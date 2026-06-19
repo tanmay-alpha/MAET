@@ -1,0 +1,7 @@
+{
+  "name": "@app/shared",
+  "type": "module",
+  "version": "0.0.0",
+  "main": "./types/index.ts",
+  "types": "./types/index.ts"
+}
