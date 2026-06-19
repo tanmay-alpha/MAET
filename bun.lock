@@ -27,6 +27,9 @@
     "shared": {
       "name": "@app/shared",
       "version": "0.0.0",
+      "dependencies": {
+        "zod": "^3.23.0",
+      },
     },
     "src": {
       "name": "@app/src",

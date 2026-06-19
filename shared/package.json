@@ -3,5 +3,8 @@
   "type": "module",
   "version": "0.0.0",
   "main": "./types/index.ts",
-  "types": "./types/index.ts"
+  "types": "./types/index.ts",
+  "dependencies": {
+    "zod": "^3.23.0"
+  }
 }
