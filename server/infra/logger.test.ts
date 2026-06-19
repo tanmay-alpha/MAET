@@ -1,19 +1,23 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterEach } from "bun:test";
 import { logger } from "./logger";
 
 describe("logger", () => {
+  const originalWrite = process.stdout.write.bind(process.stdout);
+
+  afterEach(() => {
+    process.stdout.write = originalWrite;
+  });
+
   it("child() returns a logger that emits structured JSON", () => {
     const lines: string[] = [];
-    const stream = {
-      write(s: string) {
-        lines.push(s);
-        return true;
-      },
-    };
+    process.stdout.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+      if (typeof chunk === "string") lines.push(chunk);
+      return originalWrite(chunk, ...(args as []));
+    }) as typeof process.stdout.write;
+
     const child = logger.child({ component: "test" });
-    // Swap the destination stream
-    (child as any)[Symbol.for("pino.stream")] = stream;
     child.info({ orderId: "o1" }, "placed");
+
     expect(lines.length).toBeGreaterThan(0);
     const parsed = JSON.parse(lines[0]);
     expect(parsed.msg).toBe("placed");
