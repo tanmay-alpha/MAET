@@ -21,6 +21,7 @@ describe("shared types", () => {
       price: 2500.5,
       volume: 1000,
       ts: new Date().toISOString(),
+      source: "yahoo",
     };
     expect(TickSchema.parse(tick)).toEqual(tick);
   });
