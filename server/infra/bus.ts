@@ -34,8 +34,9 @@ type Listener<K extends keyof BusEvents> = (payload: BusEvents[K]) => void;
 class TypedBus {
   private emitter = new EventEmitter();
 
-  on<K extends keyof BusEvents>(event: K, listener: Listener<K>): void {
+  on<K extends keyof BusEvents>(event: K, listener: Listener<K>): () => void {
     this.emitter.on(event, listener);
+    return () => this.emitter.off(event, listener);
   }
 
   off<K extends keyof BusEvents>(event: K, listener: Listener<K>): void {
