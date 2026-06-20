@@ -71,7 +71,7 @@ Each consumer subscribes independently to the bus (Task 5). No direct coupling b
   2. On `open`: send auth handshake (action 1) + subscribe (action 15, mode 1, NSE tokenList).
   3. On `message`: parse, if `type === "sf"` → `normalize` + `bus.emit("tick", tick)`.
   4. On `close`: exponential backoff reconnect (500 ms × 2^n, cap 30 s).
-- **`ws` dependency**: add `"ws": "^8.18.0"` to `package.json` dependencies.
+- **`ws` dependency**: add `"ws": "^8"` (current stable major) to `package.json` dependencies; let `bun install` resolve to the latest 8.x.
 - **Test** (`angelone-ws.test.ts`): uses `createSocket: () => makeFakeSocket()` that records `__push` for the test to inject messages; asserts `bus` receives a tick for the right symbol.
 
 ### Task 20 — `server/workers/candle-writer.ts`
@@ -199,4 +199,4 @@ Apply the same "note + apply + continue" rule used for Tasks 11–17:
 | `server/workers/market-clock.ts` | Create | 22 |
 | `server/workers/market-clock.test.ts` | Create | 22 |
 
-**Total**: 1 replace (doc), 1 modify (package.json), 1 create (.env.test), 12 creates, 5 commits.
+**Total**: 1 replace (doc, twice — pre-batch and post-batch), 1 modify (package.json), 1 create (.env.test), 12 code-file creates, 7 commits (2 doc refreshes + 5 task commits).
