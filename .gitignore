@@ -33,3 +33,5 @@ dist-ssr
 
 # Allow dummy test env to be committed (overrides global .env.* ignore)
 !.env.test
+
+.vercel
