@@ -303,7 +303,7 @@ Create `.git/sdd/task-21-report.md`. Status: DONE (env-caveat). Note in the repo
 
 - [ ] **Step 1: Create `.env.test`**
 
-Create `.env.test` at project root:
+Create `.env.test` at project root with **dummy test values** (safe to commit, not gitignored — Bun reads it automatically on `bun test`):
 
 ```
 SUPABASE_URL=https://x.supabase.co
@@ -314,7 +314,7 @@ ANGELONE_MASTER_KEY=test_master_key_at_least_32_chars_long_xx
 NODE_ENV=test
 ```
 
-Add `.env.test` to `.gitignore` if not already present (it should be — verify by running `cat .gitignore`; `.env*` should be ignored; if not, add `.env.test` explicitly).
+Note: `ANGELONE_MASTER_KEY` must be ≥ 32 chars (enforced by `EnvSchema` in `server/config.ts`). The value above is 42 chars.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -431,5 +431,5 @@ Before marking this plan complete, the implementer should verify:
 - [ ] Two doc-refresh commits exist: pre-batch and post-batch
 - [ ] Full test suite shows the expected baseline (~46 pass / 8 fail env-caveat, 0 pure-logic regressions)
 - [ ] `package.json` has `"ws": "^8"` added
-- [ ] `.env.test` exists and satisfies Task 22's `getConfig()` call
+- [ ] `.env.test` exists with dummy values and is committed (Bun auto-loads it)
 - [ ] REMAINING-WORK.md final state: 22 done, 17 pending, test baseline updated, Resume Point = Task 23
