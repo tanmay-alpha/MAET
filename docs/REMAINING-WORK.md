@@ -10,6 +10,47 @@
 
 ---
 
+## Known Blocker: TanStack Start Runtime on Vercel (2026-06-20)
+
+**Status:** Frontend builds and deploys to Vercel, but every request returns 500.
+
+**Error:**
+```
+TypeError [ERR_PACKAGE_IMPORT_NOT_DEFINED]: 
+  Package import specifier "#tanstack-router-entry" is not defined in package
+  /var/task/node_modules/@tanstack/start-server-core/package.json
+```
+
+**Root cause:** `start-server-core`'s bundled `createStartHandler.js` does `import("#tanstack-router-entry")`, but the package's own `imports` field doesn't declare that subpath. The TanStack Start Vite plugin is supposed to alias this at build time, but the alias isn't reaching Vercel's Node runtime.
+
+**Fixes attempted (none worked):**
+1. ❌ Vite `resolve.alias` for `#tanstack-router-entry` → `./src/router.tsx` — Vite alias doesn't apply at Node ESM runtime
+2. ❌ `imports` field in `src/package.json` — resolution happens from inside `start-server-core`, not the consumer
+3. ❌ Force fresh deploy (no cache) — same error
+4. ✅ Reverted all changes; working tree clean
+
+**Likely real fix (untried, requires deeper work):**
+- Patch `node_modules/@tanstack/start-server-core/package.json` to declare `#tanstack-router-entry` (with a postinstall hook or patch-package)
+- Or switch build target to Cloudflare preset where the framework's bundler handles this correctly
+- Or regenerate the TanStack Start entry files via `create-tanstack-start` CLI
+
+**Defer this until:** Tasks 18-30i are complete (so we have a real backend to wire to), then revisit with full context.
+
+---
+
+## Deployment State (2026-06-20)
+
+- ✅ **Vercel frontend:** deployed (URL: maet-tanmay-alpha-tanmay-alphas-projects.vercel.app), but runtime error above
+- ✅ **SmartAPI credentials:** local `.env` has all 4 (client ID, API key, PIN, TOTP secret). `getConfig()` validates them.
+- ✅ **Credential leak scrubbed:** commit `c783385` (with leaked values) was force-pushed over with `0cd962a`. Old values still in `c783385`'s SHA if you have the ref, but not at HEAD.
+- ❌ **Backend:** NOT yet deployed to Render. `render.yaml` has 5 env vars; needs 4 SmartAPI vars + Vercel-friendly CORS config added.
+- ❌ **Frontend ↔ Backend wiring:** not done. Vercel has no `VITE_API_URL` env var pointing at Render.
+
+---
+
+
+---
+
 ## At a Glance
 
 | Status | Count | Tasks |
