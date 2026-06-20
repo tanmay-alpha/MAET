@@ -173,10 +173,11 @@ fd70d05 feat(market): candle normalization, gap fill, corporate-action adjustmen
 17a2141 feat(sources): nse scraper for fundamentals + corporate actions
 ... (Tasks 1–17)
 8b8122f docs: REMAINING-WORK.md — 26 pending tasks summary
-5f6b39d feat(workers): yahoo poller with circuit-breaker + dedupe + retry
-7fb9223 feat(workers): angel one per-user ws with reconnect
+666c0a7 feat(workers): yahoo poller with bus emission
+7fb9223 feat(workers): angel one per-user ws with exp backoff and tick fan-out
 825e2b2 feat(workers): candle writer with 1m rolling buckets
 eddd8c1 feat(sse): connection registry + fan-out + quotes handler
 dee083b feat(workers): market clock worker emits bus.market:phase on change
 a9b24fc chore: commit .env.test dummy values for CI
+3dcd805 docs: refresh REMAINING-WORK.md — Phase 4 complete
 ```
