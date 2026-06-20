@@ -6,6 +6,12 @@ const EnvSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   UPSTASH_REDIS_URL: z.string().min(1),
   ANGELONE_MASTER_KEY: z.string().min(32, "ANGELONE_MASTER_KEY must be at least 32 chars"),
+  // SmartAPI credentials (Angel One broker). See Step 3 of the setup doc
+  // for where to paste the values. Never commit real values.
+  ANGELONE_API_KEY: z.string().min(8, "ANGELONE_API_KEY looks too short"),
+  ANGELONE_CLIENT_ID: z.string().min(4, "ANGELONE_CLIENT_ID looks too short"),
+  ANGELONE_PIN: z.string().regex(/^\d{4,8}$/, "ANGELONE_PIN must be 4-8 digits"),
+  ANGELONE_TOTP_SECRET: z.string().min(16, "ANGELONE_TOTP_SECRET looks too short"),
   ALERT_WEBHOOK_URL: z.string().url().optional(),
   NSE_HOLIDAYS_JSON: z.string().optional(),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -18,6 +24,10 @@ export type AppConfig = {
   supabaseServiceKey: string;
   redisUrl: string;
   angeloneMasterKey: string;
+  angeloneApiKey: string;
+  angeloneClientId: string;
+  angelonePin: string;
+  angeloneTotpSecret: string;
   alertWebhookUrl?: string;
   nseHolidays: Date[];
   nodeEnv: "development" | "production" | "test";
@@ -42,6 +52,10 @@ export function getConfig(): AppConfig {
     supabaseServiceKey: parsed.data.SUPABASE_SERVICE_ROLE_KEY,
     redisUrl: parsed.data.UPSTASH_REDIS_URL,
     angeloneMasterKey: parsed.data.ANGELONE_MASTER_KEY,
+    angeloneApiKey: parsed.data.ANGELONE_API_KEY,
+    angeloneClientId: parsed.data.ANGELONE_CLIENT_ID,
+    angelonePin: parsed.data.ANGELONE_PIN,
+    angeloneTotpSecret: parsed.data.ANGELONE_TOTP_SECRET,
     alertWebhookUrl: parsed.data.ALERT_WEBHOOK_URL,
     nseHolidays: holidays,
     nodeEnv: parsed.data.NODE_ENV,
