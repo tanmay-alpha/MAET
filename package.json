@@ -6,5 +6,8 @@
     "dev": "bun run server/src/main.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8"
   }
 }
