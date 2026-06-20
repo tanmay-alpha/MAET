@@ -139,11 +139,11 @@ server/
       hub.test.ts                     # Task 21: integration test (env-caveat)
   workers/
     yahoo-poller.ts                   # Task 18: periodic poll, emits ticks
-    angel-one-ws.ts                   # Task 19: per-user Angel One WS
+    angelone-ws.ts                    # Task 19: per-user Angel One WS
     candle-writer.ts                  # Task 20: 1m rolling buckets, in-memory
     market-clock.ts                   # Task 22: emits market:phase on change
     yahoo-poller.test.ts              # Task 18
-    angel-one-ws.test.ts              # Task 19
+    angelone-ws.test.ts               # Task 19
     candle-writer.test.ts             # Task 20
     market-clock.test.ts              # Task 22
 shared/
