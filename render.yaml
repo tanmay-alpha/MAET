@@ -10,13 +10,31 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20"
+      # Supabase (auth + DB)
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      # Redis (idempotency, rate limit, bus)
       - key: UPSTASH_REDIS_URL
         sync: false
+      # Encryption key for stored broker secrets (32-byte base64)
       - key: ANGELONE_MASTER_KEY
+        sync: false
+      # SmartAPI credentials (TanmayQuant app). Set values in Render dashboard.
+      - key: ANGELONE_API_KEY
+        sync: false
+      - key: ANGELONE_CLIENT_ID
+        sync: false
+      - key: ANGELONE_PIN
+        sync: false
+      - key: ANGELONE_TOTP_SECRET
+        sync: false
+      # Optional webhook for alert routing
+      - key: ALERT_WEBHOOK_URL
+        sync: false
+      # NSE holiday calendar as JSON array of ISO date strings
+      - key: NSE_HOLIDAYS_JSON
         sync: false
