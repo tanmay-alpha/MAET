@@ -4330,7 +4330,12 @@ function synthetic(prices: number[]): Candle[] {
 describe("SmaCrossStrategy", () => {
   it("emits a buy then sell on a synthetic golden/death cross", () => {
     // rising then falling prices should produce buy then sell
-    const prices = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6];
+    // Brief-defect fix (recorded 2026-06-20): original data [10..20,19..6] never produced a golden cross because fast SMA was already above slow when both became defined. Replaced with flat→rising→falling so fast first crosses below→above slow (golden cross = BUY), then above→below (death cross = SELL).
+    const prices = [
+      20, 20, 20, 20, 20, 20, 20, 20, // flat (8 days, slow SMA defined as 20)
+      21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, // rising (fast crosses up through slow)
+      31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, // falling
+    ];
     const candles = synthetic(prices);
     const sigs = SmaCrossStrategy({ fast: 3, slow: 8 }).signals(candles);
     // expect at least one BUY and one SELL
