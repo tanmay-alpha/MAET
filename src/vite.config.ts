@@ -10,19 +10,12 @@ export default defineConfig({
   // Set vite root to the project root (the directory above src/). This
   // lets TanStack Start's default srcDirectory: "src" resolve to src/
   // (routes, router, server.ts, etc.) — same as the official TanStack
-  // Start starter layout.
+  // Start starter layout. We rely on the inline plugin below (in
+  // `plugins: [...]`) to set the `@/*` → absolute path alias in
+  // configResolved, since the alias needs the resolved absolute root and
+  // vite's resolve.alias requires absolute paths.
   vite: {
     root: "..",
-    // Explicit alias for `@/*` → `<root>/src/*`. The lovable config already
-    // wires up vite-tsconfig-paths, but vite-tsconfig-paths only resolves
-    // paths declared in tsconfig.json. Since our tsconfig.json is at the
-    // project root and our vite root is the project root, the paths should
-    // resolve — but rolldown (Vite v8's bundler) has stricter path handling
-    // than rollup and ignores vite-tsconfig-paths' resolved id for some
-    // importers. Declaring the alias directly here makes it work for both.
-    resolve: {
-      alias: { "@": `${process.cwd().replace(/\\src$/, "")}/src` },
-    },
   },
   // TanStack Start plugin options.
   // - server.entry: "server" so Nitro builds from src/server.ts (our SSR
@@ -40,15 +33,22 @@ export default defineConfig({
     preset: "vercel",
     rootDir: ".",
   },
-  // Inline plugin that runs in the config() chain. It force-injects the
-  // virtual TanStack Start client entry into the resolved top-level
-  // `build.rolldownOptions.input` so rolldown doesn't fall back to the SPA
-  // shell lookup ("[UNRESOLVED_ENTRY] Cannot resolve entry module index.html")
-  // when Nitro's `builder.sharedConfigBuild: true` flag causes Vite to skip
-  // the per-environment build hoist.
+  // Inline plugin that runs in the config() chain. Two responsibilities:
+//   1. Inject the virtual TanStack Start client entry as the resolved
+//      top-level `build.rolldownOptions.input` so rolldown doesn't fall
+//      back to the SPA shell lookup ("[UNRESOLVED_ENTRY] Cannot resolve
+//      entry module index.html") when Nitro's
+//      `builder.sharedConfigBuild: true` flag causes Vite to skip the
+//      per-environment build hoist.
+//   2. Register the `@/*` → `<root>/src/*` alias at configResolved time
+//      (not at config() time) so we have access to the resolved vite
+//      root path. vite-tsconfig-paths handles `@/*` from tsconfig.json in
+//      most cases, but rolldown (Vite v8's bundler) is stricter and skips
+//      some of its resolved ids. Adding the alias here makes it work for
+//      both rolldown and rollup.
   plugins: [
     {
-      name: "force-virtual-client-entry",
+      name: "force-virtual-client-entry-and-aliases",
       config() {
         return {
           build: {
@@ -58,6 +58,28 @@ export default defineConfig({
           },
           appType: "custom",
         };
+      },
+      configResolved(config) {
+        // Vite's resolve.alias requires absolute paths — relative values
+        // are "used as-is" (per https://vite.dev/config/shared-options.html).
+        // vite-tsconfig-paths emits relative paths, which fail under
+        // rolldown (Vite v8's bundler) when an import sits in a different
+        // directory than the alias target. We register an absolute `@`
+        // alias here so `@/lib/foo` resolves to `<absolute-root>/src/lib/foo`
+        // regardless of which file is doing the importing.
+        const rootPath = config.root.replace(/[/\\]+$/, "");
+        const existing = Array.isArray(config.resolve?.alias)
+          ? config.resolve.alias
+          : config.resolve?.alias
+            ? [config.resolve.alias]
+            : [];
+        config.resolve = config.resolve ?? {};
+        config.resolve.alias = [
+          ...existing.filter(
+            (a) => !(typeof a === "object" && a && "find" in a && a.find === "@"),
+          ),
+          { find: "@", replacement: `${rootPath}/src` },
+        ];
       },
     },
   ],
