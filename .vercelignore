@@ -1,0 +1,20 @@
+# Vercel should ignore these — they're either build output (recreated by
+# the build), dependencies (re-installed by the install command), local
+# artifacts, or environment files with secrets.
+
+# Bundler cache directories.
+.vite/
+**/.vite/
+
+# Local dev / test artifacts.
+.playwright-mcp/
+
+# Don't ship env files with real broker secrets.
+.env
+.env.local
+.env.*.local
+
+# IDE / OS noise.
+.idea/
+.vscode/
+.DS_Store
