@@ -1,22 +1,22 @@
 import { createApp as createH3App, eventHandler, toNodeListener, toWebHandler, setResponseHeader, getMethod, getRequestHeader } from "h3";
 import healthHandler from "./routes/health.get";
 
-// CORS allow-list. In production, set FRONTEND_ORIGIN to the Vercel URL
-// (e.g. https://maet-tanmay-alpha-tanmay-alphas-projects.vercel.app).
-// Falls back to allowing Vercel preview + production hosts.
-const ALLOWED_ORIGINS = new Set<string>([
-  "https://maet.vercel.app",
-  "https://maet-tanmay-alpha-tanmay-alphas-projects.vercel.app",
-  "http://localhost:3000",
-  "http://localhost:5173",
-]);
+// CORS allow-list. Reads from FRONTEND_ORIGIN env var (comma-separated list of
+// exact origins). Falls back to a hard-coded set for local dev. Does NOT match
+// arbitrary *.vercel.app — vercel preview URLs are only allowed when explicitly
+// added (e.g. for branch previews). credentials=false because auth uses
+// Authorization header, not cookies, so there's no CSRF surface from CORS.
+const DEFAULT_LOCAL_ORIGINS = ["http://localhost:3000", "http://localhost:5173"];
+const allowedOrigins: string[] = (() => {
+  const fromEnv = process.env.FRONTEND_ORIGIN?.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_LOCAL_ORIGINS;
+})();
 
 function originAllowed(origin: string | undefined): boolean {
   if (!origin) return false;
-  if (ALLOWED_ORIGINS.has(origin)) return true;
-  // Allow any *.vercel.app preview URL.
-  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return true;
-  return false;
+  return allowedOrigins.includes(origin);
 }
 
 function corsMiddleware() {
@@ -25,7 +25,9 @@ function corsMiddleware() {
     if (origin && originAllowed(origin)) {
       setResponseHeader(event, "access-control-allow-origin", origin);
       setResponseHeader(event, "vary", "Origin");
-      setResponseHeader(event, "access-control-allow-credentials", "true");
+      // credentials=false because auth is JWT in Authorization header, not
+      // cookies. Enabling credentials would require an explicit single-origin
+      // echo (no wildcard) and CSRF token — out of scope until cookie auth lands.
     }
     // Preflight
     if (getMethod(event) === "OPTIONS") {

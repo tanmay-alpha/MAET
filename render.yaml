@@ -38,3 +38,9 @@ services:
       # NSE holiday calendar as JSON array of ISO date strings
       - key: NSE_HOLIDAYS_JSON
         sync: false
+      # Comma-separated list of exact frontend origins allowed by CORS.
+      # server/app.ts reads this at startup; the default in code is the
+      # local dev hosts. Set the Vercel production + preview hosts here so
+      # browser calls from the deployed frontend aren't rejected.
+      - key: FRONTEND_ORIGIN
+        value: "https://maet-tanmay-alpha-tanmay-alphas-projects.vercel.app,https://maet.vercel.app"
