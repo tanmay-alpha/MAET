@@ -35,3 +35,7 @@ dist-ssr
 !.env.test
 
 .vercel
+
+# Playwright MCP server artifacts (ephemeral browser session recordings,
+# console logs, and page snapshots — not source code).
+.playwright-mcp/
