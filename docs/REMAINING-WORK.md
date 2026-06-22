@@ -46,6 +46,8 @@ TypeError [ERR_PACKAGE_IMPORT_NOT_DEFINED]:
 - ❌ **Backend:** NOT yet deployed to Render. `render.yaml` has 5 env vars; needs 4 SmartAPI vars + Vercel-friendly CORS config added.
 - ❌ **Frontend ↔ Backend wiring:** not done. Vercel has no `VITE_API_URL` env var pointing at Render.
 
+> **Update 2026-06-23:** Backend is now live on Render at `https://maet-backend.onrender.com`. The `healthCheckPath` in `render.yaml` is `/health`, but Render's edge layer hijacks `/health` and serves a fixed `{"status":"online"}` response. To bypass that, the health handler was moved from `server/routes/health.get.ts` (mounted at `/health`) to `server/api/health.get.ts` (mounted at `/api/health`). When the orchestrator lands (Task 30), the smoke test should call `GET /api/health` and expect `{"status":"ok",...}` from the Nitro handler — not the Render edge default.
+
 ---
 
 
@@ -111,7 +113,7 @@ TypeError [ERR_PACKAGE_IMPORT_NOT_DEFINED]:
 |---|---|---|---|
 | 30g | Health checks for all upstream dependencies | `server/api/health.get.ts` (replace stub from Task 4) | yahoo, angel-one, nse, market-clock, db, redis |
 | 30i | Playwright e2e suite (6 journeys) | `tests/e2e/*.spec.ts` | login, screener, backtest, place-order, portfolio, sse-stream |
-| 30 | Worker orchestrator + end-to-end smoke test | `server/orchestrator.ts` + smoke test | Boots all workers, runs /health, exits 0 |
+| 30 | Worker orchestrator + end-to-end smoke test | `server/orchestrator.ts` + smoke test | Boots all workers, runs /api/health, exits 0 |
 
 ### Final
 | # | Task | Notes |

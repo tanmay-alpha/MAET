@@ -1,5 +1,4 @@
 import { createApp as createH3App, eventHandler, toNodeListener, toWebHandler, setResponseHeader, getMethod, getRequestHeader } from "h3";
-import healthHandler from "./routes/health.get";
 
 // CORS allow-list. Reads from FRONTEND_ORIGIN env var (comma-separated list of
 // exact origins). Falls back to a hard-coded set for local dev. Does NOT match
@@ -44,7 +43,6 @@ export function createApp() {
   const app = createH3App();
   // Apply CORS to all routes first.
   app.use("/", corsMiddleware());
-  app.use("/health", eventHandler(() => healthHandler()));
   const fetch = toWebHandler(app);
   return Object.assign(app, { fetch });
 }
