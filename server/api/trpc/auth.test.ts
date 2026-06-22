@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
-import { H3 } from "h3";
+import { createApp } from "../../app";
 import { requireAuth, tryAuth, verifyJwt, __resetJwksCacheForTests } from "./auth";
 import { resetConfigForTests } from "@infra/config";
 
@@ -11,11 +11,14 @@ beforeAll(() => {
 });
 
 // Build a minimal h3 event with the given Authorization header.
+// Mirrors the pattern in server/infra/health.test.ts: createApp() returns
+// an h3 app whose .fetch() handles a standard Request.
 function makeEvent(authHeader?: string) {
-  const app = new H3();
+  const app = createApp();
   const headers = new Headers();
   if (authHeader) headers.set("authorization", authHeader);
-  return app.request("/", { headers });
+  // requireAuth / tryAuth only read the header; the path is irrelevant.
+  return app.fetch(new Request("http://localhost/", { headers }));
 }
 
 describe("requireAuth — header parsing", () => {
