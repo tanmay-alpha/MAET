@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "nitro dev",
     "build": "nitro build",
-    "start": "HOST=0.0.0.0 node .output/server/index.mjs",
+    "start": "HOST=0.0.0.0 PORT=10000 node .output/server/index.mjs",
     "test": "bun test"
   },
   "dependencies": {

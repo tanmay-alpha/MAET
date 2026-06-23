@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
 import { createApp } from "../../app";
-import { requireAuth, tryAuth, verifyJwt, __resetJwksCacheForTests } from "./auth";
+import { requireAuth, tryAuth, verifyJwt, __resetJwksCacheForTests } from "../../api/trpc/auth";
 import { resetConfigForTests } from "../../config";
 
 // env must be set before any module that calls getConfig() is imported.
