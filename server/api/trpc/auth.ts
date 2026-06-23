@@ -19,7 +19,7 @@
 
 import { createRemoteJWKSet, jwtVerify, errors as joseErrors } from "jose";
 import { createError, getRequestHeader, type H3Event } from "h3";
-import { getConfig } from "@infra/config";
+import { getConfig } from "../../config";
 
 export type AuthContext = {
   userId: string;

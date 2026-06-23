@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
 import { createApp } from "../../app";
 import { requireAuth, tryAuth, verifyJwt, __resetJwksCacheForTests } from "./auth";
-import { resetConfigForTests } from "@infra/config";
+import { resetConfigForTests } from "../../config";
 
 // env must be set before any module that calls getConfig() is imported.
 // We import lazily inside the suite to ensure beforeAll runs first.
