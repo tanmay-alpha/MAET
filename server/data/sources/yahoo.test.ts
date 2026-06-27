@@ -105,7 +105,7 @@ describe("yahoo source", () => {
     expect(n).toBe(1);
   });
 
-  it("opens circuit after 3 consecutive fails and throws UpstreamDegradedError", async () => {
+  it("does not let repeated transient failures poison later requests", async () => {
     let n = 0;
     globalThis.fetch = (async () => {
       n++;
@@ -115,8 +115,13 @@ describe("yahoo source", () => {
     await expect(getQuote("X")).rejects.toBeInstanceOf(UpstreamDegradedError);
     await expect(getQuote("X")).rejects.toBeInstanceOf(UpstreamDegradedError);
     expect(n).toBe(9); // each failed request exhausts its own retry budget
-    const before = n;
-    await expect(getQuote("X")).rejects.toBeInstanceOf(UpstreamDegradedError);
-    expect(n).toBe(before); // circuit open: no fetch issued
+
+    globalThis.fetch = (async () => {
+      n++;
+      return new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 75, regularMarketVolume: 1, symbol: "X.NS" } }] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await expect(getQuote("X")).resolves.toMatchObject({ price: 75 });
+    expect(n).toBe(10);
   });
 });

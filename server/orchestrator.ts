@@ -5,7 +5,9 @@ import { YahooPoller } from "./workers/yahoo-poller";
 import { quoteStore } from "./domain/market/quote-store";
 import { closeRedis } from "./data/redis/client";
 
-const yahooPoller = new YahooPoller({ intervalMs: 15_000 });
+// Yahoo quotes are delayed and do not benefit from tick-grade polling. A
+// one-minute cadence avoids unnecessary upstream throttling on the free service.
+const yahooPoller = new YahooPoller({ intervalMs: 60_000 });
 const candleWriter = new CandleWriter();
 const marketClock = new MarketClockWorker();
 const screenerRunner = new ScreenerRunner();

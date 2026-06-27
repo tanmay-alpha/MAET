@@ -8,49 +8,36 @@ import { UpstreamDegradedError, UpstreamPermanentError } from "../../../shared/t
 export { UpstreamDegradedError, UpstreamPermanentError };
 
 const HOST = "query1.finance.yahoo.com";
-const FAIL_WINDOW_MS = 60_000;
-const FAIL_THRESHOLD = 3;
-const OPEN_MS = 5 * 60_000;
+const MAX_CONCURRENT_REQUESTS = 4;
 
-let fails: number[] = [];
-let openedAt = 0;
+let activeRequests = 0;
+const requestWaiters: Array<() => void> = [];
 
 export function _resetCircuitForTest(): void {
-  fails = [];
-  openedAt = 0;
+  activeRequests = 0;
+  requestWaiters.splice(0).forEach((release) => release());
 }
 
-function noteFail(): void {
-  const now = Date.now();
-  fails = fails.filter((t) => now - t < FAIL_WINDOW_MS);
-  fails.push(now);
-  if (fails.length >= FAIL_THRESHOLD) openedAt = now;
-}
-
-function noteSuccess(): void {
-  fails = [];
-  openedAt = 0;
-}
-
-function isOpen(): boolean {
-  if (!openedAt) return false;
-  if (Date.now() - openedAt > OPEN_MS) {
-    openedAt = 0;
-    fails = [];
-    return false;
+async function withRequestSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
+    await new Promise<void>((resolve) => requestWaiters.push(resolve));
   }
-  return true;
+  activeRequests++;
+  try {
+    return await fn();
+  } finally {
+    activeRequests--;
+    requestWaiters.shift()?.();
+  }
 }
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   const tries = 3;
   let lastErr: unknown;
-  if (isOpen()) throw new UpstreamDegradedError("yahoo circuit open");
 
   for (let i = 0; i < tries; i++) {
     try {
       const r = await fn();
-      noteSuccess();
       return r;
     } catch (e) {
       lastErr = e;
@@ -60,11 +47,6 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
       await new Promise((res) => setTimeout(res, wait));
     }
   }
-
-  // Count a failed request once, after its retry budget is exhausted. Counting
-  // every attempt caused one throttled request to open the process-wide circuit
-  // and reject unrelated quote/candle requests for five minutes.
-  noteFail();
   throw lastErr;
 }
 
@@ -110,7 +92,9 @@ export async function getQuote(
   const ticker = tickerOverride ?? symbolToTicker(symbol);
   return withRetry(async () => {
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`;
-    const res = await fetch(url, { headers: { "User-Agent": "stock-market-backend/1.0" } });
+    const res = await withRequestSlot(() =>
+      fetch(url, { headers: { "User-Agent": "stock-market-backend/1.0" } })
+    );
     if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo ${res.status}`);
     if (res.status === 404) throw new UpstreamPermanentError(`symbol not found: ${ticker}`);
     if (!res.ok) throw new UpstreamPermanentError(`yahoo ${res.status}`);
@@ -150,7 +134,9 @@ export async function getCandles(
     const period2 = Math.floor(to.getTime() / 1000);
     const interval = tf === "1h" ? "60m" : tf;
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(fullTicker)}?period1=${period1}&period2=${period2}&interval=${interval}`;
-    const res = await fetch(url, { headers: { "User-Agent": "stock-market-backend/1.0" } });
+    const res = await withRequestSlot(() =>
+      fetch(url, { headers: { "User-Agent": "stock-market-backend/1.0" } })
+    );
     if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo ${res.status}`);
     if (!res.ok) throw new UpstreamPermanentError(`yahoo ${res.status}`);
     const data = (await res.json()) as YahooChartResp;

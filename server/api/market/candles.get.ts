@@ -34,10 +34,15 @@ export default defineEventHandler(async (event) => {
   const to = new Date();
   const from = new Date(to.getTime() - RANGE_MS[range]);
   const resolved = resolveMarketSymbol(symbol);
-  const candles = (await getCandles(resolved.ticker, from, to, tf)).map((candle) => ({
-    ...candle,
-    symbol: resolved.symbol,
-  }));
+  let candles: Candle[];
+  try {
+    candles = (await getCandles(resolved.ticker, from, to, tf)).map((candle) => ({
+      ...candle,
+      symbol: resolved.symbol,
+    }));
+  } catch {
+    throw createError({ statusCode: 503, statusMessage: "Market history temporarily unavailable" });
+  }
 
   setResponseHeader(event, "cache-control", "public, max-age=15, s-maxage=30, stale-while-revalidate=60");
   return {

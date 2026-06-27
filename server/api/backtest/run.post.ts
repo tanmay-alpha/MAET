@@ -43,10 +43,15 @@ export default defineEventHandler(async (event) => {
   const resolved = resolveMarketSymbol(input.symbol.toUpperCase());
   const to = new Date();
   const from = new Date(to.getTime() - RANGE_MS[input.range]);
-  const candles = (await getCandles(resolved.ticker, from, to, input.timeframe)).map((candle) => ({
-    ...candle,
-    symbol: resolved.symbol,
-  }));
+  let candles: Candle[];
+  try {
+    candles = (await getCandles(resolved.ticker, from, to, input.timeframe)).map((candle) => ({
+      ...candle,
+      symbol: resolved.symbol,
+    }));
+  } catch {
+    throw createError({ statusCode: 503, statusMessage: "Market history temporarily unavailable" });
+  }
   if (candles.length < 2) {
     throw createError({ statusCode: 422, statusMessage: "Not enough market history for this backtest" });
   }
