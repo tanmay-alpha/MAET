@@ -9,14 +9,28 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as PortfolioRouteImport } from './routes/portfolio'
+import { Route as OrdersRouteImport } from './routes/orders'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as StockSymbolRouteImport } from './routes/stock.$symbol'
+import { Route as ChartSymbolRouteImport } from './routes/chart.$symbol'
 import { Route as AppTerminalRouteImport } from './routes/_app.terminal'
 import { Route as AppStrategiesRouteImport } from './routes/_app.strategies'
 import { Route as AppScreenerRouteImport } from './routes/_app.screener'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppBacktestRouteImport } from './routes/_app.backtest'
 
+const PortfolioRoute = PortfolioRouteImport.update({
+  id: '/portfolio',
+  path: '/portfolio',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrdersRoute = OrdersRouteImport.update({
+  id: '/orders',
+  path: '/orders',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
@@ -24,6 +38,16 @@ const AppRoute = AppRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StockSymbolRoute = StockSymbolRouteImport.update({
+  id: '/stock/$symbol',
+  path: '/stock/$symbol',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChartSymbolRoute = ChartSymbolRouteImport.update({
+  id: '/chart/$symbol',
+  path: '/chart/$symbol',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppTerminalRoute = AppTerminalRouteImport.update({
@@ -54,65 +78,107 @@ const AppBacktestRoute = AppBacktestRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/orders': typeof OrdersRoute
+  '/portfolio': typeof PortfolioRoute
   '/backtest': typeof AppBacktestRoute
   '/dashboard': typeof AppDashboardRoute
   '/screener': typeof AppScreenerRoute
   '/strategies': typeof AppStrategiesRoute
   '/terminal': typeof AppTerminalRoute
+  '/chart/$symbol': typeof ChartSymbolRoute
+  '/stock/$symbol': typeof StockSymbolRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/orders': typeof OrdersRoute
+  '/portfolio': typeof PortfolioRoute
   '/backtest': typeof AppBacktestRoute
   '/dashboard': typeof AppDashboardRoute
   '/screener': typeof AppScreenerRoute
   '/strategies': typeof AppStrategiesRoute
   '/terminal': typeof AppTerminalRoute
+  '/chart/$symbol': typeof ChartSymbolRoute
+  '/stock/$symbol': typeof StockSymbolRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/orders': typeof OrdersRoute
+  '/portfolio': typeof PortfolioRoute
   '/_app/backtest': typeof AppBacktestRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/screener': typeof AppScreenerRoute
   '/_app/strategies': typeof AppStrategiesRoute
   '/_app/terminal': typeof AppTerminalRoute
+  '/chart/$symbol': typeof ChartSymbolRoute
+  '/stock/$symbol': typeof StockSymbolRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/orders'
+    | '/portfolio'
     | '/backtest'
     | '/dashboard'
     | '/screener'
     | '/strategies'
     | '/terminal'
+    | '/chart/$symbol'
+    | '/stock/$symbol'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/orders'
+    | '/portfolio'
     | '/backtest'
     | '/dashboard'
     | '/screener'
     | '/strategies'
     | '/terminal'
+    | '/chart/$symbol'
+    | '/stock/$symbol'
   id:
     | '__root__'
     | '/'
     | '/_app'
+    | '/orders'
+    | '/portfolio'
     | '/_app/backtest'
     | '/_app/dashboard'
     | '/_app/screener'
     | '/_app/strategies'
     | '/_app/terminal'
+    | '/chart/$symbol'
+    | '/stock/$symbol'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
+  OrdersRoute: typeof OrdersRoute
+  PortfolioRoute: typeof PortfolioRoute
+  ChartSymbolRoute: typeof ChartSymbolRoute
+  StockSymbolRoute: typeof StockSymbolRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/portfolio': {
+      id: '/portfolio'
+      path: '/portfolio'
+      fullPath: '/portfolio'
+      preLoaderRoute: typeof PortfolioRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/orders': {
+      id: '/orders'
+      path: '/orders'
+      fullPath: '/orders'
+      preLoaderRoute: typeof OrdersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app': {
       id: '/_app'
       path: ''
@@ -125,6 +191,20 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stock/$symbol': {
+      id: '/stock/$symbol'
+      path: '/stock/$symbol'
+      fullPath: '/stock/$symbol'
+      preLoaderRoute: typeof StockSymbolRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/chart/$symbol': {
+      id: '/chart/$symbol'
+      path: '/chart/$symbol'
+      fullPath: '/chart/$symbol'
+      preLoaderRoute: typeof ChartSymbolRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/terminal': {
@@ -186,6 +266,10 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
+  OrdersRoute: OrdersRoute,
+  PortfolioRoute: PortfolioRoute,
+  ChartSymbolRoute: ChartSymbolRoute,
+  StockSymbolRoute: StockSymbolRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
