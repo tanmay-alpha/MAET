@@ -45,19 +45,26 @@ function isOpen(): boolean {
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   const tries = 3;
   let lastErr: unknown;
+  if (isOpen()) throw new UpstreamDegradedError("yahoo circuit open");
+
   for (let i = 0; i < tries; i++) {
-    if (isOpen()) throw new UpstreamDegradedError("yahoo circuit open");
     try {
       const r = await fn();
       noteSuccess();
       return r;
     } catch (e) {
       lastErr = e;
-      noteFail();
+      if (e instanceof UpstreamPermanentError) throw e;
+      if (i === tries - 1) break;
       const wait = 200 * Math.pow(2, i) + Math.floor(Math.random() * 100);
       await new Promise((res) => setTimeout(res, wait));
     }
   }
+
+  // Count a failed request once, after its retry budget is exhausted. Counting
+  // every attempt caused one throttled request to open the process-wide circuit
+  // and reject unrelated quote/candle requests for five minutes.
+  noteFail();
   throw lastErr;
 }
 

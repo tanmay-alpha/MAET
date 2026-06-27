@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { getCandles, getQuote, UpstreamDegradedError, _resetCircuitForTest } from "./yahoo";
+import {
+  getCandles,
+  getQuote,
+  UpstreamDegradedError,
+  UpstreamPermanentError,
+  _resetCircuitForTest,
+} from "./yahoo";
 
 const origFetch = globalThis.fetch;
 
@@ -88,6 +94,17 @@ describe("yahoo source", () => {
     expect(n).toBe(2);
   });
 
+  it("does not retry permanent upstream errors", async () => {
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n++;
+      return new Response("", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    await expect(getQuote("MISSING")).rejects.toBeInstanceOf(UpstreamPermanentError);
+    expect(n).toBe(1);
+  });
+
   it("opens circuit after 3 consecutive fails and throws UpstreamDegradedError", async () => {
     let n = 0;
     globalThis.fetch = (async () => {
@@ -97,6 +114,7 @@ describe("yahoo source", () => {
     await expect(getQuote("X")).rejects.toBeInstanceOf(UpstreamDegradedError);
     await expect(getQuote("X")).rejects.toBeInstanceOf(UpstreamDegradedError);
     await expect(getQuote("X")).rejects.toBeInstanceOf(UpstreamDegradedError);
+    expect(n).toBe(9); // each failed request exhausts its own retry budget
     const before = n;
     await expect(getQuote("X")).rejects.toBeInstanceOf(UpstreamDegradedError);
     expect(n).toBe(before); // circuit open: no fetch issued
