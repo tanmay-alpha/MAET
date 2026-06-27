@@ -19,13 +19,16 @@ function minuteKey(ts: string): string {
 
 export class CandleWriter {
   private buckets = new Map<string, Bucket>();
+  private off: (() => void) | undefined;
 
   start(): void {
-    bus.on("tick", (t) => this.onTick(t));
+    if (this.off) return;
+    this.off = bus.on("tick", (t) => this.onTick(t));
   }
 
   stop(): void {
-    bus.off("tick", () => {});
+    this.off?.();
+    this.off = undefined;
   }
 
   onTick(t: Tick): void {

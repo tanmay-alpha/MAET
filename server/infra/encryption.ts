@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { getConfig } from "../config";
 
 export type EncryptedPayload = {
@@ -16,10 +16,11 @@ function getKey(): Buffer {
     // fall through
   }
   const b = Buffer.from(raw);
-  if (b.length !== 32) {
-    throw new Error("ANGELONE_MASTER_KEY must decode to exactly 32 bytes");
-  }
-  return b;
+  if (b.length === 32) return b;
+  // Config accepts high-entropy secrets of 32+ characters. Derive the exact
+  // AES-256 key width so valid longer secrets do not fail at runtime.
+  if (b.length >= 32) return createHash("sha256").update(b).digest();
+  throw new Error("ANGELONE_MASTER_KEY must contain at least 32 bytes of key material");
 }
 
 export function encrypt(plaintext: string): EncryptedPayload {

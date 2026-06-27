@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect, type MouseEvent, type TouchEvent } from "react";
-import type { Candle } from "@/lib/mock-data";
+type Candle = { t: number; o: number; h: number; l: number; c: number; v: number };
 
 type Hover = { idx: number; px: number; py: number; price: number };
 

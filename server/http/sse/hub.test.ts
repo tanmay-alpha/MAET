@@ -6,15 +6,15 @@ import { RedisKeys } from "../../data/redis/keys";
 
 const TEST_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
 const r = new Redis(TEST_URL, { lazyConnect: true });
+const describeIntegration = process.env.TEST_REDIS_URL ? describe : describe.skip;
+if (process.env.TEST_REDIS_URL) process.env.UPSTASH_REDIS_URL = process.env.TEST_REDIS_URL;
 
-afterAll(async () => {
-  // cleanup
-  const keys = await r.keys("sse:*");
-  if (keys.length) await r.del(...keys);
-  r.disconnect();
-});
-
-describe("SseHub (integration)", () => {
+describeIntegration("SseHub (integration)", () => {
+  afterAll(async () => {
+    const keys = await r.keys("sse:*");
+    if (keys.length) await r.del(...keys);
+    r.disconnect();
+  });
   it("broadcasts a tick to two connections subscribed to RELIANCE", async () => {
     const hub = new SseHub({ writeQueueTimeoutMs: 200 });
     const a: { events: Array<[string, unknown]> } = { events: [] };

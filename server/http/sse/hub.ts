@@ -57,16 +57,11 @@ export class SseHub {
         c.send("tick", tick);
         c.lastWrite = Date.now();
       } catch {
-        c.send("dropped", { reason: "send_failed" });
+        try { c.send("dropped", { reason: "send_failed" }); } catch {}
         this.unregister(c.connId);
         c.close();
       } finally {
         c.pending--;
-      }
-      if (c.pending > 50) {
-        c.send("dropped", { reason: "slow_consumer" });
-        this.unregister(c.connId);
-        c.close();
       }
     }
   }
@@ -75,7 +70,7 @@ export class SseHub {
     const now = Date.now();
     for (const c of this.conns.values()) {
       if (now - c.lastWrite > HEARTBEAT_MS) {
-        c.send("dropped", { reason: "heartbeat_timeout" });
+        try { c.send("dropped", { reason: "heartbeat_timeout" }); } catch {}
         this.unregister(c.connId);
         c.close();
       }

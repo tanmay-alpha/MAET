@@ -22,12 +22,17 @@ export const TickSchema = z.object({
   bid: z.number().positive().optional(),
   ask: z.number().positive().optional(),
   source: z.enum(["angelone", "yahoo", "nse"]).default("yahoo"),
+  previousClose: z.number().positive().optional(),
+  change: z.number().optional(),
+  changePct: z.number().optional(),
+  marketState: z.string().optional(),
+  currency: z.string().optional(),
 });
 export type Tick = z.infer<typeof TickSchema>;
 
 export const CandleSchema = z.object({
   symbol: z.string(),
-  tf: z.enum(["1m", "1d"]),
+  tf: z.enum(["1m", "5m", "15m", "1h", "1d", "1wk"]),
   ts: z.string().datetime(),
   open: z.number().nonnegative(),
   high: z.number().nonnegative(),

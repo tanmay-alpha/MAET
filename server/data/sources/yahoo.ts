@@ -1,14 +1,11 @@
-import { getLogger } from "../../infra/logger";
-import type { Candle, Tick } from "@shared/types";
-import { UpstreamDegradedError, UpstreamPermanentError } from "@shared/types/errors";
+import type { Candle, Tick } from "../../../shared/types";
+import { UpstreamDegradedError, UpstreamPermanentError } from "../../../shared/types";
 
 // Upstream error classes live in shared/types/errors.ts so that all data/sources/*
 // modules can depend on them without coupling to a specific source (yahoo, nse, ...).
 // Per spec section 4, data/* may import from shared/ and infra/ but not from sibling data/*.
 
 export { UpstreamDegradedError, UpstreamPermanentError };
-
-const log = getLogger().child({ source: "yahoo" });
 
 const HOST = "query1.finance.yahoo.com";
 const FAIL_WINDOW_MS = 60_000;
@@ -67,21 +64,43 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 type YahooChartResp = {
   chart: {
     result?: Array<{
-      meta: { regularMarketPrice: number; regularMarketVolume: number; symbol: string };
+      meta: {
+        regularMarketPrice: number;
+        regularMarketVolume: number;
+        symbol: string;
+        chartPreviousClose?: number;
+        previousClose?: number;
+        marketState?: string;
+        currency?: string;
+        regularMarketTime?: number;
+      };
       timestamp?: number[];
-      indicators: { quote: Array<{ open: number[]; high: number[]; low: number[]; close: number[]; volume: number[] }> };
+      indicators: {
+        quote: Array<{
+          open: Array<number | null>;
+          high: Array<number | null>;
+          low: Array<number | null>;
+          close: Array<number | null>;
+          volume: Array<number | null>;
+        }>;
+      };
     }>;
     error?: unknown;
   };
 };
 
 function symbolToTicker(symbol: string): string {
+  if (symbol.startsWith("^")) return symbol;
   if (symbol.endsWith(".NS") || symbol.endsWith(".BO")) return symbol;
   return `${symbol}.NS`;
 }
 
-export async function getQuote(symbol: string): Promise<Tick> {
-  const ticker = symbolToTicker(symbol);
+export async function getQuote(
+  symbol: string,
+  tickerOverride?: string,
+  exchangeOverride?: "NSE" | "BSE"
+): Promise<Tick> {
+  const ticker = tickerOverride ?? symbolToTicker(symbol);
   return withRetry(async () => {
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`;
     const res = await fetch(url, { headers: { "User-Agent": "stock-market-backend/1.0" } });
@@ -91,14 +110,23 @@ export async function getQuote(symbol: string): Promise<Tick> {
     const data = (await res.json()) as YahooChartResp;
     const r = data.chart.result?.[0];
     if (!r) throw new UpstreamPermanentError("yahoo: empty result");
-    const exchange = ticker.endsWith(".NS") ? "NSE" : "BSE";
+    const exchange = exchangeOverride ?? (ticker.endsWith(".BO") ? "BSE" : "NSE");
+    const previousClose = r.meta.chartPreviousClose ?? r.meta.previousClose;
+    const change = previousClose ? r.meta.regularMarketPrice - previousClose : undefined;
     return {
       exchange,
-      symbol: ticker.replace(/\.(NS|BO)$/, ""),
+      symbol: symbol.replace(/\.(NS|BO)$/, ""),
       price: r.meta.regularMarketPrice,
       volume: r.meta.regularMarketVolume,
-      ts: new Date().toISOString(),
+      ts: r.meta.regularMarketTime
+        ? new Date(r.meta.regularMarketTime * 1000).toISOString()
+        : new Date().toISOString(),
       source: "yahoo",
+      previousClose,
+      change,
+      changePct: previousClose && change !== undefined ? (change / previousClose) * 100 : undefined,
+      marketState: r.meta.marketState,
+      currency: r.meta.currency,
     } satisfies Tick;
   });
 }
@@ -107,13 +135,13 @@ export async function getCandles(
   ticker: string,
   from: Date,
   to: Date,
-  tf: "1m" | "1d"
+  tf: Candle["tf"]
 ): Promise<Candle[]> {
   return withRetry(async () => {
     const fullTicker = symbolToTicker(ticker);
     const period1 = Math.floor(from.getTime() / 1000);
     const period2 = Math.floor(to.getTime() / 1000);
-    const interval = tf === "1m" ? "1m" : "1d";
+    const interval = tf === "1h" ? "60m" : tf;
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(fullTicker)}?period1=${period1}&period2=${period2}&interval=${interval}`;
     const res = await fetch(url, { headers: { "User-Agent": "stock-market-backend/1.0" } });
     if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo ${res.status}`);
@@ -123,17 +151,40 @@ export async function getCandles(
     if (!r) throw new UpstreamPermanentError("yahoo: empty result");
     const ts = r.timestamp ?? [];
     const q = r.indicators.quote[0];
+    if (!q) throw new UpstreamPermanentError("yahoo: empty quote data");
     const out: Candle[] = [];
     for (let i = 0; i < ts.length; i++) {
+      const open = q.open[i];
+      const high = q.high[i];
+      const low = q.low[i];
+      const close = q.close[i];
+      const volume = q.volume[i];
+
+      // Yahoo can include placeholder rows for future or incomplete sessions.
+      // Those rows have null/zero OHLC values and must never reach charts or
+      // strategy calculations as if they were real trades.
+      if (
+        !Number.isFinite(open) ||
+        !Number.isFinite(high) ||
+        !Number.isFinite(low) ||
+        !Number.isFinite(close) ||
+        open! <= 0 ||
+        high! <= 0 ||
+        low! <= 0 ||
+        close! <= 0
+      ) {
+        continue;
+      }
+
       out.push({
         symbol: fullTicker.replace(/\.(NS|BO)$/, ""),
         tf,
         ts: new Date(ts[i] * 1000).toISOString(),
-        open: q.open[i] ?? 0,
-        high: q.high[i] ?? 0,
-        low: q.low[i] ?? 0,
-        close: q.close[i] ?? 0,
-        volume: q.volume[i] ?? 0,
+        open: open!,
+        high: high!,
+        low: low!,
+        close: close!,
+        volume: Number.isFinite(volume) && volume! >= 0 ? volume! : 0,
       });
     }
     return out;

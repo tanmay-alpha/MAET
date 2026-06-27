@@ -1,10 +1,39 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { PlacePaperOrder } from "@/hooks/use-paper-account";
 
-export function OrderPanel({ symbol, price }: { symbol: string; price: number }) {
+export function OrderPanel({
+  symbol,
+  price,
+  availableCash,
+  onPlace,
+}: {
+  symbol: string;
+  price?: number;
+  availableCash: number;
+  onPlace: (order: PlacePaperOrder) => { ok: boolean; message: string };
+}) {
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [qty, setQty] = useState(1);
-  const [limit, setLimit] = useState(price.toFixed(2));
+  const [limit, setLimit] = useState(price?.toFixed(2) ?? "");
   const [type, setType] = useState<"MKT" | "LMT" | "SL">("LMT");
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    setLimit(price?.toFixed(2) ?? "");
+    setMessage("");
+  }, [price, symbol]);
+
+  const submit = () => {
+    const result = onPlace({
+      symbol,
+      side,
+      qty,
+      type: type === "MKT" ? "MARKET" : type === "LMT" ? "LIMIT" : "STOP",
+      triggerPrice: type === "MKT" ? undefined : Number(limit),
+      marketPrice: price,
+    });
+    setMessage(result.message);
+  };
 
   return (
     <div className="flex h-full flex-col bg-panel">
@@ -12,7 +41,7 @@ export function OrderPanel({ symbol, price }: { symbol: string; price: number })
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Order</div>
         <div className="mt-0.5 flex items-baseline gap-2">
           <div className="font-semibold">{symbol}</div>
-          <div className="font-mono tabular text-xs text-muted-foreground">{price.toFixed(2)}</div>
+          <div className="font-mono tabular text-xs text-muted-foreground">{price?.toFixed(2) ?? "Waiting for quote"}</div>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-1 p-2">
@@ -46,21 +75,26 @@ export function OrderPanel({ symbol, price }: { symbol: string; price: number })
         )}
         <div className="grid grid-cols-2 gap-2 pt-1 text-[11px] text-muted-foreground">
           <div className="rounded bg-panel-elevated px-2 py-1.5">
-            <div>Margin</div>
-            <div className="font-mono tabular text-foreground">₹{(qty * price * 0.2).toFixed(0)}</div>
+            <div>Notional</div>
+            <div className="font-mono tabular text-foreground">₹{price ? (qty * price).toFixed(0) : "—"}</div>
           </div>
           <div className="rounded bg-panel-elevated px-2 py-1.5">
-            <div>Charges</div>
-            <div className="font-mono tabular text-foreground">₹{(qty * price * 0.0005).toFixed(2)}</div>
+            <div>Mode</div>
+            <div className="font-mono tabular text-foreground">Paper</div>
           </div>
         </div>
-        <button className={`w-full rounded py-2.5 text-sm font-semibold text-white ${side === "BUY" ? "bg-bull hover:opacity-90" : "bg-bear hover:opacity-90"}`}>
+        <button
+          onClick={submit}
+          disabled={!price || qty <= 0}
+          className={`w-full rounded py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${side === "BUY" ? "bg-bull hover:opacity-90" : "bg-bear hover:opacity-90"}`}
+        >
           Place {side} order
         </button>
+        {message && <div className="text-center text-[11px] text-muted-foreground">{message}</div>}
       </div>
       <div className="mt-auto border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-        <div className="flex justify-between"><span>Available</span><span className="font-mono tabular text-foreground">₹2,48,532</span></div>
-        <div className="flex justify-between"><span>Used margin</span><span className="font-mono tabular text-foreground">₹1,12,840</span></div>
+        <div className="flex justify-between"><span>Paper cash</span><span className="font-mono tabular text-foreground">₹{availableCash.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span></div>
+        <div className="mt-1">Stored only in this browser. No broker order is sent.</div>
       </div>
     </div>
   );

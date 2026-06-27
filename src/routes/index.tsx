@@ -1,7 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowUpRight, Activity, FlaskConical, Table2, LineChart, Layers, Github, Keyboard } from "lucide-react";
-import { INDICES, WATCHLIST } from "@/lib/mock-data";
-import { useLivePrice } from "@/hooks/use-live-price";
+import { INDICES, WATCHLIST } from "@/lib/market-catalog";
+import { useMarketCandles } from "@/hooks/use-market-candles";
+import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { TiltCard } from "@/components/trading/tilt-card";
 import { LiveTape } from "@/components/trading/live-tape";
 import { DepthMeter } from "@/components/trading/depth-meter";
@@ -24,13 +25,26 @@ export const Route = createFileRoute("/")({
   component: Landing,
 });
 
-function LiveTickerCell({ symbol, price }: { symbol: string; price: number }) {
-  const { price: p, dir, tick } = useLivePrice(price, { volatility: 0.0008, interval: 1400 });
+const INDEX_KEYS: Record<string, string> = {
+  "NIFTY 50": "NIFTY50",
+  "BANK NIFTY": "BANKNIFTY",
+  SENSEX: "SENSEX",
+  "NIFTY IT": "NIFTYIT",
+  "NIFTY FMCG": "NIFTYFMCG",
+  "INDIA VIX": "INDIAVIX",
+};
+const LANDING_SYMBOLS = [
+  ...WATCHLIST.map((item) => item.symbol),
+  ...Object.values(INDEX_KEYS),
+];
+
+function LiveTickerCell({ symbol, price, change }: { symbol: string; price?: number; change?: number }) {
+  const dir = change === undefined || change === 0 ? "flat" : change > 0 ? "up" : "down";
   return (
     <div className="flex items-center gap-2 px-5 text-xs">
       <span className="font-semibold tracking-wide">{symbol}</span>
-      <span key={tick} className={`font-mono tabular text-foreground rounded-sm px-1 ${dir === "up" ? "flash-bull" : dir === "down" ? "flash-bear" : ""}`}>
-        {p.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+      <span className="font-mono tabular text-foreground rounded-sm px-1">
+        {price?.toLocaleString("en-IN", { maximumFractionDigits: 2 }) ?? "—"}
       </span>
       <span className={`font-mono tabular text-[10px] ${dir === "up" ? "text-bull" : dir === "down" ? "text-bear" : "text-muted-foreground"}`}>
         {dir === "up" ? "▲" : dir === "down" ? "▼" : "▬"}
@@ -39,26 +53,30 @@ function LiveTickerCell({ symbol, price }: { symbol: string; price: number }) {
   );
 }
 
-function IndexCard({ symbol, basePrice, changePct }: { symbol: string; basePrice: number; changePct: number }) {
-  const { price, dir } = useLivePrice(basePrice, { volatility: 0.0006, interval: 1600 });
-  const positive = changePct >= 0;
+function IndexCard({ symbol, price, changePct }: { symbol: string; price?: number; changePct?: number }) {
+  const positive = (changePct ?? 0) >= 0;
   return (
     <div className="group relative overflow-hidden rounded-lg border border-border bg-panel/60 px-4 py-3">
       <div className="flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{symbol}</span>
-        <span className={`h-1.5 w-1.5 rounded-full ${dir === "up" ? "bg-bull" : dir === "down" ? "bg-bear" : "bg-muted-foreground"} ${dir !== "flat" ? "animate-pulse" : ""}`} />
+        <span className={`h-1.5 w-1.5 rounded-full ${positive ? "bg-bull" : "bg-bear"}`} />
       </div>
       <div className="mt-1 font-mono tabular text-lg font-semibold">
-        {price.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+        {price?.toLocaleString("en-IN", { maximumFractionDigits: 2 }) ?? "—"}
       </div>
       <div className={`font-mono tabular text-[11px] ${positive ? "text-bull" : "text-bear"}`}>
-        {positive ? "+" : ""}{changePct.toFixed(2)}%
+        {changePct === undefined ? "Waiting for quote" : `${positive ? "+" : ""}${changePct.toFixed(2)}%`}
       </div>
     </div>
   );
 }
 
 function Landing() {
+  const { quoteMap, streamConnected } = useMarketQuotes(LANDING_SYMBOLS);
+  const relianceQuote = quoteMap.get("RELIANCE");
+  const relianceCandles = useMarketCandles("RELIANCE", "5m", "5d");
+  const chartCloses = (relianceCandles.data?.candles ?? []).map((candle) => candle.close).slice(-90);
+  const latestBar = relianceCandles.data?.candles.at(-1);
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Nav — single Open Terminal button lives here */}
@@ -84,7 +102,7 @@ function Landing() {
           </nav>
           <div className="ml-auto flex items-center gap-2">
             <a
-              href="https://github.com/tanmay-alpha/indian-algo-trading-platform"
+              href="https://github.com/tanmay-alpha/MAET"
               target="_blank"
               rel="noreferrer"
               className="hidden items-center gap-1.5 rounded-md border border-border bg-panel px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground md:flex"
@@ -105,7 +123,12 @@ function Landing() {
       <div className="border-b border-border bg-panel/80 overflow-hidden">
         <div className="flex ticker-scroll whitespace-nowrap py-2">
           {[...WATCHLIST, ...WATCHLIST].map((w, i) => (
-            <LiveTickerCell key={i} symbol={w.symbol} price={w.price} />
+            <LiveTickerCell
+              key={i}
+              symbol={w.symbol}
+              price={quoteMap.get(w.symbol)?.price}
+              change={quoteMap.get(w.symbol)?.change}
+            />
           ))}
         </div>
       </div>
@@ -123,7 +146,7 @@ function Landing() {
                 <span className="absolute inset-0 animate-ping rounded-full bg-bull/70" />
                 <span className="relative h-1.5 w-1.5 rounded-full bg-bull" />
               </span>
-              <span className="font-mono tabular">NSE · BSE · MCX</span>
+              <span className="font-mono tabular">NSE · SENSEX</span>
               <span className="text-muted-foreground/60">/</span>
               <span>Research terminal — not a broker</span>
             </div>
@@ -137,7 +160,7 @@ function Landing() {
             </h1>
 
             <p className="mt-6 max-w-lg text-base leading-relaxed text-muted-foreground">
-              MAET is a research terminal for Indian equities — a scanner, a tick-grade chart,
+              MAET is a research terminal for Indian equities — a delayed-market chart,
               a paper-trading desk, and a strategy lab. No order routing, no broker integration,
               no real money. Just the workspace you wish you had while studying the market.
             </p>
@@ -184,8 +207,14 @@ function Landing() {
                     <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">NSE · Equity</div>
                   </div>
                   <div className="flex items-baseline gap-2">
-                    <span className="font-mono tabular font-semibold">2,945.30</span>
-                    <span className="font-mono tabular text-xs text-bull">+1.10%</span>
+                    <span className="font-mono tabular font-semibold">
+                      {relianceQuote?.price.toLocaleString("en-IN", { minimumFractionDigits: 2 }) ?? "—"}
+                    </span>
+                    <span className={`font-mono tabular text-xs ${(relianceQuote?.changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                      {relianceQuote?.changePct === undefined
+                        ? "Waiting for quote"
+                        : `${relianceQuote.changePct >= 0 ? "+" : ""}${relianceQuote.changePct.toFixed(2)}%`}
+                    </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 border-b border-border px-3 py-1.5 text-[11px]">
@@ -194,18 +223,18 @@ function Landing() {
                   ))}
                   <span className="ml-auto flex items-center gap-1 text-[10px] text-bull">
                     <span className="relative flex h-1.5 w-1.5"><span className="absolute inset-0 animate-ping rounded-full bg-bull/70" /><span className="relative h-1.5 w-1.5 rounded-full bg-bull" /></span>
-                    Simulated feed
+                    {streamConnected ? "Yahoo delayed feed" : "Connecting to market feed"}
                   </span>
                 </div>
                 <div className="px-1">
-                  <LiveMiniChart seed={2945} height={260} />
+                  <LiveMiniChart data={chartCloses} height={260} />
                 </div>
                 <div className="grid grid-cols-4 gap-px border-t border-border bg-border text-xs">
                   {[
-                    { l: "Open", v: "2,913.15" },
-                    { l: "High", v: "2,958.40", c: "text-bull" },
-                    { l: "Low", v: "2,902.80", c: "text-bear" },
-                    { l: "Vol", v: "4.2M" },
+                    { l: "Open", v: latestBar?.open.toFixed(2) ?? "—" },
+                    { l: "High", v: latestBar?.high.toFixed(2) ?? "—", c: "text-bull" },
+                    { l: "Low", v: latestBar?.low.toFixed(2) ?? "—", c: "text-bear" },
+                    { l: "Bar vol", v: latestBar ? latestBar.volume.toLocaleString("en-IN") : "—" },
                   ].map((s) => (
                     <div key={s.l} className="bg-panel px-3 py-2">
                       <div className="text-[9px] uppercase tracking-[0.16em] text-muted-foreground">{s.l}</div>
@@ -235,12 +264,17 @@ function Landing() {
               <h2 className="mt-1 font-serif text-2xl tracking-tight md:text-3xl">Indices &amp; sectors at a glance.</h2>
             </div>
             <div className="font-mono tabular text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              Simulated · 1s tick
+              {streamConnected ? "Yahoo delayed · live connection" : "Connecting to market data"}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
             {INDICES.map((i) => (
-              <IndexCard key={i.symbol} symbol={i.symbol} basePrice={i.price} changePct={i.changePct} />
+              <IndexCard
+                key={i.symbol}
+                symbol={i.symbol}
+                price={quoteMap.get(INDEX_KEYS[i.symbol])?.price}
+                changePct={quoteMap.get(INDEX_KEYS[i.symbol])?.changePct}
+              />
             ))}
           </div>
           <div className="mt-6"><SectorStrip /></div>
@@ -258,7 +292,8 @@ function Landing() {
               </h2>
             </div>
             <p className="max-w-sm text-sm text-muted-foreground">
-              Treemap shaded by intraday change. Breadth and flows are simulated for research purposes.
+              Treemap and watchlist breadth use the latest delayed Yahoo quotes. Institutional flows stay
+              blank because no verified upstream is connected.
             </p>
           </div>
           <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
@@ -297,16 +332,15 @@ function Landing() {
               Practice the desk. <em className="text-muted-foreground/80 italic">Risk nothing.</em>
             </h2>
             <p className="mt-5 max-w-md text-sm leading-relaxed text-muted-foreground">
-              A simulated order book, simulated tape, and a play-money P&amp;L. Place buys and sells against
-              a synthetic feed and watch fills, slippage, and book impact behave the way live ones do.
-              Nothing leaves the browser — there is no broker behind this.
+              Place browser-only paper orders against the latest delayed market quote and track positions
+              without risking money. Nothing leaves the browser and no broker order is sent.
             </p>
 
             <ul className="mt-7 space-y-3 text-sm">
               {[
-                ["Synthetic L2 book", "10-level depth with realistic spread and refresh."],
-                ["Tape replay", "Trade-by-trade tape so you learn to read prints, not just candles."],
-                ["Play-money P&L", "Reset any time. Position size, stop, target — all paper."],
+                ["Real quote marks", "Paper fills and positions use the Yahoo market quote, not a random walk."],
+                ["Honest data limits", "Order-book depth and institutional flows remain blank without a verified feed."],
+                ["Play-money P&L", "Reset any time. Market, limit, and stop orders stay in this browser."],
                 ["Keyboard-first", "B / S to ticket, ⌘K to jump symbols, Esc to cancel."],
               ].map(([t, d]) => (
                 <li key={t} className="flex gap-3">
@@ -330,9 +364,8 @@ function Landing() {
                 <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Paper P&amp;L</div>
                 <span className="rounded-sm bg-accent px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em] text-muted-foreground">simulated</span>
               </div>
-              <div className="mt-1 font-mono tabular text-3xl font-semibold text-bull">+₹1,738.50</div>
-              <div className="mt-1 font-mono tabular text-[11px] text-muted-foreground">4 open · 12 today · session resets daily</div>
-              <div className="mt-4 h-20"><LiveMiniChart seed={100} height={80} /></div>
+              <div className="mt-1 font-mono tabular text-3xl font-semibold">₹0.00</div>
+              <div className="mt-1 font-mono tabular text-[11px] text-muted-foreground">No paper trades recorded in this browser</div>
             </div>
           </div>
         </div>
@@ -359,7 +392,7 @@ function Landing() {
               { icon: LineChart, t: "Tick-grade charts", d: "Candles, indicators, drawing tools, multi-timeframe. Built for reading, not for screenshots." },
               { icon: Table2, t: "Stock screener", d: "Filter NSE/BSE universe by fundamentals, momentum, breadth and your own derived columns." },
               { icon: FlaskConical, t: "Historical replay", d: "Step through past sessions candle-by-candle and watch your rules trigger as the day unfolds." },
-              { icon: Activity, t: "Paper execution", d: "Promote a rule-set to the paper desk and let it ticket against the simulated feed." },
+              { icon: Activity, t: "Paper execution", d: "Place browser-only orders against delayed market quotes without sending anything to a broker." },
               { icon: Layers, t: "Versioned ideas", d: "Every tweak is its own revision. Compare equity curves side-by-side, keep the one that holds up." },
               { icon: Keyboard, t: "Keyboard-first UX", d: "Roving focus across screener rows, hotkeys in the terminal — TradingView-style ergonomics." },
             ].map((f) => (
@@ -379,12 +412,12 @@ function Landing() {
           <div className="text-[10px] uppercase tracking-[0.22em] text-primary">Coverage</div>
           <h2 className="mt-2 font-serif text-3xl tracking-tight md:text-4xl">Symbols you can study today.</h2>
           <p className="mt-2 max-w-xl text-sm text-muted-foreground">
-            Universe loaded from public NSE / BSE listings. Live quotes are simulated in the demo; bring
-            your own data adapter to wire a real feed.
+            NSE equity quotes and candles are loaded from Yahoo Finance through the MAET backend. Quotes
+            may be delayed and show the most recent completed session when the exchange is closed.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border md:grid-cols-3 lg:grid-cols-6">
-          {["NSE Equity", "BSE Equity", "NSE F&O", "BSE F&O", "Currency", "MCX Commodity"].map((m) => (
+          {["NSE Equity", "NSE Indices", "SENSEX"].map((m) => (
             <div key={m} className="bg-panel px-4 py-6 text-center text-sm tracking-tight">{m}</div>
           ))}
         </div>
@@ -422,7 +455,7 @@ function Landing() {
             </div>
             <span className="max-w-2xl text-muted-foreground/80">
               Research &amp; education tool. Not a broker, not investment advice, and not a SEBI-registered
-              intermediary. All quotes shown in the demo are simulated.
+              intermediary. Market quotes are supplied by Yahoo Finance and may be delayed.
             </span>
           </div>
           <div className="flex gap-5">
@@ -430,7 +463,7 @@ function Landing() {
             <a href="#" className="hover:text-foreground">API</a>
             <a href="#" className="hover:text-foreground">Status</a>
             <a href="#" className="hover:text-foreground">Privacy</a>
-            <a href="https://github.com/tanmay-alpha/indian-algo-trading-platform" target="_blank" rel="noreferrer" className="hover:text-foreground">GitHub</a>
+            <a href="https://github.com/tanmay-alpha/MAET" target="_blank" rel="noreferrer" className="hover:text-foreground">GitHub</a>
           </div>
         </div>
       </footer>

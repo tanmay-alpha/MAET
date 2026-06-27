@@ -1,61 +1,59 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { STRATEGIES } from "@/lib/mock-data";
-import { Play, Pause, Settings2, Plus } from "lucide-react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { Activity, ArrowUpRight, GitCompareArrows } from "lucide-react";
 
 export const Route = createFileRoute("/_app/strategies")({
   head: () => ({ meta: [{ title: "Strategies — MAET" }] }),
   component: Strategies,
 });
 
+const templates = [
+  {
+    id: "sma_cross",
+    name: "SMA crossover",
+    description: "Long-only trend strategy. Buy when the fast moving average crosses above the slow average; exit on the reverse cross.",
+    defaults: "Fast 20 · Slow 50",
+    icon: GitCompareArrows,
+  },
+  {
+    id: "rsi",
+    name: "RSI reversal",
+    description: "Long-only mean-reversion strategy. Enter when RSI recovers from oversold and exit when it falls back from overbought.",
+    defaults: "Period 14 · 30 / 70",
+    icon: Activity,
+  },
+];
+
 function Strategies() {
   return (
     <div className="h-full overflow-y-auto p-4">
-      <div className="mb-4 flex items-end justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Strategies</h1>
-          <p className="text-xs text-muted-foreground">{STRATEGIES.filter((s) => s.status === "Live").length} live · {STRATEGIES.length} total</p>
-        </div>
-        <button className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">
-          <Plus className="h-3.5 w-3.5" /> New strategy
-        </button>
+      <div className="mb-4">
+        <h1 className="text-xl font-semibold">Strategy templates</h1>
+        <p className="text-xs text-muted-foreground">Two deterministic engines are available. No fabricated live performance is shown.</p>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {STRATEGIES.map((s) => (
-          <div key={s.id} className="rounded-lg border border-border bg-panel p-4 transition hover:border-primary/40">
-            <div className="flex items-start justify-between">
+      <div className="grid gap-3 md:grid-cols-2">
+        {templates.map((template) => (
+          <div key={template.id} className="rounded-lg border border-border bg-panel p-5">
+            <div className="flex items-start gap-3">
+              <div className="rounded-md bg-primary/15 p-2 text-primary"><template.icon className="h-5 w-5" /></div>
               <div>
-                <div className="font-semibold">{s.name}</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">{s.type} · {s.asset}</div>
-              </div>
-              <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${s.status === "Live" ? "bg-bull/20 text-bull" : s.status === "Paused" ? "bg-bear/20 text-bear" : "bg-primary/20 text-primary"}`}>{s.status}</span>
-            </div>
-
-            <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">P&L</div>
-                <div className={`mt-0.5 font-mono tabular font-semibold ${s.pnl >= 0 ? "text-bull" : "text-bear"}`}>{s.pnl >= 0 ? "+" : ""}₹{s.pnl.toLocaleString("en-IN")}</div>
-              </div>
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Win rate</div>
-                <div className="mt-0.5 font-mono tabular font-semibold">{s.winRate}%</div>
-              </div>
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Sharpe</div>
-                <div className="mt-0.5 font-mono tabular font-semibold">{s.sharpe.toFixed(2)}</div>
+                <div className="font-semibold">{template.name}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{template.defaults}</div>
               </div>
             </div>
-
-            <div className="mt-4 flex items-center gap-1 border-t border-border pt-3">
-              <button className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-panel-elevated px-2 py-1.5 text-xs hover:bg-accent">
-                {s.status === "Live" ? <><Pause className="h-3 w-3" /> Pause</> : <><Play className="h-3 w-3" /> Start</>}
-              </button>
-              <button className="flex items-center justify-center rounded-md bg-panel-elevated px-2 py-1.5 text-xs hover:bg-accent">
-                <Settings2 className="h-3 w-3" />
-              </button>
+            <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{template.description}</p>
+            <div className="mt-5 border-t border-border pt-4">
+              <Link to="/backtest" className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground">
+                Run on real candles <ArrowUpRight className="h-3.5 w-3.5" />
+              </Link>
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="mt-4 rounded-lg border border-border bg-panel px-5 py-8 text-center">
+        <div className="text-sm font-medium">No deployed strategies</div>
+        <div className="mt-1 text-xs text-muted-foreground">MAET currently performs research backtests and browser-only paper orders. It does not route automated broker orders.</div>
       </div>
     </div>
   );

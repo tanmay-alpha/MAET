@@ -4,9 +4,13 @@ import { RedisKeys } from "../data/redis/keys";
 import { evaluate, type EvalCtx } from "../domain/screener/engine";
 import type { Screener, Tick } from "@shared/types";
 import type { Fundamentals } from "../data/sources/nse";
-import { logger } from "../infra/logger";
-
-const log = logger.child({ worker: "screener-runner" });
+function getLog() {
+  try {
+    return require("../infra/logger").getLogger().child({ worker: "screener-runner" });
+  } catch {
+    return { warn: (..._args: unknown[]) => {} };
+  }
+}
 
 const CACHE_TTL_S = 30;
 
@@ -43,7 +47,7 @@ export class ScreenerRunner {
       const r = getRedis();
       await r.set(RedisKeys.screenerCriteriaKey(exchange), JSON.stringify(list), "EX", CACHE_TTL_S);
     } catch (e) {
-      log.warn({ exchange, err: (e as Error).message }, "redis write skipped");
+      getLog().warn({ exchange, err: (e as Error).message }, "redis write skipped");
     }
   }
 
@@ -69,7 +73,7 @@ export class ScreenerRunner {
               fund = await this.getFundamentals(tick.symbol);
               if (fund) this.fundamentalsCache.set(tick.symbol, fund);
             } catch (e) {
-              log.warn({ symbol: tick.symbol, err: (e as Error).message }, "fundamentals fetch failed");
+              getLog().warn({ symbol: tick.symbol, err: (e as Error).message }, "fundamentals fetch failed");
             }
           }
         }
@@ -80,7 +84,7 @@ export class ScreenerRunner {
           bus.emit("screener:match", { userId: s.userId, screenerId: s.id, symbol: tick.symbol, tick });
         }
       } catch (e) {
-        log.warn({ screenerId: s.id, err: (e as Error).message }, "evaluate failed");
+        getLog().warn({ screenerId: s.id, err: (e as Error).message }, "evaluate failed");
       }
     }
   }

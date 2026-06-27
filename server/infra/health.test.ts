@@ -10,4 +10,17 @@ describe("app health", () => {
     expect(body.status).toBe("ok");
     expect(body.checks).toBeDefined();
   });
+
+  it("adds CORS headers only for an allowed frontend origin", async () => {
+    const app = createApp();
+    const allowed = await app.fetch(new Request("http://localhost/api/health", {
+      headers: { origin: "https://maet-pi.vercel.app" },
+    }));
+    expect(allowed.headers.get("access-control-allow-origin")).toBe("https://maet-pi.vercel.app");
+
+    const rejected = await app.fetch(new Request("http://localhost/api/health", {
+      headers: { origin: "https://example.invalid" },
+    }));
+    expect(rejected.headers.get("access-control-allow-origin")).toBeNull();
+  });
 });

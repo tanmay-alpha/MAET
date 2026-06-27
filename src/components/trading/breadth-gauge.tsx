@@ -1,22 +1,15 @@
-import { useEffect, useState } from "react";
+import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { WATCHLIST } from "@/lib/market-catalog";
 
 export function BreadthGauge() {
-  const [adv, setAdv] = useState(1342);
-  const [dec, setDec] = useState(908);
-  const [unc, setUnc] = useState(112);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      setAdv((v) => Math.max(0, v + Math.round((Math.random() - 0.45) * 8)));
-      setDec((v) => Math.max(0, v + Math.round((Math.random() - 0.55) * 8)));
-      setUnc((v) => Math.max(0, v + Math.round((Math.random() - 0.5) * 3)));
-    }, 1500);
-    return () => clearInterval(id);
-  }, []);
-
+  const { quoteMap } = useMarketQuotes(WATCHLIST.map((item) => item.symbol));
+  const changes = [...quoteMap.values()].map((quote) => quote.changePct).filter((value) => value !== undefined);
+  const adv = changes.filter((value) => value > 0).length;
+  const dec = changes.filter((value) => value < 0).length;
+  const unc = changes.filter((value) => value === 0).length;
   const total = adv + dec + unc;
-  const advPct = (adv / total) * 100;
-  const decPct = (dec / total) * 100;
+  const advPct = total ? (adv / total) * 100 : 0;
+  const decPct = total ? (dec / total) * 100 : 0;
   const ratio = adv / Math.max(1, dec);
 
   // gauge angle: -90 (full bear) to +90 (full bull)
@@ -26,8 +19,8 @@ export function BreadthGauge() {
   return (
     <div className="rounded-lg border border-border bg-panel p-5">
       <div className="flex items-center justify-between">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Market breadth · NSE</div>
-        <div className="font-mono tabular text-[10px] text-muted-foreground">A/D · live</div>
+        <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Watchlist breadth · NSE</div>
+        <div className="font-mono tabular text-[10px] text-muted-foreground">{total}/{WATCHLIST.length} quotes</div>
       </div>
 
       <div className="relative mx-auto mt-3 h-[120px] w-[220px]">
@@ -57,7 +50,7 @@ export function BreadthGauge() {
           </g>
         </svg>
         <div className="absolute inset-x-0 bottom-0 text-center">
-          <div className="font-mono tabular text-2xl font-semibold">{ratio.toFixed(2)}</div>
+          <div className="font-mono tabular text-2xl font-semibold">{total ? ratio.toFixed(2) : "—"}</div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Adv / Dec</div>
         </div>
       </div>

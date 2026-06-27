@@ -10,6 +10,10 @@ export function getRedis(): Redis {
     maxRetriesPerRequest: 3,
     enableReadyCheck: true,
   });
+  // Every ioredis instance needs an error listener; callers still receive
+  // rejected commands, while transient connection errors no longer become
+  // process-level unhandled events.
+  client.on("error", () => {});
   return client;
 }
 
@@ -17,6 +21,17 @@ export async function setnxWithTtl(key: string, value: string, ttlSeconds: numbe
   const r = getRedis();
   const result = await r.set(key, value, "EX", ttlSeconds, "NX");
   return result === "OK";
+}
+
+export async function closeRedis(): Promise<void> {
+  if (!client) return;
+  const current = client;
+  client = undefined;
+  try {
+    await current.quit();
+  } catch {
+    current.disconnect(false);
+  }
 }
 
 export const redis = new Proxy({} as Redis, {

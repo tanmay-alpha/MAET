@@ -1,7 +1,16 @@
-import { WATCHLIST } from "@/lib/mock-data";
 import { Search } from "lucide-react";
+import type { MarketQuote } from "@/lib/market-api";
+import { WATCHLIST } from "@/lib/market-catalog";
 
-export function Watchlist({ active, onSelect }: { active: string; onSelect: (s: string) => void }) {
+export function Watchlist({
+  active,
+  onSelect,
+  quotes,
+}: {
+  active: string;
+  onSelect: (symbol: string) => void;
+  quotes: Map<string, MarketQuote>;
+}) {
   return (
     <div className="flex h-full flex-col bg-panel">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -17,22 +26,27 @@ export function Watchlist({ active, onSelect }: { active: string; onSelect: (s: 
         <div className="col-span-3 text-right">Chg%</div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {WATCHLIST.map((s) => (
-          <button
-            key={s.symbol}
-            onClick={() => onSelect(s.symbol)}
-            className={`grid w-full grid-cols-12 items-center px-3 py-2 text-xs transition-colors hover:bg-accent ${active === s.symbol ? "bg-accent" : ""}`}
-          >
-            <div className="col-span-5 text-left">
-              <div className="font-medium">{s.symbol}</div>
-              <div className="truncate text-[10px] text-muted-foreground">{s.name}</div>
-            </div>
-            <div className="col-span-4 text-right font-mono tabular">{s.price.toFixed(2)}</div>
-            <div className={`col-span-3 text-right font-mono tabular ${s.change >= 0 ? "text-bull" : "text-bear"}`}>
-              {s.changePct >= 0 ? "+" : ""}{s.changePct.toFixed(2)}%
-            </div>
-          </button>
-        ))}
+        {WATCHLIST.map((item) => {
+          const quote = quotes.get(item.symbol);
+          const price = quote?.price;
+          const changePct = quote?.changePct;
+          return (
+            <button
+              key={item.symbol}
+              onClick={() => onSelect(item.symbol)}
+              className={`grid w-full grid-cols-12 items-center px-3 py-2 text-xs transition-colors hover:bg-accent ${active === item.symbol ? "bg-accent" : ""}`}
+            >
+              <div className="col-span-5 text-left">
+                <div className="font-medium">{item.symbol}</div>
+                <div className="truncate text-[10px] text-muted-foreground">{item.name}</div>
+              </div>
+              <div className="col-span-4 text-right font-mono tabular">{price?.toFixed(2) ?? "—"}</div>
+              <div className={`col-span-3 text-right font-mono tabular ${(changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                {changePct === undefined ? "—" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`}
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

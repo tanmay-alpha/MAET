@@ -4,6 +4,7 @@ import { RedisKeys } from "./keys";
 
 const TEST_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
 const r = new Redis(TEST_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
+const describeIntegration = process.env.TEST_REDIS_URL ? describe : describe.skip;
 
 describe("RedisKeys", () => {
   it("quoteKey formats cache:quote:NSE:RELIANCE", () => {
@@ -19,7 +20,7 @@ describe("RedisKeys", () => {
   });
 });
 
-describe("redis (integration)", () => {
+describeIntegration("redis (integration)", () => {
   afterAll(() => r.disconnect());
 
   it("SETNX and TTL on idempotencyKey", async () => {

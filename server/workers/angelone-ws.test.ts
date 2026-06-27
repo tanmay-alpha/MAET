@@ -25,9 +25,13 @@ describe("AngelOneWorker", () => {
     // Simulate an incoming message via the fake socket
     const sock = (w as any).sockets.get("u1");
     sock.__push({
-      last_traded_price: 100,
-      volume_traded_for_the_day: 1,
-      exchange_timestamp: new Date().toISOString(),
+      type: "sf",
+      data: {
+        symbol: "RELIANCE",
+        last_traded_price: 100,
+        volume_traded_for_the_day: 1,
+        exchange_timestamp: new Date().toISOString(),
+      },
     });
     await new Promise((r) => setTimeout(r, 20));
     expect(received.length).toBeGreaterThanOrEqual(1);

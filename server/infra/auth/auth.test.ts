@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
-import { createApp } from "../../app";
 import { requireAuth, tryAuth, verifyJwt, __resetJwksCacheForTests } from "../../api/trpc/auth";
 import { resetConfigForTests } from "../../config";
+import type { H3Event } from "h3";
 
 // env must be set before any module that calls getConfig() is imported.
 // We import lazily inside the suite to ensure beforeAll runs first.
@@ -14,11 +14,10 @@ beforeAll(() => {
 // Mirrors the pattern in server/infra/health.test.ts: createApp() returns
 // an h3 app whose .fetch() handles a standard Request.
 function makeEvent(authHeader?: string) {
-  const app = createApp();
-  const headers = new Headers();
-  if (authHeader) headers.set("authorization", authHeader);
-  // requireAuth / tryAuth only read the header; the path is irrelevant.
-  return app.fetch(new Request("http://localhost/", { headers }));
+  return {
+    node: { req: { headers: authHeader ? { authorization: authHeader } : {} } },
+    context: {},
+  } as unknown as H3Event;
 }
 
 describe("requireAuth — header parsing", () => {
@@ -79,7 +78,7 @@ describe("verifyJwt — error classification", () => {
     // unrelated JWKS. jose will throw JWSSignatureVerificationFailed
     // which we map to null.
     const { generateKeyPair, exportJWK, SignJWT } = await import("jose");
-    const { privateKey, publicKey } = await generateKeyPair("RS256");
+    const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
     const privateJwk = await exportJWK(privateKey);
     privateJwk.alg = "RS256";
     privateJwk.kid = "test-kid";
@@ -93,7 +92,7 @@ describe("verifyJwt — error classification", () => {
     // returns our key. The verifyJwt code path will fetch from
     // SUPABASE_URL/auth/v1/.well-known/jwks.json.
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async (input: any) => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.url;
       if (url.endsWith("/auth/v1/.well-known/jwks.json")) {
         return new Response(JSON.stringify({ keys: [publicJwk] }), {
@@ -102,7 +101,7 @@ describe("verifyJwt — error classification", () => {
         });
       }
       return originalFetch(input);
-    };
+    }) as typeof fetch;
     __resetJwksCacheForTests();
 
     try {

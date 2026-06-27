@@ -20,6 +20,62 @@ describe("yahoo source", () => {
     expect(t.exchange).toBe("NSE");
   });
 
+  it("uses Yahoo's market timestamp and previous close metadata", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({
+        chart: {
+          result: [{
+            meta: {
+              regularMarketPrice: 105,
+              regularMarketVolume: 10,
+              regularMarketTime: 1_700_000_000,
+              chartPreviousClose: 100,
+              currency: "INR",
+              symbol: "RELIANCE.NS",
+            },
+          }],
+        },
+      }))) as unknown as typeof fetch;
+
+    const tick = await getQuote("RELIANCE");
+    expect(tick.ts).toBe(new Date(1_700_000_000 * 1000).toISOString());
+    expect(tick.previousClose).toBe(100);
+    expect(tick.change).toBe(5);
+    expect(tick.changePct).toBe(5);
+    expect(tick.currency).toBe("INR");
+  });
+
+  it("drops null and zero-value Yahoo candle placeholders", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({
+        chart: {
+          result: [{
+            meta: { regularMarketPrice: 105, regularMarketVolume: 10, symbol: "RELIANCE.NS" },
+            timestamp: [1_700_000_000, 1_700_000_300, 1_700_000_600],
+            indicators: {
+              quote: [{
+                open: [100, 0, null],
+                high: [106, 0, null],
+                low: [99, 0, null],
+                close: [105, 0, null],
+                volume: [1234, 0, null],
+              }],
+            },
+          }],
+        },
+      }))) as unknown as typeof fetch;
+
+    const candles = await getCandles(
+      "RELIANCE",
+      new Date("2023-11-14T00:00:00.000Z"),
+      new Date("2023-11-15T00:00:00.000Z"),
+      "5m"
+    );
+    expect(candles).toHaveLength(1);
+    expect(candles[0].close).toBe(105);
+    expect(candles[0].volume).toBe(1234);
+  });
+
   it("retries on 429 and succeeds on second try", async () => {
     let n = 0;
     globalThis.fetch = (async () => {

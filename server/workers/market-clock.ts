@@ -1,42 +1,53 @@
 import { bus } from "../infra/bus";
 import { computePhase, MarketClock, type MarketPhase } from "../domain/market/clock";
-import { getLogger } from "../infra/logger";
 import { getConfig } from "../config";
-
-const log = getLogger().child({ worker: "market-clock" });
 
 export type MarketClockWorkerOptions = {
   tickMs?: number;
   getNow?: () => Date;
+  holidays?: Date[];
 };
+
+function getLog() {
+  try {
+    return require("../infra/logger").getLogger().child({ worker: "market-clock" });
+  } catch {
+    return { info: (..._args: unknown[]) => {} };
+  }
+}
 
 export class MarketClockWorker {
   private clock: MarketClock;
   private off: (() => void) | undefined;
-  private busOff: (() => void) | undefined;
 
   constructor(opts: MarketClockWorkerOptions = {}) {
-    const cfg = getConfig();
+    let holidays = opts.holidays;
+    if (!holidays) {
+      try {
+        holidays = getConfig().nseHolidays;
+      } catch {
+        holidays = [];
+      }
+    }
     this.clock = new MarketClock({
       tickMs: opts.tickMs ?? 1_000,
       getNow: opts.getNow,
-      holidays: cfg.nseHolidays,
+      holidays,
     });
   }
 
   start(): void {
     this.off = this.clock.subscribe((phase: MarketPhase) => {
-      log.info({ phase }, "market phase change");
+      getLog().info({ phase }, "market phase change");
       bus.emit("market:phase", { phase, ts: new Date().toISOString() });
     });
-    this.busOff = bus.on("market:phase", () => {}); // placeholder for any subscriber fan-in
     this.clock.start();
   }
 
   stop(): void {
     this.clock.stop();
     this.off?.();
-    this.busOff?.();
+    this.off = undefined;
   }
 
   onPhase(cb: (phase: MarketPhase) => void): () => void {

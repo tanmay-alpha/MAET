@@ -5,8 +5,10 @@ import { RedisKeys } from "../data/redis/keys";
 
 const TEST_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
 const r = new Redis(TEST_URL, { lazyConnect: true });
+const describeIntegration = process.env.TEST_REDIS_URL ? describe : describe.skip;
+if (process.env.TEST_REDIS_URL) process.env.UPSTASH_REDIS_URL = process.env.TEST_REDIS_URL;
 
-describe("rateLimit (integration)", () => {
+describeIntegration("rateLimit (integration)", () => {
   afterAll(async () => {
     const minute = Math.floor(Date.now() / 60_000).toString();
     await r.del(RedisKeys.ratelimitRestKey("u-rate", minute));

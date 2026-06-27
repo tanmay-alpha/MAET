@@ -4,6 +4,7 @@ import { defaultWsFactory, type WsFactory, type WsLike } from "../data/sources/a
 import type { AngelOneSession } from "../data/sources/angelone/client";
 
 const WS_URL = "wss://smartapis.angelone.in/websocket";
+const MAX_RECONNECT_ATTEMPTS = 10;
 
 type UserState = {
   session: AngelOneSession;
@@ -49,6 +50,7 @@ export class AngelOneWorker {
   private factory: WsFactory;
   private users = new Map<string, UserState>();
   private sockets = new Map<string, WsLike>();
+  private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private stopped = true;
 
   constructor(opts: WorkerOptions = {}) {
@@ -66,6 +68,8 @@ export class AngelOneWorker {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    for (const timer of this.reconnectTimers.values()) clearTimeout(timer);
+    this.reconnectTimers.clear();
     for (const [uid, s] of this.sockets) {
       try { s.close(); } catch {}
       this.sockets.delete(uid);
@@ -79,12 +83,15 @@ export class AngelOneWorker {
   }
 
   dropUser(userId: string): void {
+    this.users.delete(userId);
     const s = this.sockets.get(userId);
+    const timer = this.reconnectTimers.get(userId);
+    if (timer) clearTimeout(timer);
+    this.reconnectTimers.delete(userId);
     if (s) {
       try { s.close(); } catch {}
       this.sockets.delete(userId);
     }
-    this.users.delete(userId);
   }
 
   private connect(userId: string): void {
@@ -118,18 +125,9 @@ export class AngelOneWorker {
           const tick = normalize(msg.data, "NSE", msg.data.symbol ?? "");
           bus.emit("tick", tick);
         }
-        // Bare-tick payload (test fixture + future compact protocol): treat
-        // the message itself as the tick. Lets the test path bypass the
-        // envelope without changing the wire format. Fall back to the first
-        // subscribed token for the user when symbol is not in the payload.
-        else if (typeof msg.last_traded_price !== "undefined") {
-          const fallback = u.tokens[0] ?? "";
-          const tick = normalize(msg, "NSE", msg.symbol ?? fallback);
-          bus.emit("tick", tick);
-        }
         if (msg.type === "error" && msg.code === "invalid_token") {
-          bus.emit("user:angelone:ready", { userId }); // bus reused to push auth-failed event
-          // In a real impl we'd emit user:angelone:auth_failed; keeping single event type for MVP
+          bus.emit("user:angelone:auth_failed", { userId, reason: "invalid_token" });
+          this.dropUser(userId);
         }
       } catch (e) {
         getLog().warn({ err: (e as Error).message }, "ws message parse failed");
@@ -137,10 +135,19 @@ export class AngelOneWorker {
     });
     sock.on("close", () => {
       this.sockets.delete(userId);
-      if (this.stopped) return;
+      if (this.stopped || !this.users.has(userId)) return;
+      if (u.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        bus.emit("user:angelone:auth_failed", { userId, reason: "reconnect_exhausted" });
+        this.users.delete(userId);
+        return;
+      }
       const wait = Math.min(30_000, 500 * Math.pow(2, u.reconnectAttempts));
       u.reconnectAttempts++;
-      setTimeout(() => this.connect(userId), wait);
+      const timer = setTimeout(() => {
+        this.reconnectTimers.delete(userId);
+        this.connect(userId);
+      }, wait);
+      this.reconnectTimers.set(userId, timer);
     });
     sock.on("error", (e) => getLog().warn({ err: (e as Error)?.message }, "ws error"));
   }

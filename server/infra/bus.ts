@@ -15,6 +15,7 @@ export type OrderFill = {
 };
 
 export type UserAngelOneReady = { userId: string };
+export type UserAngelOneAuthFailed = { userId: string; reason: string };
 
 export type MarketPhaseEvent = {
   phase: "PRE_OPEN" | "OPEN" | "CLOSED" | "HOLIDAY" | "AFTER_HOURS";
@@ -26,6 +27,7 @@ export type BusEvents = {
   "screener:match": ScreenerMatch;
   "order:fill": OrderFill;
   "user:angelone:ready": UserAngelOneReady;
+  "user:angelone:auth_failed": UserAngelOneAuthFailed;
   "market:phase": MarketPhaseEvent;
 };
 

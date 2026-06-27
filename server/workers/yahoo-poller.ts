@@ -31,10 +31,24 @@ function getLog() {
 // inject their own batchFetch do not require getConfig() env vars to load.
 async function defaultBatchFetch(symbols: string[]): Promise<Tick[]> {
   const { getQuote } = await import("../data/sources/yahoo");
+  const { resolveMarketSymbol } = await import("../domain/market/symbol");
   const out: Tick[] = [];
-  for (const s of symbols) {
-    const tick = await getQuote(s);
-    out.push(tick);
+  const queue = [...symbols];
+  const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const symbol = queue.shift();
+      if (!symbol) return;
+      const resolved = resolveMarketSymbol(symbol);
+      try {
+        out.push(await getQuote(resolved.symbol, resolved.ticker, resolved.exchange));
+      } catch (error) {
+        getLog().warn({ symbol, err: String(error) }, "yahoo quote fetch failed");
+      }
+    }
+  });
+  await Promise.all(workers);
+  if (out.length === 0 && symbols.length > 0) {
+    throw new Error("all Yahoo quote requests failed");
   }
   return out;
 }
@@ -44,6 +58,7 @@ export class YahooPoller {
   private intervalMs: number;
   private batchFetch: BatchFetch;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private refreshPromise: Promise<void> | undefined;
 
   constructor(opts: YahooPollerOptions = {}) {
     this.intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
@@ -61,13 +76,22 @@ export class YahooPoller {
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      void this.tick();
+      void this.refresh();
     }, this.intervalMs);
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+  }
+
+  refresh(): Promise<void> {
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.tick().finally(() => {
+        this.refreshPromise = undefined;
+      });
+    }
+    return this.refreshPromise;
   }
 
   private async tick(): Promise<void> {
