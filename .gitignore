@@ -39,3 +39,6 @@ dist-ssr
 # Playwright MCP server artifacts (ephemeral browser session recordings,
 # console logs, and page snapshots — not source code).
 .playwright-mcp/
+
+# Temporary files left behind by FUSE/overlay filesystem operations.
+.fuse_hidden*
