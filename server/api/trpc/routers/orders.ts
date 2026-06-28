@@ -6,10 +6,11 @@ export const ordersRouter = router({
   // Get user's orders
   getOrders: protectedProcedure
     .query(async ({ ctx }) => {
-      // Mock data - would come from database
+      // TODO: Replace with real DB query: db.orders.findMany({ where: { userId: ctx.userId } })
+      // Scoped by userId to prevent data leakage across users
       const mockOrders = [
         {
-          id: "1",
+          id: crypto.randomUUID(),
           userId: ctx.userId,
           symbol: "RELIANCE",
           exchange: "NSE",
@@ -17,8 +18,8 @@ export const ordersRouter = router({
           type: "LIMIT",
           qty: 10,
           limitPrice: 2500,
-          status: "pending",
-          idempotencyKey: "unique-key-1",
+          status: "pending" as const,
+          idempotencyKey: crypto.randomUUID(),
           rejectReason: null,
           placedAt: new Date().toISOString(),
           filledAt: null,
@@ -36,7 +37,7 @@ export const ordersRouter = router({
       exchange: z.string().default("NSE"),
       side: z.enum(["BUY", "SELL"]),
       type: z.enum(["MARKET", "LIMIT", "SL", "SL-M"]),
-      qty: z.number().int().positive().max,
+      qty: z.number().int().positive().max(100000),
       limitPrice: z.number().positive().optional(),
       triggerPrice: z.number().positive().optional(),
     }))
@@ -72,22 +73,23 @@ export const ordersRouter = router({
       orderId: z.string(),
     }))
     .mutation(async ({ input, ctx }) => {
-      // SECURITY: Verify order ownership before cancellation
-      // This prevents IDOR attacks where users could cancel orders belonging to other users
-      // In production with database:
+      // SECURITY: Verify order ownership before cancellation (fail-closed)
+      // This prevents IDOR attacks where users could cancel orders belonging to other users.
+      //
+      // TODO: Wire to real database once Drizzle is initialized in app.ts
       // const order = await db.orders.findUnique({ where: { id: input.orderId } });
       // if (!order || order.userId !== ctx.userId) {
       //   throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
       // }
+      //
+      // Until DB is wired: fail-closed — deny cancellation to prevent unauthorized access.
+      // This MUST be changed to a real DB check before production deployment.
+      const DB_WIRED = false;
 
-      // Mock cancellation with ownership check
-      // For now we simulate the check - in production this would query the database
-      const mockOrderOwnershipCheck = true; // In production: order.userId === ctx.userId
-
-      if (!mockOrderOwnershipCheck) {
+      if (!DB_WIRED) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Order not found",
+          message: "Order cancellation temporarily unavailable",
         });
       }
 
