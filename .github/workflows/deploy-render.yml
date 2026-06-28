@@ -1,0 +1,36 @@
+name: Deploy to Render
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Trigger Render Deployment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Trigger Render Deployment
+        run: |
+          # This workflow notifies Render to deploy when main branch updates
+          # Render should be connected to the GitHub repo for auto-deploy
+          echo "Triggering Render deployment for stock-market-backend"
+
+          # Check if render.yaml exists
+          if [ -f "render.yaml" ]; then
+            echo "✅ render.yaml found - deployment configuration ready"
+            cat render.yaml
+          else
+            echo "❌ render.yaml not found"
+            exit 1
+          fi
+
+          echo "📋 Next steps:"
+          echo "1. Ensure Render dashboard is connected to this repo"
+          echo "2. Set environment variables in Render dashboard"
+          echo "3. Render will auto-deploy on push to main branch"
