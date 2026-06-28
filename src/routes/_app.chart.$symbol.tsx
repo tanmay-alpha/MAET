@@ -4,10 +4,10 @@ import { useMemo, useState } from "react";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { TiltCard } from "@/components/trading/tilt-card";
-import { ContractPanel } from "@/components/trading/contract-panel";
+import { ContractPanel } from "@/components/common/contract-panel";
 import type { MarketCandle } from "@/lib/market-api";
 
-export const Route = createFileRoute("/chart/$symbol")({
+export const Route = createFileRoute("/_app/chart/$symbol")({
   head: () => ({
     meta: [{ title: "Chart — MAET" }]
   }),
