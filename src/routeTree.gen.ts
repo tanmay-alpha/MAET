@@ -11,11 +11,24 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppUniverseRouteImport } from './routes/_app.universe'
 import { Route as AppTerminalRouteImport } from './routes/_app.terminal'
 import { Route as AppStrategiesRouteImport } from './routes/_app.strategies'
+import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppScreenerRouteImport } from './routes/_app.screener'
+import { Route as AppPortfolioRouteImport } from './routes/_app.portfolio'
+import { Route as AppOrdersRouteImport } from './routes/_app.orders'
+import { Route as AppNewsRouteImport } from './routes/_app.news'
+import { Route as AppHeatmapRouteImport } from './routes/_app.heatmap'
+import { Route as AppFuturesRouteImport } from './routes/_app.futures'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
+import { Route as AppCompareRouteImport } from './routes/_app.compare'
+import { Route as AppChartGridRouteImport } from './routes/_app.chart-grid'
 import { Route as AppBacktestRouteImport } from './routes/_app.backtest'
+import { Route as AppAlertsRouteImport } from './routes/_app.alerts'
+import { Route as AppStockSymbolRouteImport } from './routes/_app.stock.$symbol'
+import { Route as AppOptionsUnderlyingRouteImport } from './routes/_app.options.$underlying'
+import { Route as AppChartSymbolRouteImport } from './routes/_app.chart.$symbol'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -25,6 +38,11 @@ const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppUniverseRoute = AppUniverseRouteImport.update({
+  id: '/universe',
+  path: '/universe',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppTerminalRoute = AppTerminalRouteImport.update({
   id: '/terminal',
@@ -36,9 +54,39 @@ const AppStrategiesRoute = AppStrategiesRouteImport.update({
   path: '/strategies',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppScreenerRoute = AppScreenerRouteImport.update({
   id: '/screener',
   path: '/screener',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPortfolioRoute = AppPortfolioRouteImport.update({
+  id: '/portfolio',
+  path: '/portfolio',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOrdersRoute = AppOrdersRouteImport.update({
+  id: '/orders',
+  path: '/orders',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppNewsRoute = AppNewsRouteImport.update({
+  id: '/news',
+  path: '/news',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppHeatmapRoute = AppHeatmapRouteImport.update({
+  id: '/heatmap',
+  path: '/heatmap',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppFuturesRoute = AppFuturesRouteImport.update({
+  id: '/futures',
+  path: '/futures',
   getParentRoute: () => AppRoute,
 } as any)
 const AppDashboardRoute = AppDashboardRouteImport.update({
@@ -46,64 +94,172 @@ const AppDashboardRoute = AppDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCompareRoute = AppCompareRouteImport.update({
+  id: '/compare',
+  path: '/compare',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppChartGridRoute = AppChartGridRouteImport.update({
+  id: '/chart-grid',
+  path: '/chart-grid',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppBacktestRoute = AppBacktestRouteImport.update({
   id: '/backtest',
   path: '/backtest',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAlertsRoute = AppAlertsRouteImport.update({
+  id: '/alerts',
+  path: '/alerts',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStockSymbolRoute = AppStockSymbolRouteImport.update({
+  id: '/stock/$symbol',
+  path: '/stock/$symbol',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOptionsUnderlyingRoute = AppOptionsUnderlyingRouteImport.update({
+  id: '/options/$underlying',
+  path: '/options/$underlying',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppChartSymbolRoute = AppChartSymbolRouteImport.update({
+  id: '/chart/$symbol',
+  path: '/chart/$symbol',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/alerts': typeof AppAlertsRoute
   '/backtest': typeof AppBacktestRoute
+  '/chart-grid': typeof AppChartGridRoute
+  '/compare': typeof AppCompareRoute
   '/dashboard': typeof AppDashboardRoute
+  '/futures': typeof AppFuturesRoute
+  '/heatmap': typeof AppHeatmapRoute
+  '/news': typeof AppNewsRoute
+  '/orders': typeof AppOrdersRoute
+  '/portfolio': typeof AppPortfolioRoute
   '/screener': typeof AppScreenerRoute
+  '/settings': typeof AppSettingsRoute
   '/strategies': typeof AppStrategiesRoute
   '/terminal': typeof AppTerminalRoute
+  '/universe': typeof AppUniverseRoute
+  '/chart/$symbol': typeof AppChartSymbolRoute
+  '/options/$underlying': typeof AppOptionsUnderlyingRoute
+  '/stock/$symbol': typeof AppStockSymbolRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/alerts': typeof AppAlertsRoute
   '/backtest': typeof AppBacktestRoute
+  '/chart-grid': typeof AppChartGridRoute
+  '/compare': typeof AppCompareRoute
   '/dashboard': typeof AppDashboardRoute
+  '/futures': typeof AppFuturesRoute
+  '/heatmap': typeof AppHeatmapRoute
+  '/news': typeof AppNewsRoute
+  '/orders': typeof AppOrdersRoute
+  '/portfolio': typeof AppPortfolioRoute
   '/screener': typeof AppScreenerRoute
+  '/settings': typeof AppSettingsRoute
   '/strategies': typeof AppStrategiesRoute
   '/terminal': typeof AppTerminalRoute
+  '/universe': typeof AppUniverseRoute
+  '/chart/$symbol': typeof AppChartSymbolRoute
+  '/options/$underlying': typeof AppOptionsUnderlyingRoute
+  '/stock/$symbol': typeof AppStockSymbolRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/_app/alerts': typeof AppAlertsRoute
   '/_app/backtest': typeof AppBacktestRoute
+  '/_app/chart-grid': typeof AppChartGridRoute
+  '/_app/compare': typeof AppCompareRoute
   '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/futures': typeof AppFuturesRoute
+  '/_app/heatmap': typeof AppHeatmapRoute
+  '/_app/news': typeof AppNewsRoute
+  '/_app/orders': typeof AppOrdersRoute
+  '/_app/portfolio': typeof AppPortfolioRoute
   '/_app/screener': typeof AppScreenerRoute
+  '/_app/settings': typeof AppSettingsRoute
   '/_app/strategies': typeof AppStrategiesRoute
   '/_app/terminal': typeof AppTerminalRoute
+  '/_app/universe': typeof AppUniverseRoute
+  '/_app/chart/$symbol': typeof AppChartSymbolRoute
+  '/_app/options/$underlying': typeof AppOptionsUnderlyingRoute
+  '/_app/stock/$symbol': typeof AppStockSymbolRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/alerts'
     | '/backtest'
+    | '/chart-grid'
+    | '/compare'
     | '/dashboard'
+    | '/futures'
+    | '/heatmap'
+    | '/news'
+    | '/orders'
+    | '/portfolio'
     | '/screener'
+    | '/settings'
     | '/strategies'
     | '/terminal'
+    | '/universe'
+    | '/chart/$symbol'
+    | '/options/$underlying'
+    | '/stock/$symbol'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/alerts'
     | '/backtest'
+    | '/chart-grid'
+    | '/compare'
     | '/dashboard'
+    | '/futures'
+    | '/heatmap'
+    | '/news'
+    | '/orders'
+    | '/portfolio'
     | '/screener'
+    | '/settings'
     | '/strategies'
     | '/terminal'
+    | '/universe'
+    | '/chart/$symbol'
+    | '/options/$underlying'
+    | '/stock/$symbol'
   id:
     | '__root__'
     | '/'
     | '/_app'
+    | '/_app/alerts'
     | '/_app/backtest'
+    | '/_app/chart-grid'
+    | '/_app/compare'
     | '/_app/dashboard'
+    | '/_app/futures'
+    | '/_app/heatmap'
+    | '/_app/news'
+    | '/_app/orders'
+    | '/_app/portfolio'
     | '/_app/screener'
+    | '/_app/settings'
     | '/_app/strategies'
     | '/_app/terminal'
+    | '/_app/universe'
+    | '/_app/chart/$symbol'
+    | '/_app/options/$underlying'
+    | '/_app/stock/$symbol'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -127,6 +283,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/universe': {
+      id: '/_app/universe'
+      path: '/universe'
+      fullPath: '/universe'
+      preLoaderRoute: typeof AppUniverseRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/terminal': {
       id: '/_app/terminal'
       path: '/terminal'
@@ -141,11 +304,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppStrategiesRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/screener': {
       id: '/_app/screener'
       path: '/screener'
       fullPath: '/screener'
       preLoaderRoute: typeof AppScreenerRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/portfolio': {
+      id: '/_app/portfolio'
+      path: '/portfolio'
+      fullPath: '/portfolio'
+      preLoaderRoute: typeof AppPortfolioRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/orders': {
+      id: '/_app/orders'
+      path: '/orders'
+      fullPath: '/orders'
+      preLoaderRoute: typeof AppOrdersRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/news': {
+      id: '/_app/news'
+      path: '/news'
+      fullPath: '/news'
+      preLoaderRoute: typeof AppNewsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/heatmap': {
+      id: '/_app/heatmap'
+      path: '/heatmap'
+      fullPath: '/heatmap'
+      preLoaderRoute: typeof AppHeatmapRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/futures': {
+      id: '/_app/futures'
+      path: '/futures'
+      fullPath: '/futures'
+      preLoaderRoute: typeof AppFuturesRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/dashboard': {
@@ -155,6 +360,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDashboardRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/compare': {
+      id: '/_app/compare'
+      path: '/compare'
+      fullPath: '/compare'
+      preLoaderRoute: typeof AppCompareRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/chart-grid': {
+      id: '/_app/chart-grid'
+      path: '/chart-grid'
+      fullPath: '/chart-grid'
+      preLoaderRoute: typeof AppChartGridRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/backtest': {
       id: '/_app/backtest'
       path: '/backtest'
@@ -162,23 +381,77 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBacktestRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/alerts': {
+      id: '/_app/alerts'
+      path: '/alerts'
+      fullPath: '/alerts'
+      preLoaderRoute: typeof AppAlertsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/stock/$symbol': {
+      id: '/_app/stock/$symbol'
+      path: '/stock/$symbol'
+      fullPath: '/stock/$symbol'
+      preLoaderRoute: typeof AppStockSymbolRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/options/$underlying': {
+      id: '/_app/options/$underlying'
+      path: '/options/$underlying'
+      fullPath: '/options/$underlying'
+      preLoaderRoute: typeof AppOptionsUnderlyingRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/chart/$symbol': {
+      id: '/_app/chart/$symbol'
+      path: '/chart/$symbol'
+      fullPath: '/chart/$symbol'
+      preLoaderRoute: typeof AppChartSymbolRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
 interface AppRouteChildren {
+  AppAlertsRoute: typeof AppAlertsRoute
   AppBacktestRoute: typeof AppBacktestRoute
+  AppChartGridRoute: typeof AppChartGridRoute
+  AppCompareRoute: typeof AppCompareRoute
   AppDashboardRoute: typeof AppDashboardRoute
+  AppFuturesRoute: typeof AppFuturesRoute
+  AppHeatmapRoute: typeof AppHeatmapRoute
+  AppNewsRoute: typeof AppNewsRoute
+  AppOrdersRoute: typeof AppOrdersRoute
+  AppPortfolioRoute: typeof AppPortfolioRoute
   AppScreenerRoute: typeof AppScreenerRoute
+  AppSettingsRoute: typeof AppSettingsRoute
   AppStrategiesRoute: typeof AppStrategiesRoute
   AppTerminalRoute: typeof AppTerminalRoute
+  AppUniverseRoute: typeof AppUniverseRoute
+  AppChartSymbolRoute: typeof AppChartSymbolRoute
+  AppOptionsUnderlyingRoute: typeof AppOptionsUnderlyingRoute
+  AppStockSymbolRoute: typeof AppStockSymbolRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAlertsRoute: AppAlertsRoute,
   AppBacktestRoute: AppBacktestRoute,
+  AppChartGridRoute: AppChartGridRoute,
+  AppCompareRoute: AppCompareRoute,
   AppDashboardRoute: AppDashboardRoute,
+  AppFuturesRoute: AppFuturesRoute,
+  AppHeatmapRoute: AppHeatmapRoute,
+  AppNewsRoute: AppNewsRoute,
+  AppOrdersRoute: AppOrdersRoute,
+  AppPortfolioRoute: AppPortfolioRoute,
   AppScreenerRoute: AppScreenerRoute,
+  AppSettingsRoute: AppSettingsRoute,
   AppStrategiesRoute: AppStrategiesRoute,
   AppTerminalRoute: AppTerminalRoute,
+  AppUniverseRoute: AppUniverseRoute,
+  AppChartSymbolRoute: AppChartSymbolRoute,
+  AppOptionsUnderlyingRoute: AppOptionsUnderlyingRoute,
+  AppStockSymbolRoute: AppStockSymbolRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

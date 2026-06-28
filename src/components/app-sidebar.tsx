@@ -1,5 +1,21 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, CandlestickChart, Cpu, FlaskConical, Table2 } from "lucide-react";
+import {
+  LayoutDashboard,
+  CandlestickChart,
+  Cpu,
+  FlaskConical,
+  Table2,
+  LineChart,
+  BarChart3,
+  Search,
+  Grid3x3,
+  TrendingUp,
+  Layers,
+  Bell,
+  Newspaper,
+  Settings,
+  ArrowUpDown,
+} from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter,
@@ -9,8 +25,17 @@ const items = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Screener", url: "/screener", icon: Table2 },
   { title: "Terminal", url: "/terminal", icon: CandlestickChart },
+  { title: "Chart Grid", url: "/chart-grid", icon: Grid3x3 },
+  { title: "Compare", url: "/compare", icon: ArrowUpDown },
+  { title: "Universe", url: "/universe", icon: Search },
+  { title: "Heatmap", url: "/heatmap", icon: TrendingUp },
   { title: "Strategies", url: "/strategies", icon: Cpu },
   { title: "Backtest", url: "/backtest", icon: FlaskConical },
+  { title: "Options", url: "/options/RELIANCE", icon: Layers },
+  { title: "Futures", url: "/futures", icon: BarChart3 },
+  { title: "Alerts", url: "/alerts", icon: Bell },
+  { title: "News", url: "/news", icon: Newspaper },
+  { title: "Settings", url: "/settings", icon: Settings },
 ];
 
 export function AppSidebar() {
