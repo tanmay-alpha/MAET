@@ -7,11 +7,11 @@ import { TiltCard } from "@/components/trading/tilt-card";
 import { MarketHeatmap } from "@/components/trading/market-heatmap";
 import { BreadthGauge } from "@/components/trading/breadth-gauge";
 import { SectorStrip } from "@/components/trading/sector-strip";
-import { ContractPanel } from "@/components/trading/contract-panel";
+import { ContractPanel } from "@/components/common/contract-panel";
 import { Loadable } from "@/components/trading/skeleton";
 import type { MarketQuote } from "@/lib/market-api";
 
-export const Route = createFileRoute("/portfolio")({
+export const Route = createFileRoute("/_app/portfolio")({
   head: () => ({
     meta: [{ title: "Portfolio — MAET" }]
   }),

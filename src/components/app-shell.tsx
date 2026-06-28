@@ -20,6 +20,16 @@ export function AppShell() {
                 { to: "/terminal", label: "Terminal" },
                 { to: "/strategies", label: "Strategies" },
                 { to: "/backtest", label: "Backtest" },
+                { to: "/compare", label: "Compare" },
+                { to: "/chart-grid", label: "Chart Grid" },
+                { to: "/universe", label: "Universe" },
+                { to: "/heatmap", label: "Heatmap" },
+                { to: "/portfolio", label: "Portfolio" },
+                { to: "/orders", label: "Orders" },
+                { to: "/alerts", label: "Alerts" },
+                { to: "/news", label: "News" },
+                { to: "/settings", label: "Settings" },
+                { to: "/futures", label: "Futures" },
               ].map((link) => (
                 <Link
                   key={link.to}

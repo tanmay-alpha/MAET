@@ -7,12 +7,12 @@ import { TiltCard } from "@/components/trading/tilt-card";
 import { MarketHeatmap } from "@/components/trading/market-heatmap";
 import { BreadthGauge } from "@/components/trading/breadth-gauge";
 import { SectorStrip } from "@/components/trading/sector-strip";
-import { ContractPanel } from "@/components/trading/contract-panel";
+import { ContractPanel } from "@/components/common/contract-panel";
 import { Loadable } from "@/components/trading/skeleton";
 import type { MarketCandle } from "@/lib/market-api";
 import { INDICES } from "@/lib/market-catalog";
 
-export const Route = createFileRoute("/stock/$symbol")({
+export const Route = createFileRoute("/_app/stock/$symbol")({
   head: () => ({
     meta: [{ title: "Stock Detail — MAET" }]
   }),

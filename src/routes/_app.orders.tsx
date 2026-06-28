@@ -3,11 +3,11 @@ import { ArrowLeft, Activity, Clock, CheckCircle, XCircle, AlertCircle, Filter, 
 import { useMemo, useState } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { usePaperAccount } from "@/hooks/use-paper-account";
-import { ContractPanel } from "@/components/trading/contract-panel";
+import { ContractPanel } from "@/components/common/contract-panel";
 import { Loadable } from "@/components/trading/skeleton";
 import type { PaperOrder } from "@/hooks/use-paper-account";
 
-export const Route = createFileRoute("/orders")({
+export const Route = createFileRoute("/_app/orders")({
   head: () => ({
     meta: [{ title: "Orders — MAET" }]
   }),
