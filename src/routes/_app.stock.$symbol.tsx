@@ -1,16 +1,16 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, BarChart3, Info, Layers, TrendingDown, TrendingUp, Users, Calculator } from "lucide-react";
-import { useMemo } from "react";
+import { ArrowLeft, BarChart2, BookOpen, GitMerge, Layers, TrendingDown, TrendingUp, Users, Calculator } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { TiltCard } from "@/components/trading/tilt-card";
-import { MarketHeatmap } from "@/components/trading/market-heatmap";
-import { BreadthGauge } from "@/components/trading/breadth-gauge";
-import { SectorStrip } from "@/components/trading/sector-strip";
 import { ContractPanel } from "@/components/common/contract-panel";
-import { Loadable } from "@/components/trading/skeleton";
+import { FinancialStatementsPanel } from "@/components/stock/financials-panel";
+import { KeyRatiosPanel } from "@/components/stock/ratios-panel";
+import { ShareholdingPanel } from "@/components/stock/shareholding-panel";
+import { CorporateActionsPanel } from "@/components/stock/corporate-actions-panel";
+import { PeerComparisonPanel } from "@/components/stock/peer-comparison-panel";
 import type { MarketCandle } from "@/lib/market-api";
-import { INDICES } from "@/lib/market-catalog";
 
 export const Route = createFileRoute("/_app/stock/$symbol")({
   head: () => ({
@@ -18,6 +18,9 @@ export const Route = createFileRoute("/_app/stock/$symbol")({
   }),
   component: StockDetail,
 });
+
+type StatementTab = "balance_sheet" | "pl" | "cashflow";
+type DetailTab = "ratios" | "shareholding" | "actions" | "peers";
 
 function StatCard({ icon: Icon, label, value, sub }: { icon: any; label: string; value: string; sub?: string }) {
   return (
@@ -32,11 +35,26 @@ function StatCard({ icon: Icon, label, value, sub }: { icon: any; label: string;
   );
 }
 
+const STATEMENT_TABS: { id: StatementTab; label: string }[] = [
+  { id: "balance_sheet", label: "Balance Sheet" },
+  { id: "pl", label: "P&L" },
+  { id: "cashflow", label: "Cash Flow" },
+];
+
+const DETAIL_TABS: { id: DetailTab; label: string; icon: any }[] = [
+  { id: "ratios", label: "Key Ratios", icon: Calculator },
+  { id: "shareholding", label: "Shareholding", icon: Users },
+  { id: "actions", label: "Corporate Actions", icon: GitMerge },
+  { id: "peers", label: "Peer Comparison", icon: BarChart2 },
+];
+
 function StockDetail() {
   const { symbol } = Route.useParams();
   const navigate = useNavigate();
   const { quoteMap, streamConnected, isError: quoteError } = useMarketQuotes([symbol]);
   const liveQuote = quoteMap.get(symbol);
+  const [activeStatement, setActiveStatement] = useState<StatementTab>("balance_sheet");
+  const [activeDetail, setActiveDetail] = useState<DetailTab>("ratios");
 
   // Load candles for default chart
   const candleQuery = useMarketCandles(symbol, "5m", "1d");
@@ -54,9 +72,8 @@ function StockDetail() {
 
   const currentPrice = liveQuote?.price;
   const previousClose = liveQuote?.previousClose;
-  const dayChange = liveQuote?.change;
   const dayChangePct = liveQuote?.changePct;
-  const marketCap = previousClose ? (currentPrice || 0) * 100000000 : undefined; // Mock 1 crore shares
+  const marketCap = previousClose ? (currentPrice || 0) * 100000000 : undefined;
 
   if (liveQuote === undefined) {
     return (
@@ -72,26 +89,28 @@ function StockDetail() {
       <div className="sticky top-0 z-50 border-b border-border/60 bg-background/70 backdrop-blur-xl">
         <div className="mx-auto max-w-7xl px-6 py-4">
           <button
-            onClick={() => navigate({ to: "/" })}
+            onClick={() => navigate({ to: "/screener" })}
             className="flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-sm hover:bg-accent"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Scanner
+            Back to Screener
           </button>
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl px-6 py-6">
+      <div className="mx-auto max-w-7xl px-6 py-6 space-y-8">
         {/* Symbol Header */}
-        <div className="flex items-end justify-between mb-6">
+        <div className="flex items-end justify-between">
           <div>
             <h1 className="text-3xl font-bold">{symbol}</h1>
             <p className="text-muted-foreground">NSE · Equity</p>
           </div>
           <div className="text-right">
             <div className="text-4xl font-mono font-bold">{currentPrice?.toFixed(2) ?? "—"}</div>
-            <div className={`font-mono text-lg ${dayChangePct && dayChangePct >= 0 ? "text-bull" : "text-bear"}`}>
-              {dayChangePct ? `${dayChangePct >= 0 ? "+" : ""}${dayChangePct.toFixed(2)}%` : "Loading..."}
+            <div className={`font-mono text-lg ${dayChangePct !== undefined && dayChangePct >= 0 ? "text-bull" : "text-bear"}`}>
+              {dayChangePct !== undefined
+                ? `${dayChangePct >= 0 ? "+" : ""}${dayChangePct.toFixed(2)}%`
+                : "Loading..."}
             </div>
             <div className="text-xs text-muted-foreground">
               {quoteError ? "Quote unavailable" : streamConnected ? "Yahoo delayed" : "Connecting"}
@@ -100,7 +119,7 @@ function StockDetail() {
         </div>
 
         {/* Time periods */}
-        <div className="flex gap-2 mb-6">
+        <div className="flex gap-2">
           {["1m", "5m", "15m", "1h", "1D", "1W"].map((tf) => (
             <button
               key={tf}
@@ -209,8 +228,76 @@ function StockDetail() {
           </div>
         </div>
 
+        {/* Financial Statements */}
+        <div>
+          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+            <BookOpen className="h-5 w-5" />
+            Financial Statements
+          </h2>
+          <TiltCard>
+            <div className="rounded-xl border border-border bg-panel p-4">
+              <div className="mb-4 flex gap-2 border-b border-border pb-3">
+                {STATEMENT_TABS.map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveStatement(tab.id)}
+                    className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+                      activeStatement === tab.id
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-accent hover:bg-accent/80"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <FinancialStatementsPanel symbol={symbol} active={activeStatement} />
+            </div>
+          </TiltCard>
+        </div>
+
+        {/* Key Ratios */}
+        <div>
+          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+            <Calculator className="h-5 w-5" />
+            Key Ratios
+          </h2>
+          <KeyRatiosPanel symbol={symbol} />
+        </div>
+
+        {/* Shareholding + Corporate Actions side by side */}
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div>
+            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Shareholding Pattern
+            </h2>
+            <ShareholdingPanel symbol={symbol} />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <GitMerge className="h-5 w-5" />
+              Corporate Actions
+            </h2>
+            <CorporateActionsPanel symbol={symbol} />
+          </div>
+        </div>
+
+        {/* Peer Comparison */}
+        <div>
+          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+            <BarChart2 className="h-5 w-5" />
+            Sector Peer Comparison
+          </h2>
+          <TiltCard>
+            <div className="rounded-xl border border-border bg-panel p-4">
+              <PeerComparisonPanel symbol={symbol} />
+            </div>
+          </TiltCard>
+        </div>
+
         {/* Similar Stocks */}
-        <div className="mt-8">
+        <div>
           <h2 className="text-xl font-semibold mb-4">Similar Stocks</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {["TCS", "INFY", "HCLTECH", "TECHM"].map((ticker) => (

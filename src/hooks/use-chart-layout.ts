@@ -6,6 +6,7 @@
  * - Chart type
  * - Visible indicators
  * - Drawing tool settings
+ * - Named layouts (save/load)
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -22,6 +23,19 @@ export interface ChartLayout {
   drawingTool: string | null;
 }
 
+export interface SavedLayout {
+  name: string;
+  chartState?: {
+    zoom: number;
+    panOffset: number;
+    drawings: unknown[];
+  };
+  timeframe: string;
+  chartType: "candles" | "line" | "area";
+  indicators: ChartLayout["indicators"];
+  savedAt: string;
+}
+
 const DEFAULT_LAYOUT: ChartLayout = {
   timeframe: "5m",
   chartType: "candles",
@@ -36,6 +50,10 @@ const DEFAULT_LAYOUT: ChartLayout = {
 
 function getStorageKey(symbol: string): string {
   return `maet_chart_layout_${symbol}`;
+}
+
+function getNamedLayoutsKey(symbol: string): string {
+  return `maet_chart_layouts_${symbol}`;
 }
 
 export function useChartLayout(symbol: string) {
@@ -80,12 +98,116 @@ export function useChartLayout(symbol: string) {
     setLayout(DEFAULT_LAYOUT);
   }, []);
 
+  // Named layouts management
+  const saveNamedLayout = useCallback((name: string, chartState?: ChartLayout) => {
+    if (typeof window === "undefined") return false;
+    try {
+      const layouts = getNamedLayouts(symbol);
+      const newLayout: SavedLayout = {
+        name,
+        chartState: chartState as SavedLayout["chartState"],
+        timeframe: layout.timeframe,
+        chartType: layout.chartType,
+        indicators: { ...layout.indicators },
+        savedAt: new Date().toISOString(),
+      };
+      layouts[name] = newLayout;
+      localStorage.setItem(getNamedLayoutsKey(symbol), JSON.stringify(layouts));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [symbol, layout]);
+
+  const loadNamedLayout = useCallback((name: string): SavedLayout | null => {
+    if (typeof window === "undefined") return null;
+    try {
+      const layouts = getNamedLayouts(symbol);
+      return layouts[name] || null;
+    } catch {
+      return null;
+    }
+  }, [symbol]);
+
+  const deleteNamedLayout = useCallback((name: string) => {
+    if (typeof window === "undefined") return;
+    try {
+      const layouts = getNamedLayouts(symbol);
+      delete layouts[name];
+      localStorage.setItem(getNamedLayoutsKey(symbol), JSON.stringify(layouts));
+    } catch {
+      // Ignore
+    }
+  }, [symbol]);
+
+  const getNamedLayoutNames = useCallback((): string[] => {
+    if (typeof window === "undefined") return [];
+    try {
+      return Object.keys(getNamedLayouts(symbol));
+    } catch {
+      return [];
+    }
+  }, [symbol]);
+
+  // Export layout to JSON file
+  const exportLayout = useCallback((chartState?: unknown) => {
+    const data = {
+      version: 1,
+      layout,
+      chartState,
+      exportedAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `maet-layout-${symbol}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [symbol, layout]);
+
+  // Import layout from JSON file
+  const importLayout = useCallback((file: File): Promise<SavedLayout | null> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target?.result as string);
+          if (data.layout) {
+            setLayout(data.layout);
+            resolve(data);
+          } else {
+            resolve(null);
+          }
+        } catch {
+          resolve(null);
+        }
+      };
+      reader.readAsText(file);
+    });
+  }, []);
+
   return {
     layout,
     updateLayout,
     updateIndicator,
     resetLayout,
+    saveNamedLayout,
+    loadNamedLayout,
+    deleteNamedLayout,
+    getNamedLayoutNames,
+    exportLayout,
+    importLayout,
   };
+}
+
+function getNamedLayouts(symbol: string): Record<string, SavedLayout> {
+  try {
+    const stored = localStorage.getItem(getNamedLayoutsKey(symbol));
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
+  }
 }
 
 // Hook for keyboard shortcuts
@@ -97,6 +219,11 @@ export function useChartShortcuts(handlers: {
   onPanLeft?: () => void;
   onPanRight?: () => void;
   onSelectTool?: (tool: string) => void;
+  onToggleVolume?: () => void;
+  onToggleMA?: () => void;
+  onToggleRSI?: () => void;
+  onDeleteDrawing?: () => void;
+  onEscape?: () => void;
 }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -135,12 +262,16 @@ export function useChartShortcuts(handlers: {
 
         // Pan
         case "arrowleft":
-          e.preventDefault();
-          handlers.onPanLeft?.();
+          if (!e.altKey) {
+            e.preventDefault();
+            handlers.onPanLeft?.();
+          }
           break;
         case "arrowright":
-          e.preventDefault();
-          handlers.onPanRight?.();
+          if (!e.altKey) {
+            e.preventDefault();
+            handlers.onPanRight?.();
+          }
           break;
 
         // Drawing tools
@@ -150,21 +281,48 @@ export function useChartShortcuts(handlers: {
           break;
         case "h":
           e.preventDefault();
-          handlers.onSelectTool?.("hline");
+          handlers.onSelectTool?.("horizontal");
           break;
         case "v":
           e.preventDefault();
-          handlers.onSelectTool?.("vline");
+          handlers.onSelectTool?.("vertical");
           break;
         case "f":
           e.preventDefault();
-          handlers.onSelectTool?.("fib");
+          handlers.onSelectTool?.("fibonacci");
+          break;
+        case "s":
+          e.preventDefault();
+          handlers.onSelectTool?.("support");
+          break;
+
+        // Indicators
+        case "m":
+          if (!e.altKey) {
+            e.preventDefault();
+            handlers.onToggleMA?.();
+          }
+          break;
+        case "r":
+          if (!e.altKey) {
+            e.preventDefault();
+            handlers.onToggleRSI?.();
+          }
+          break;
+
+        // Delete last drawing
+        case "delete":
+        case "backspace":
+          if (!(e.target instanceof HTMLInputElement)) {
+            e.preventDefault();
+            handlers.onDeleteDrawing?.();
+          }
           break;
 
         // Escape to exit tool
         case "escape":
           e.preventDefault();
-          handlers.onSelectTool?.(null as any);
+          handlers.onEscape?.();
           break;
       }
     };
@@ -201,3 +359,7 @@ export function useFullscreen() {
 
   return { isFullscreen, toggleFullscreen };
 }
+
+// Export DrawingLine type for external use
+export type { DrawingLine } from "@/components/trading/candlestick-chart";
+export type { ChartState } from "@/components/trading/candlestick-chart";

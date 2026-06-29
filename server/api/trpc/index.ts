@@ -1,6 +1,11 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { AuthContext } from "./auth";
 import { requireAuth } from "./auth";
+import { marketRouter } from "./routers/market";
+import { ordersRouter } from "./routers/orders";
+import { alertsRouter } from "./routers/alerts";
+import { screenerRouter } from "./routers/screener";
+import { portfolioRouter } from "./routers/portfolio";
 
 /**
  * tRPC initialization for MAET backend.
@@ -35,6 +40,13 @@ const isAuthed = t.middleware(async ({ next, type }) => {
   return next();
 });
 
-export const router = t.router;
+export const router = t.router({
+  market: marketRouter,
+  orders: ordersRouter,
+  alerts: alertsRouter,
+  screener: screenerRouter,
+  portfolio: portfolioRouter,
+});
+
 export const publicProcedure = t.procedure;
 export const protectedProcedure = t.procedure.use(isAuthed);
