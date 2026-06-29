@@ -1,9 +1,10 @@
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import type { H3Event } from "h3";
+import { defineEventHandler } from "h3";
 import { router } from "./index";
 import { tryAuth } from "./auth";
 
-export default defineEventHandler(async (event: H3Event) => {
+// Nitro route handler for tRPC
+export default defineEventHandler(async (event) => {
   // Try to authenticate user, but allow unauthenticated access too
   // Individual procedures use protectedProcedure for auth checks
   const authCtx = await tryAuth(event).catch(() => null);
