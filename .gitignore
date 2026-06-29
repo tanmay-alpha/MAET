@@ -16,6 +16,12 @@ dist-ssr
 .nitro
 *.local
 
+# Environment files - NEVER COMMIT REAL CREDENTIALS!
+.env
+.env.local
+.env.production
+.env.*.local
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
