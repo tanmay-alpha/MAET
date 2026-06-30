@@ -5,11 +5,11 @@ services:
     plan: free
     rootDir: server
     # Run install from workspace root so nitropack is hoisted into root
-    # node_modules/.bin/ where `server/`'s `bun run build` can find it.
+    # node_modules/.bin/ where `server/`'s `npm run build` can find it.
     # Render's Nixpacks sets CWD to rootDir=server, which breaks the
-    # workspace contract. --frozen-lockfile matches CI behavior.
-    buildCommand: cd .. && bun install --frozen-lockfile && cd server && bun run build
-    startCommand: bun run start
+    # workspace contract.
+    buildCommand: cd .. && npm install && cd server && npm run build
+    startCommand: npm run start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
