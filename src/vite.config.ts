@@ -1,10 +1,8 @@
-// @lovable.dev/vite-tanstack-config already includes the following — do NOT add them manually
-// or the app will break with duplicate plugins:
-//   - tanstackStart, viteReact, tailwindcss, tsConfigPaths, nitro (build-only using cloudflare as a default target),
-//     componentTagger (dev-only), VITE_* env injection, @ path alias, React/TanStack dedupe,
-//     error logger plugins, and sandbox detection (port/host/strictPort).
-// You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
+import path from "path";
+import { fileURLToPath } from "url";
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   // Set vite root to the project root (the directory above src/). This
@@ -16,6 +14,12 @@ export default defineConfig({
   // vite's resolve.alias requires absolute paths.
   vite: {
     root: "..",
+    resolve: {
+      tsconfigPaths: true,
+      alias: {
+        "@": __dirname,
+      },
+    },
   },
   // TanStack Start plugin options.
   // - server.entry: "server" so Nitro builds from src/server.ts (our SSR
@@ -67,19 +71,53 @@ export default defineConfig({
         // directory than the alias target. We register an absolute `@`
         // alias here so `@/lib/foo` resolves to `<absolute-root>/src/lib/foo`
         // regardless of which file is doing the importing.
-        const rootPath = config.root.replace(/[/\\]+$/, "");
+        const rootPath = config.root.replace(/\\/g, "/").replace(/\/+$/, "");
         const existing = Array.isArray(config.resolve?.alias)
           ? config.resolve.alias
           : config.resolve?.alias
             ? [config.resolve.alias]
             : [];
         config.resolve = config.resolve ?? {};
+        const aliasRule = { find: /^@\//, replacement: `${rootPath}/src/` };
         config.resolve.alias = [
           ...existing.filter(
-            (a) => !(typeof a === "object" && a && "find" in a && a.find === "@"),
+            (a) =>
+              !(
+                typeof a === "object" &&
+                a &&
+                "find" in a &&
+                (a.find === "@" || (a.find instanceof RegExp && a.find.source === "^@\\/"))
+              ),
           ),
-          { find: "@", replacement: `${rootPath}/src` },
+          aliasRule,
         ];
+        
+        // Vite 8 Environment resolution support
+        if (config.environments) {
+          for (const key of Object.keys(config.environments)) {
+            const env = config.environments[key];
+            if (env && env.resolve) {
+              const envExisting = Array.isArray(env.resolve.alias)
+                ? env.resolve.alias
+                : env.resolve.alias
+                  ? [env.resolve.alias]
+                  : [];
+              env.resolve.alias = [
+                ...envExisting.filter(
+                  (a) =>
+                    !(
+                      typeof a === "object" &&
+                      a &&
+                      "find" in a &&
+                      (a.find === "@" || (a.find instanceof RegExp && a.find.source === "^@\\/"))
+                    ),
+                ),
+                aliasRule,
+              ];
+            }
+          }
+        }
+        console.log("VITE_RESOLVED_ALIASES:", JSON.stringify(config.resolve.alias));
       },
     },
   ],
