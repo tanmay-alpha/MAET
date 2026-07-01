@@ -36,6 +36,12 @@ export default defineConfig({
   nitro: {
     preset: "vercel",
     rootDir: ".",
+    externals: {
+      inline: [
+        "@tanstack/react-start",
+        "@tanstack/start-server-core",
+      ],
+    },
   },
   // Inline plugin that runs in the config() chain. Two responsibilities:
 //   1. Inject the virtual TanStack Start client entry as the resolved
