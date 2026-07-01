@@ -4,10 +4,11 @@ services:
     runtime: node
     plan: free
     rootDir: server
-    # rootDir is already "server" so Render's CWD is server/ for both commands.
-    # npm install installs server/package.json deps (including nitropack).
-    # npm run build invokes `nitro build` which reads server/nitro.config.ts.
-    buildCommand: npm install && npm run build
+    # NOTE: If this service was created manually in Render dashboard (not via Blueprint),
+    # the dashboard buildCommand overrides this file. In that case, update the dashboard
+    # Build Command to: cd .. && bun install && cd server && bun run build
+    # (remove --frozen-lockfile to allow lockfile regeneration on Render)
+    buildCommand: cd .. && bun install && cd server && bun run build
     startCommand: npm run start
     healthCheckPath: /api/health
     envVars:
