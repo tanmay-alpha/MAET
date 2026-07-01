@@ -1,11 +1,11 @@
 import { defineEventHandler, getQuery } from "h3";
 import { rateLimit } from "../../infra/rate-limit";
 import { sseHub } from "./hub";
-import { AppError } from "@shared/types";
+import { AppError, UpstreamDegradedError } from "@shared/types/errors";
 
 export default defineEventHandler(async (event) => {
-  const userId = event.context.userId as string;
-  if (!userId) throw new AppError("UNAUTHORIZED", "no userId on context");
+  // SSE endpoint doesn't require auth - it's public data
+  const userId = "anonymous"; // Using anonymous since SSE data is public quotes
   const q = getQuery(event);
   const symbols = String(q.symbols ?? "").split(",").filter(Boolean);
   if (!symbols.length) throw new AppError("VALIDATION_FAILED", "symbols required");
