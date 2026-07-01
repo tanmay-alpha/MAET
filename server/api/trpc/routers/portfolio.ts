@@ -6,8 +6,8 @@
 import { router, protectedProcedure } from "../index";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db } from "../../data/drizzle/client";
-import { orders, fills, candles, watchlist } from "../../data/drizzle/schema";
+import { db } from "../../../data/drizzle/client";
+import { orders, fills, candles, watchlist } from "../../../db/schema";
 import { eq, desc, and, sql } from "drizzle-orm";
 
 export const portfolioRouter = router({
@@ -172,6 +172,11 @@ export const portfolioRouter = router({
             data.totalCost -= fill.price * fill.qty;
           }
         });
+        const symbols = Object.keys(symbolData);
+        let latestCandles: any[] = [];
+        if (symbols.length > 0) {
+          latestCandles = await db.select().from(candles);
+        }
 
         // Calculate average price and P&L
         const positions = Object.values(symbolData)
@@ -179,7 +184,7 @@ export const portfolioRouter = router({
           .map(pos => {
             const avgPrice = pos.totalCost / pos.totalQty;
             // Get current price from latest candle
-            const latestCandle = candles.find(c => c.symbol === pos.symbol);
+            const latestCandle = latestCandles.find(c => c.symbol === pos.symbol);
 
             return {
               id: crypto.randomUUID(),

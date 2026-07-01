@@ -118,3 +118,21 @@ export const idempotency = pgTable("idempotency", {
   primaryKey({ columns: [table.userId, table.key] }),
   index("idempotency_expiry_idx").on(table.expiresAt),
 ]);
+
+export const alerts = pgTable("alerts", {
+  id: uuid("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  symbol: text("symbol").notNull(),
+  exchange: text("exchange").notNull().default("NSE"),
+  type: text("type").notNull(),
+  condition: text("condition").notNull(),
+  target: numeric("target", { precision: 18, scale: 4 }).notNull(),
+  message: text("message"),
+  triggered: boolean("triggered").notNull().default(false),
+  triggeredAt: timestamp("triggered_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("alerts_user_idx").on(table.userId),
+]);
+

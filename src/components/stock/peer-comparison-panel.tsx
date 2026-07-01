@@ -24,7 +24,7 @@ export function PeerComparisonPanel({ symbol }: PeerComparisonPanelProps) {
   const peers = allSymbols.map((s) => {
     const quote = quoteMap.get(s);
     const fundamentals = MOCK_FUNDAMENTALS[s] ?? { pe: "—", pb: "—", roe: "—", de: "—" };
-    return { symbol: s, price: quote?.price, changePct: quote?.changePct, ...fundamentals };
+    return { symbol: s, price: quote?.price, changePct: quote?.changePct, ...fundamentals } as any;
   });
 
   return (
