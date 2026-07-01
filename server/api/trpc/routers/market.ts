@@ -1,7 +1,7 @@
-import { router, protectedProcedure } from "../index";
+import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 
-export const marketRouter = router({
+export const marketRouter = createRouter({
   // Get quotes for a list of symbols
   getQuotes: protectedProcedure
     .input(z.object({
@@ -171,4 +171,4 @@ export const marketRouter = router({
       };
     }),
 });
-
+

@@ -6,16 +6,18 @@
 // working directory is already server/).
 //
 // Key differences from the root nitro.config.ts:
-//   - No srcDir / scanDirs (everything is relative to this file's directory)
+//   - serverDir points at this directory so api/, routes/, middleware/, and
+//     plugins/ are included in the production bundle.
 //   - Uses "node-server" preset for Render (Node.js web service)
 //   - Excludes test files from route scanning
 
 import { defineNitroConfig } from "nitropack/config";
 
-export default defineNitroConfig({
+const config = {
   // Build output goes to server/.output/
   // render.yaml startCommand: node .output/server/index.mjs
   preset: "node-server",
+  serverDir: ".",
 
   // Exclude test files and spec files so colocated *.test.ts files
   // under api/ (which import bun:test) don't get compiled as routes.
@@ -37,4 +39,6 @@ export default defineNitroConfig({
   routeRules: {
     "/api/stream/**": { headers: { "cache-control": "no-store" } },
   },
-});
+};
+
+export default defineNitroConfig(config);

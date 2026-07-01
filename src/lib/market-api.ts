@@ -82,7 +82,10 @@ export type BacktestResponse = {
 };
 
 const configuredApiUrl = import.meta.env.VITE_API_URL as string | undefined;
-export const API_BASE_URL = (configuredApiUrl || "https://maet.onrender.com").replace(/\/$/, "");
+const defaultApiUrl = import.meta.env.DEV
+  ? "http://localhost:3000"
+  : "https://stock-market-backend.onrender.com";
+export const API_BASE_URL = (configuredApiUrl || defaultApiUrl).replace(/\/$/, "");
 
 export async function fetchMarketQuotes(
   symbols: string[],

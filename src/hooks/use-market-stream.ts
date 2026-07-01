@@ -7,8 +7,8 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { Quote } from "../lib/api-client";
+import { API_BASE_URL } from "../lib/market-api";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
@@ -64,13 +64,15 @@ export function useMarketStream({
         setReconnectAttempts(0);
       };
 
-      eventSource.onmessage = (event) => {
+      const handleQuotes = (event: MessageEvent<string>) => {
         if (!mountedRef.current) return;
         try {
           const data = JSON.parse(event.data);
-
-          // Handle both single quote and array of quotes
-          const newQuotes: Quote[] = Array.isArray(data) ? data : [data];
+          const newQuotes: Quote[] = Array.isArray(data)
+            ? data
+            : Array.isArray(data.quotes)
+              ? data.quotes
+              : [data];
 
           setQuotes((prev) => {
             const updated = new Map(prev);
@@ -85,6 +87,8 @@ export function useMarketStream({
           console.error("Failed to parse SSE message:", parseError);
         }
       };
+      eventSource.addEventListener("snapshot", handleQuotes as EventListener);
+      eventSource.addEventListener("tick", handleQuotes as EventListener);
 
       eventSource.onerror = () => {
         if (!mountedRef.current) return;

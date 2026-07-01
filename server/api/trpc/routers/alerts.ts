@@ -3,14 +3,14 @@
  * CRUD operations for price alerts, volume alerts, and indicator alerts
  */
 
-import { router, protectedProcedure } from "../index";
+import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { alerts } from "../../../db/schema";
 import { eq, and } from "drizzle-orm";
 
-export const alertsRouter = router({
+export const alertsRouter = createRouter({
   // Get all alerts for the current user
   getAlerts: protectedProcedure
     .query(async ({ ctx }) => {

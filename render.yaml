@@ -4,11 +4,8 @@ services:
     runtime: node
     plan: free
     rootDir: server
-    # NOTE: If this service was created manually in Render dashboard (not via Blueprint),
-    # the dashboard buildCommand overrides this file. In that case, update the dashboard
-    # Build Command to: cd .. && bun install && cd server && bun run build
-    # (remove --frozen-lockfile to allow lockfile regeneration on Render)
-    buildCommand: cd .. && bun install && cd server && bun run build
+    # Install from the workspace root so the shared package and lockfile are used.
+    buildCommand: cd .. && npm ci && npm run build --prefix server
     startCommand: npm run start
     healthCheckPath: /api/health
     envVars:
@@ -20,6 +17,8 @@ services:
       - key: SUPABASE_ANON_KEY
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_DB_URL
         sync: false
       # Redis (idempotency, rate limit, bus)
       - key: UPSTASH_REDIS_URL

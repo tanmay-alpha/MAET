@@ -34,18 +34,11 @@ function saveScreeners(screeners: SavedScreener[]): void {
 }
 
 function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  return crypto.randomUUID();
 }
 
 export const AVAILABLE_FIELDS = [
-  { value: "marketCap", label: "Market Cap" },
-  { value: "peRatio", label: "P/E Ratio" },
-  { value: "pbRatio", label: "P/B Ratio" },
-  { value: "roe", label: "ROE %" },
-  { value: "debtToEquity", label: "Debt / Equity" },
-  { value: "revenueGrowth", label: "Revenue Growth" },
-  { value: "profitGrowth", label: "Profit Growth" },
-  { value: "dividendYield", label: "Dividend Yield" },
+  { value: "price", label: "Price" },
   { value: "volume", label: "Volume" },
   { value: "changePct", label: "Change %" },
 ];
@@ -72,7 +65,7 @@ export function SavedScreeners({ onApply }: SavedScreenersProps) {
   // Form state
   const [formName, setFormName] = useState("");
   const [formFilters, setFormFilters] = useState<FilterCondition[]>([
-    { field: "peRatio", operator: "lt", value: 25 },
+    { field: "volume", operator: "gt", value: 1000000 },
   ]);
 
   useEffect(() => {
@@ -105,7 +98,7 @@ export function SavedScreeners({ onApply }: SavedScreenersProps) {
     setShowForm(false);
     setEditingId(null);
     setFormName("");
-    setFormFilters([{ field: "peRatio", operator: "lt", value: 25 }]);
+    setFormFilters([{ field: "volume", operator: "gt", value: 1000000 }]);
   }
 
   function handleEdit(screener: SavedScreener) {
@@ -121,7 +114,7 @@ export function SavedScreeners({ onApply }: SavedScreenersProps) {
   }
 
   function addFilter() {
-    setFormFilters((prev) => [...prev, { field: "peRatio", operator: "lt", value: 25 }]);
+    setFormFilters((prev) => [...prev, { field: "volume", operator: "gt", value: 1000000 }]);
   }
 
   function removeFilter(idx: number) {
@@ -159,7 +152,7 @@ export function SavedScreeners({ onApply }: SavedScreenersProps) {
             setShowForm(true);
             setEditingId(null);
             setFormName("");
-            setFormFilters([{ field: "peRatio", operator: "lt", value: 25 }]);
+            setFormFilters([{ field: "volume", operator: "gt", value: 1000000 }]);
           }}
           className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent"
         >
@@ -177,10 +170,10 @@ export function SavedScreeners({ onApply }: SavedScreenersProps) {
               placeholder="Screener name..."
               className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
             />
-            <button onClick={handleSave} className="rounded p-1 hover:bg-accent">
+            <button onClick={handleSave} className="rounded p-1 hover:bg-accent" aria-label="Save screener">
               <Check className="h-3.5 w-3.5 text-bull" />
             </button>
-            <button onClick={() => { setShowForm(false); setEditingId(null); }} className="rounded p-1 hover:bg-accent">
+            <button onClick={() => { setShowForm(false); setEditingId(null); }} className="rounded p-1 hover:bg-accent" aria-label="Cancel screener">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
