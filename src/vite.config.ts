@@ -38,8 +38,7 @@ export default defineConfig({
     rootDir: ".",
     externals: {
       inline: [
-        "@tanstack/react-start",
-        "@tanstack/start-server-core",
+        /^@tanstack/,
       ],
     },
   },
