@@ -8,6 +8,7 @@
     "shared"
   ],
   "scripts": {
+    "build": "npm run build --prefix src",
     "dev": "bun run server/src/main.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
