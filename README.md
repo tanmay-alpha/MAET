@@ -1,4 +1,4 @@
-# 🚀 MAET — Real-Time Indian Stock Market Scanner & Trading Platform
+# 🚀 MAET — Real-Time Indian Stock Market Scanner
 
 **MAET** is a professional-grade real-time scanning, charting, and paper-trading platform optimized for the Indian stock market (NSE/BSE). Powered by **Angel One SmartAPI**, **Yahoo Finance**, and a high-performance **Nitro backend**, it provides traders with the tools to screen, backtest, and simulate strategies in real time.
 
