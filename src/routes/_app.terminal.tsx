@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { CandlestickChart } from "@/components/trading/candlestick-chart";
+import { CandlestickChartSimple as CandlestickChart } from "@/components/trading/candlestick-chart";
 import { OrderPanel } from "@/components/trading/order-panel";
 import { Watchlist } from "@/components/trading/watchlist";
 import { useMarketCandles } from "@/hooks/use-market-candles";

@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "cd src && npm run build",
-  "installCommand": "cd src && npm install",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
   "outputDirectory": "src/.vercel/output",
   "env": {
     "VITE_API_URL": "https://stock-market-backend.onrender.com"

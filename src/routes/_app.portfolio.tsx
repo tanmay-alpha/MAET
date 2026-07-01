@@ -257,11 +257,11 @@ function PortfolioPage() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-lg font-semibold">Positions</h2>
                 <div className="text-sm text-muted-foreground">
-                  {metrics.hasPositions ? `${account.positions.length} open` : "None"}
+                  {account.positions.length > 0 ? `${account.positions.length} open` : "None"}
                 </div>
               </div>
 
-              {metrics.hasPositions ? (
+              {account.positions.length > 0 ? (
                 <div className="space-y-3">
                   {account.positions.map(position => {
                     const quote = quoteMap.get(position.symbol);
