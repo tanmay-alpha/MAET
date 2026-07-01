@@ -1,92 +1,103 @@
-# 🚀 MAET — Real-Time Indian Stock Market Scanner
+# MAET - Indian Market Scanner and Trading Platform
 
-**MAET** is a professional-grade real-time scanning, charting, and paper-trading platform optimized for the Indian stock market (NSE/BSE). Powered by **Angel One SmartAPI**, **Yahoo Finance**, and a high-performance **Nitro backend**, it provides traders with the tools to screen, backtest, and simulate strategies in real time.
+MAET is a TanStack Start frontend with a Nitro backend for NSE/BSE market
+monitoring, scanning, charting, backtesting, alerts, and paper trading.
 
----
+## Data Sources
 
-## 🛠️ Tech Stack & Workspace Architecture
+- Angel One SmartAPI WebSocket 2.0 supplies live NSE quotes when broker
+  authentication succeeds.
+- Yahoo Finance supplies delayed quotes and historical candles and remains the
+  fallback when the broker stream is unavailable.
+- The UI identifies Yahoo data as delayed. It does not label fabricated values
+  as live data.
+- Fundamental scanner fields are intentionally unavailable until a reliable
+  licensed provider is connected. The previous mock values were removed.
 
-MAET is designed as a modular monorepo using Bun Workspaces:
+## Workspace
 
-```
-MAET/
-├── src/                  # FRONTEND: TanStack Start (Vite + React + Tailwind + Zustand)
-├── server/               # BACKEND: Nitro (h3 web server + Drizzle ORM + tRPC)
-├── shared/               # SHARED: Unified TypeScript types and symbol lists
-└── render.yaml / vercel.json # IaC deployment files
-```
-
-- **Frontend (Vercel):** Single-page TanStack Start app with persistent charts, indicator toolbars, and responsive UI.
-- **Backend (Render):** Nitro-powered h3 server providing real-time quotes, indicators (SMA, RSI), and tRPC query/mutation routing.
-- **Database:** PostgreSQL (Supabase) via **Drizzle ORM**.
-- **Caching & Queue:** Redis (Upstash) for API rate-limiting and session synchronization.
-
----
-
-## ⚡ The MAET Screener & Scanner Engine
-
-The core differentiator of MAET is its dynamic rule-based screening engine (`server/domain/screener/engine.ts`). It supports nested compound logical operations (`AND`, `OR`) over real-time parameters:
-
-### Supported Parameters
-- **Fundamentals:** P/E Ratio, P/B Ratio, ROE (Return on Equity), Dividend Yield, Market Capitalization, and Sector.
-- **Technical Indicators:** Relative Strength Index (RSI), Simple Moving Average (SMA), Exponential Moving Average (EMA).
-
-```typescript
-// Example Scanner Evaluation Rule
-{
-  op: "AND",
-  children: [
-    { field: "pe", op: "lt", value: 25 },
-    { field: "rsi", op: "between", value: [30, 70], period: 14 }
-  ]
-}
+```text
+src/       TanStack Start, React, Vite, Tailwind
+server/    Nitro, h3, tRPC, Drizzle, market workers
+shared/    Shared schemas and NSE symbol catalog
 ```
 
----
+## Required Environment
 
-## 🚦 Deployment & Local Setup
+Create a local `.env` from `.env.example`. Render needs the same backend keys:
 
-### Prerequisite Environment Variables
-Ensure you copy `.env.example` to `.env` and set:
+```text
+SUPABASE_URL
+SUPABASE_ANON_KEY
+SUPABASE_SERVICE_ROLE_KEY
+SUPABASE_DB_URL
+UPSTASH_REDIS_URL
+ANGELONE_MASTER_KEY
+ANGELONE_API_KEY
+ANGELONE_CLIENT_ID
+ANGELONE_PIN
+ANGELONE_TOTP_SECRET
+FRONTEND_ORIGIN
+```
+
+Vercel must set:
+
+```text
+VITE_API_URL=https://stock-market-backend.onrender.com
+```
+
+Do not commit `.env`, `.env.backup`, broker credentials, TOTP secrets, or
+database passwords.
+
+## Local Development
+
 ```bash
-# Supabase DB Connection
-SUPABASE_DB_URL=postgresql://...
-
-# SmartAPI Credentials
-ANGELONE_API_KEY=...
-ANGELONE_CLIENT_ID=...
-ANGELONE_PIN=...
-ANGELONE_TOTP_SECRET=...
-
-# Redis
-UPSTASH_REDIS_URL=redis://...
+npm ci
+npm run build --prefix server
+npm run start --prefix server
 ```
 
-### Local Development
-1. Install root dependencies:
-   ```bash
-   bun install
-   ```
-2. Start the Nitro backend:
-   ```bash
-   cd server && bun run dev
-   ```
-3. Start the TanStack Start frontend:
-   ```bash
-   cd src && bun run dev
-   ```
+In another terminal:
 
----
+```bash
+VITE_API_URL=http://localhost:3000 npm run dev --prefix src
+```
 
-## 🌍 CI/CD Deployments
+The backend uses `PORT` and `HOST` from the environment. The Lovable frontend
+development server currently defaults to port 8080.
 
-### Vercel Deployment
-The frontend automatically builds on Vercel using the root workspace hoisting configuration:
-- **Build Command:** `npm run build`
-- **Install Command:** `npm install`
-- **Output Directory:** `src/.vercel/output`
+## Verification
 
-### Render Deployment
-The backend deploys automatically on Render using `render.yaml`:
-- **Build Command:** `cd .. && bun install && cd server && bun run build`
-- **Start Command:** `npm run start` (inside `server/`)
+```bash
+npm run typecheck
+npm test -- --run
+npm run build
+npm run build --prefix server
+npm audit --omit=dev --audit-level=high
+```
+
+Runtime checks:
+
+```text
+GET /api/health
+GET /api/market/quotes?symbols=RELIANCE,TCS
+GET /api/market/candles?symbol=RELIANCE&tf=1d&range=1mo
+GET /api/market/stream?symbols=RELIANCE
+```
+
+## Deployment
+
+Vercel uses the root `vercel.json` and emits `src/.vercel/output`.
+
+Render uses `render.yaml` with `rootDir: server`:
+
+```text
+Build: cd .. && npm ci && npm run build --prefix server
+Start: npm run start
+Health: /api/health
+```
+
+If the Render service was created manually, dashboard commands override
+`render.yaml`; set the dashboard commands to the values above.
+
+See `docs/REMAINING-WORK.md` for verified limitations and production follow-up.

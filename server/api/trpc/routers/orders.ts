@@ -1,11 +1,11 @@
-import { router, protectedProcedure } from "../index";
+import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { orders } from "../../../db/schema";
 import { eq, desc, and } from "drizzle-orm";
 
-export const ordersRouter = router({
+export const ordersRouter = createRouter({
   // Get user's orders - scoped by userId to prevent data leakage
   getOrders: protectedProcedure
     .query(async ({ ctx }) => {

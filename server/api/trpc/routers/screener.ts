@@ -3,7 +3,7 @@
  * Stock screening and filtering operations
  */
 
-import { router, protectedProcedure } from "../index";
+import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
@@ -39,7 +39,7 @@ const FIELD_MAP = {
   source: candles.source,
 } as const;
 
-export const screenerRouter = router({
+export const screenerRouter = createRouter({
   // Run a stock screen with filters
   runScreen: protectedProcedure
     .input(z.object({

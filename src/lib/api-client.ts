@@ -3,35 +3,20 @@
  *
  * Type-safe API client for communicating with the MAET backend.
  * Uses VITE_API_URL environment variable (set in Vercel dashboard).
- * Falls back to localhost for development.
+ * Uses the same canonical base URL and market contracts as the live-data hooks.
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+import {
+  API_BASE_URL,
+  type MarketCandle,
+  type MarketCandlesResponse,
+  type MarketQuote,
+  type MarketQuotesResponse,
+} from "./market-api";
 
 // Type definitions matching backend schemas
-export interface Quote {
-  symbol: string;
-  exchange: string;
-  name?: string;
-  price: number;
-  prevClose: number;
-  change: number;
-  changePercent: number;
-  volume: number;
-  lastUpdated: string;
-}
-
-export interface Candle {
-  symbol: string;
-  timeframe: string;
-  ts: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  source: string;
-}
+export type Quote = MarketQuote;
+export type Candle = MarketCandle;
 
 export interface MarketClock {
   phase: "PRE_OPEN" | "OPEN" | "CLOSED" | "HOLIDAY" | "AFTER_HOURS";
@@ -63,8 +48,9 @@ export interface HealthCheck {
   uptime: number;
   version: string;
   checks?: Record<string, {
-    status: boolean;
-    message?: string;
+    name: string;
+    ok: boolean;
+    detail?: string;
   }>;
 }
 
@@ -127,9 +113,9 @@ export const api = {
 
   // Market data
   async getQuotes(symbols: string[]): Promise<Quote[]> {
-    const params = new URLSearchParams();
-    symbols.forEach(s => params.append("symbols", s));
-    return apiFetch<Quote[]>(`/api/market/quotes?${params}`);
+    const params = new URLSearchParams({ symbols: symbols.join(",") });
+    const response = await apiFetch<MarketQuotesResponse>(`/api/market/quotes?${params}`);
+    return response.quotes;
   },
 
   async getCandles(
@@ -142,7 +128,8 @@ export const api = {
       tf: timeframe,
       range,
     });
-    return apiFetch<Candle[]>(`/api/market/candles?${params}`);
+    const response = await apiFetch<MarketCandlesResponse>(`/api/market/candles?${params}`);
+    return response.candles;
   },
 
   async getMarketClock(): Promise<MarketClock> {
@@ -181,21 +168,22 @@ export function createQuotesStream(
   onMessage: (quotes: Quote[]) => void,
   onError?: (error: Error) => void
 ): () => void {
-  const params = new URLSearchParams();
-  symbols.forEach(s => params.append("symbols", s));
+  const params = new URLSearchParams({ symbols: symbols.join(",") });
 
   const eventSource = new EventSource(
     `${API_BASE_URL}/api/market/stream?${params}`
   );
 
-  eventSource.onmessage = (event) => {
+  const handleEvent = (event: MessageEvent<string>) => {
     try {
-      const data = JSON.parse(event.data);
-      onMessage(data);
+      const data = JSON.parse(event.data) as Quote | { quotes: Quote[] };
+      onMessage("quotes" in data ? data.quotes : [data]);
     } catch {
       onError?.(new Error("Failed to parse SSE message"));
     }
   };
+  eventSource.addEventListener("snapshot", handleEvent as EventListener);
+  eventSource.addEventListener("tick", handleEvent as EventListener);
 
   eventSource.onerror = () => {
     onError?.(new Error("SSE connection error"));

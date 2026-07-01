@@ -73,15 +73,24 @@ export function refreshDependencyChecks(force = false): Promise<void> {
         }).catch((error: Error) => registerCheck("redis", false, error.message))
       : Promise.resolve(registerCheck("redis", false, "not configured"));
 
+    const databaseUrl = process.env.SUPABASE_DB_URL ?? process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
+    const database = databaseUrl
+      ? import("../data/drizzle/client")
+          .then(({ getDb }) => timed(getDb().execute(sql`select 1`)))
+          .then(() => registerCheck("database", true, "reachable"))
+          .catch((error: Error) => registerCheck("database", false, error.message))
+      : Promise.resolve(registerCheck("database", false, "not configured"));
+
     const brokerConfigured = Boolean(
       process.env.ANGELONE_API_KEY && process.env.ANGELONE_CLIENT_ID && process.env.ANGELONE_TOTP_SECRET
     );
-    registerCheck("angelone", brokerConfigured, brokerConfigured ? "credentials configured" : "not configured");
+    if (!brokerConfigured) registerCheck("angelone", false, "not configured");
 
-    await Promise.all([yahoo, supabase, redis]);
+    await Promise.all([yahoo, supabase, redis, database]);
     lastDependencyRefresh = Date.now();
   })().finally(() => {
     refreshInFlight = undefined;
   });
   return refreshInFlight;
 }
+import { sql } from "drizzle-orm";

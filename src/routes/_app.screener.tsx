@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { RefreshCw, Search, SlidersHorizontal, Table } from "lucide-react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import type { MarketQuote } from "@/lib/market-api";
 import { SavedScreeners, type SavedScreener, type FilterCondition, AVAILABLE_FIELDS } from "@/components/screener/saved-screeners";
 
 export const Route = createFileRoute("/_app/screener")({
@@ -40,13 +41,31 @@ const ROWS: Row[] = [
   { symbol: "NTPC", name: "NTPC Limited", logo: "N", logoColor: "bg-orange-700", sector: "Energy" },
 ];
 
-// Mock fundamentals data for screener columns
-const MOCK_FUNDAMENTALS: Record<string, Record<string, string | number>> = {
-  RELIANCE: { mktCap: "₹17,00,000Cr", pe: "24.5", eps: "91.2", epsGrowth: "12%", divYield: "0.5%" },
-  HDFCBANK: { mktCap: "₹9,50,000Cr", pe: "19.2", eps: "153.4", epsGrowth: "15%", divYield: "1.2%" },
-  TCS: { mktCap: "₹15,00,000Cr", pe: "26.1", eps: "145.6", epsGrowth: "8%", divYield: "1.0%" },
-  INFY: { mktCap: "₹6,00,000Cr", pe: "22.8", eps: "56.7", epsGrowth: "10%", divYield: "2.4%" },
-};
+function matchesFilter(quote: MarketQuote | undefined, filter: FilterCondition): boolean {
+  if (!quote) return false;
+  const value = filter.field === "price"
+    ? quote.price
+    : filter.field === "volume"
+      ? quote.volume
+      : filter.field === "changePct"
+        ? quote.changePct
+        : undefined;
+  const target = Number(filter.value);
+  if (value === undefined || !Number.isFinite(target)) return false;
+
+  switch (filter.operator) {
+    case "gt": return value > target;
+    case "gte": return value >= target;
+    case "lt": return value < target;
+    case "lte": return value <= target;
+    case "eq": return value === target;
+    case "between": {
+      const upper = Number(filter.value2);
+      return Number.isFinite(upper) && value >= target && value <= upper;
+    }
+    default: return false;
+  }
+}
 
 function LivePriceCell({ price }: { price?: number }) {
   return (
@@ -76,21 +95,14 @@ function Screener() {
       r.name.toLowerCase().includes(query.toLowerCase())
     );
 
-    // Apply mock filters (in real app, this would query fundamentals API)
     if (activeFilters.length > 0) {
-      result = result.filter((row) => {
-        const mock = MOCK_FUNDAMENTALS[row.symbol] ?? {};
-        return activeFilters.every((f) => {
-          const val = mock[f.field as keyof typeof mock];
-          if (val === undefined) return true; // include if no data
-          // Very basic mock filter logic — real implementation needs proper parsing
-          return true;
-        });
-      });
+      result = result.filter((row) => activeFilters.every((filter) =>
+        matchesFilter(quoteMap.get(row.symbol), filter)
+      ));
     }
 
     return [...result].sort((a, b) => a.symbol.localeCompare(b.symbol));
-  }, [query, activeFilters]);
+  }, [query, activeFilters, quoteMap]);
 
   const rows = filteredRows;
 
@@ -110,7 +122,7 @@ function Screener() {
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden bg-background">
       {/* Top header */}
       <div className="border-b border-border px-5 pt-4 pb-3">
         <div className="flex items-center justify-between">
@@ -142,7 +154,7 @@ function Screener() {
           </div>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Price, change, and volume come from Yahoo. Fundamental columns use mock data until a provider is connected.
+          Yahoo market data. Fundamental values remain unavailable until a reliable provider is connected.
         </p>
       </div>
 
@@ -171,7 +183,7 @@ function Screener() {
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-auto">
+      <div className="min-w-0 flex-1 overflow-auto">
         <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-sm">
           <thead className="sticky top-0 z-10 bg-background">
             <tr className="border-b border-border">
@@ -215,7 +227,6 @@ function Screener() {
             }}
           >
             {rows.map((r, i) => {
-              const fundamentals = MOCK_FUNDAMENTALS[r.symbol] ?? {};
               return (
                 <tr
                   key={r.symbol}
@@ -251,19 +262,19 @@ function Screener() {
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">—</td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    {fundamentals.mktCap ?? "—"}
+                    —
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    {fundamentals.pe ?? "—"}
+                    —
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    {fundamentals.eps ?? "—"}
+                    —
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    {fundamentals.epsGrowth ?? "—"}
+                    —
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    {fundamentals.divYield ?? "—"}
+                    —
                   </td>
                   <td className="px-3 py-2.5 text-left text-xs text-foreground/90">{r.sector}</td>
                   <td className="px-3 py-2.5 text-left text-muted-foreground">—</td>
@@ -279,7 +290,7 @@ function Screener() {
         <div className="flex items-center gap-4">
           <span className="inline-flex items-center gap-1.5">
             <span className={`h-1.5 w-1.5 rounded-full ${quoteError ? "bg-bear" : "bg-bull animate-pulse"}`} />
-            {quoteError ? "Quote service unavailable" : streamConnected ? "Yahoo delayed · fundamentals mock" : "Connecting · NSE"}
+            {quoteError ? "Quote service unavailable" : streamConnected ? "Yahoo delayed stream" : "Connecting to market data"}
           </span>
           <span>{rows.length} matches</span>
         </div>

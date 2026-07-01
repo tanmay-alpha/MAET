@@ -3,14 +3,14 @@
  * Portfolio management, positions, trades, and analytics
  */
 
-import { router, protectedProcedure } from "../index";
+import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { orders, fills, candles, watchlist } from "../../../db/schema";
 import { eq, desc, and, sql } from "drizzle-orm";
 
-export const portfolioRouter = router({
+export const portfolioRouter = createRouter({
   // Get user's portfolio summary
   getPortfolioSummary: protectedProcedure
     .query(async ({ ctx }) => {

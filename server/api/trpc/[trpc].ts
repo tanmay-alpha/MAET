@@ -1,6 +1,6 @@
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { defineEventHandler, toWebRequest } from "h3";
-import { router } from "./index";
+import { appRouter } from "./index";
 import { tryAuth } from "./auth";
 
 // Nitro route handler for tRPC
@@ -12,8 +12,8 @@ export default defineEventHandler(async (event) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
     req: toWebRequest(event) as unknown as Request,
-    router: router,
-    createContext: () => ({ userId: authCtx?.userId, email: authCtx?.email }),
+    router: appRouter,
+    createContext: () => ({ userId: authCtx?.userId, email: authCtx?.email ?? null }),
     onError:
       process.env.NODE_ENV === "development"
         ? ({ path, error }) => {

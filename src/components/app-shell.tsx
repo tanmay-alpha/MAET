@@ -9,11 +9,11 @@ export function AppShell() {
     <SidebarProvider>
       <div className="flex min-h-screen w-full bg-background text-foreground">
         <AppSidebar />
-        <div className="flex flex-1 flex-col">
-          <header className="flex h-12 items-center gap-3 border-b border-border bg-panel px-3">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="flex h-12 min-w-0 items-center gap-3 border-b border-border bg-panel px-3">
             <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
             <div className="h-4 w-px bg-border" />
-            <nav className="flex items-center gap-1 text-xs">
+            <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto text-xs">
               {[
                 { to: "/dashboard", label: "Dashboard" },
                 { to: "/screener", label: "Screener" },
@@ -41,7 +41,7 @@ export function AppShell() {
                 </Link>
               ))}
             </nav>
-            <div className="ml-auto flex items-center gap-2 text-xs">
+            <div className="ml-auto hidden shrink-0 items-center gap-2 text-xs sm:flex">
               <div className="hidden items-center gap-1.5 rounded-md bg-panel-elevated px-2.5 py-1 md:flex">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-bull" />
                 <span className="text-muted-foreground">NSE</span>
@@ -56,7 +56,7 @@ export function AppShell() {
             </div>
           </header>
           <TickerTape />
-          <main className="flex-1 overflow-hidden">
+          <main className="min-w-0 flex-1 overflow-hidden">
             <Outlet />
           </main>
         </div>
