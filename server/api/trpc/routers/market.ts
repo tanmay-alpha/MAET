@@ -171,6 +171,4 @@ export const marketRouter = router({
       };
     }),
 });
-
-// Export the market router
-export { marketRouter };
+
