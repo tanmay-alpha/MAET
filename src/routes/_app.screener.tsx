@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { RefreshCw, Search, SlidersHorizontal, Table } from "lucide-react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import type { MarketQuote } from "@/lib/market-api";
+import { api } from "@/lib/api-client";
 import { SavedScreeners, type SavedScreener, type FilterCondition, AVAILABLE_FIELDS } from "@/components/screener/saved-screeners";
 
 export const Route = createFileRoute("/_app/screener")({

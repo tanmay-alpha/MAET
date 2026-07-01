@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build --prefix src",
-    "dev": "bun run server/src/main.ts",
+    "dev": "bun run server/orchestrator.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

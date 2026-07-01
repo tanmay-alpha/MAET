@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["../shared/*"],
+      "@server/*": ["./*"],
+      "@/*": ["../src/*"]
+    }
+  },
+  "include": ["./*.ts", "./**/*.ts"],
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.spec.ts", ".output", ".vercel"]
+}

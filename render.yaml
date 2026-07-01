@@ -5,8 +5,8 @@ services:
     plan: free
     rootDir: server
     # Install from the workspace root so the shared package and lockfile are used.
-    buildCommand: cd .. && npm ci && npm run build --prefix server
-    startCommand: npm run start
+    buildCommand: cd .. && bun ci && bun run build --prefix server
+    startCommand: node .output/server/index.mjs
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION

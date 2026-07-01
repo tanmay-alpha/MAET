@@ -43,6 +43,10 @@ function scheduleAngelLogin(delayMs = 60_000): void {
 async function connectAngelOne(): Promise<void> {
   try {
     const config = getConfig();
+    if (!config.angeloneApiKey || !config.angeloneClientId || !config.angelonePin || !config.angeloneTotpSecret) {
+      console.warn("Angel One credentials not configured, skipping login");
+      return;
+    }
     const session = await login({
       apiKey: config.angeloneApiKey,
       clientCode: config.angeloneClientId,
