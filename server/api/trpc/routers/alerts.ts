@@ -6,8 +6,8 @@
 import { router, protectedProcedure } from "../index";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db } from "../../data/drizzle/client";
-import { alerts } from "../../data/drizzle/schema";
+import { db } from "../../../data/drizzle/client";
+import { alerts } from "../../../db/schema";
 import { eq, and } from "drizzle-orm";
 
 export const alertsRouter = router({
@@ -42,7 +42,7 @@ export const alertsRouter = router({
           exchange: input.exchange.toUpperCase(),
           type: input.type,
           condition: input.condition,
-          target: input.target,
+          target: String(input.target),
           message: input.message || null,
           triggered: false,
           triggeredAt: null,
@@ -74,7 +74,7 @@ export const alertsRouter = router({
           )
         );
 
-        if (result.rowsAffected === 0) {
+        if ((result as any).rowsAffected === 0) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Alert not found",

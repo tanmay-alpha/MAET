@@ -100,7 +100,7 @@ function Compare() {
               <td className="px-4 py-2 text-muted-foreground">Price</td>
               {symbols.map((s) => (
                 <td key={s} className="px-4 py-2 text-center font-mono tabular">
-                  <Link to={`/chart/${s}`} className="text-primary hover:underline">
+                  <Link to={`/chart/${s}` as any} className="text-primary hover:underline">
                     {s === "RELIANCE" ? "₹2,450" : s === "TCS" ? "₹3,520" : "—"}
                   </Link>
                 </td>

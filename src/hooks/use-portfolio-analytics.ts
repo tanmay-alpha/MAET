@@ -62,7 +62,7 @@ const RISK_FREE_RATE = 0.05; // 5% annual risk-free rate
 
 // Generate mock equity curve from trades for visualization
 function generateEquityCurve(
-  orders: { filledAt?: string; side: string; fillPrice: number; qty: number; symbol: string }[],
+  orders: any[],
   initialCash: number
 ): PerformanceDataPoint[] {
   const filledOrders = orders

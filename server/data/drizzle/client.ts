@@ -5,7 +5,7 @@
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import * as schema from "./schema";
+import * as schema from "../../db/schema";
 
 let dbInstance: ReturnType<typeof drizzle> | null = null;
 let sqlClient: postgres.Sql | null = null;
@@ -58,4 +58,4 @@ export const db = new Proxy({} as ReturnType<typeof drizzle>, {
 });
 
 // Re-export schema for use in routers
-export * from "./schema";
+export * from "../../db/schema";

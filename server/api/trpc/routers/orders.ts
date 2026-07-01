@@ -1,8 +1,8 @@
 import { router, protectedProcedure } from "../index";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db } from "../../data/drizzle/client";
-import { orders } from "../../data/drizzle/schema";
+import { db } from "../../../data/drizzle/client";
+import { orders } from "../../../db/schema";
 import { eq, desc, and } from "drizzle-orm";
 
 export const ordersRouter = router({
@@ -52,7 +52,7 @@ export const ordersRouter = router({
           side: input.side,
           type: input.type,
           qty: input.qty,
-          limitPrice: input.limitPrice || null,
+          limitPrice: input.limitPrice ? String(input.limitPrice) : null,
           status: "pending",
           idempotencyKey,
           rejectReason: null,

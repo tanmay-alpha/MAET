@@ -19,7 +19,7 @@ function ChartCard({ symbol }: { symbol: string }) {
   return (
     <div className="group relative overflow-hidden rounded-lg border border-border bg-panel transition hover:border-primary/40">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <Link to={`/chart/${symbol}`} className="font-semibold text-sm hover:text-primary">
+        <Link to={`/chart/${symbol}` as any} className="font-semibold text-sm hover:text-primary">
           {symbol}
         </Link>
         <button type="button" aria-label="Maximize" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" title="Maximize chart">

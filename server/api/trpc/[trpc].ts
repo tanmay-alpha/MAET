@@ -1,5 +1,5 @@
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { defineEventHandler } from "h3";
+import { defineEventHandler, toWebRequest } from "h3";
 import { router } from "./index";
 import { tryAuth } from "./auth";
 
@@ -11,7 +11,7 @@ export default defineEventHandler(async (event) => {
 
   return fetchRequestHandler({
     endpoint: "/api/trpc",
-    req: event.node.req,
+    req: toWebRequest(event) as unknown as Request,
     router: router,
     createContext: () => ({ userId: authCtx?.userId, email: authCtx?.email }),
     onError:

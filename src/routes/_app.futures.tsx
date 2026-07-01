@@ -306,7 +306,7 @@ function FuturesTable({ contracts, sortBy, onSortChange, filterExpiry, onFilterC
             <tr key={contract.symbol} className="border-b border-border hover:bg-accent/50">
               <td className="px-4 py-3">
                 <Link
-                  to={`/chart/${contract.underlying}`}
+                  to={`/chart/${contract.underlying}` as any}
                   className="font-semibold text-foreground hover:text-primary"
                 >
                   {contract.symbol}
@@ -314,7 +314,7 @@ function FuturesTable({ contracts, sortBy, onSortChange, filterExpiry, onFilterC
                 <div className="text-xs text-muted-foreground">{contract.name}</div>
               </td>
               <td className="px-4 py-3">
-                <Link to={`/chart/${contract.underlying}`} className="text-muted-foreground hover:text-foreground">
+                <Link to={`/chart/${contract.underlying}` as any} className="text-muted-foreground hover:text-foreground">
                   {contract.underlying}
                 </Link>
               </td>
@@ -344,7 +344,7 @@ function FuturesTable({ contracts, sortBy, onSortChange, filterExpiry, onFilterC
               </td>
               <td className="px-4 py-3 text-right">
                 <Link
-                  to={`/chart/${contract.underlying}`}
+                  to={`/chart/${contract.underlying}` as any}
                   className="rounded bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:opacity-90"
                 >
                   View

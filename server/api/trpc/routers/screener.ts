@@ -6,8 +6,8 @@
 import { router, protectedProcedure } from "../index";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db } from "../../data/drizzle/client";
-import { candles } from "../../data/drizzle/schema";
+import { db } from "../../../data/drizzle/client";
+import { candles } from "../../../db/schema";
 import { desc, sql, and, or, gte, lte, eq, gt, lt } from "drizzle-orm";
 
 // Whitelist of allowed filter fields to prevent SQL injection
@@ -55,7 +55,7 @@ export const screenerRouter = router({
     .query(async ({ input }) => {
       try {
         // Start with base query
-        let query = db.select().from(candles);
+        let query: any = db.select().from(candles);
 
         // Apply filters safely using whitelisted fields
         for (const filter of input.filters) {
@@ -105,7 +105,7 @@ export const screenerRouter = router({
 
         const results = await query;
 
-        return results.map(row => ({
+        return results.map((row: any) => ({
           symbol: row.symbol,
           timeframe: row.timeframe,
           ts: row.ts,
