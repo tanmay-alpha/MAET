@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { RefreshCw, Search, SlidersHorizontal, Table } from "lucide-react";
+import { BarChart3, BookmarkPlus, RefreshCw, Search, SlidersHorizontal, Table } from "lucide-react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import type { MarketQuote } from "@/lib/market-api";
 import { api } from "@/lib/api-client";
@@ -83,6 +83,11 @@ function Screener() {
   const [query, setQuery] = useState("");
   const [showSaved, setShowSaved] = useState(false);
   const [activeFilters, setActiveFilters] = useState<FilterCondition[]>([]);
+  const [minPrice, setMinPrice] = useState("");
+  const [minChange, setMinChange] = useState("");
+  const [minVolume, setMinVolume] = useState("");
+  const [sector, setSector] = useState("all");
+  const [activeView, setActiveView] = useState<"overview" | "performance" | "technicals">("overview");
   const tbodyRef = useRef<HTMLTableSectionElement>(null);
 
   // Get all unique symbols from ROWS and active screener filters
@@ -102,8 +107,20 @@ function Screener() {
       ));
     }
 
+    const priceFloor = Number(minPrice);
+    const changeFloor = Number(minChange);
+    const volumeFloor = Number(minVolume);
+    result = result.filter((row) => {
+      const quote = quoteMap.get(row.symbol);
+      if (sector !== "all" && row.sector !== sector) return false;
+      if (minPrice && (!quote || quote.price < priceFloor)) return false;
+      if (minChange && (!quote || (quote.changePct ?? Number.NEGATIVE_INFINITY) < changeFloor)) return false;
+      if (minVolume && (!quote || quote.volume < volumeFloor)) return false;
+      return true;
+    });
+
     return [...result].sort((a, b) => a.symbol.localeCompare(b.symbol));
-  }, [query, activeFilters, quoteMap]);
+  }, [query, activeFilters, quoteMap, minPrice, minChange, minVolume, sector]);
 
   const rows = filteredRows;
 
@@ -130,7 +147,8 @@ function Screener() {
           <div>
             <div className="text-xs text-muted-foreground">Stock Screener</div>
             <div className="mt-1 flex items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-tight">NSE market watch</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">All stocks</h1>
+              <span className="rounded bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-primary">NSE</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -142,7 +160,7 @@ function Screener() {
               }`}
               aria-label="Toggle saved screeners"
             >
-              <SlidersHorizontal className="h-4 w-4" />
+              <BookmarkPlus className="h-4 w-4" />
             </button>
             <button
               type="button"
@@ -154,9 +172,7 @@ function Screener() {
             </button>
           </div>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Yahoo market data. Fundamental values remain unavailable until a reliable provider is connected.
-        </p>
+        <p className="mt-2 text-xs text-muted-foreground">Fast NSE cash-market scanning with resilient Yahoo delayed quotes.</p>
       </div>
 
       {/* Saved screeners panel */}
@@ -166,17 +182,54 @@ function Screener() {
         </div>
       )}
 
-      {/* Tabs row */}
-      <div className="border-b border-border px-4 py-2 text-xs font-medium flex items-center gap-3">
-        <div className="flex items-center gap-1.5">
-          <Table className="h-3.5 w-3.5 text-muted-foreground" />
-          <span>Overview</span>
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-panel px-4 py-2 text-xs">
+        <div className="inline-flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1.5 text-primary">
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          Filters
         </div>
+        <label className="flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1.5 text-muted-foreground">
+          Price ≥
+          <input value={minPrice} onChange={(event) => setMinPrice(event.target.value)} inputMode="decimal" placeholder="Any" className="w-16 bg-transparent font-mono text-foreground outline-none" />
+        </label>
+        <label className="flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1.5 text-muted-foreground">
+          Chg % ≥
+          <input value={minChange} onChange={(event) => setMinChange(event.target.value)} inputMode="decimal" placeholder="Any" className="w-14 bg-transparent font-mono text-foreground outline-none" />
+        </label>
+        <label className="flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1.5 text-muted-foreground">
+          Volume ≥
+          <input value={minVolume} onChange={(event) => setMinVolume(event.target.value)} inputMode="numeric" placeholder="Any" className="w-20 bg-transparent font-mono text-foreground outline-none" />
+        </label>
+        <label className="flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1.5 text-muted-foreground">
+          Sector
+          <select value={sector} onChange={(event) => setSector(event.target.value)} className="bg-transparent text-foreground outline-none">
+            <option value="all">All</option>
+            {[...new Set(ROWS.map((row) => row.sector))].sort().map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        {(minPrice || minChange || minVolume || sector !== "all") && (
+          <button type="button" onClick={() => { setMinPrice(""); setMinChange(""); setMinVolume(""); setSector("all"); }} className="rounded px-2 py-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
+            Reset quick filters
+          </button>
+        )}
+      </div>
+
+      {/* Tabs row */}
+      <div className="border-b border-border px-4 text-xs font-medium flex items-center gap-1">
+        {([
+          { id: "overview", label: "Overview", icon: Table },
+          { id: "performance", label: "Performance", icon: BarChart3 },
+          { id: "technicals", label: "Technicals", icon: SlidersHorizontal },
+        ] as const).map(({ id, label, icon: Icon }) => (
+          <button key={id} type="button" onClick={() => setActiveView(id)} className={`flex items-center gap-1.5 border-b-2 px-3 py-2.5 ${activeView === id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+            <Icon className="h-3.5 w-3.5" />
+            {label}
+          </button>
+        ))}
         {activeFilters.length > 0 && (
           <button
             type="button"
             onClick={clearFilters}
-            className="rounded bg-accent px-2 py-0.5 text-xs hover:bg-accent/80"
+            className="ml-2 rounded bg-accent px-2 py-0.5 text-xs hover:bg-accent/80"
           >
             Clear {activeFilters.length} filter{activeFilters.length > 1 ? "s" : ""}
           </button>
@@ -291,7 +344,7 @@ function Screener() {
         <div className="flex items-center gap-4">
           <span className="inline-flex items-center gap-1.5">
             <span className={`h-1.5 w-1.5 rounded-full ${quoteError ? "bg-bear" : "bg-bull animate-pulse"}`} />
-            {quoteError ? "Quote service unavailable" : streamConnected ? "Yahoo delayed stream" : "Connecting to market data"}
+            {quoteError ? "Quote service unavailable" : streamConnected ? "Broker stream connected" : "Yahoo delayed polling active"}
           </span>
           <span>{rows.length} matches</span>
         </div>

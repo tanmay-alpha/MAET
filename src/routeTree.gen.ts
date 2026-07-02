@@ -26,6 +26,8 @@ import { Route as AppCompareRouteImport } from './routes/_app.compare'
 import { Route as AppChartGridRouteImport } from './routes/_app.chart-grid'
 import { Route as AppBacktestRouteImport } from './routes/_app.backtest'
 import { Route as AppAlertsRouteImport } from './routes/_app.alerts'
+import { Route as ApiMarketQuotesRouteImport } from './routes/api.market.quotes'
+import { Route as ApiMarketCandlesRouteImport } from './routes/api.market.candles'
 import { Route as AppStockSymbolRouteImport } from './routes/_app.stock.$symbol'
 import { Route as AppOptionsUnderlyingRouteImport } from './routes/_app.options.$underlying'
 import { Route as AppChartSymbolRouteImport } from './routes/_app.chart.$symbol'
@@ -114,6 +116,16 @@ const AppAlertsRoute = AppAlertsRouteImport.update({
   path: '/alerts',
   getParentRoute: () => AppRoute,
 } as any)
+const ApiMarketQuotesRoute = ApiMarketQuotesRouteImport.update({
+  id: '/api/market/quotes',
+  path: '/api/market/quotes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMarketCandlesRoute = ApiMarketCandlesRouteImport.update({
+  id: '/api/market/candles',
+  path: '/api/market/candles',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppStockSymbolRoute = AppStockSymbolRouteImport.update({
   id: '/stock/$symbol',
   path: '/stock/$symbol',
@@ -150,6 +162,8 @@ export interface FileRoutesByFullPath {
   '/chart/$symbol': typeof AppChartSymbolRoute
   '/options/$underlying': typeof AppOptionsUnderlyingRoute
   '/stock/$symbol': typeof AppStockSymbolRoute
+  '/api/market/candles': typeof ApiMarketCandlesRoute
+  '/api/market/quotes': typeof ApiMarketQuotesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -171,6 +185,8 @@ export interface FileRoutesByTo {
   '/chart/$symbol': typeof AppChartSymbolRoute
   '/options/$underlying': typeof AppOptionsUnderlyingRoute
   '/stock/$symbol': typeof AppStockSymbolRoute
+  '/api/market/candles': typeof ApiMarketCandlesRoute
+  '/api/market/quotes': typeof ApiMarketQuotesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -194,6 +210,8 @@ export interface FileRoutesById {
   '/_app/chart/$symbol': typeof AppChartSymbolRoute
   '/_app/options/$underlying': typeof AppOptionsUnderlyingRoute
   '/_app/stock/$symbol': typeof AppStockSymbolRoute
+  '/api/market/candles': typeof ApiMarketCandlesRoute
+  '/api/market/quotes': typeof ApiMarketQuotesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -217,6 +235,8 @@ export interface FileRouteTypes {
     | '/chart/$symbol'
     | '/options/$underlying'
     | '/stock/$symbol'
+    | '/api/market/candles'
+    | '/api/market/quotes'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -238,6 +258,8 @@ export interface FileRouteTypes {
     | '/chart/$symbol'
     | '/options/$underlying'
     | '/stock/$symbol'
+    | '/api/market/candles'
+    | '/api/market/quotes'
   id:
     | '__root__'
     | '/'
@@ -260,11 +282,15 @@ export interface FileRouteTypes {
     | '/_app/chart/$symbol'
     | '/_app/options/$underlying'
     | '/_app/stock/$symbol'
+    | '/api/market/candles'
+    | '/api/market/quotes'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
+  ApiMarketCandlesRoute: typeof ApiMarketCandlesRoute
+  ApiMarketQuotesRoute: typeof ApiMarketQuotesRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -388,6 +414,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAlertsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/api/market/quotes': {
+      id: '/api/market/quotes'
+      path: '/api/market/quotes'
+      fullPath: '/api/market/quotes'
+      preLoaderRoute: typeof ApiMarketQuotesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/market/candles': {
+      id: '/api/market/candles'
+      path: '/api/market/candles'
+      fullPath: '/api/market/candles'
+      preLoaderRoute: typeof ApiMarketCandlesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/stock/$symbol': {
       id: '/_app/stock/$symbol'
       path: '/stock/$symbol'
@@ -459,6 +499,8 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
+  ApiMarketCandlesRoute: ApiMarketCandlesRoute,
+  ApiMarketQuotesRoute: ApiMarketQuotesRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
