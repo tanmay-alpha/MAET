@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "git push origin main"
+      "git push origin main",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)"
     ]
   }
 }
