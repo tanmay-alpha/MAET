@@ -172,7 +172,7 @@ function Screener() {
             </button>
           </div>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">Fast NSE cash-market scanning with resilient Yahoo delayed quotes.</p>
+        <p className="mt-2 text-xs text-muted-foreground">Fast NSE cash-market scanning with Angel One live ticks and a resilient Yahoo delayed fallback.</p>
       </div>
 
       {/* Saved screeners panel */}
