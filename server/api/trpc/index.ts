@@ -4,6 +4,7 @@ import { ordersRouter } from "./routers/orders";
 import { alertsRouter } from "./routers/alerts";
 import { screenerRouter } from "./routers/screener";
 import { portfolioRouter } from "./routers/portfolio";
+import { companiesRouter } from "./routers/companies";
 
 /**
  * tRPC initialization for MAET backend.
@@ -18,6 +19,7 @@ export const appRouter = createRouter({
   alerts: alertsRouter,
   screener: screenerRouter,
   portfolio: portfolioRouter,
+  companies: companiesRouter,
 });
 
 export const router = appRouter;

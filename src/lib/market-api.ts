@@ -31,6 +31,20 @@ export type MarketCandle = {
   volume: number;
 };
 
+// Extended timeframe support for charts
+export type ChartTimeframe = {
+  "1m": { label: string; range: string };
+  "5m": { label: string; range: string };
+  "10d": { label: string; range: string };
+  "15m": { label: string; range: string };
+  "1h": { label: string; range: string };
+  "6mo": { label: string; range: string };
+  "1D": { label: string; range: string };
+  "1W": { label: string; range: string };
+  "5y": { label: string; range: string };
+  "max": { label: string; range: string };
+};
+
 export type MarketCandlesResponse = {
   symbol: string;
   timeframe: MarketCandle["tf"];
