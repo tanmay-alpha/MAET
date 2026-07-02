@@ -18,6 +18,8 @@ Last audited: 2026-07-02
   subscribe to broker/Yahoo quotes at a time.
 - Angel One's instrument master enriches the NSE universe with live-feed tokens
   without replacing NSE as the canonical source for company identity.
+- Angel One's authenticated REST quote snapshot supplies last traded prices
+  when the exchange is closed or the WebSocket has not emitted a fresh tick.
 - When NSE blocks Render's data-center IP, the backend reads the same official
   NSE-derived, cached company pages through the production Vercel edge route;
   Angel token hydration remains independent of that fallback.
@@ -28,7 +30,7 @@ Last audited: 2026-07-02
 - Drizzle was upgraded past the identifier SQL-injection advisory.
 - Render configuration installs from the workspace lockfile and declares the
   required Supabase database URL.
-- Unit baseline: 92 passing, 9 environment-dependent tests skipped.
+- Unit baseline: 93 passing, 9 environment-dependent tests skipped.
 
 ## Required Before Production Deployment
 

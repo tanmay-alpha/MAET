@@ -5,7 +5,7 @@ import { YahooPoller } from "./workers/yahoo-poller";
 import { AngelOneWorker } from "./workers/angelone-ws";
 import { quoteStore } from "./domain/market/quote-store";
 import { closeRedis } from "./data/redis/client";
-import { login } from "./data/sources/angelone/client";
+import { login, setAngelOneMarketSession } from "./data/sources/angelone/client";
 import { getConfig } from "./config";
 import { lookupSymbol } from "./domain/market/symbol";
 import { bus } from "./infra/bus";
@@ -55,6 +55,7 @@ async function connectAngelOne(): Promise<void> {
       totpSecret: config.angeloneTotpSecret,
     });
     if (!started) return;
+    setAngelOneMarketSession(session);
     angelOne.manageUser(ANGEL_FEED_USER, session, activeAngelTokens());
     registerCheck("angelone", true, "authenticated; stream connecting");
   } catch (error) {
@@ -104,6 +105,7 @@ export async function stopOrchestrator(): Promise<void> {
   angelFailedOff?.();
   angelFailedOff = undefined;
   await angelOne.stop();
+  setAngelOneMarketSession(undefined);
   screenerRunner.stop();
   marketClock.stop();
   candleWriter.stop();

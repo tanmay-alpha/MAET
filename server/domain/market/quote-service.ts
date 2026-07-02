@@ -2,7 +2,8 @@ import type { Tick } from "@shared/types";
 import { getQuote } from "../../data/sources/yahoo";
 import { bus } from "../../infra/bus";
 import { quoteStore } from "./quote-store";
-import { resolveMarketSymbol } from "./symbol";
+import { lookupSymbol, resolveMarketSymbol } from "./symbol";
+import { getAngelOneMarketQuotes } from "../../data/sources/angelone/client";
 
 const CACHE_TTL_MS = 15_000;
 const cache = new Map<string, { tick: Tick; fetchedAt: number }>();
@@ -42,7 +43,39 @@ export async function loadQuote(symbol: string, force = false): Promise<Tick> {
 
 export async function loadQuotes(symbols: string[], force = false): Promise<QuoteLoadResult> {
   const unique = [...new Set(symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean))];
-  const settled = await Promise.allSettled(unique.map((symbol) => loadQuote(symbol, force)));
+  const missing = unique.filter((symbol) => {
+    const existing = cache.get(symbol);
+    return force || !existing || Date.now() - existing.fetchedAt >= CACHE_TTL_MS;
+  });
+  if (missing.length > 0) {
+    try {
+      const requests = missing.flatMap((symbol) => {
+        const record = lookupSymbol("NSE", symbol);
+        return record ? [{ symbol, token: record.token }] : [];
+      });
+      const snapshots = await getAngelOneMarketQuotes(requests);
+      for (const snapshot of snapshots) {
+        const tick: Tick = {
+          exchange: "NSE",
+          symbol: snapshot.symbol,
+          price: snapshot.price,
+          volume: snapshot.volume,
+          ts: new Date().toISOString(),
+          source: "angelone",
+          previousClose: snapshot.previousClose,
+          change: snapshot.change,
+          changePct: snapshot.changePct,
+          currency: "INR",
+        };
+        cache.set(tick.symbol, { tick, fetchedAt: Date.now() });
+        quoteStore.set(tick);
+        bus.emit("tick", tick);
+      }
+    } catch {
+      // Yahoo below remains the delayed fallback when broker REST is unavailable.
+    }
+  }
+  const settled = await Promise.allSettled(unique.map((symbol) => loadQuote(symbol, false)));
   const quotes: Tick[] = [];
   const errors: QuoteLoadResult["errors"] = [];
 
