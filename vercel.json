@@ -1,6 +1,6 @@
 {
-  "buildCommand": "cd src && bun install && bun run build",
+  "buildCommand": "bun run build",
   "installCommand": "bun install",
-  "outputDirectory": "src/.vercel/output",
+  "outputDirectory": ".vercel/output",
   "framework": null
 }
