@@ -36,6 +36,9 @@ type Column = {
 
 const PAGE_SIZE = 50;
 const SAVED_KEY = "maet:screener-v4:views";
+const QUOTE_FILTER_KEYS = new Set([
+  "price_min", "price_max", "change_pct_min", "change_pct_max", "volume_min", "volume_max",
+]);
 const NUMERIC_FILTERS = [
   ["price_min", "Min price"], ["price_max", "Max price"], ["change_pct_min", "Min change %"], ["change_pct_max", "Max change %"],
   ["volume_min", "Min volume"], ["volume_max", "Max volume"], ["rel_volume_min", "Min rel volume"], ["rel_volume_max", "Max rel volume"],
@@ -163,28 +166,54 @@ function Screener() {
   const [showColumns, setShowColumns] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<string[]>([]);
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  const [sourceMode, setSourceMode] = useState("unknown");
 
   useEffect(() => setSavedViews(loadSavedViews()), []);
   useEffect(() => { setPage(1); }, [deferredQuery, filters, sortBy, sortDir]);
 
   const serverQuery = useMemo<ScreenerQuery>(() => {
     const values: ScreenerQuery = { sortBy, sortDir };
-    for (const [key, value] of Object.entries(filters)) if (value.trim()) values[key] = value.trim();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value.trim() && !(sourceMode === "nse-fallback" && QUOTE_FILTER_KEYS.has(key))) values[key] = value.trim();
+    }
     return values;
-  }, [filters, sortBy, sortDir]);
+  }, [filters, sourceMode, sortBy, sortDir]);
   const companiesQuery = useQuery({
     queryKey: ["market-companies-v4", page, deferredQuery, serverQuery],
     queryFn: ({ signal }) => fetchMarketCompanies(page, PAGE_SIZE, deferredQuery, signal, serverQuery),
     staleTime: 30_000,
     retry: 2,
   });
+  useEffect(() => {
+    if (companiesQuery.data?.source) setSourceMode(companiesQuery.data.source);
+  }, [companiesQuery.data?.source]);
   const companies = useMemo(() => companiesQuery.data?.items ?? [], [companiesQuery.data?.items]);
   const symbols = useMemo(() => companies.map((company) => company.symbol), [companies]);
   const quotes = useMarketQuotes(symbols);
+  const visibleCompanies = useMemo(() => {
+    if (sourceMode !== "nse-fallback") return companies;
+    return companies.filter((company) => {
+      const quote = quotes.quoteMap.get(company.symbol);
+      const values: Record<string, number | undefined> = {
+        price: quote?.price ?? company.price,
+        change_pct: quote?.changePct ?? company.changePct,
+        volume: quote?.volume ?? company.volume,
+      };
+      for (const prefix of ["price", "change_pct", "volume"] as const) {
+        const value = values[prefix];
+        const min = filters[`${prefix}_min`];
+        const max = filters[`${prefix}_max`];
+        if (min && (value === undefined || value < Number(min))) return false;
+        if (max && (value === undefined || value > Number(max))) return false;
+      }
+      return true;
+    });
+  }, [companies, filters, quotes.quoteMap, sourceMode]);
   const allColumns = useMemo(() => buildColumns(activeView), [activeView]);
   const columns = allColumns.filter((column) => !hiddenColumns.includes(column.id));
   const availability = companiesQuery.data?.fieldAvailability ?? {};
   const hasFilter = Object.values(filters).some(Boolean);
+  const hasQuoteFilter = Object.entries(filters).some(([key, value]) => Boolean(value) && QUOTE_FILTER_KEYS.has(key));
 
   function updateFilter(key: string, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -255,6 +284,7 @@ function Screener() {
           <span className="inline-flex items-center gap-1"><i className="h-1.5 w-1.5 rounded-full bg-bull" />Angel live</span>
           <span className="inline-flex items-center gap-1"><i className="h-1.5 w-1.5 rounded-full bg-amber-400" />Yahoo delayed</span>
           <span className="inline-flex items-center gap-1"><i className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />— unavailable</span>
+          {sourceMode === "nse-fallback" && hasQuoteFilter && <span className="rounded bg-bull/10 px-1.5 py-0.5 text-bull">Price/change/volume filters apply to this live page</span>}
           <span className="ml-auto">{companiesQuery.data?.sourceSummary.join(" · ")}</span>
         </div>
       </header>
@@ -296,17 +326,17 @@ function Screener() {
       <div className="min-w-0 flex-1 overflow-auto">
         <table className="w-full min-w-[980px] border-separate border-spacing-0 text-xs">
           <thead className="sticky top-0 z-20 bg-background/95 backdrop-blur"><tr>{columns.map((column) => <th key={column.id} className={`border-b border-border px-3 py-2.5 font-medium text-muted-foreground ${column.align === "right" ? "text-right" : "text-left"}`}><button type="button" disabled={!column.sortBy} onClick={() => changeSort(column)} className="inline-flex items-center gap-1 disabled:cursor-default">{column.label}{column.sortBy && <ChevronDown className={`h-3 w-3 ${sortBy === column.sortBy ? "text-primary" : "opacity-30"} ${sortBy === column.sortBy && sortDir === "asc" ? "rotate-180" : ""}`} />}</button></th>)}<th className="border-b border-border px-3 py-2.5 text-right text-muted-foreground">Actions</th></tr></thead>
-          <tbody>{companies.map((company, index) => <tr key={company.symbol} className="group border-b border-border/50 hover:bg-accent/35">
+          <tbody>{visibleCompanies.map((company, index) => <tr key={company.symbol} className="group border-b border-border/50 hover:bg-accent/35">
             {columns.map((column) => <td key={column.id} className={`border-b border-border/40 px-3 py-2.5 font-mono tabular-nums ${column.align === "right" ? "text-right" : "text-left"}`}>{column.id === "rank" ? <span className="text-muted-foreground">{(page - 1) * PAGE_SIZE + index + 1}</span> : column.id === "company" ? <button type="button" onClick={() => navigate({ to: `/stock/${company.symbol}` })} className="flex min-w-[240px] items-center gap-2 text-left"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 font-semibold text-primary">{company.symbol[0]}</span><span><span className="block font-semibold text-primary">{company.symbol}</span><span className="block max-w-[210px] truncate font-sans text-[11px] text-foreground/80">{company.name}</span></span>{company.marketCapBucket !== "unknown" && <span className="rounded bg-accent px-1 py-0.5 text-[9px] uppercase text-muted-foreground">{company.marketCapBucket}</span>}</button> : column.render(company, quotes.quoteMap)}</td>)}
             <td className="border-b border-border/40 px-3 py-2.5"><div className="flex justify-end gap-1 opacity-60 group-hover:opacity-100"><button type="button" onClick={() => navigate({ to: `/stock/${company.symbol}` })} className="rounded p-1.5 hover:bg-accent" title="Open company detail"><Building2Icon /></button><button type="button" onClick={() => navigate({ to: `/chart/${company.symbol}` })} className="rounded p-1.5 hover:bg-accent" title="Open chart"><BarChart3 className="h-3.5 w-3.5" /></button><a href={getTradingViewUrl(company.symbol)} target="_blank" rel="noreferrer" className="rounded p-1.5 hover:bg-accent" title="Open TradingView"><ExternalLink className="h-3.5 w-3.5" /></a><button type="button" onClick={() => void navigator.clipboard.writeText(company.symbol)} className="rounded p-1.5 hover:bg-accent" title="Copy symbol"><Copy className="h-3.5 w-3.5" /></button></div></td>
           </tr>)}
             {companiesQuery.isFetching && companies.length === 0 && Array.from({ length: 8 }, (_, index) => <tr key={index}>{columns.map((column) => <td key={column.id} className="border-b border-border/40 px-3 py-3"><div className="h-4 animate-pulse rounded bg-accent" /></td>)}<td /></tr>)}
-            {!companiesQuery.isFetching && companies.length === 0 && <tr><td colSpan={columns.length + 1} className="px-6 py-16 text-center"><div className="text-sm font-medium">{companiesQuery.isError ? "Screener API unavailable" : "No companies match these filters"}</div><p className="mt-2 text-xs text-muted-foreground">{companiesQuery.isError ? (companiesQuery.error instanceof Error ? companiesQuery.error.message : "Try again shortly") : companiesQuery.data?.source === "nse-fallback" && hasFilter ? "These filters require stored database snapshots; the NSE identity fallback cannot evaluate them honestly." : "Try clearing filters or searching another symbol, company, or ISIN."}</p>{hasFilter && <button type="button" onClick={() => setFilters({})} className="mt-3 rounded border border-border px-3 py-1.5 text-xs hover:bg-accent">Clear filters</button>}</td></tr>}
+            {!companiesQuery.isFetching && visibleCompanies.length === 0 && <tr><td colSpan={columns.length + 1} className="px-6 py-16 text-center"><div className="text-sm font-medium">{companiesQuery.isError ? "Screener API unavailable" : "No companies match these filters"}</div><p className="mt-2 text-xs text-muted-foreground">{companiesQuery.isError ? (companiesQuery.error instanceof Error ? companiesQuery.error.message : "Try again shortly") : companiesQuery.data?.source === "nse-fallback" && hasFilter ? hasQuoteFilter ? "No companies on this live page match the price, change, or volume filter. Stored fundamental filters require PostgreSQL snapshots." : "These filters require stored database snapshots; the NSE identity fallback cannot evaluate them honestly." : "Try clearing filters or searching another symbol, company, or ISIN."}</p>{hasFilter && <button type="button" onClick={() => setFilters({})} className="mt-3 rounded border border-border px-3 py-1.5 text-xs hover:bg-accent">Clear filters</button>}</td></tr>}
           </tbody>
         </table>
       </div>
 
-      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-panel px-4 py-2 text-[11px] text-muted-foreground"><div className="flex items-center gap-4"><span className="inline-flex items-center gap-1.5"><i className={`h-1.5 w-1.5 rounded-full ${quotes.isError ? "bg-bear" : quotes.streamConnected ? "bg-bull animate-pulse" : "bg-amber-400"}`} />{quotes.isError ? "Quote service unavailable" : quotes.streamConnected ? "Broker stream connected" : "Delayed quote polling"}</span><span>{companies.length} rows · source {companiesQuery.data?.source ?? "loading"}</span></div>
+      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-panel px-4 py-2 text-[11px] text-muted-foreground"><div className="flex items-center gap-4"><span className="inline-flex items-center gap-1.5"><i className={`h-1.5 w-1.5 rounded-full ${quotes.isError ? "bg-bear" : quotes.streamConnected ? "bg-bull animate-pulse" : "bg-amber-400"}`} />{quotes.isError ? "Quote service unavailable" : quotes.streamConnected ? "Broker stream connected" : "Delayed quote polling"}</span><span>{visibleCompanies.length} rows · source {companiesQuery.data?.source ?? "loading"}</span></div>
         <div className="flex items-center gap-2 font-mono"><button type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))} className="rounded p-1 hover:bg-accent disabled:opacity-30" aria-label="Previous page"><ChevronLeft className="h-4 w-4" /></button><span>Page {page} / {Math.max(1, companiesQuery.data?.pageCount ?? 1)}</span><button type="button" disabled={page >= (companiesQuery.data?.pageCount ?? 1)} onClick={() => setPage((current) => current + 1)} className="rounded p-1 hover:bg-accent disabled:opacity-30" aria-label="Next page"><ChevronRight className="h-4 w-4" /></button></div></footer>
     </div>
   );
