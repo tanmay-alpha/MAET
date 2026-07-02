@@ -1,10 +1,11 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { generateTotp, login } from "./client";
+import { generateTotp, getAngelOneMarketQuotes, login, setAngelOneMarketSession } from "./client";
 
 const origFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = origFetch;
+  setAngelOneMarketSession(undefined);
 });
 
 describe("angelone login", () => {
@@ -35,5 +36,24 @@ describe("angelone login", () => {
     const body = JSON.parse(captured.body);
     expect(body.totp).toMatch(/^\d{6}$/);
     expect(body.clientcode).toBe("C");
+  });
+
+  it("loads an authenticated market snapshot for requested tokens", async () => {
+    setAngelOneMarketSession({ jwt: "JWT", feedToken: "FEED", refreshToken: "REFRESH", clientCode: "C", apiKey: "K", obtainedAt: new Date().toISOString() });
+    globalThis.fetch = (async (_url, init) => {
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer JWT");
+      return Response.json({
+        status: true,
+        data: { fetched: [{ symbolToken: "2885", ltp: 1_410.5, tradeVolume: 12_345, close: 1_400, netChange: 10.5, percentChange: 0.75 }] },
+      });
+    }) as unknown as typeof fetch;
+    expect(await getAngelOneMarketQuotes([{ symbol: "RELIANCE", token: "2885" }])).toEqual([{
+      symbol: "RELIANCE",
+      price: 1_410.5,
+      volume: 12_345,
+      previousClose: 1_400,
+      change: 10.5,
+      changePct: 0.75,
+    }]);
   });
 });
