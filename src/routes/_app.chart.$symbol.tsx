@@ -22,10 +22,14 @@ export const Route = createFileRoute("/_app/chart/$symbol")({
 const TIMEFRAMES = {
   "1m": { timeframe: "1m", range: "1d", label: "1 Day" },
   "5m": { timeframe: "5m", range: "5d", label: "5 Days" },
+  "10d": { timeframe: "1d", range: "10d", label: "10 Days" },
   "15m": { timeframe: "15m", range: "1mo", label: "1 Month" },
   "1h": { timeframe: "1h", range: "3mo", label: "3 Months" },
+  "6mo": { timeframe: "1d", range: "6mo", label: "6 Months" },
   "1D": { timeframe: "1d", range: "1y", label: "1 Year" },
   "1W": { timeframe: "1wk", range: "2y", label: "2 Years" },
+  "5y": { timeframe: "1wk", range: "5y", label: "5 Years" },
+  "max": { timeframe: "1mo", range: "max", label: "Max" },
 };
 
 function IndicatorCard({ name, enabled, onChange }: { name: string; enabled: boolean; onChange: (enabled: boolean) => void }) {

@@ -1,3 +1,5 @@
+import { sql } from "drizzle-orm";
+
 export type HealthCheck = {
   name: string;
   ok: boolean;
@@ -93,4 +95,3 @@ export function refreshDependencyChecks(force = false): Promise<void> {
   });
   return refreshInFlight;
 }
-import { sql } from "drizzle-orm";
