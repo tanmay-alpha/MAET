@@ -113,7 +113,7 @@ function Screener() {
       return true;
     });
 
-    return [...result].sort((a, b) => a.symbol.localeCompare(b.symbol));
+    return result;
   }, [companyRows, activeFilters, quoteMap, minPrice, minChange, minVolume]);
 
   const rows = filteredRows;
