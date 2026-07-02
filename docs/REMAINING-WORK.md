@@ -18,6 +18,9 @@ Last audited: 2026-07-02
   subscribe to broker/Yahoo quotes at a time.
 - Angel One's instrument master enriches the NSE universe with live-feed tokens
   without replacing NSE as the canonical source for company identity.
+- When NSE blocks Render's data-center IP, the backend reads the same official
+  NSE-derived, cached company pages through the production Vercel edge route;
+  Angel token hydration remains independent of that fallback.
 - Normalized company, financial-statement, and calculated-fundamental schemas
   are included in migration `0002_company_master_and_fundamentals.sql`.
 - Profitability, liquidity, leverage, efficiency, growth, cash-flow, and
