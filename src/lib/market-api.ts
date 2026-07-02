@@ -30,6 +30,15 @@ export type MarketCompany = {
   paidUpValue?: number;
   marketLot?: number;
   faceValue?: number;
+  // Extended fundamentals — populated after daily-processor sync
+  sector?: string;
+  industry?: string;
+  marketCap?: number;
+  pe?: number;
+  pb?: number;
+  roe?: number;
+  dividendYield?: number;
+  eps?: number;
   source: "nse";
 };
 

@@ -397,6 +397,7 @@ function ChartPage() {
                       chartState={chartState}
                       onChartStateChange={setChartState}
                       drawingTool={selectedTool}
+                      indicators={{ sma: showMA, ema: showMA, rsi: showRSI, macd: false, volume: showVolume }}
                     />
                   </div>
                 )}

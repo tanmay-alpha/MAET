@@ -60,12 +60,18 @@ export function CandlestickChart({
   drawingTool,
   indicators = { sma: false, ema: false, rsi: false, macd: false, volume: true }
 }: CandlestickChartProps) {
-  // Indicator state
+  // Indicator state — initialized from props, kept in sync via useEffect
   const [showSMA, setShowSMA] = useState(indicators.sma);
   const [showEMA, setShowEMA] = useState(indicators.ema);
   const [showRSI, setShowRSI] = useState(indicators.rsi);
   const [showMACD, setShowMACD] = useState(indicators.macd);
   const [showVolume, setShowVolume] = useState(indicators.volume);
+
+  // Sync internal indicator state when parent props change
+  useEffect(() => { setShowSMA(indicators.sma); }, [indicators.sma]);
+  useEffect(() => { setShowEMA(indicators.ema); }, [indicators.ema]);
+  useEffect(() => { setShowRSI(indicators.rsi); }, [indicators.rsi]);
+  useEffect(() => { setShowVolume(indicators.volume); }, [indicators.volume]);
 
   // Indicator calculations
   const indicatorData = useMemo(() => {
@@ -579,6 +585,37 @@ export function CandlestickChart({
           return <div key={i} className="text-right">{v.toFixed(2)}</div>;
         })}
       </div>
+
+      {/* RSI sub-panel */}
+      {showRSI && indicatorData && (
+        <div className="absolute left-0 bottom-0 right-14 h-16 border-t border-border bg-panel/80">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
+            {/* 30/70 threshold lines */}
+            <line x1="0" x2="100" y1="70" y2="70" stroke="var(--color-border)" strokeWidth="0.15" strokeDasharray="0.5,0.5" />
+            <line x1="0" x2="100" y1="30" y2="30" stroke="var(--color-border)" strokeWidth="0.15" strokeDasharray="0.5,0.5" />
+            {/* RSI line */}
+            {(() => {
+              const rsiValues = indicatorData.rsi;
+              const visibleRSI = rsiValues.slice(visibleStart, visibleEnd);
+              const pts: string[] = [];
+              let idx = 0;
+              for (let i = 0; i < visibleRSI.length; i++) {
+                if (isNaN(visibleRSI[i])) continue;
+                const x = (idx / Math.max(1, visibleRSI.filter(v => !isNaN(v)).length - 1)) * 100;
+                const y = 100 - visibleRSI[i];
+                pts.push(`${idx === 0 ? "M" : "L"} ${x} ${y}`);
+                idx++;
+              }
+              return pts.length >= 2 ? <path key="rsi-line" d={pts.join(" ")} stroke="#8b5cf6" strokeWidth="0.25" fill="none" /> : null;
+            })()}
+          </svg>
+          <div className="pointer-events-none absolute right-0 top-0 flex h-full w-14 flex-col justify-between px-2 py-1 text-tv-legend text-muted-foreground">
+            <div className="text-right">70</div>
+            <div className="text-right">50</div>
+            <div className="text-right">30</div>
+          </div>
+        </div>
+      )}
 
       {/* Hover elements */}
       {hover && (
