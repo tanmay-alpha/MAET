@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import nifty50 from "../../../shared/symbols/nifty50.json";
-import { resolveMarketSymbol, SYMBOLS, lookupSymbol, yahooTicker } from "./symbol";
+import { resolveMarketSymbol, SYMBOLS, lookupSymbol, lookupSymbolByToken, registerMarketSymbols, yahooTicker } from "./symbol";
 
 describe("symbol domain", () => {
   it("bundle contains at least 50 NSE symbols", () => {
@@ -16,6 +16,13 @@ describe("symbol domain", () => {
 
   it("lookupSymbol returns undefined for unknown", () => {
     expect(lookupSymbol("NSE", "ZZZZZ")).toBeUndefined();
+  });
+
+  it("registers dynamically loaded broker symbols and token lookups", () => {
+    registerMarketSymbols([{ exchange: "NSE", symbol: "DYNAMIC", name: "Dynamic Limited", token: "999999", yahooTicker: "DYNAMIC.NS", isActive: true }]);
+    expect(lookupSymbol("NSE", "DYNAMIC")?.token).toBe("999999");
+    expect(lookupSymbolByToken("999999")?.symbol).toBe("DYNAMIC");
+    expect(resolveMarketSymbol("DYNAMIC").ticker).toBe("DYNAMIC.NS");
   });
 
   it("yahooTicker appends .NS for NSE and .BO for BSE", () => {

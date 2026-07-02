@@ -15,6 +15,7 @@ import { db } from "../data/drizzle/client";
 import { candles, companies, fundamentals } from "../db/schema";
 import { getCandles } from "../data/sources/yahoo";
 import { getFundamentals as fetchNSEFundamentals } from "../data/sources/nse";
+import { getNseCompanyMaster } from "../data/sources/nse-company-master";
 import { resolveMarketSymbol } from "../domain/market/symbol";
 import type { Candle } from "@shared/types";
 import { sql } from "drizzle-orm";
@@ -48,6 +49,7 @@ const DEFAULT_TIMEFRAMES: Candle["tf"][] = ["1d", "1wk"];
 const MAX_CONCURRENT = 4;
 
 interface ProcessingStats {
+  companiesSynced: number;
   symbolsProcessed: number;
   candlesWritten: number;
   fundamentalsSynced: number;
@@ -98,6 +100,7 @@ export class DailyProcessor {
     }
     this.running = true;
     const stats: ProcessingStats = {
+      companiesSynced: 0,
       symbolsProcessed: 0,
       candlesWritten: 0,
       fundamentalsSynced: 0,
@@ -108,6 +111,7 @@ export class DailyProcessor {
 
     try {
       log.info({ symbols: this.symbols.length, timeframes: this.timeframes }, "starting daily processor");
+      stats.companiesSynced = await this.syncCompanyMaster(log);
       await this.processSymbols(stats, log);
       if (this.syncFundamentals) {
         await this.processFundamentals(stats, log);
@@ -123,6 +127,51 @@ export class DailyProcessor {
     }
 
     return stats;
+  }
+
+  private async syncCompanyMaster(log: ProcessorLogger): Promise<number> {
+    const master = await getNseCompanyMaster(true);
+    if (this.dryRun) {
+      log.info({ count: master.length }, "company master dry run complete");
+      return master.length;
+    }
+
+    const updatedAt = new Date();
+    for (let index = 0; index < master.length; index += 200) {
+      const rows = master.slice(index, index + 200).map((company) => ({
+        id: company.symbol,
+        symbol: company.symbol,
+        name: company.name,
+        exchange: company.exchange,
+        series: company.series,
+        isin: company.isin || null,
+        listingDate: company.listingDate ? new Date(`${company.listingDate}T00:00:00Z`) : null,
+        marketLot: company.marketLot,
+        faceValue: company.faceValue?.toString(),
+        isActive: true,
+        dataSource: company.source,
+        lastMasterUpdate: updatedAt,
+        updatedAt,
+      }));
+      await db.insert(companies).values(rows).onConflictDoUpdate({
+        target: companies.symbol,
+        set: {
+          name: sql`excluded.name`,
+          exchange: sql`excluded.exchange`,
+          series: sql`excluded.series`,
+          isin: sql`excluded.isin`,
+          listingDate: sql`excluded.listing_date`,
+          marketLot: sql`excluded.market_lot`,
+          faceValue: sql`excluded.face_value`,
+          isActive: true,
+          dataSource: sql`excluded.data_source`,
+          lastMasterUpdate: updatedAt,
+          updatedAt,
+        },
+      });
+    }
+    log.info({ count: master.length }, "official NSE company master synced");
+    return master.length;
   }
 
   // -------------------------------------------------------------------------

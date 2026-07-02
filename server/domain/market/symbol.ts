@@ -19,10 +19,23 @@ export const INDEX_SYMBOLS: readonly MarketSymbol[] = [
 ];
 
 const byKey = new Map<string, Quote>();
+const byToken = new Map<string, Quote>();
 for (const q of SYMBOLS) byKey.set(`${q.exchange}:${q.symbol}`, q);
+for (const q of SYMBOLS) byToken.set(q.token, q);
+
+export function registerMarketSymbols(quotes: Quote[]): void {
+  for (const quote of quotes) {
+    byKey.set(`${quote.exchange}:${quote.symbol}`, quote);
+    byToken.set(quote.token, quote);
+  }
+}
 
 export function lookupSymbol(exchange: "NSE" | "BSE", symbol: string): Quote | undefined {
   return byKey.get(`${exchange}:${symbol}`);
+}
+
+export function lookupSymbolByToken(token: string): Quote | undefined {
+  return byToken.get(token);
 }
 
 export function yahooTicker(quote: Quote): string {
@@ -39,7 +52,7 @@ export function resolveMarketSymbol(symbol: string): MarketSymbol {
   const index = INDEX_SYMBOLS.find((item) => item.symbol === normalized);
   if (index) return index;
 
-  const quote = SYMBOLS.find((item) => item.symbol === normalized);
+  const quote = lookupSymbol("NSE", normalized) ?? lookupSymbol("BSE", normalized);
   if (quote) {
     return { symbol: quote.symbol, ticker: yahooTicker(quote), exchange: quote.exchange };
   }

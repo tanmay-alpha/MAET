@@ -20,6 +20,30 @@ export type MarketQuotesResponse = {
   errors: Array<{ symbol: string; message: string }>;
 };
 
+export type MarketCompany = {
+  symbol: string;
+  name: string;
+  exchange: "NSE";
+  series: "EQ";
+  isin: string;
+  listingDate?: string;
+  paidUpValue?: number;
+  marketLot?: number;
+  faceValue?: number;
+  source: "nse";
+};
+
+export type MarketCompaniesResponse = {
+  asOf: string;
+  source: "nse";
+  total: number;
+  universeTotal: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  items: MarketCompany[];
+};
+
 export type MarketCandle = {
   symbol: string;
   tf: "1m" | "5m" | "15m" | "1h" | "1d" | "1wk";
@@ -130,6 +154,19 @@ export async function fetchMarketQuotes(
   const response = await fetchMarketEndpoint(`/api/market/quotes?${params}`, signal);
   if (!response.ok) throw new Error(`Quote service returned ${response.status}`);
   return response.json() as Promise<MarketQuotesResponse>;
+}
+
+export async function fetchMarketCompanies(
+  page: number,
+  limit: number,
+  search: string,
+  signal?: AbortSignal
+): Promise<MarketCompaniesResponse> {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (search.trim()) params.set("search", search.trim());
+  const response = await fetchMarketEndpoint(`/api/market/companies?${params}`, signal);
+  if (!response.ok) throw new Error(`Company master returned ${response.status}`);
+  return response.json() as Promise<MarketCompaniesResponse>;
 }
 
 export async function fetchMarketCandles(
