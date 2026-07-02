@@ -18,6 +18,14 @@ export interface ChartState {
   drawings: DrawingLine[];
 }
 
+export interface ChartIndicatorConfig {
+  sma: boolean;
+  ema: boolean;
+  rsi: boolean;
+  macd: boolean;
+  volume: boolean;
+}
+
 const DEFAULT_CHART_STATE: ChartState = {
   zoom: 1,
   panOffset: 0,
@@ -41,6 +49,7 @@ interface CandlestickChartProps {
   chartState: ChartState;
   onChartStateChange: (state: ChartState) => void;
   drawingTool: string | null;
+  indicators?: ChartIndicatorConfig;
 }
 
 export function CandlestickChart({
@@ -48,8 +57,109 @@ export function CandlestickChart({
   height = 420,
   chartState,
   onChartStateChange,
-  drawingTool
+  drawingTool,
+  indicators = { sma: false, ema: false, rsi: false, macd: false, volume: true }
 }: CandlestickChartProps) {
+  // Indicator state
+  const [showSMA, setShowSMA] = useState(indicators.sma);
+  const [showEMA, setShowEMA] = useState(indicators.ema);
+  const [showRSI, setShowRSI] = useState(indicators.rsi);
+  const [showMACD, setShowMACD] = useState(indicators.macd);
+  const [showVolume, setShowVolume] = useState(indicators.volume);
+
+  // Indicator calculations
+  const indicatorData = useMemo(() => {
+    if (data.length < 2) return null;
+
+    const closes = data.map(d => d.c);
+    const volumes = data.map(d => d.v);
+
+    // SMA calculation
+    const calculateSMA = (period: number) => {
+      const result: number[] = [];
+      for (let i = 0; i < closes.length; i++) {
+        if (i < period - 1) { result.push(NaN); continue; }
+        let sum = 0;
+        for (let j = 0; j < period; j++) sum += closes[i - j];
+        result.push(sum / period);
+      }
+      return result;
+    };
+
+    // EMA calculation
+    const calculateEMA = (period: number) => {
+      const result: number[] = [];
+      const multiplier = 2 / (period + 1);
+      let ema = NaN;
+      for (let i = 0; i < closes.length; i++) {
+        if (i < period - 1) { result.push(NaN); continue; }
+        if (isNaN(ema)) { let sum = 0; for (let j = 0; j < period; j++) sum += closes[i - j]; ema = sum / period; }
+        else ema = (closes[i] - ema) * multiplier + ema;
+        result.push(ema);
+      }
+      return result;
+    };
+
+    // RSI calculation
+    const calculateRSI = (period: number = 14) => {
+      const result: number[] = [];
+      for (let i = 0; i < closes.length; i++) {
+        if (i < period) { result.push(NaN); continue; }
+        let gains = 0, losses = 0;
+        for (let j = i - period + 1; j <= i; j++) {
+          const change = closes[j] - closes[j - 1];
+          if (change > 0) gains += change; else losses -= change;
+        }
+        const avgGain = gains / period, avgLoss = losses / period;
+        result.push(avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss)));
+      }
+      return result;
+    };
+
+    // MACD calculation
+    const calculateMACD = () => {
+      const ema12 = calculateEMA(12);
+      const ema26 = calculateEMA(26);
+      const macdLine = ema12.map((v, i) => isNaN(v) || isNaN(ema26[i]) ? NaN : v - ema26[i]);
+      const signal = calculateEMA(periods => macdLine.filter(v => !isNaN(v)), 9);
+      return { macdLine, signal };
+    };
+
+    // Helper for EMA of a filtered array
+    const calculateEMA2 = (arr: number[], period: number): number[] => {
+      const multiplier = 2 / (period + 1);
+      const result: number[] = [];
+      let ema = NaN;
+      for (let i = 0; i < arr.length; i++) {
+        if (isNaN(arr[i])) { result.push(NaN); continue; }
+        if (isNaN(ema)) ema = arr[i];
+        else ema = (arr[i] - ema) * multiplier + ema;
+        result.push(ema);
+      }
+      return result;
+    };
+
+    const ema12 = calculateEMA(12);
+    const ema26 = calculateEMA(26);
+    const macdLine = ema12.map((v, i) => (isNaN(v) || isNaN(ema26[i])) ? NaN : v - ema26[i]);
+    const validMacd = macdLine.filter(v => !isNaN(v));
+    const signalLine = calculateEMA2(validMacd, 9);
+    let sigIdx = 0;
+    const signal = macdLine.map(v => isNaN(v) ? NaN : signalLine[sigIdx++] ?? NaN);
+    const histogram = macdLine.map((m, i) => (isNaN(m) || isNaN(signal[i])) ? NaN : m - signal[i]);
+
+    // Volume max for scaling
+    const maxVol = Math.max(...volumes);
+
+    return {
+      sma20: calculateSMA(20),
+      ema20: calculateEMA(20),
+      rsi: calculateRSI(14),
+      macd: { line: macdLine, signal, histogram },
+      maxVol
+    };
+  }, [data]);
+
   const { min, max, candleW } = useMemo(() => {
     const min = Math.min(...data.map((d) => d.l));
     const max = Math.max(...data.map((d) => d.h));
@@ -412,6 +522,44 @@ export function CandlestickChart({
             )}
           </g>
         )}
+
+        {/* Volume Histogram */}
+        {showVolume && indicatorData && visibleData.map((c, i) => {
+          const x = i * visibleCandleW + visibleCandleW / 2;
+          const bull = c.c >= c.o;
+          const barW = visibleCandleW * 0.35;
+          const volH = indicatorData.maxVol > 0 ? (c.v / indicatorData.maxVol) * 25 : 0;
+          const vColor = bull ? "var(--color-bull-bar)" : "var(--color-bear-bar)";
+          return (
+            <rect key={`vol-${i}`} x={x - barW / 2} y={100 - volH} width={barW} height={volH} fill={vColor} opacity="0.4" />
+          );
+        })}
+
+        {/* SMA Line */}
+        {showSMA && indicatorData && (() => {
+          const pts: Array<{x: number, y: number}> = [];
+          for (let i = 0; i < data.length; i++) {
+            if (!isNaN(indicatorData.sma20[i]) && i >= visibleStart && i < visibleEnd) {
+              pts.push({ x: (i - visibleStart) * visibleCandleW + visibleCandleW / 2, y: y(indicatorData.sma20[i]) });
+            }
+          }
+          if (pts.length < 2) return null;
+          const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+          return <path key="sma-line" d={d} stroke="#f59e0b" strokeWidth="0.15" fill="none" />;
+        })()}
+
+        {/* EMA Line */}
+        {showEMA && indicatorData && (() => {
+          const pts: Array<{x: number, y: number}> = [];
+          for (let i = 0; i < data.length; i++) {
+            if (!isNaN(indicatorData.ema20[i]) && i >= visibleStart && i < visibleEnd) {
+              pts.push({ x: (i - visibleStart) * visibleCandleW + visibleCandleW / 2, y: y(indicatorData.ema20[i]) });
+            }
+          }
+          if (pts.length < 2) return null;
+          const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+          return <path key="ema-line" d={d} stroke="#06b6d4" strokeWidth="0.15" fill="none" />;
+        })()}
 
         {/* Candlesticks */}
         {visibleData.map((c, i) => {
