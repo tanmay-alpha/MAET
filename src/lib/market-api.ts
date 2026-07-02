@@ -282,7 +282,19 @@ export async function fetchMarketCandles(
   signal?: AbortSignal
 ): Promise<MarketCandlesResponse> {
   const params = new URLSearchParams({ symbol, tf: timeframe, range });
-  const response = await fetchMarketEndpoint(`/api/market/candles?${params}`, signal);
+  const path = `/api/market/candles?${params}`;
+
+  // Historical data is delayed and does not depend on Render's live broker
+  // process. Prefer the same-origin server route in the browser so a degraded
+  // Render database/Yahoo worker does not emit a failed request before the
+  // already-working Vercel fallback is used.
+  let response: Response;
+  if (typeof window !== "undefined" && API_BASE_URL) {
+    response = await fetch(path, { signal });
+    if (!response.ok) response = await fetchMarketEndpoint(path, signal);
+  } else {
+    response = await fetchMarketEndpoint(path, signal);
+  }
   if (!response.ok) throw new Error(`Candle service returned ${response.status}`);
   return response.json() as Promise<MarketCandlesResponse>;
 }
