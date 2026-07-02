@@ -2,6 +2,7 @@ export const RedisKeys = {
   quoteKey: (exchange: string, symbol: string) => `cache:quote:${exchange}:${symbol}`,
   candlesKey: (exchange: string, symbol: string, tf: string, from: string, to: string) =>
     `cache:candles:${exchange}:${symbol}:${tf}:${from}:${to}`,
+  fundamentals: (symbol: string) => `cache:fundamentals:${symbol}`,
   idempotencyKey: (userId: string, key: string) => `idempotency:${userId}:${key}`,
   sseConnKey: (connId: string) => `sse:conn:${connId}`,
   sseSubsKey: (symbol: string) => `sse:subs:${symbol}`,

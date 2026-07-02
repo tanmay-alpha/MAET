@@ -1,5 +1,7 @@
 import type { Candle, Tick } from "../../../shared/types";
 import { UpstreamDegradedError, UpstreamPermanentError } from "../../../shared/types";
+import { getCachedJson, setCachedJson } from "../../data/redis/client";
+import { RedisKeys } from "../../data/redis/keys";
 
 // Upstream error classes live in shared/types/errors.ts so that all data/sources/*
 // modules can depend on them without coupling to a specific source (yahoo, nse, ...).
@@ -128,9 +130,34 @@ export async function getCandles(
   to: Date,
   tf: Candle["tf"]
 ): Promise<Candle[]> {
+  // --- Redis cache lookup ---
+  const cacheKey = RedisKeys.candlesKey("NSE", ticker, tf,
+    Math.floor(from.getTime() / 1000).toString(),
+    Math.floor(to.getTime() / 1000).toString(),
+  );
+  const cached = await getCachedJson<Candle[]>(cacheKey);
+  if (cached) return cached;
+
+  // --- Range fallback: Yahoo limits per interval ---
+  // 1m: max 7 days, 5m: max 30 days, 15m: max 60 days, 1h: max 2 years, 1d+: no limit
+  const maxDaysForTf: Record<string, number> = {
+    "1m":  7,           // 7 days of 1-minute bars
+    "5m":  30,          // 30 days of 5-minute bars
+    "15m": 60,          // 60 days of 15-minute bars
+    "1h":  730,         // ~2 years of hourly bars
+    "1d":  36500,       // no practical limit for daily+
+    "1wk": 36500,
+  };
+  const maxDays = maxDaysForTf[tf] ?? 36500;
+  const requestedDays = (to.getTime() - from.getTime()) / 86_400_000;
+  let fromDate = from;
+  if (requestedDays > maxDays) {
+    fromDate = new Date(to.getTime() - maxDays * 86_400_000);
+  }
+
   return withRetry(async () => {
     const fullTicker = symbolToTicker(ticker);
-    const period1 = Math.floor(from.getTime() / 1000);
+    const period1 = Math.floor(fromDate.getTime() / 1000);
     const period2 = Math.floor(to.getTime() / 1000);
     const interval = tf === "1h" ? "60m" : tf;
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(fullTicker)}?period1=${period1}&period2=${period2}&interval=${interval}`;
@@ -180,6 +207,10 @@ export async function getCandles(
         volume: Number.isFinite(volume) && volume! >= 0 ? volume! : 0,
       });
     }
+
+    // Write through to Redis cache (1 hour TTL)
+    await setCachedJson(cacheKey, out, 3600);
+
     return out;
   });
 }

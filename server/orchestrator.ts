@@ -41,6 +41,42 @@ function scheduleAngelLogin(delayMs = 60_000): void {
   }, delayMs);
 }
 
+// ---------------------------------------------------------------------------
+// Daily processor cron — runs at 18:30 IST (13:00 UTC) on weekdays
+// ---------------------------------------------------------------------------
+
+let dailyProcessorTimer: ReturnType<typeof setInterval> | undefined;
+
+function shouldRunDailyProcessor(now: Date): boolean {
+  const day = now.getDay(); // 0 = Sun, 6 = Sat
+  if (day === 0 || day === 6) return false;
+  // 18:30 IST = 13:00 UTC (IST is UTC+5:30)
+  const hour = now.getUTCHours();
+  const min = now.getUTCMinutes();
+  return hour === 13 && min === 0;
+}
+
+let lastProcessorRunDate = "";
+
+function scheduleDailyProcessor(): void {
+  if (dailyProcessorTimer) return;
+  dailyProcessorTimer = setInterval(async () => {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    if (shouldRunDailyProcessor(now) && lastProcessorRunDate !== today) {
+      lastProcessorRunDate = today;
+      console.log("[cron] running daily processor at", now.toISOString());
+      try {
+        const { runDailyProcessor } = await import("./workers/daily-processor");
+        const stats = await runDailyProcessor({ backfillDays: 365 });
+        console.log("[cron] daily processor finished:", stats);
+      } catch (e) {
+        console.error("[cron] daily processor failed:", e);
+      }
+    }
+  }, 60_000); // check every minute
+}
+
 async function connectAngelOne(): Promise<void> {
   try {
     const config = getConfig();
@@ -86,6 +122,7 @@ export function startOrchestrator(): void {
   });
   angelOne.start();
   void connectAngelOne();
+  scheduleDailyProcessor();
   void hydrateAngelOneCompanyTokens()
     .then((count) => {
       registerCheck("instrumentMaster", count >= 1_000, `${count} NSE equity tokens loaded`);
@@ -100,6 +137,8 @@ export async function stopOrchestrator(): Promise<void> {
   yahooPoller.stop();
   if (angelRetryTimer) clearTimeout(angelRetryTimer);
   angelRetryTimer = undefined;
+  if (dailyProcessorTimer) clearInterval(dailyProcessorTimer);
+  dailyProcessorTimer = undefined;
   angelReadyOff?.();
   angelReadyOff = undefined;
   angelFailedOff?.();

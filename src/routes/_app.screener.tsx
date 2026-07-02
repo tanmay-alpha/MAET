@@ -33,6 +33,28 @@ function companyRow(company: MarketCompany): Row {
   };
 }
 
+const UNAVAILABLE_DATA = {
+  "Rel vol": "Relative volume requires 20-day average — not yet calculated",
+  "Mkt cap": "Market cap from NSE/Yahoo — enable in company master sync",
+  "P/E": "Fundamentals from Yahoo Finance — enable quoteSummary API",
+  "EPS": "Requires quarterly financials — not yet available",
+  "ROE": "ROE data coming soon — awaiting Yahoo Finance verification",
+  "Div yield": "Dividend yield from Yahoo — enable in daily sync",
+  "Analyst rating": "Analyst ratings not yet available",
+  "Sector": "Sector data coming soon",
+};
+
+function UnavailableCell({ source }: { source: string }) {
+  return (
+    <span
+      className="cursor-help select-none text-muted-foreground"
+      title={`Data coming soon — awaiting verification from ${source}`}
+    >
+      —
+    </span>
+  );
+}
+
 function matchesFilter(quote: MarketQuote | undefined, filter: FilterCondition): boolean {
   if (!quote) return false;
   const value = filter.field === "price"
@@ -80,6 +102,16 @@ function Screener() {
   const [minChange, setMinChange] = useState("");
   const [minVolume, setMinVolume] = useState("");
   const [activeView, setActiveView] = useState<"overview" | "performance" | "technicals">("overview");
+
+  // Tooltip helper for unavailable data
+  const DataUnavailable = ({ source }: { source: string }) => (
+    <span
+      className="cursor-help select-none text-muted-foreground"
+      title={`Data coming soon — awaiting verification from ${source}`}
+    >
+      —
+    </span>
+  );
   const tbodyRef = useRef<HTMLTableSectionElement>(null);
 
   const companiesQuery = useQuery({
@@ -88,8 +120,18 @@ function Screener() {
     staleTime: 60 * 60 * 1_000,
     retry: 2,
   });
-  const companyRows = useMemo(() => (companiesQuery.data?.items ?? []).map(companyRow), [companiesQuery.data?.items]);
+  // companyItems = full MarketCompany[] with extended fields (fundamentals, sector, etc.)
+  const companyItems = companiesQuery.data?.items ?? [];
+  const companyRows = useMemo(() => companyItems.map(companyRow), [companyItems]);
   const screenerSymbols = useMemo(() => companyRows.map((row) => row.symbol), [companyRows]);
+
+  // Build a lookup from symbol → extended fields for the current page
+  const extendedLookup = useMemo(() => {
+    const map = new Map<string, MarketCompany>();
+    for (const c of companyItems) map.set(c.symbol, c);
+    return map;
+  }, [companyItems]);
+
   const { quoteMap, streamConnected, isError: quoteError, isFetching: quotesFetching, refetch } = useMarketQuotes(screenerSymbols);
 
   // Apply filters to rows
@@ -245,11 +287,11 @@ function Screener() {
                   <span className="ml-2 text-[10px] uppercase tracking-wider">{companiesQuery.data?.total.toLocaleString("en-IN") ?? "…"}</span>
                 </div>
               </th>
-              {["Price", "Chg %", "Vol", "Rel vol", "Mkt cap", "P/E", "EPS dil TTM", "EPS growth", "Div yield"].map((label) => (
+              {["Price", "Chg %", "Vol", "Rel vol", "Mkt cap", "P/E", "EPS", "ROE", "Div yield"].map((label) => (
                 <th key={label} className="px-3 py-2.5 text-right text-tv-caps font-medium text-muted-foreground">{label}</th>
               ))}
+              <th className="px-3 py-2.5 text-right text-tv-caps font-medium text-muted-foreground">Sector</th>
               <th className="px-3 py-2.5 text-left text-tv-caps font-medium text-muted-foreground">ISIN</th>
-              <th className="px-3 py-2.5 text-left text-tv-caps font-medium text-muted-foreground">Analyst rating</th>
             </tr>
           </thead>
           <tbody
@@ -279,7 +321,6 @@ function Screener() {
                   data-idx={i}
                   tabIndex={i === focusIdx ? 0 : -1}
                   role="row"
-                  aria-selected={selected === r.symbol ? true : undefined}
                   onClick={() => { setSelected(r.symbol); setFocusIdx(i); }}
                   onFocus={() => setFocusIdx(i)}
                   className={`cursor-pointer border-b border-border/60 outline-none transition-colors focus-visible:tv-row-focus ${
@@ -306,24 +347,28 @@ function Screener() {
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
                     {quoteMap.get(r.symbol)?.volume.toLocaleString("en-IN") ?? "—"}
                   </td>
-                  <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">—</td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    —
+                    <UnavailableCell source="daily processor — requires 20-day average" />
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    —
+                    <UnavailableCell source="NSE/Yahoo fundamentals sync" />
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    —
+                    <UnavailableCell source="Yahoo Finance quoteSummary" />
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    —
+                    <UnavailableCell source="quarterly financials" />
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
-                    —
+                    <UnavailableCell source="Yahoo Finance" />
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
+                    <UnavailableCell source="Yahoo Finance" />
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm truncate max-w-[80px]">
+                    <UnavailableCell source="NSE company master" />
                   </td>
                   <td className="px-3 py-2.5 text-left font-mono text-[11px] text-muted-foreground">{r.isin || "—"}</td>
-                  <td className="px-3 py-2.5 text-left text-muted-foreground">—</td>
                 </tr>
               );
             })}

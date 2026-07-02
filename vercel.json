@@ -1,15 +1,6 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm run build",
-  "installCommand": "npm install",
+  "buildCommand": "cd src && bun install && bun run build",
+  "installCommand": "bun install",
   "outputDirectory": "src/.vercel/output",
-  "framework": "vite",
-  "headers": [
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "*" }
-      ]
-    }
-  ]
+  "framework": null
 }
