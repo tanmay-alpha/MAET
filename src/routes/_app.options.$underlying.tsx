@@ -82,7 +82,7 @@ function OptionsChain() {
   const [showGreeks, setShowGreeks] = useState(false);
 
   const spot = 2450;
-  const expiryDate = new Date("2026-06-28");
+  const expiryDate = useMemo(() => new Date("2026-06-28"), []);
 
   const chain = useMemo(() => generateMockChain(spot, expiryDate), [spot, expiryDate]);
 

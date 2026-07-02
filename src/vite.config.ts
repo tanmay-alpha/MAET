@@ -4,6 +4,17 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+type MutableAliasRule = {
+  find: string | RegExp;
+  replacement: string;
+};
+
+type MutableResolvedConfig = {
+  root: string;
+  resolve?: { alias?: MutableAliasRule[] | MutableAliasRule };
+  environments?: Record<string, { resolve?: { alias?: MutableAliasRule[] | MutableAliasRule } }>;
+};
+
 export default defineConfig({
   // Set vite root to the project root (the directory above src/). This
   // lets TanStack Start's default srcDirectory: "src" resolve to src/
@@ -41,7 +52,7 @@ export default defineConfig({
         /^@tanstack/,
       ],
     },
-  },
+  } as unknown as { preset: string },
   // Inline plugin that runs in the config() chain. Two responsibilities:
 //   1. Inject the virtual TanStack Start client entry as the resolved
 //      top-level `build.rolldownOptions.input` so rolldown doesn't fall
@@ -69,6 +80,7 @@ export default defineConfig({
         };
       },
       configResolved(config) {
+        const mutableConfig = config as unknown as MutableResolvedConfig;
         // Vite's resolve.alias requires absolute paths — relative values
         // are "used as-is" (per https://vite.dev/config/shared-options.html).
         // vite-tsconfig-paths emits relative paths, which fail under
@@ -76,15 +88,15 @@ export default defineConfig({
         // directory than the alias target. We register an absolute `@`
         // alias here so `@/lib/foo` resolves to `<absolute-root>/src/lib/foo`
         // regardless of which file is doing the importing.
-        const rootPath = config.root.replace(/\\/g, "/").replace(/\/+$/, "");
-        const existing = Array.isArray(config.resolve?.alias)
-          ? config.resolve.alias
-          : config.resolve?.alias
-            ? [config.resolve.alias]
+        const rootPath = mutableConfig.root.replace(/\\/g, "/").replace(/\/+$/, "");
+        const existing = Array.isArray(mutableConfig.resolve?.alias)
+          ? mutableConfig.resolve.alias
+          : mutableConfig.resolve?.alias
+            ? [mutableConfig.resolve.alias]
             : [];
-        config.resolve = config.resolve ?? {};
+        mutableConfig.resolve ??= {};
         const aliasRule = { find: /^@\//, replacement: `${rootPath}/src/` };
-        config.resolve.alias = [
+        mutableConfig.resolve.alias = [
           ...existing.filter(
             (a) =>
               !(
@@ -98,9 +110,9 @@ export default defineConfig({
         ];
         
         // Vite 8 Environment resolution support
-        if (config.environments) {
-          for (const key of Object.keys(config.environments)) {
-            const env = config.environments[key];
+        if (mutableConfig.environments) {
+          for (const key of Object.keys(mutableConfig.environments)) {
+            const env = mutableConfig.environments[key];
             if (env && env.resolve) {
               const envExisting = Array.isArray(env.resolve.alias)
                 ? env.resolve.alias
@@ -122,7 +134,7 @@ export default defineConfig({
             }
           }
         }
-        console.log("VITE_RESOLVED_ALIASES:", JSON.stringify(config.resolve.alias));
+        console.log("VITE_RESOLVED_ALIASES:", JSON.stringify(mutableConfig.resolve.alias));
       },
     },
   ],

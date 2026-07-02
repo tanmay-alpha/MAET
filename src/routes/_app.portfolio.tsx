@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, Activity, DollarSign, TrendingUp, TrendingDown, Clock, Calculator, PieChart, BarChart3, Award, Target, Zap, Shield, Calendar, Filter, Download, X } from "lucide-react";
+import { ArrowLeft, Activity, DollarSign, TrendingUp, TrendingDown, Clock, Calculator, PieChart, BarChart3, Award, Target, Zap, Shield, Calendar, Filter, Download, X, type LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { usePortfolioAnalytics } from "@/hooks/use-portfolio-analytics";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
@@ -17,7 +17,7 @@ export const Route = createFileRoute("/_app/portfolio")({
 });
 
 function StatCard({ icon: Icon, label, value, sub, trend }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   value: string;
   sub?: string;
@@ -118,7 +118,7 @@ function PortfolioPage() {
         };
       })
       .sort((a, b) => b.value - a.value);
-  }, [account.positions, metrics.totalValue, quoteMap]);
+  }, [account.positions, metrics.positionsValue, metrics.totalValue, quoteMap]);
 
   const allocationColors = ["#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#6366f1", "#ef4444"];
 

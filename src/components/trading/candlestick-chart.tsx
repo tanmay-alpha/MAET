@@ -116,15 +116,6 @@ export function CandlestickChart({
       return result;
     };
 
-    // MACD calculation
-    const calculateMACD = () => {
-      const ema12 = calculateEMA(12);
-      const ema26 = calculateEMA(26);
-      const macdLine = ema12.map((v, i) => isNaN(v) || isNaN(ema26[i]) ? NaN : v - ema26[i]);
-      const signal = calculateEMA(periods => macdLine.filter(v => !isNaN(v)), 9);
-      return { macdLine, signal };
-    };
-
     // Helper for EMA of a filtered array
     const calculateEMA2 = (arr: number[], period: number): number[] => {
       const multiplier = 2 / (period + 1);

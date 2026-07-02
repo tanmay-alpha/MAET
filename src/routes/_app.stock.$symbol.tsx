@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, BarChart2, BookOpen, GitMerge, Layers, TrendingDown, TrendingUp, Users, Calculator } from "lucide-react";
+import { ArrowLeft, BarChart2, BookOpen, GitMerge, Layers, TrendingDown, TrendingUp, Users, Calculator, type LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
@@ -22,7 +22,7 @@ export const Route = createFileRoute("/_app/stock/$symbol")({
 type StatementTab = "balance_sheet" | "pl" | "cashflow";
 type DetailTab = "ratios" | "shareholding" | "actions" | "peers";
 
-function StatCard({ icon: Icon, label, value, sub }: { icon: any; label: string; value: string; sub?: string }) {
+function StatCard({ icon: Icon, label, value, sub }: { icon: LucideIcon; label: string; value: string; sub?: string }) {
   return (
     <div className="rounded-lg border border-border bg-panel p-4">
       <div className="flex items-center gap-2">
@@ -41,7 +41,7 @@ const STATEMENT_TABS: { id: StatementTab; label: string }[] = [
   { id: "cashflow", label: "Cash Flow" },
 ];
 
-const DETAIL_TABS: { id: DetailTab; label: string; icon: any }[] = [
+const DETAIL_TABS: { id: DetailTab; label: string; icon: LucideIcon }[] = [
   { id: "ratios", label: "Key Ratios", icon: Calculator },
   { id: "shareholding", label: "Shareholding", icon: Users },
   { id: "actions", label: "Corporate Actions", icon: GitMerge },

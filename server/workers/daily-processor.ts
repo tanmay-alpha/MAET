@@ -17,6 +17,7 @@ import { getCandles } from "../data/sources/yahoo";
 import { getFundamentals as fetchNSEFundamentals } from "../data/sources/nse";
 import { resolveMarketSymbol } from "../domain/market/symbol";
 import type { Candle } from "@shared/types";
+import { sql } from "drizzle-orm";
 
 export type DailyProcessorOptions = {
   /** Symbols to process. Defaults to NSE Nifty 50 constituents. */
@@ -54,7 +55,14 @@ interface ProcessingStats {
   startTime: number;
 }
 
-function getLog() {
+type ProcessorLogger = {
+  info: (...args: any[]) => void;
+  warn: (...args: any[]) => void;
+  error: (...args: any[]) => void;
+  debug: (...args: any[]) => void;
+};
+
+function getLog(): ProcessorLogger {
   try {
     return getLogger().child({ worker: "daily-processor" });
   } catch {
@@ -63,7 +71,7 @@ function getLog() {
       warn: (...args: unknown[]) => console.warn("[daily-processor]", ...args),
       error: (...args: unknown[]) => console.error("[daily-processor]", ...args),
       debug: (...args: unknown[]) => console.debug("[daily-processor]", ...args),
-    } as ReturnType<ReturnType<typeof getLogger>["child"]>;
+    };
   }
 }
 
@@ -121,7 +129,7 @@ export class DailyProcessor {
   // Symbol processing
   // -------------------------------------------------------------------------
 
-  private async processSymbols(stats: ProcessingStats, log: ReturnType<ReturnType<typeof getLogger>["child"]>): Promise<void> {
+  private async processSymbols(stats: ProcessingStats, log: ProcessorLogger): Promise<void> {
     const to = new Date();
     const from = new Date(to.getTime() - this.backfillDays * 24 * 60 * 60 * 1000);
 
@@ -146,7 +154,7 @@ export class DailyProcessor {
     symbol: string,
     from: Date,
     to: Date,
-    log: ReturnType<ReturnType<typeof getLogger>["child"]>
+    log: ProcessorLogger
   ): Promise<{ candlesWritten: number }> {
     const resolved = resolveMarketSymbol(symbol);
     let candlesWritten = 0;
@@ -164,7 +172,7 @@ export class DailyProcessor {
           high: c.high.toString(),
           low: c.low.toString(),
           close: c.close.toString(),
-          volume: BigInt(Math.floor(c.volume)),
+          volume: Math.floor(c.volume),
           source: "yahoo",
         }));
 
@@ -190,7 +198,7 @@ export class DailyProcessor {
     high: string;
     low: string;
     close: string;
-    volume: bigint;
+    volume: number;
     source: string;
   }>): Promise<void> {
     for (const row of rows) {
@@ -217,7 +225,7 @@ export class DailyProcessor {
 
   private async processFundamentals(
     stats: ProcessingStats,
-    log: ReturnType<ReturnType<typeof getLogger>["child"]>
+    log: ProcessorLogger
   ): Promise<void> {
     for (let i = 0; i < this.symbols.length; i += MAX_CONCURRENT) {
       const batch = this.symbols.slice(i, i + MAX_CONCURRENT);
@@ -233,7 +241,7 @@ export class DailyProcessor {
 
   private async syncSymbolFundamentals(
     symbol: string,
-    log: ReturnType<ReturnType<typeof getLogger>["child"]>
+    log: ProcessorLogger
   ): Promise<boolean> {
     try {
       const data = await fetchNSEFundamentals(symbol);
@@ -258,17 +266,19 @@ export class DailyProcessor {
           lastFundamentalsUpdate: now,
           updatedAt: now,
         })
-        .onConflict(companies.symbol)
-        .doUpdate({
-          sector: data.sector,
-          industry: data.raw?.industry,
-          marketCap: data.marketCap?.toString(),
-          peRatio: data.pe?.toString(),
-          pbRatio: data.pb?.toString(),
-          roe: data.roe?.toString(),
-          dividendYield: data.dividendYield?.toString(),
-          lastFundamentalsUpdate: now,
-          updatedAt: now,
+        .onConflictDoUpdate({
+          target: companies.symbol,
+          set: {
+            sector: data.sector,
+            industry: data.raw?.industry,
+            marketCap: data.marketCap?.toString(),
+            peRatio: data.pe?.toString(),
+            pbRatio: data.pb?.toString(),
+            roe: data.roe?.toString(),
+            dividendYield: data.dividendYield?.toString(),
+            lastFundamentalsUpdate: now,
+            updatedAt: now,
+          },
         });
 
       // Upsert latest fundamentals snapshot
@@ -304,7 +314,7 @@ export class DailyProcessor {
 
   private async cleanupStaleData(
     stats: ProcessingStats,
-    log: ReturnType<ReturnType<typeof getLogger>["child"]>
+    log: ProcessorLogger
   ): Promise<void> {
     if (this.dryRun) {
       log.info("skipping cleanup in dry-run mode");
@@ -314,11 +324,11 @@ export class DailyProcessor {
     // Delete candles older than 5 years (keep 5y of history)
     const cutoff = new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000);
     try {
-      const result = await db
+      await db
         .delete(candles)
         .where(sql`${candles.ts} < ${cutoff}`);
 
-      log.info({ cutoff, deleted: result.rowCount }, "stale candle data cleaned up");
+      log.info({ cutoff }, "stale candle data cleaned up");
     } catch (err) {
       log.warn({ err }, "failed to cleanup stale candles");
     }

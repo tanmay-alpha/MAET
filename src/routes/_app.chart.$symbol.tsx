@@ -74,7 +74,7 @@ function ChartPage() {
       setShowRSI(layout.indicators.rsi);
       setSelectedTool(layout.drawingTool);
     }
-  }, []);
+  }, [layout]);
 
   // Save layout when settings change
   useEffect(() => {

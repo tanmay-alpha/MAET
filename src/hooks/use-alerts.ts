@@ -132,12 +132,15 @@ export function clearAllAlerts(): void {
 }
 
 // Check alerts against current quotes
-export function checkAlerts(quotes: Map<string, { price: number; volume?: number }>): Alert[] {
+export function checkAlerts(
+  quotes: Map<string, { price: number; volume?: number }>,
+  currentAlerts = alerts
+): Alert[] {
   loadAlerts();
   let changed = false;
   const now = new Date().toISOString();
 
-  const next = alerts.map((alert) => {
+  const next = currentAlerts.map((alert) => {
     if (!alert.enabled || alert.triggered && !alert.repeat) return alert;
 
     const quote = quotes.get(alert.symbol);
@@ -205,7 +208,7 @@ export function useAlerts() {
 
   // Check alerts and get updated list
   const alerts = useMemo(() => {
-    return checkAlerts(quotesForCheck);
+    return checkAlerts(quotesForCheck, storedAlerts);
   }, [quotesForCheck, storedAlerts]);
 
   // Get triggered alerts for notifications

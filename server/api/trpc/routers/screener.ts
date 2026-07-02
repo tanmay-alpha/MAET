@@ -266,7 +266,7 @@ export const screenerRouter = createRouter({
 
       // Build candle-only query
       try {
-        let query = db.select().from(candles);
+        let query = db.select().from(candles).$dynamic();
         const conditions: any[] = [];
 
         for (const filter of candleFilters) {

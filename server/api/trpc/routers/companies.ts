@@ -187,23 +187,25 @@ export const companiesRouter = createRouter({
           lastFundamentalsUpdate: now,
           updatedAt: now,
         })
-        .onConflict(companies.symbol)
-        .doUpdate({
-          name: input.name,
-          exchange: input.exchange,
-          isin: input.isin,
-          sector: input.sector,
-          industry: input.industry,
-          marketCap: input.marketCap?.toString(),
-          peRatio: input.peRatio?.toString(),
-          pbRatio: input.pbRatio?.toString(),
-          roe: input.roe?.toString(),
-          dividendYield: input.dividendYield?.toString(),
-          eps: input.eps?.toString(),
-          debtToEquity: input.debtToEquity?.toString(),
-          faceValue: input.faceValue?.toString(),
-          isActive: input.isActive,
-          updatedAt: now,
+        .onConflictDoUpdate({
+          target: companies.symbol,
+          set: {
+            name: input.name,
+            exchange: input.exchange,
+            isin: input.isin,
+            sector: input.sector,
+            industry: input.industry,
+            marketCap: input.marketCap?.toString(),
+            peRatio: input.peRatio?.toString(),
+            pbRatio: input.pbRatio?.toString(),
+            roe: input.roe?.toString(),
+            dividendYield: input.dividendYield?.toString(),
+            eps: input.eps?.toString(),
+            debtToEquity: input.debtToEquity?.toString(),
+            faceValue: input.faceValue?.toString(),
+            isActive: input.isActive,
+            updatedAt: now,
+          },
         });
 
       return { success: true, symbol: input.symbol.toUpperCase() };
@@ -248,17 +250,19 @@ export const companiesRouter = createRouter({
           lastFundamentalsUpdate: now,
           updatedAt: now,
         })
-        .onConflict(companies.symbol)
-        .doUpdate({
-          sector: data.sector,
-          industry: data.raw?.industry,
-          marketCap: data.marketCap?.toString(),
-          peRatio: data.pe?.toString(),
-          pbRatio: data.pb?.toString(),
-          roe: data.roe?.toString(),
-          dividendYield: data.dividendYield?.toString(),
-          lastFundamentalsUpdate: now,
-          updatedAt: now,
+        .onConflictDoUpdate({
+          target: companies.symbol,
+          set: {
+            sector: data.sector,
+            industry: data.raw?.industry,
+            marketCap: data.marketCap?.toString(),
+            peRatio: data.pe?.toString(),
+            pbRatio: data.pb?.toString(),
+            roe: data.roe?.toString(),
+            dividendYield: data.dividendYield?.toString(),
+            lastFundamentalsUpdate: now,
+            updatedAt: now,
+          },
         });
 
       return {

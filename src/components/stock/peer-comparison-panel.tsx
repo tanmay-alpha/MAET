@@ -8,7 +8,14 @@ interface PeerComparisonPanelProps {
 
 const PEER_SYMBOLS = ["TCS", "INFY", "HCLTECH", "WIPRO", "TECHM"];
 
-const MOCK_FUNDAMENTALS: Record<string, Record<string, string>> = {
+type FundamentalSnapshot = {
+  pe: string;
+  pb: string;
+  roe: string;
+  de: string;
+};
+
+const MOCK_FUNDAMENTALS: Record<string, FundamentalSnapshot> = {
   RELIANCE: { pe: "24.5", pb: "1.8", roe: "9.2", de: "0.5" },
   TCS: { pe: "26.1", pb: "9.2", roe: "42.0", de: "0.0" },
   INFY: { pe: "22.8", pb: "5.1", roe: "31.5", de: "0.1" },
@@ -24,7 +31,7 @@ export function PeerComparisonPanel({ symbol }: PeerComparisonPanelProps) {
   const peers = allSymbols.map((s) => {
     const quote = quoteMap.get(s);
     const fundamentals = MOCK_FUNDAMENTALS[s] ?? { pe: "—", pb: "—", roe: "—", de: "—" };
-    return { symbol: s, price: quote?.price, changePct: quote?.changePct, ...fundamentals } as any;
+    return { symbol: s, price: quote?.price, changePct: quote?.changePct, ...fundamentals };
   });
 
   return (

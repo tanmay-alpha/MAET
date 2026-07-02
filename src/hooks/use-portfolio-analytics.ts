@@ -4,7 +4,7 @@
  */
 
 import { useMemo } from "react";
-import { usePaperAccount } from "@/hooks/use-paper-account";
+import { usePaperAccount, type PaperOrder } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 
 // Types
@@ -62,11 +62,13 @@ const RISK_FREE_RATE = 0.05; // 5% annual risk-free rate
 
 // Generate mock equity curve from trades for visualization
 function generateEquityCurve(
-  orders: any[],
+  orders: PaperOrder[],
   initialCash: number
 ): PerformanceDataPoint[] {
   const filledOrders = orders
-    .filter((o) => o.status === "filled" && o.filledAt)
+    .filter((order): order is PaperOrder & { filledAt: string; fillPrice: number } =>
+      order.status === "filled" && order.filledAt !== undefined && order.fillPrice !== undefined
+    )
     .sort((a, b) => new Date(a.filledAt!).getTime() - new Date(b.filledAt!).getTime());
 
   if (filledOrders.length === 0) {
