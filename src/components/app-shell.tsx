@@ -1,6 +1,7 @@
 import { Link, Outlet } from "@tanstack/react-router";
 import { Bell, Settings } from "lucide-react";
 import { AppSidebar } from "@/components/app-sidebar";
+import { ClientOnly } from "@/components/common/client-only";
 import { TickerTape } from "@/components/trading/ticker-tape";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 
@@ -55,7 +56,9 @@ export function AppShell() {
               </button>
             </div>
           </header>
-          <TickerTape />
+          <ClientOnly>
+            <TickerTape />
+          </ClientOnly>
           <main className="min-w-0 flex-1 overflow-hidden">
             <Outlet />
           </main>
