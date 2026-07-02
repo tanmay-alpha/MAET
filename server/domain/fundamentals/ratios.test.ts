@@ -47,4 +47,10 @@ describe("fundamental ratio engine", () => {
     expect(ratios.eps).toBeUndefined();
     expect(ratios.peRatio).toBeUndefined();
   });
+
+  test("does not publish a misleading P/E for negative earnings", () => {
+    const ratios = calculateFundamentalRatios({ netIncome: -50, sharesOutstanding: 10 }, {}, { price: 100 });
+    expect(ratios.eps).toBe(-5);
+    expect(ratios.peRatio).toBeUndefined();
+  });
 });

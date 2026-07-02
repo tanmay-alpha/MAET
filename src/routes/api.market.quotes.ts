@@ -10,8 +10,8 @@ function parseSymbols(request: Request): string[] {
     .map((symbol) => symbol.trim().toUpperCase())
     .filter(Boolean);
 
-  if (symbols.length === 0 || symbols.length > 25) {
-    throw new Response("Request between 1 and 25 symbols", { status: 400 });
+  if (symbols.length === 0 || symbols.length > 50) {
+    throw new Response("Request between 1 and 50 symbols", { status: 400 });
   }
   if (symbols.some((symbol) => !/^[A-Z0-9&.^-]+$/.test(symbol))) {
     throw new Response("Invalid symbol", { status: 400 });
@@ -26,11 +26,12 @@ export const Route = createFileRoute("/api/market/quotes")({
         try {
           const symbols = parseSymbols(request);
           const result = await loadQuotes(symbols);
+          const source = result.quotes.some((quote) => quote.source === "angelone") ? "angelone" : "yahoo";
           return Response.json(
             {
               asOf: new Date().toISOString(),
-              source: "yahoo",
-              delayed: true,
+              source,
+              delayed: source !== "angelone",
               ...result,
             },
             {

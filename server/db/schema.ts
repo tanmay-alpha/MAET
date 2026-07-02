@@ -151,6 +151,10 @@ export const companies = pgTable("companies", {
   marketLot: integer("market_lot"),
   sector: text("sector"),
   industry: text("industry"),
+  bseCode: text("bse_code"),
+  yahooSymbol: text("yahoo_symbol"),
+  exchangePrimary: text("exchange_primary").notNull().default("NSE"),
+  marketCapBucket: text("market_cap_bucket").notNull().default("unknown"),
   marketCap: numeric("market_cap", { precision: 24, scale: 2 }),
   peRatio: numeric("pe_ratio", { precision: 8, scale: 4 }),
   pbRatio: numeric("pb_ratio", { precision: 8, scale: 4 }),
@@ -169,6 +173,34 @@ export const companies = pgTable("companies", {
   index("companies_symbol_idx").on(table.symbol),
   index("companies_sector_idx").on(table.sector),
   index("companies_exchange_idx").on(table.exchange),
+  index("companies_isin_idx").on(table.isin),
+  index("companies_market_cap_bucket_idx").on(table.marketCapBucket),
+]);
+
+export const companyIdentifiers = pgTable("company_identifiers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: text("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  identifierType: text("identifier_type").notNull(),
+  identifierValue: text("identifier_value").notNull(),
+  source: text("source").notNull(),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("company_identifiers_type_value_unique").on(table.identifierType, table.identifierValue),
+  index("company_identifiers_company_idx").on(table.companyId),
+]);
+
+export const quoteSnapshots = pgTable("quote_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: text("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  price: numeric("price", { precision: 18, scale: 4 }).notNull(),
+  changePct: numeric("change_pct", { precision: 10, scale: 4 }),
+  volume: bigint("volume", { mode: "number" }),
+  marketCap: numeric("market_cap", { precision: 24, scale: 2 }),
+  asOf: timestamp("as_of", { withTimezone: true }).notNull(),
+  source: text("source").notNull(),
+}, (table) => [
+  uniqueIndex("quote_snapshots_company_as_of_unique").on(table.companyId, table.asOf),
+  index("quote_snapshots_company_as_of_idx").on(table.companyId, table.asOf),
 ]);
 
 export const financialStatements = pgTable("financial_statements", {
@@ -176,6 +208,7 @@ export const financialStatements = pgTable("financial_statements", {
   companyId: text("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
   periodDate: timestamp("period_date", { withTimezone: true }).notNull(),
   periodType: text("period_type").notNull(),
+  statementType: text("statement_type").notNull().default("combined"),
   fiscalYear: integer("fiscal_year").notNull(),
   currency: text("currency").notNull().default("INR"),
   revenue: numeric("revenue", { precision: 24, scale: 2 }),
@@ -201,10 +234,11 @@ export const financialStatements = pgTable("financial_statements", {
   source: text("source").notNull(),
   sourceUrl: text("source_url"),
   raw: jsonb("raw"),
+  asOf: timestamp("as_of", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  uniqueIndex("financial_statements_company_period_unique").on(table.companyId, table.periodDate, table.periodType),
+  uniqueIndex("financial_statements_company_period_unique").on(table.companyId, table.periodDate, table.periodType, table.statementType),
   index("financial_statements_company_idx").on(table.companyId, table.periodDate),
 ]);
 
@@ -214,11 +248,13 @@ export const fundamentals = pgTable("fundamentals", {
   periodDate: timestamp("period_date", { withTimezone: true }).notNull(),
   periodType: text("period_type").notNull().default("quarterly"), // quarterly | annual
   peRatio: numeric("pe_ratio", { precision: 8, scale: 4 }),
+  forwardPe: numeric("forward_pe", { precision: 10, scale: 4 }),
   pbRatio: numeric("pb_ratio", { precision: 8, scale: 4 }),
   roe: numeric("roe", { precision: 8, scale: 4 }),
   marketCap: numeric("market_cap", { precision: 24, scale: 2 }),
   dividendYield: numeric("dividend_yield", { precision: 8, scale: 4 }),
   eps: numeric("eps", { precision: 8, scale: 4 }),
+  bookValuePerShare: numeric("book_value_per_share", { precision: 18, scale: 4 }),
   debtToEquity: numeric("debt_to_equity", { precision: 8, scale: 4 }),
   grossMargin: numeric("gross_margin", { precision: 10, scale: 4 }),
   operatingMargin: numeric("operating_margin", { precision: 10, scale: 4 }),
@@ -226,6 +262,7 @@ export const fundamentals = pgTable("fundamentals", {
   netMargin: numeric("net_margin", { precision: 10, scale: 4 }),
   returnOnAssets: numeric("return_on_assets", { precision: 10, scale: 4 }),
   returnOnInvestedCapital: numeric("return_on_invested_capital", { precision: 10, scale: 4 }),
+  roce: numeric("roce", { precision: 10, scale: 4 }),
   currentRatio: numeric("current_ratio", { precision: 10, scale: 4 }),
   quickRatio: numeric("quick_ratio", { precision: 10, scale: 4 }),
   interestCoverage: numeric("interest_coverage", { precision: 10, scale: 4 }),
@@ -241,10 +278,30 @@ export const fundamentals = pgTable("fundamentals", {
   enterpriseValueToEbitda: numeric("enterprise_value_to_ebitda", { precision: 10, scale: 4 }),
   revenue: numeric("revenue", { precision: 24, scale: 2 }),
   netIncome: numeric("net_income", { precision: 24, scale: 2 }),
+  fiftyTwoWeekHigh: numeric("fifty_two_week_high", { precision: 18, scale: 4 }),
+  fiftyTwoWeekLow: numeric("fifty_two_week_low", { precision: 18, scale: 4 }),
+  average20DayVolume: bigint("average_20_day_volume", { mode: "number" }),
+  relativeVolume: numeric("relative_volume", { precision: 12, scale: 4 }),
   source: text("source").notNull().default("nse"),
+  sourceFlags: jsonb("source_flags"),
+  isStale: boolean("is_stale").notNull().default(false),
   raw: jsonb("raw"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => [
   index("fundamentals_company_idx").on(table.companyId, table.periodDate),
+]);
+
+export const marketCapClassifications = pgTable("market_cap_classifications", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: text("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  classificationVersion: text("classification_version").notNull(),
+  bucket: text("bucket").notNull(),
+  methodology: text("methodology").notNull(),
+  effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+  effectiveTo: timestamp("effective_to", { withTimezone: true }),
+  source: text("source").notNull(),
+}, (table) => [
+  uniqueIndex("market_cap_classification_company_version_unique").on(table.companyId, table.classificationVersion),
+  index("market_cap_classification_bucket_idx").on(table.bucket, table.effectiveFrom),
 ]);
 

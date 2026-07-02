@@ -21,8 +21,8 @@ function parseSymbols(value: unknown): string[] {
     .split(",")
     .map((symbol) => symbol.trim().toUpperCase())
     .filter(Boolean);
-  if (symbols.length === 0 || symbols.length > 25) {
-    throw createError({ statusCode: 400, statusMessage: "Request between 1 and 25 symbols" });
+  if (symbols.length === 0 || symbols.length > 50) {
+    throw createError({ statusCode: 400, statusMessage: "Request between 1 and 50 symbols" });
   }
   if (symbols.some((symbol) => !/^[A-Z0-9&.-]+$/.test(symbol))) {
     throw createError({ statusCode: 400, statusMessage: "Invalid symbol" });
@@ -34,12 +34,13 @@ export default defineEventHandler(async (event) => {
   const query = getQuery(event);
   const symbols = parseSymbols(query.symbols);
   const result = await loadQuotes(symbols, query.refresh === "1");
+  const source = result.quotes.some((quote) => quote.source === "angelone") ? "angelone" : "yahoo";
 
   setResponseHeader(event, "cache-control", "public, max-age=5, s-maxage=10, stale-while-revalidate=30");
   return {
     asOf: new Date().toISOString(),
-    source: "yahoo",
-    delayed: true,
+    source,
+    delayed: source !== "angelone",
     ...result,
   };
 });

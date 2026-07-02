@@ -12,11 +12,23 @@
 
 import { getLogger } from "../infra/logger";
 import { db } from "../data/drizzle/client";
-import { candles, companies, fundamentals } from "../db/schema";
+import {
+  candles,
+  companies,
+  companyIdentifiers,
+  financialStatements,
+  fundamentals,
+  marketCapClassifications,
+  quoteSnapshots,
+} from "../db/schema";
 import { getCandles } from "../data/sources/yahoo";
 import { getFundamentals as fetchNSEFundamentals } from "../data/sources/nse";
 import { getNseCompanyMaster } from "../data/sources/nse-company-master";
+import { getYahooFundamentals } from "../data/sources/yahoo-fundamentals";
 import { resolveMarketSymbol } from "../domain/market/symbol";
+import { loadQuote } from "../domain/market/quote-service";
+import { classifyByMarketCapRank } from "../domain/fundamentals/classification";
+import { calculateFundamentalRatios } from "../domain/fundamentals/ratios";
 import type { Candle } from "@shared/types";
 import { sql } from "drizzle-orm";
 
@@ -53,6 +65,8 @@ interface ProcessingStats {
   symbolsProcessed: number;
   candlesWritten: number;
   fundamentalsSynced: number;
+  quoteSnapshotsWritten: number;
+  classificationsSynced: number;
   errors: string[];
   startTime: number;
 }
@@ -104,6 +118,8 @@ export class DailyProcessor {
       symbolsProcessed: 0,
       candlesWritten: 0,
       fundamentalsSynced: 0,
+      quoteSnapshotsWritten: 0,
+      classificationsSynced: 0,
       errors: [],
       startTime: Date.now(),
     };
@@ -116,6 +132,7 @@ export class DailyProcessor {
       if (this.syncFundamentals) {
         await this.processFundamentals(stats, log);
       }
+      stats.classificationsSynced = await this.refreshMarketCapClassifications(log);
       await this.cleanupStaleData(stats, log);
     } catch (err) {
       log.error({ err }, "daily processor fatal error");
@@ -169,6 +186,38 @@ export class DailyProcessor {
           updatedAt,
         },
       });
+
+      const identifiers = master.slice(index, index + 200).flatMap((company) => [
+        {
+          companyId: company.symbol,
+          identifierType: "nse_symbol",
+          identifierValue: company.symbol,
+          source: "nse",
+          verifiedAt: updatedAt,
+        },
+        ...(company.isin ? [{
+          companyId: company.symbol,
+          identifierType: "isin",
+          identifierValue: company.isin,
+          source: "nse",
+          verifiedAt: updatedAt,
+        }] : []),
+        {
+          companyId: company.symbol,
+          identifierType: "yahoo_symbol",
+          identifierValue: `${company.symbol}.NS`,
+          source: "derived_from_nse_symbol",
+          verifiedAt: updatedAt,
+        },
+      ]);
+      await db.insert(companyIdentifiers).values(identifiers).onConflictDoUpdate({
+        target: [companyIdentifiers.identifierType, companyIdentifiers.identifierValue],
+        set: {
+          companyId: sql`excluded.company_id`,
+          source: sql`excluded.source`,
+          verifiedAt: updatedAt,
+        },
+      });
     }
     log.info({ count: master.length }, "official NSE company master synced");
     return master.length;
@@ -192,6 +241,7 @@ export class DailyProcessor {
         if (r.status === "fulfilled") {
           stats.symbolsProcessed++;
           stats.candlesWritten += r.value.candlesWritten;
+          stats.quoteSnapshotsWritten += r.value.quoteSnapshotWritten ? 1 : 0;
         } else {
           stats.errors.push(r.reason?.message ?? String(r.reason));
         }
@@ -204,14 +254,16 @@ export class DailyProcessor {
     from: Date,
     to: Date,
     log: ProcessorLogger
-  ): Promise<{ candlesWritten: number }> {
+  ): Promise<{ candlesWritten: number; quoteSnapshotWritten: boolean }> {
     const resolved = resolveMarketSymbol(symbol);
     let candlesWritten = 0;
+    let dailyCandles: Candle[] = [];
 
     for (const tf of this.timeframes) {
       try {
         const data = await getCandles(resolved.ticker, from, to, tf);
         if (data.length === 0) continue;
+        if (tf === "1d") dailyCandles = data;
 
         const rows = data.map((c) => ({
           symbol: resolved.symbol,
@@ -236,7 +288,81 @@ export class DailyProcessor {
       }
     }
 
-    return { candlesWritten };
+    const quoteSnapshotWritten = await this.persistMarketSnapshot(resolved.symbol, dailyCandles, log);
+    return { candlesWritten, quoteSnapshotWritten };
+  }
+
+  private async persistMarketSnapshot(symbol: string, dailyCandles: Candle[], log: ProcessorLogger): Promise<boolean> {
+    try {
+      const quote = await loadQuote(symbol, true);
+      const asOf = new Date(quote.ts);
+      if (!this.dryRun) {
+        await db.insert(quoteSnapshots).values({
+          companyId: symbol,
+          price: quote.price.toString(),
+          changePct: quote.changePct?.toString(),
+          volume: quote.volume,
+          asOf,
+          source: quote.source,
+        }).onConflictDoNothing();
+
+        const validDaily = dailyCandles.filter((candle) => Number.isFinite(candle.close) && Number.isFinite(candle.volume));
+        const trailingYear = validDaily.slice(-252);
+        const last20 = validDaily.slice(-20);
+        const average20DayVolume = last20.length === 20
+          ? Math.round(last20.reduce((sum, candle) => sum + candle.volume, 0) / last20.length)
+          : undefined;
+        const fiftyTwoWeekHigh = trailingYear.length > 0 ? Math.max(...trailingYear.map((candle) => candle.high)) : undefined;
+        const fiftyTwoWeekLow = trailingYear.length > 0 ? Math.min(...trailingYear.map((candle) => candle.low)) : undefined;
+        const relativeVolume = average20DayVolume && average20DayVolume > 0 ? quote.volume / average20DayVolume : undefined;
+        const [company] = await db.select().from(companies).where(sql`${companies.id} = ${symbol}`).limit(1);
+        const snapshotId = `${symbol}-market-${asOf.toISOString().slice(0, 10)}`;
+        await db.insert(fundamentals).values({
+          id: snapshotId,
+          companyId: symbol,
+          periodDate: asOf,
+          periodType: "market",
+          marketCap: company?.marketCap,
+          peRatio: company?.peRatio,
+          pbRatio: company?.pbRatio,
+          roe: company?.roe,
+          dividendYield: company?.dividendYield,
+          eps: company?.eps,
+          debtToEquity: company?.debtToEquity,
+          fiftyTwoWeekHigh: fiftyTwoWeekHigh?.toString(),
+          fiftyTwoWeekLow: fiftyTwoWeekLow?.toString(),
+          average20DayVolume,
+          relativeVolume: relativeVolume?.toString(),
+          source: `${company?.dataSource ?? "nse"}+${quote.source}+yahoo_candles`,
+          sourceFlags: {
+            quote: quote.source,
+            candles: "yahoo",
+            fundamentals: company?.dataSource ?? "unavailable",
+          },
+          isStale: false,
+        }).onConflictDoUpdate({
+          target: fundamentals.id,
+          set: {
+            periodDate: asOf,
+            fiftyTwoWeekHigh: fiftyTwoWeekHigh?.toString(),
+            fiftyTwoWeekLow: fiftyTwoWeekLow?.toString(),
+            average20DayVolume,
+            relativeVolume: relativeVolume?.toString(),
+            source: `${company?.dataSource ?? "nse"}+${quote.source}+yahoo_candles`,
+            sourceFlags: {
+              quote: quote.source,
+              candles: "yahoo",
+              fundamentals: company?.dataSource ?? "unavailable",
+            },
+            isStale: false,
+          },
+        });
+      }
+      return true;
+    } catch (error) {
+      log.warn({ symbol, err: String(error) }, "failed to persist quote/market metrics snapshot");
+      return false;
+    }
   }
 
   private async upsertCandles(rows: Array<{
@@ -293,6 +419,159 @@ export class DailyProcessor {
     log: ProcessorLogger
   ): Promise<boolean> {
     try {
+      const yahoo = await getYahooFundamentals(symbol);
+      if (yahoo) {
+        const now = new Date(yahoo.asOf);
+        const companyId = symbol.toUpperCase();
+        const quote = await loadQuote(companyId).catch(() => undefined);
+        const statements = yahoo.statements.sort((left, right) => right.periodDate.localeCompare(left.periodDate));
+        const current = statements[0];
+        const previous = statements.find((statement) => statement.periodType === current?.periodType && statement.periodDate !== current.periodDate);
+        const calculated = current ? calculateFundamentalRatios(current, previous, {
+          price: quote?.price,
+          marketCap: yahoo.marketCap,
+        }) : {};
+
+        await db.insert(companies).values({
+          id: companyId,
+          symbol: companyId,
+          name: companyId,
+          exchange: "NSE",
+          yahooSymbol: `${companyId}.NS`,
+          marketCap: yahoo.marketCap?.toString(),
+          peRatio: yahoo.trailingPe?.toString(),
+          pbRatio: yahoo.pb?.toString(),
+          roe: yahoo.roe?.toString(),
+          dividendYield: yahoo.dividendYield?.toString(),
+          eps: yahoo.epsTtm?.toString(),
+          debtToEquity: yahoo.debtToEquity?.toString(),
+          lastFundamentalsUpdate: now,
+          updatedAt: now,
+        }).onConflictDoUpdate({
+          target: companies.symbol,
+          set: {
+            yahooSymbol: `${companyId}.NS`,
+            marketCap: yahoo.marketCap?.toString(),
+            peRatio: yahoo.trailingPe?.toString(),
+            pbRatio: yahoo.pb?.toString(),
+            roe: yahoo.roe?.toString(),
+            dividendYield: yahoo.dividendYield?.toString(),
+            eps: yahoo.epsTtm?.toString(),
+            debtToEquity: yahoo.debtToEquity?.toString(),
+            lastFundamentalsUpdate: now,
+            updatedAt: now,
+          },
+        });
+
+        for (const statement of statements) {
+          const statementId = `${companyId}-${statement.periodType}-${statement.periodDate.slice(0, 10)}`;
+          await db.insert(financialStatements).values({
+            id: statementId,
+            companyId,
+            periodDate: new Date(statement.periodDate),
+            periodType: statement.periodType,
+            statementType: "combined",
+            fiscalYear: statement.fiscalYear,
+            currency: statement.currency,
+            revenue: statement.revenue?.toString(),
+            costOfRevenue: statement.costOfRevenue?.toString(),
+            operatingIncome: statement.operatingIncome?.toString(),
+            ebitda: statement.ebitda?.toString(),
+            ebit: statement.ebit?.toString(),
+            interestExpense: statement.interestExpense?.toString(),
+            taxExpense: statement.taxExpense?.toString(),
+            netIncome: statement.netIncome?.toString(),
+            totalAssets: statement.totalAssets?.toString(),
+            currentAssets: statement.currentAssets?.toString(),
+            inventory: statement.inventory?.toString(),
+            cashAndEquivalents: statement.cashAndEquivalents?.toString(),
+            totalLiabilities: statement.totalLiabilities?.toString(),
+            currentLiabilities: statement.currentLiabilities?.toString(),
+            totalDebt: statement.totalDebt?.toString(),
+            shareholdersEquity: statement.shareholdersEquity?.toString(),
+            operatingCashFlow: statement.operatingCashFlow?.toString(),
+            capitalExpenditure: statement.capitalExpenditure?.toString(),
+            dividendsPaid: statement.dividendsPaid?.toString(),
+            sharesOutstanding: statement.sharesOutstanding?.toString(),
+            source: "yahoo",
+            sourceUrl: `https://finance.yahoo.com/quote/${companyId}.NS/financials`,
+            raw: statement.raw,
+            asOf: now,
+            updatedAt: now,
+          }).onConflictDoUpdate({
+            target: financialStatements.id,
+            set: {
+              revenue: statement.revenue?.toString(),
+              costOfRevenue: statement.costOfRevenue?.toString(),
+              operatingIncome: statement.operatingIncome?.toString(),
+              ebitda: statement.ebitda?.toString(),
+              ebit: statement.ebit?.toString(),
+              interestExpense: statement.interestExpense?.toString(),
+              taxExpense: statement.taxExpense?.toString(),
+              netIncome: statement.netIncome?.toString(),
+              totalAssets: statement.totalAssets?.toString(),
+              currentAssets: statement.currentAssets?.toString(),
+              inventory: statement.inventory?.toString(),
+              cashAndEquivalents: statement.cashAndEquivalents?.toString(),
+              totalLiabilities: statement.totalLiabilities?.toString(),
+              currentLiabilities: statement.currentLiabilities?.toString(),
+              totalDebt: statement.totalDebt?.toString(),
+              shareholdersEquity: statement.shareholdersEquity?.toString(),
+              operatingCashFlow: statement.operatingCashFlow?.toString(),
+              capitalExpenditure: statement.capitalExpenditure?.toString(),
+              dividendsPaid: statement.dividendsPaid?.toString(),
+              sharesOutstanding: statement.sharesOutstanding?.toString(),
+              raw: statement.raw,
+              asOf: now,
+              updatedAt: now,
+            },
+          });
+        }
+
+        const fundId = `${companyId}-fundamentals-${now.toISOString().slice(0, 10)}`;
+        await db.insert(fundamentals).values({
+          id: fundId,
+          companyId,
+          periodDate: now,
+          periodType: "snapshot",
+          marketCap: yahoo.marketCap?.toString(),
+          peRatio: (yahoo.trailingPe ?? calculated.peRatio)?.toString(),
+          forwardPe: yahoo.forwardPe?.toString(),
+          pbRatio: (yahoo.pb ?? calculated.pbRatio)?.toString(),
+          roe: (yahoo.roe ?? calculated.roe)?.toString(),
+          roce: calculated.roce?.toString(),
+          returnOnAssets: calculated.returnOnAssets?.toString(),
+          dividendYield: yahoo.dividendYield?.toString(),
+          eps: (yahoo.epsTtm ?? calculated.eps)?.toString(),
+          bookValuePerShare: yahoo.bookValuePerShare?.toString(),
+          debtToEquity: (yahoo.debtToEquity ?? calculated.debtToEquity)?.toString(),
+          currentRatio: (yahoo.currentRatio ?? calculated.currentRatio)?.toString(),
+          operatingMargin: calculated.operatingMargin?.toString(),
+          netMargin: calculated.netMargin?.toString(),
+          revenueGrowth: calculated.revenueGrowth?.toString(),
+          netIncomeGrowth: calculated.netIncomeGrowth?.toString(),
+          fiftyTwoWeekHigh: yahoo.fiftyTwoWeekHigh?.toString(),
+          fiftyTwoWeekLow: yahoo.fiftyTwoWeekLow?.toString(),
+          revenue: current?.revenue?.toString(),
+          netIncome: current?.netIncome?.toString(),
+          source: "yahoo",
+          sourceFlags: { quoteSummary: true, normalizedStatements: statements.length > 0 },
+          isStale: false,
+          raw: yahoo.raw,
+        }).onConflictDoUpdate({
+          target: fundamentals.id,
+          set: {
+            marketCap: yahoo.marketCap?.toString(), peRatio: yahoo.trailingPe?.toString(), forwardPe: yahoo.forwardPe?.toString(),
+            pbRatio: yahoo.pb?.toString(), roe: yahoo.roe?.toString(), dividendYield: yahoo.dividendYield?.toString(),
+            eps: yahoo.epsTtm?.toString(), bookValuePerShare: yahoo.bookValuePerShare?.toString(),
+            debtToEquity: yahoo.debtToEquity?.toString(), currentRatio: yahoo.currentRatio?.toString(),
+            raw: yahoo.raw, sourceFlags: { quoteSummary: true, normalizedStatements: statements.length > 0 }, isStale: false,
+          },
+        });
+        log.debug({ symbol, statements: statements.length, pe: yahoo.trailingPe }, "Yahoo fundamentals synced");
+        return true;
+      }
+
       const data = await fetchNSEFundamentals(symbol);
       const now = new Date();
       const companyId = symbol.toUpperCase();
@@ -381,6 +660,44 @@ export class DailyProcessor {
     } catch (err) {
       log.warn({ err }, "failed to cleanup stale candles");
     }
+  }
+
+  private async refreshMarketCapClassifications(log: ProcessorLogger): Promise<number> {
+    if (this.dryRun) return 0;
+    const rows = await db.select({ companyId: companies.id, marketCap: companies.marketCap }).from(companies);
+    const classifications = classifyByMarketCapRank(rows.map((row) => ({
+      companyId: row.companyId,
+      marketCap: row.marketCap ? Number(row.marketCap) : undefined,
+    })));
+    const effectiveFrom = new Date();
+    const classificationVersion = effectiveFrom.toISOString().slice(0, 10);
+    for (let index = 0; index < classifications.length; index += 50) {
+      const batch = classifications.slice(index, index + 50);
+      await Promise.all(batch.map(async (classification) => {
+        await db.update(companies).set({
+          marketCapBucket: classification.bucket,
+          updatedAt: effectiveFrom,
+        }).where(sql`${companies.id} = ${classification.companyId}`);
+        await db.insert(marketCapClassifications).values({
+          companyId: classification.companyId,
+          classificationVersion,
+          bucket: classification.bucket,
+          methodology: classification.methodology,
+          effectiveFrom,
+          source: "derived_stored_market_cap_rank",
+        }).onConflictDoUpdate({
+          target: [marketCapClassifications.companyId, marketCapClassifications.classificationVersion],
+          set: {
+            bucket: classification.bucket,
+            methodology: classification.methodology,
+            effectiveFrom,
+            source: "derived_stored_market_cap_rank",
+          },
+        });
+      }));
+    }
+    log.info({ count: classifications.length, classificationVersion }, "market-cap classifications refreshed");
+    return classifications.length;
   }
 }
 

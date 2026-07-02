@@ -1,7 +1,6 @@
 import { createError, defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { Candle } from "@shared/types";
-import { getCandles } from "../../data/sources/yahoo";
-import { resolveMarketSymbol } from "../../domain/market/symbol";
+import { loadMarketCandles } from "../../domain/market/candle-service";
 
 const TIMEFRAMES: Candle["tf"][] = ["1m", "5m", "15m", "1h", "1d", "1wk"];
 const RANGE_MS: Record<string, number> = {
@@ -51,25 +50,22 @@ export default defineEventHandler(async (event) => {
   } else {
     from = new Date(to.getTime() - RANGE_MS[range]);
   }
-  const resolved = resolveMarketSymbol(symbol);
-  let candles: Candle[];
+  let result;
   try {
-    candles = (await getCandles(resolved.ticker, from, to, tf)).map((candle) => ({
-      ...candle,
-      symbol: resolved.symbol,
-    }));
+    result = await loadMarketCandles(symbol, tf, from, to);
   } catch {
     throw createError({ statusCode: 503, statusMessage: "Market history temporarily unavailable" });
   }
 
   setResponseHeader(event, "cache-control", "public, max-age=15, s-maxage=30, stale-while-revalidate=60");
   return {
-    symbol: resolved.symbol,
+    symbol,
     timeframe: tf,
     range,
-    source: "yahoo",
+    source: result.source,
     delayed: true,
     asOf: new Date().toISOString(),
-    candles,
+    persisted: result.persisted,
+    candles: result.candles,
   };
 });

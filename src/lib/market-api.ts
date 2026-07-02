@@ -30,6 +30,8 @@ export type MarketCompany = {
   paidUpValue?: number;
   marketLot?: number;
   faceValue?: number;
+  bseCode?: string;
+  yahooSymbol?: string;
   // Extended fundamentals — populated after daily-processor sync
   sector?: string;
   industry?: string;
@@ -39,18 +41,100 @@ export type MarketCompany = {
   roe?: number;
   dividendYield?: number;
   eps?: number;
-  source: "nse";
+  price?: number;
+  changePct?: number;
+  volume?: number;
+  forwardPe?: number;
+  bookValuePerShare?: number;
+  roce?: number;
+  roa?: number;
+  debtToEquity?: number;
+  currentRatio?: number;
+  salesGrowth?: number;
+  profitGrowth?: number;
+  operatingMargin?: number;
+  netMargin?: number;
+  fiftyTwoWeekHigh?: number;
+  fiftyTwoWeekLow?: number;
+  average20DayVolume?: number;
+  relVolume?: number;
+  revenue?: number;
+  netIncome?: number;
+  marketCapBucket: "large" | "mid" | "small" | "micro" | "unknown";
+  quoteAsOf?: string;
+  fundamentalsAsOf?: string;
+  quoteSource?: string;
+  fundamentalsSource?: string;
+  staleFundamentals?: boolean;
+  source: "database" | "nse";
 };
+
+export type MarketFieldAvailability = Record<string, {
+  available: boolean;
+  source?: string;
+  reason?: string;
+}>;
 
 export type MarketCompaniesResponse = {
   asOf: string;
-  source: "nse";
+  generatedAt: string;
+  source: "database" | "nse-fallback";
+  sourceSummary: string[];
   total: number;
   universeTotal: number;
   page: number;
   pageSize: number;
   pageCount: number;
   items: MarketCompany[];
+  fieldAvailability: MarketFieldAvailability;
+  capBucketMethodology: string;
+};
+
+export type ScreenerQuery = Record<string, string | number | boolean | string[] | undefined>;
+
+export type FinancialStatement = {
+  id: string;
+  periodDate: string;
+  periodType: "annual" | "quarterly" | string;
+  statementType: "balance_sheet" | "income_statement" | "cash_flow" | "combined" | string;
+  fiscalYear: number;
+  currency: string;
+  source: string;
+  asOf: string;
+  revenue?: number;
+  costOfRevenue?: number;
+  operatingIncome?: number;
+  ebitda?: number;
+  ebit?: number;
+  interestExpense?: number;
+  taxExpense?: number;
+  netIncome?: number;
+  totalAssets?: number;
+  currentAssets?: number;
+  inventory?: number;
+  cashAndEquivalents?: number;
+  totalLiabilities?: number;
+  currentLiabilities?: number;
+  totalDebt?: number;
+  shareholdersEquity?: number;
+  operatingCashFlow?: number;
+  capitalExpenditure?: number;
+  dividendsPaid?: number;
+  sharesOutstanding?: number;
+};
+
+export type CompanyDetailResponse = {
+  generatedAt: string;
+  master: {
+    symbol: string; name: string; exchange: string; series: string; isin: string;
+    bseCode?: string; yahooSymbol?: string; sector?: string; industry?: string;
+    marketCapBucket: string; listingDate?: string;
+  };
+  quote?: { price: number; changePct?: number; volume?: number; marketCap?: number; asOf: string; source: string };
+  fundamentals?: Record<string, string | number | boolean | undefined> & { asOf: string; source: string; stale: boolean };
+  statements: { annual: FinancialStatement[]; quarterly: FinancialStatement[] };
+  candles: MarketCandle[];
+  availability: MarketFieldAvailability;
 };
 
 export type MarketCandle = {
@@ -84,6 +168,7 @@ export type MarketCandlesResponse = {
   range: string;
   source: string;
   delayed: boolean;
+  persisted?: boolean;
   asOf: string;
   candles: MarketCandle[];
 };
@@ -169,13 +254,25 @@ export async function fetchMarketCompanies(
   page: number,
   limit: number,
   search: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  query: ScreenerQuery = {}
 ): Promise<MarketCompaniesResponse> {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) });
-  if (search.trim()) params.set("search", search.trim());
+  if (search.trim()) params.set("q", search.trim());
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === "" || value === false) continue;
+    params.set(key, Array.isArray(value) ? value.join(",") : String(value));
+  }
   const response = await fetchMarketEndpoint(`/api/market/companies?${params}`, signal);
   if (!response.ok) throw new Error(`Company master returned ${response.status}`);
   return response.json() as Promise<MarketCompaniesResponse>;
+}
+
+export async function fetchCompanyDetail(symbol: string, signal?: AbortSignal): Promise<CompanyDetailResponse> {
+  const params = new URLSearchParams({ symbol });
+  const response = await fetchMarketEndpoint(`/api/market/company?${params}`, signal);
+  if (!response.ok) throw new Error(`Company detail returned ${response.status}`);
+  return response.json() as Promise<CompanyDetailResponse>;
 }
 
 export async function fetchMarketCandles(

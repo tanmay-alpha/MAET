@@ -1,6 +1,6 @@
 # Remaining Work
 
-Last audited: 2026-07-02
+Last audited: 2026-07-03
 
 ## Completed And Verified
 
@@ -11,10 +11,10 @@ Last audited: 2026-07-02
 - Angel One uses SmartAPI WebSocket 2.0 headers, subscriptions, heartbeat,
   binary quote decoding, reconnect limits, and on-demand symbol tokens.
 - tRPC protected procedures reject unauthenticated callers.
-- Screener price, change, and volume filters operate on market responses.
+- Screener identity search, pagination, sorting, and available-field filters execute server-side.
 - The scanner company universe is loaded from NSE's official equity master:
   2,071 EQ-series companies were returned in the 2026-07-02 verification.
-- Company search and pagination are server-side; only the visible 25 symbols
+- Company search covers symbol, company name, and ISIN; only the visible 50 symbols
   subscribe to broker/Yahoo quotes at a time.
 - Angel One's instrument master enriches the NSE universe with live-feed tokens
   without replacing NSE as the canonical source for company identity.
@@ -23,8 +23,9 @@ Last audited: 2026-07-02
 - When NSE blocks Render's data-center IP, the backend reads the same official
   NSE-derived, cached company pages through the production Vercel edge route;
   Angel token hydration remains independent of that fallback.
-- Normalized company, financial-statement, and calculated-fundamental schemas
-  are included in migration `0002_company_master_and_fundamentals.sql`.
+- Normalized company, identifier, quote-snapshot, financial-statement,
+  calculated-fundamental, and cap-classification schemas are included through
+  migration `0003_screener_v4.sql`.
 - Profitability, liquidity, leverage, efficiency, growth, cash-flow, and
   valuation ratios are calculated by a deterministic, unit-tested engine.
 - Drizzle was upgraded past the identifier SQL-injection advisory.
@@ -37,18 +38,17 @@ Last audited: 2026-07-02
 1. In Render, configure every variable listed in `.env.example`, especially
    `SUPABASE_DB_URL`. Existing Supabase API keys are not a Postgres connection
    string.
-2. Confirm the Render dashboard build command is
-   `cd .. && npm ci && npm run build --prefix server`; dashboard settings can
-   override `render.yaml`.
-3. Apply and verify the production database migration before enabling persisted
+2. Confirm the Render dashboard uses the commands in `render.yaml`; dashboard
+   settings can override repository configuration.
+3. Apply and verify migrations `0001` through `0003` before enabling persisted
    orders, alerts, portfolios, or saved screeners.
 
 ## Product Gaps
 
-- The normalized fundamentals pipeline is ready, but production statement data
-  still requires a licensed filings/fundamentals provider and a configured
-  database. Mock values are intentionally not shown; P/E, P/B, ROE, market-cap,
-  sector, dividend, and growth filters must remain disabled until sourced data
+- The normalized fundamentals pipeline and Yahoo adapter are ready, but Yahoo
+  quoteSummary returned HTTP 401 from both query hosts on 2026-07-03.
+  Production statement data therefore still requires a reachable verified
+  provider and a configured database. Filters stay disabled until sourced data
   has been stored and validated.
 - Saved screeners currently persist in browser local storage. The tRPC saved
   screener procedures still need a database table and ownership-scoped CRUD.

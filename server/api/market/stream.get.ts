@@ -17,8 +17,8 @@ export default defineEventHandler(async (event) => {
       .map((symbol) => symbol.trim().toUpperCase())
       .filter(Boolean)
   )];
-  if (symbols.length === 0 || symbols.length > 25) {
-    throw createError({ statusCode: 400, statusMessage: "Request between 1 and 25 symbols" });
+  if (symbols.length === 0 || symbols.length > 50) {
+    throw createError({ statusCode: 400, statusMessage: "Request between 1 and 50 symbols" });
   }
 
   event.node.res.setHeader("Content-Type", "text/event-stream");

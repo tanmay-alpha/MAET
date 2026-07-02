@@ -1,6 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { getCandles } from "@server/data/sources/yahoo";
-import { resolveMarketSymbol } from "@server/domain/market/symbol";
+import { loadMarketCandles } from "@server/domain/market/candle-service";
 import type { Candle } from "@shared/types";
 
 const TIMEFRAMES: Candle["tf"][] = ["1m", "5m", "15m", "1h", "1d", "1wk"];
@@ -42,17 +41,17 @@ export const Route = createFileRoute("/api/market/candles")({
           : new Date(to.getTime() - RANGE_MS[range]);
 
         try {
-          const resolved = resolveMarketSymbol(symbol);
-          const candles = await getCandles(resolved.ticker, from, to, timeframe);
+          const result = await loadMarketCandles(symbol, timeframe, from, to);
           return Response.json(
             {
-              symbol: resolved.symbol,
+              symbol,
               timeframe,
               range,
-              source: "yahoo",
+              source: result.source,
               delayed: true,
               asOf: new Date().toISOString(),
-              candles,
+              persisted: result.persisted,
+              candles: result.candles,
             },
             {
               headers: {
