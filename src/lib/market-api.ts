@@ -290,7 +290,11 @@ export async function fetchMarketCandles(
   // already-working Vercel fallback is used.
   let response: Response;
   if (typeof window !== "undefined" && API_BASE_URL) {
-    response = await fetch(path, { signal });
+    // Do not forward TanStack Query's observer signal here. During route/layout
+    // hydration that signal can be replaced before this fast serverless request
+    // settles, producing an abort/refetch loop. Query keys still prevent a
+    // superseded timeframe response from being displayed.
+    response = await fetch(path);
     if (!response.ok) response = await fetchMarketEndpoint(path, signal);
   } else {
     response = await fetchMarketEndpoint(path, signal);
