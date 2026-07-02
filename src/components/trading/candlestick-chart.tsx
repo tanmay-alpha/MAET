@@ -60,18 +60,12 @@ export function CandlestickChart({
   drawingTool,
   indicators = { sma: false, ema: false, rsi: false, macd: false, volume: true }
 }: CandlestickChartProps) {
-  // Indicator state — initialized from props, kept in sync via useEffect
-  const [showSMA, setShowSMA] = useState(indicators.sma);
-  const [showEMA, setShowEMA] = useState(indicators.ema);
-  const [showRSI, setShowRSI] = useState(indicators.rsi);
-  const [showMACD, setShowMACD] = useState(indicators.macd);
-  const [showVolume, setShowVolume] = useState(indicators.volume);
-
-  // Sync internal indicator state when parent props change
-  useEffect(() => { setShowSMA(indicators.sma); }, [indicators.sma]);
-  useEffect(() => { setShowEMA(indicators.ema); }, [indicators.ema]);
-  useEffect(() => { setShowRSI(indicators.rsi); }, [indicators.rsi]);
-  useEffect(() => { setShowVolume(indicators.volume); }, [indicators.volume]);
+  // Indicator visibility is controlled by the parent. Keeping this derived from
+  // props avoids the stale copied-state bug when toolbar toggles change.
+  const showSMA = indicators.sma;
+  const showEMA = indicators.ema;
+  const showRSI = indicators.rsi;
+  const showVolume = indicators.volume;
 
   // Indicator calculations
   const indicatorData = useMemo(() => {
@@ -588,7 +582,12 @@ export function CandlestickChart({
 
       {/* RSI sub-panel */}
       {showRSI && indicatorData && (
-        <div className="absolute left-0 bottom-0 right-14 h-16 border-t border-border bg-panel/80">
+        <div
+          className="absolute left-0 bottom-0 right-14 h-16 border-t border-border bg-panel/90"
+          data-testid="rsi-panel"
+          role="img"
+          aria-label="RSI 14 indicator panel with 30 and 70 thresholds"
+        >
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
             {/* 30/70 threshold lines */}
             <line x1="0" x2="100" y1="70" y2="70" stroke="var(--color-border)" strokeWidth="0.15" strokeDasharray="0.5,0.5" />

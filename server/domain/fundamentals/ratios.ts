@@ -34,6 +34,7 @@ export type FundamentalRatios = {
   roe?: number;
   returnOnAssets?: number;
   returnOnInvestedCapital?: number;
+  roce?: number;
   currentRatio?: number;
   quickRatio?: number;
   debtToEquity?: number;
@@ -93,6 +94,9 @@ export function calculateFundamentalRatios(
     ? current.ebit - Math.max(0, current.taxExpense ?? 0)
     : undefined;
 
+  const roce = ratio(current.ebit, investedCapital);
+  const peRatio = eps !== undefined && eps > 0 ? ratio(market.price, eps) : undefined;
+
   return {
     grossMargin: ratio(grossProfit, current.revenue),
     operatingMargin: ratio(current.operatingIncome, current.revenue),
@@ -101,6 +105,7 @@ export function calculateFundamentalRatios(
     roe: ratio(current.netIncome, averageEquity),
     returnOnAssets: ratio(current.netIncome, averageAssets),
     returnOnInvestedCapital: ratio(afterTaxOperatingIncome, investedCapital),
+    roce,
     currentRatio: ratio(current.currentAssets, current.currentLiabilities),
     quickRatio: ratio(
       current.currentAssets !== undefined ? current.currentAssets - (current.inventory ?? 0) : undefined,
@@ -110,7 +115,8 @@ export function calculateFundamentalRatios(
     interestCoverage: ratio(current.ebit, current.interestExpense !== undefined ? Math.abs(current.interestExpense) : undefined),
     assetTurnover: ratio(current.revenue, averageAssets),
     eps,
-    peRatio: ratio(market.price, eps),
+    // A negative or zero EPS has no meaningful conventional P/E.
+    peRatio,
     pbRatio: ratio(market.marketCap, current.shareholdersEquity),
     revenueGrowth: growth(current.revenue, previous.revenue),
     netIncomeGrowth: growth(current.netIncome, previous.netIncome),

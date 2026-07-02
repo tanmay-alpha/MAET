@@ -167,7 +167,8 @@ export function searchNseCompanyMaster(companies: CompanyMasterEntry[], search: 
   return companies
     .filter((company) =>
       company.symbol.toLocaleLowerCase("en-IN").includes(normalized) ||
-      company.name.toLocaleLowerCase("en-IN").includes(normalized)
+      company.name.toLocaleLowerCase("en-IN").includes(normalized) ||
+      company.isin.toLocaleLowerCase("en-IN").includes(normalized)
     )
     .sort((left, right) => {
       const leftSymbol = left.symbol.toLocaleLowerCase("en-IN");

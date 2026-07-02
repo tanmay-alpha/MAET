@@ -18,6 +18,11 @@ const config = {
   // render.yaml startCommand: node .output/server/index.mjs
   preset: "node-server",
   serverDir: ".",
+  compatibilityDate: "2026-07-03" as const,
+  alias: {
+    "@shared/types/errors": "../shared/types/errors.ts",
+    "@shared/types": "../shared/types/index.ts",
+  },
 
   // Exclude test files and spec files so colocated *.test.ts files
   // under api/ (which import bun:test) don't get compiled as routes.

@@ -398,25 +398,26 @@ This version focused on making MAET more like a real scanner foundation.
 
 - Render backend configuration updated
 - Vercel frontend configuration improved
-- Supabase database connected
-- Supabase migrations applied
-- Database tables created
+- Supabase/PostgreSQL schema and idempotent migrations are included
+- Production database connection and migration application remain operator steps
 
 ### Data layer
 
 - Redis JSON cache helpers added
 - Yahoo candle caching added
 - Yahoo range fallback improved
-- Yahoo fundamentals source/fallback added
-- Company API expanded for fundamentals fields
-- DB-first company query added with fallback behavior
+- Yahoo fundamentals/statement adapter added; it remains inactive when Yahoo returns HTTP 401
+- Company APIs expose DB-first screener filters, source metadata, stored statements, and candle history
+- NSE identity fallback remains available without inventing enriched fields
 
 ### Scanner
 
 - Scanner table now handles unavailable data honestly
 - Fundamental columns show blank instead of fake data
 - Company fields extended for sector, industry, market cap, P/E, P/B, ROE, dividend, EPS
-- Search, pagination, and quote-based filtering foundation improved
+- Search by symbol, company name, or ISIN plus server-side pagination, sorting, and available-field filters
+- Versioned rank-based Indian market-cap buckets (1-100 / 101-250 / 251+)
+- Local saved views persist filters, tab, sort, and column visibility
 
 ### Charts
 
@@ -584,9 +585,9 @@ Use this to explain the project:
 
 > MAET is a scanner-first Indian market intelligence terminal. The goal is to make stock screening scalable for 500+ companies. Instead of manually checking each company, the system pulls market data, stores structured data in our database, calculates useful indicators and ratios, and shows clean scanner results in the UI.
 
-> In this demo, the foundation is working: company universe, scanner UI, search, quote data, price/change/volume filters, chart view, moving average and RSI toggles, Supabase database schema, backend APIs, and deployment setup.
+> In this demo, the foundation is working: company universe, scanner UI, symbol/name/ISIN search, quote data, server-side filters for stored fields, chart view, moving average and RSI toggles, PostgreSQL schema, backend APIs, and deployment setup.
 
-> I have intentionally kept missing fundamentals as blank instead of fake values. The next production phase is to connect a verified fundamentals provider, populate financial statements, calculate ratios like P/E, P/B, ROE, ROCE, margins and growth, and then enable those filters after validation.
+> Missing fundamentals remain blank instead of fake values. The ingestion and normalization paths exist, but production must apply migration `0003_screener_v4.sql`, configure `SUPABASE_DB_URL`, and use a reachable verified statements source. Yahoo quoteSummary returned HTTP 401 during the 2026-07-03 verification, so those values are not presented as available unless a stored snapshot exists.
 
 ---
 
