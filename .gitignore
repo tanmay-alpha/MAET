@@ -48,3 +48,5 @@ dist-ssr
 
 # Temporary files left behind by FUSE/overlay filesystem operations.
 .fuse_hidden*
+
+.vercel
