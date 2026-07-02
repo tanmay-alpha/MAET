@@ -1,4 +1,5 @@
 import { bus } from "../infra/bus";
+import { getLogger as getInfraLogger } from "../infra/logger";
 import { defaultWsFactory, type WsFactory, type WsLike } from "../data/sources/angelone/ws";
 import type { AngelOneSession } from "../data/sources/angelone/client";
 import { SYMBOLS } from "../domain/market/symbol";
@@ -42,10 +43,7 @@ function getLog() {
 }
 
 function getLogger() {
-  // Lazy import: avoids loading logger.ts (and transitively config.ts +
-  // env-var schema) at module load time, keeping env-less tests green.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  return require("../infra/logger").getLogger() as ReturnType<typeof import("../infra/logger").getLogger>;
+  return getInfraLogger();
 }
 
 export class AngelOneWorker {

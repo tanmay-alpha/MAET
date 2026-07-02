@@ -1,4 +1,4 @@
-name: Deploy to Render
+name: Verify Render Deployment
 
 on:
   push:
@@ -6,31 +6,45 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: render-production
+  cancel-in-progress: true
+
 jobs:
-  deploy:
-    name: Trigger Render Deployment
+  verify:
+    name: Build backend and verify Render
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Trigger Render Deployment
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Render backend
+        run: bun run build --prefix server
+
+      - name: Verify production health endpoint
+        shell: bash
         run: |
-          # This workflow notifies Render to deploy when main branch updates
-          # Render should be connected to the GitHub repo for auto-deploy
-          echo "Triggering Render deployment for stock-market-backend"
-
-          # Check if render.yaml exists
-          if [ -f "render.yaml" ]; then
-            echo "✅ render.yaml found - deployment configuration ready"
-            cat render.yaml
-          else
-            echo "❌ render.yaml not found"
-            exit 1
-          fi
-
-          echo "📋 Next steps:"
-          echo "1. Ensure Render dashboard is connected to this repo"
-          echo "2. Set environment variables in Render dashboard"
-          echo "3. Render will auto-deploy on push to main branch"
+          for attempt in {1..12}; do
+            status="$(curl --silent --show-error --output /tmp/maet-health.json --write-out '%{http_code}' --max-time 15 https://maet.onrender.com/api/health || true)"
+            if [[ "$status" == "200" ]]; then
+              cat /tmp/maet-health.json
+              exit 0
+            fi
+            echo "Render health attempt $attempt returned HTTP $status"
+            sleep 10
+          done
+          echo "Render did not return HTTP 200 within the verification window"
+          exit 1

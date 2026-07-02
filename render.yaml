@@ -1,12 +1,12 @@
 services:
   - type: web
-    name: stock-market-backend
+    name: MAET
     runtime: node
     plan: free
     rootDir: server
     # Install from the workspace root so the shared package and lockfile are used.
-    buildCommand: cd .. && bun ci && bun run build --prefix server
-    startCommand: node .output/server/index.mjs
+    buildCommand: cd .. && bun install && cd server && bun run build
+    startCommand: bun run start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
