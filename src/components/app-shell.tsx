@@ -44,9 +44,9 @@ export function AppShell() {
             </nav>
             <div className="ml-auto hidden shrink-0 items-center gap-2 text-xs sm:flex">
               <div className="hidden items-center gap-1.5 rounded-md bg-panel-elevated px-2.5 py-1 md:flex">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-bull" />
+                <span className="h-1.5 w-1.5 rounded-full bg-warning" />
                 <span className="text-muted-foreground">NSE</span>
-                <span className="font-medium">Open</span>
+                <span className="font-medium">Delayed</span>
               </div>
               <button aria-label="Notifications" className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
                 <Bell className="h-4 w-4" />

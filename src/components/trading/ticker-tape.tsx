@@ -37,7 +37,7 @@ export function TickerTape() {
             </span>
             {index === 0 && (
               <span className="text-[9px] uppercase tracking-wider text-muted-foreground">
-                {streamConnected ? "Yahoo delayed" : "Connecting"}
+                {streamConnected ? "Broker stream" : "Yahoo delayed"}
               </span>
             )}
           </div>

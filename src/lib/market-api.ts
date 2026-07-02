@@ -96,17 +96,38 @@ export type BacktestResponse = {
 };
 
 const configuredApiUrl = import.meta.env.VITE_API_URL as string | undefined;
-const defaultApiUrl = import.meta.env.DEV
-  ? "http://localhost:3000"
-  : "https://stock-market-backend.onrender.com";
-export const API_BASE_URL = (configuredApiUrl || defaultApiUrl).replace(/\/$/, "");
+export const API_BASE_URL = (configuredApiUrl ?? "").replace(/\/$/, "");
+
+async function fetchMarketEndpoint(path: string, signal?: AbortSignal): Promise<Response> {
+  if (!API_BASE_URL) return fetch(path, { signal });
+
+  const primaryUrl = `${API_BASE_URL}${path}`;
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), 4_000);
+  const abortPrimary = () => controller.abort();
+  signal?.addEventListener("abort", abortPrimary, { once: true });
+
+  try {
+    const response = await fetch(primaryUrl, { signal: controller.signal });
+    if (response.ok) return response;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", abortPrimary);
+  }
+
+  // A same-origin server route keeps market data available when the optional
+  // Render broker-stream service is sleeping or temporarily unhealthy.
+  return fetch(path, { signal });
+}
 
 export async function fetchMarketQuotes(
   symbols: string[],
   signal?: AbortSignal
 ): Promise<MarketQuotesResponse> {
   const params = new URLSearchParams({ symbols: symbols.join(",") });
-  const response = await fetch(`${API_BASE_URL}/api/market/quotes?${params}`, { signal });
+  const response = await fetchMarketEndpoint(`/api/market/quotes?${params}`, signal);
   if (!response.ok) throw new Error(`Quote service returned ${response.status}`);
   return response.json() as Promise<MarketQuotesResponse>;
 }
@@ -118,7 +139,7 @@ export async function fetchMarketCandles(
   signal?: AbortSignal
 ): Promise<MarketCandlesResponse> {
   const params = new URLSearchParams({ symbol, tf: timeframe, range });
-  const response = await fetch(`${API_BASE_URL}/api/market/candles?${params}`, { signal });
+  const response = await fetchMarketEndpoint(`/api/market/candles?${params}`, signal);
   if (!response.ok) throw new Error(`Candle service returned ${response.status}`);
   return response.json() as Promise<MarketCandlesResponse>;
 }

@@ -37,13 +37,13 @@ export function useMarketQuotes(symbols: string[]) {
     queryFn: ({ signal }) => fetchMarketQuotes(normalized, signal),
     enabled: typeof window !== "undefined" && normalized.length > 0,
     staleTime: 10_000,
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
     refetchIntervalInBackground: false,
     retry: 2,
   });
 
   useEffect(() => {
-    if (typeof window === "undefined" || normalized.length === 0) return;
+    if (typeof window === "undefined" || normalized.length === 0 || !API_BASE_URL) return;
     const params = new URLSearchParams({ symbols: symbolKey });
     const source = new EventSource(`${API_BASE_URL}/api/market/stream?${params}`);
 
@@ -65,7 +65,10 @@ export function useMarketQuotes(symbols: string[]) {
         errors: snapshot.errors,
       }));
     });
-    source.onerror = () => setStreamConnected(false);
+    source.onerror = () => {
+      setStreamConnected(false);
+      source.close();
+    };
 
     return () => {
       source.close();
