@@ -1,10 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { BarChart3, BookmarkPlus, RefreshCw, Search, SlidersHorizontal, Table } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { BarChart3, BookmarkPlus, ChevronLeft, ChevronRight, RefreshCw, Search, SlidersHorizontal, Table } from "lucide-react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
-import type { MarketQuote } from "@/lib/market-api";
-import { api } from "@/lib/api-client";
-import { SavedScreeners, type SavedScreener, type FilterCondition, AVAILABLE_FIELDS } from "@/components/screener/saved-screeners";
+import { fetchMarketCompanies, type MarketCompany, type MarketQuote } from "@/lib/market-api";
+import { SavedScreeners, type SavedScreener, type FilterCondition } from "@/components/screener/saved-screeners";
 
 export const Route = createFileRoute("/_app/screener")({
   head: () => ({ meta: [{ title: "Stock Screener — MAET" }] }),
@@ -16,31 +16,22 @@ type Row = {
   name: string;
   logo: string;
   logoColor: string;
-  sector: string;
+  isin: string;
 };
 
-const ROWS: Row[] = [
-  { symbol: "RELIANCE", name: "Reliance Industries Limited", logo: "R", logoColor: "bg-amber-700", sector: "Energy" },
-  { symbol: "HDFCBANK", name: "HDFC Bank Limited", logo: "H", logoColor: "bg-red-600", sector: "Finance" },
-  { symbol: "BHARTIARTL", name: "Bharti Airtel Limited", logo: "B", logoColor: "bg-rose-600", sector: "Communications" },
-  { symbol: "ICICIBANK", name: "ICICI Bank Limited", logo: "I", logoColor: "bg-orange-600", sector: "Finance" },
-  { symbol: "SBIN", name: "State Bank of India", logo: "S", logoColor: "bg-blue-700", sector: "Finance" },
-  { symbol: "TCS", name: "Tata Consultancy Services Limited", logo: "T", logoColor: "bg-slate-700", sector: "Technology" },
-  { symbol: "BAJFINANCE", name: "Bajaj Finance Limited", logo: "B", logoColor: "bg-indigo-700", sector: "Finance" },
-  { symbol: "LT", name: "Larsen & Toubro Limited", logo: "L", logoColor: "bg-yellow-700", sector: "Industrials" },
-  { symbol: "LICI", name: "Life Insurance Corporation of India", logo: "L", logoColor: "bg-blue-800", sector: "Finance" },
-  { symbol: "HINDUNILVR", name: "Hindustan Unilever Limited", logo: "H", logoColor: "bg-blue-600", sector: "Consumer" },
-  { symbol: "INFY", name: "Infosys Limited", logo: "I", logoColor: "bg-blue-500", sector: "Technology" },
-  { symbol: "ITC", name: "ITC Limited", logo: "I", logoColor: "bg-yellow-600", sector: "Consumer" },
-  { symbol: "MARUTI", name: "Maruti Suzuki India Limited", logo: "M", logoColor: "bg-red-700", sector: "Automotive" },
-  { symbol: "AXISBANK", name: "Axis Bank Limited", logo: "A", logoColor: "bg-rose-700", sector: "Finance" },
-  { symbol: "KOTAKBANK", name: "Kotak Mahindra Bank Limited", logo: "K", logoColor: "bg-blue-900", sector: "Finance" },
-  { symbol: "WIPRO", name: "Wipro Limited", logo: "W", logoColor: "bg-slate-600", sector: "Technology" },
-  { symbol: "HCLTECH", name: "HCL Technologies Limited", logo: "H", logoColor: "bg-blue-700", sector: "Technology" },
-  { symbol: "SUNPHARMA", name: "Sun Pharmaceutical Industries Limited", logo: "S", logoColor: "bg-green-700", sector: "Healthcare" },
-  { symbol: "TATAMOTORS", name: "Tata Motors Limited", logo: "T", logoColor: "bg-blue-600", sector: "Automotive" },
-  { symbol: "NTPC", name: "NTPC Limited", logo: "N", logoColor: "bg-orange-700", sector: "Energy" },
-];
+const LOGO_COLORS = ["bg-blue-700", "bg-cyan-700", "bg-emerald-700", "bg-amber-700", "bg-orange-700", "bg-rose-700", "bg-indigo-700", "bg-slate-700"];
+const PAGE_SIZE = 25;
+
+function companyRow(company: MarketCompany): Row {
+  const colorIndex = [...company.symbol].reduce((sum, character) => sum + character.charCodeAt(0), 0) % LOGO_COLORS.length;
+  return {
+    symbol: company.symbol,
+    name: company.name,
+    logo: company.symbol.charAt(0),
+    logoColor: LOGO_COLORS[colorIndex],
+    isin: company.isin,
+  };
+}
 
 function matchesFilter(quote: MarketQuote | undefined, filter: FilterCondition): boolean {
   if (!quote) return false;
@@ -81,25 +72,29 @@ function Screener() {
   const [selected, setSelected] = useState<string | null>("RELIANCE");
   const [focusIdx, setFocusIdx] = useState<number>(0);
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+  const [page, setPage] = useState(1);
   const [showSaved, setShowSaved] = useState(false);
   const [activeFilters, setActiveFilters] = useState<FilterCondition[]>([]);
   const [minPrice, setMinPrice] = useState("");
   const [minChange, setMinChange] = useState("");
   const [minVolume, setMinVolume] = useState("");
-  const [sector, setSector] = useState("all");
   const [activeView, setActiveView] = useState<"overview" | "performance" | "technicals">("overview");
   const tbodyRef = useRef<HTMLTableSectionElement>(null);
 
-  // Get all unique symbols from ROWS and active screener filters
-  const screenerSymbols = useMemo(() => ROWS.map((row) => row.symbol), []);
-  const { quoteMap, streamConnected, isError: quoteError, isFetching, refetch } = useMarketQuotes(screenerSymbols);
+  const companiesQuery = useQuery({
+    queryKey: ["market-companies", page, deferredQuery],
+    queryFn: ({ signal }) => fetchMarketCompanies(page, PAGE_SIZE, deferredQuery, signal),
+    staleTime: 60 * 60 * 1_000,
+    retry: 2,
+  });
+  const companyRows = useMemo(() => (companiesQuery.data?.items ?? []).map(companyRow), [companiesQuery.data?.items]);
+  const screenerSymbols = useMemo(() => companyRows.map((row) => row.symbol), [companyRows]);
+  const { quoteMap, streamConnected, isError: quoteError, isFetching: quotesFetching, refetch } = useMarketQuotes(screenerSymbols);
 
   // Apply filters to rows
   const filteredRows = useMemo(() => {
-    let result = ROWS.filter((r) =>
-      r.symbol.toLowerCase().includes(query.toLowerCase()) ||
-      r.name.toLowerCase().includes(query.toLowerCase())
-    );
+    let result = companyRows;
 
     if (activeFilters.length > 0) {
       result = result.filter((row) => activeFilters.every((filter) =>
@@ -112,7 +107,6 @@ function Screener() {
     const volumeFloor = Number(minVolume);
     result = result.filter((row) => {
       const quote = quoteMap.get(row.symbol);
-      if (sector !== "all" && row.sector !== sector) return false;
       if (minPrice && (!quote || quote.price < priceFloor)) return false;
       if (minChange && (!quote || (quote.changePct ?? Number.NEGATIVE_INFINITY) < changeFloor)) return false;
       if (minVolume && (!quote || quote.volume < volumeFloor)) return false;
@@ -120,7 +114,7 @@ function Screener() {
     });
 
     return [...result].sort((a, b) => a.symbol.localeCompare(b.symbol));
-  }, [query, activeFilters, quoteMap, minPrice, minChange, minVolume, sector]);
+  }, [companyRows, activeFilters, quoteMap, minPrice, minChange, minVolume]);
 
   const rows = filteredRows;
 
@@ -129,6 +123,11 @@ function Screener() {
     const el = tbodyRef.current?.querySelector<HTMLTableRowElement>(`tr[data-idx="${focusIdx}"]`);
     el?.focus({ preventScroll: false });
   }, [focusIdx]);
+
+  useEffect(() => {
+    setPage(1);
+    setFocusIdx(0);
+  }, [deferredQuery]);
 
   function handleApplyScreener(screener: SavedScreener) {
     setActiveFilters(screener.filters);
@@ -164,11 +163,11 @@ function Screener() {
             </button>
             <button
               type="button"
-              onClick={() => void refetch()}
+              onClick={() => { void refetch(); void companiesQuery.refetch(); }}
               className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
               aria-label="Refresh quotes"
             >
-              <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+              <RefreshCw className={`h-4 w-4 ${quotesFetching || companiesQuery.isFetching ? "animate-spin" : ""}`} />
             </button>
           </div>
         </div>
@@ -199,15 +198,8 @@ function Screener() {
           Volume ≥
           <input value={minVolume} onChange={(event) => setMinVolume(event.target.value)} inputMode="numeric" placeholder="Any" className="w-20 bg-transparent font-mono text-foreground outline-none" />
         </label>
-        <label className="flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1.5 text-muted-foreground">
-          Sector
-          <select value={sector} onChange={(event) => setSector(event.target.value)} className="bg-transparent text-foreground outline-none">
-            <option value="all">All</option>
-            {[...new Set(ROWS.map((row) => row.sector))].sort().map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
-        </label>
-        {(minPrice || minChange || minVolume || sector !== "all") && (
-          <button type="button" onClick={() => { setMinPrice(""); setMinChange(""); setMinVolume(""); setSector("all"); }} className="rounded px-2 py-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
+        {(minPrice || minChange || minVolume) && (
+          <button type="button" onClick={() => { setMinPrice(""); setMinChange(""); setMinVolume(""); }} className="rounded px-2 py-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
             Reset quick filters
           </button>
         )}
@@ -250,13 +242,13 @@ function Screener() {
                     placeholder="Symbol"
                     className="w-40 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
                   />
-                  <span className="ml-2 text-[10px] uppercase tracking-wider">{rows.length}</span>
+                  <span className="ml-2 text-[10px] uppercase tracking-wider">{companiesQuery.data?.total.toLocaleString("en-IN") ?? "…"}</span>
                 </div>
               </th>
               {["Price", "Chg %", "Vol", "Rel vol", "Mkt cap", "P/E", "EPS dil TTM", "EPS growth", "Div yield"].map((label) => (
                 <th key={label} className="px-3 py-2.5 text-right text-tv-caps font-medium text-muted-foreground">{label}</th>
               ))}
-              <th className="px-3 py-2.5 text-left text-tv-caps font-medium text-muted-foreground">Sector</th>
+              <th className="px-3 py-2.5 text-left text-tv-caps font-medium text-muted-foreground">ISIN</th>
               <th className="px-3 py-2.5 text-left text-tv-caps font-medium text-muted-foreground">Analyst rating</th>
             </tr>
           </thead>
@@ -330,11 +322,18 @@ function Screener() {
                   <td className="px-3 py-2.5 text-right font-mono tabular text-tv-sm">
                     —
                   </td>
-                  <td className="px-3 py-2.5 text-left text-xs text-foreground/90">{r.sector}</td>
+                  <td className="px-3 py-2.5 text-left font-mono text-[11px] text-muted-foreground">{r.isin || "—"}</td>
                   <td className="px-3 py-2.5 text-left text-muted-foreground">—</td>
                 </tr>
               );
             })}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={12} className="px-4 py-12 text-center text-xs text-muted-foreground">
+                  {companiesQuery.isError ? "Official NSE company master is temporarily unavailable." : companiesQuery.isFetching ? "Loading NSE company master…" : "No companies match the current page filters."}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -346,9 +345,17 @@ function Screener() {
             <span className={`h-1.5 w-1.5 rounded-full ${quoteError ? "bg-bear" : "bg-bull animate-pulse"}`} />
             {quoteError ? "Quote service unavailable" : streamConnected ? "Broker stream connected" : "Yahoo delayed polling active"}
           </span>
-          <span>{rows.length} matches</span>
+          <span>{rows.length} page matches · {(companiesQuery.data?.universeTotal ?? 0).toLocaleString("en-IN")} NSE companies</span>
         </div>
-        <div className="font-mono tabular">MAET Screener · v1.0</div>
+        <div className="flex items-center gap-2 font-mono tabular">
+          <button type="button" aria-label="Previous company page" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))} className="rounded p-0.5 hover:bg-accent disabled:opacity-30">
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
+          <span>Page {page} / {Math.max(1, companiesQuery.data?.pageCount ?? 1)}</span>
+          <button type="button" aria-label="Next company page" disabled={page >= (companiesQuery.data?.pageCount ?? 1)} onClick={() => setPage((current) => current + 1)} className="rounded p-0.5 hover:bg-accent disabled:opacity-30">
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );

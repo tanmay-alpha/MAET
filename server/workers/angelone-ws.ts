@@ -2,13 +2,12 @@ import { bus } from "../infra/bus";
 import { getLogger as getInfraLogger } from "../infra/logger";
 import { defaultWsFactory, type WsFactory, type WsLike } from "../data/sources/angelone/ws";
 import type { AngelOneSession } from "../data/sources/angelone/client";
-import { SYMBOLS } from "../domain/market/symbol";
+import { lookupSymbolByToken } from "../domain/market/symbol";
 import type { Tick } from "@shared/types";
 
 const WS_URL = "wss://smartapisocket.angelone.in/smart-stream";
 const MAX_RECONNECT_ATTEMPTS = 10;
 const HEARTBEAT_MS = 30_000;
-const symbolByToken = new Map(SYMBOLS.map((symbol) => [symbol.token, symbol]));
 
 type UserState = {
   session: AngelOneSession;
@@ -211,7 +210,7 @@ export function parseAngelOnePacket(buffer: Buffer): Tick {
   const mode = buffer.readUInt8(0);
   const exchangeType = buffer.readUInt8(1);
   const token = readToken(buffer);
-  const catalog = symbolByToken.get(token);
+  const catalog = lookupSymbolByToken(token);
   if (!catalog) throw new Error(`Unknown Angel One token: ${token}`);
   if (exchangeType !== 1) throw new Error(`Unsupported Angel One exchange: ${exchangeType}`);
 

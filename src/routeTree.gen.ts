@@ -27,6 +27,7 @@ import { Route as AppChartGridRouteImport } from './routes/_app.chart-grid'
 import { Route as AppBacktestRouteImport } from './routes/_app.backtest'
 import { Route as AppAlertsRouteImport } from './routes/_app.alerts'
 import { Route as ApiMarketQuotesRouteImport } from './routes/api.market.quotes'
+import { Route as ApiMarketCompaniesRouteImport } from './routes/api.market.companies'
 import { Route as ApiMarketCandlesRouteImport } from './routes/api.market.candles'
 import { Route as AppStockSymbolRouteImport } from './routes/_app.stock.$symbol'
 import { Route as AppOptionsUnderlyingRouteImport } from './routes/_app.options.$underlying'
@@ -121,6 +122,11 @@ const ApiMarketQuotesRoute = ApiMarketQuotesRouteImport.update({
   path: '/api/market/quotes',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMarketCompaniesRoute = ApiMarketCompaniesRouteImport.update({
+  id: '/api/market/companies',
+  path: '/api/market/companies',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiMarketCandlesRoute = ApiMarketCandlesRouteImport.update({
   id: '/api/market/candles',
   path: '/api/market/candles',
@@ -163,6 +169,7 @@ export interface FileRoutesByFullPath {
   '/options/$underlying': typeof AppOptionsUnderlyingRoute
   '/stock/$symbol': typeof AppStockSymbolRoute
   '/api/market/candles': typeof ApiMarketCandlesRoute
+  '/api/market/companies': typeof ApiMarketCompaniesRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
 }
 export interface FileRoutesByTo {
@@ -186,6 +193,7 @@ export interface FileRoutesByTo {
   '/options/$underlying': typeof AppOptionsUnderlyingRoute
   '/stock/$symbol': typeof AppStockSymbolRoute
   '/api/market/candles': typeof ApiMarketCandlesRoute
+  '/api/market/companies': typeof ApiMarketCompaniesRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
 }
 export interface FileRoutesById {
@@ -211,6 +219,7 @@ export interface FileRoutesById {
   '/_app/options/$underlying': typeof AppOptionsUnderlyingRoute
   '/_app/stock/$symbol': typeof AppStockSymbolRoute
   '/api/market/candles': typeof ApiMarketCandlesRoute
+  '/api/market/companies': typeof ApiMarketCompaniesRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
 }
 export interface FileRouteTypes {
@@ -236,6 +245,7 @@ export interface FileRouteTypes {
     | '/options/$underlying'
     | '/stock/$symbol'
     | '/api/market/candles'
+    | '/api/market/companies'
     | '/api/market/quotes'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -259,6 +269,7 @@ export interface FileRouteTypes {
     | '/options/$underlying'
     | '/stock/$symbol'
     | '/api/market/candles'
+    | '/api/market/companies'
     | '/api/market/quotes'
   id:
     | '__root__'
@@ -283,6 +294,7 @@ export interface FileRouteTypes {
     | '/_app/options/$underlying'
     | '/_app/stock/$symbol'
     | '/api/market/candles'
+    | '/api/market/companies'
     | '/api/market/quotes'
   fileRoutesById: FileRoutesById
 }
@@ -290,6 +302,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
   ApiMarketCandlesRoute: typeof ApiMarketCandlesRoute
+  ApiMarketCompaniesRoute: typeof ApiMarketCompaniesRoute
   ApiMarketQuotesRoute: typeof ApiMarketQuotesRoute
 }
 
@@ -421,6 +434,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMarketQuotesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/market/companies': {
+      id: '/api/market/companies'
+      path: '/api/market/companies'
+      fullPath: '/api/market/companies'
+      preLoaderRoute: typeof ApiMarketCompaniesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/market/candles': {
       id: '/api/market/candles'
       path: '/api/market/candles'
@@ -500,6 +520,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   ApiMarketCandlesRoute: ApiMarketCandlesRoute,
+  ApiMarketCompaniesRoute: ApiMarketCompaniesRoute,
   ApiMarketQuotesRoute: ApiMarketQuotesRoute,
 }
 export const routeTree = rootRouteImport

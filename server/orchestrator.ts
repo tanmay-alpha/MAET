@@ -10,6 +10,7 @@ import { getConfig } from "./config";
 import { lookupSymbol } from "./domain/market/symbol";
 import { bus } from "./infra/bus";
 import { registerCheck } from "./infra/health";
+import { hydrateAngelOneCompanyTokens } from "./data/sources/nse-company-master";
 
 // Yahoo quotes are delayed and do not benefit from tick-grade polling. A
 // one-minute cadence avoids unnecessary upstream throttling on the free service.
@@ -84,6 +85,12 @@ export function startOrchestrator(): void {
   });
   angelOne.start();
   void connectAngelOne();
+  void hydrateAngelOneCompanyTokens()
+    .then((count) => {
+      registerCheck("instrumentMaster", count >= 1_000, `${count} NSE equity tokens loaded`);
+      syncAngelSubscriptions();
+    })
+    .catch((error) => registerCheck("instrumentMaster", false, (error as Error).message));
 }
 
 export async function stopOrchestrator(): Promise<void> {
