@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { login } from "./client";
+import { generateTotp, login } from "./client";
 
 const origFetch = globalThis.fetch;
 
@@ -8,6 +8,10 @@ afterEach(() => {
 });
 
 describe("angelone login", () => {
+  it("generates the RFC 6238 SHA-1 TOTP vector", () => {
+    expect(generateTotp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 59_000)).toBe("287082");
+  });
+
   it("sends TOTP in the request body and parses session", async () => {
     let captured: any = null;
     globalThis.fetch = (async (url, init) => {

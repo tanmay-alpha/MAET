@@ -40,10 +40,12 @@ ANGELONE_TOTP_SECRET
 FRONTEND_ORIGIN
 ```
 
-Vercel must set:
+The Vercel frontend uses same-origin server routes by default, so quote and
+candle requests continue working even when the optional streaming backend is
+unavailable. To enable Angel One streaming, set:
 
 ```text
-VITE_API_URL=https://stock-market-backend.onrender.com
+VITE_API_URL=https://maet.onrender.com
 ```
 
 Do not commit `.env`, `.env.backup`, broker credentials, TOTP secrets, or
@@ -89,11 +91,13 @@ GET /api/market/stream?symbols=RELIANCE
 
 Vercel uses the root `vercel.json` and emits `src/.vercel/output`.
 
+Render service: `https://maet.onrender.com`.
+
 Render uses `render.yaml` with `rootDir: server`:
 
 ```text
-Build: cd .. && npm ci && npm run build --prefix server
-Start: npm run start
+Build: cd .. && bun install && cd server && bun run build
+Start: bun run start
 Health: /api/health
 ```
 
