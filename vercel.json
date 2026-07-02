@@ -3,7 +3,16 @@
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "outputDirectory": "src/.vercel/output",
+  "framework": "vite",
   "env": {
     "VITE_API_URL": "https://stock-market-backend.onrender.com"
-  }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" }
+      ]
+    }
+  ]
 }

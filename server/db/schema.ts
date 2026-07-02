@@ -136,3 +136,54 @@ export const alerts = pgTable("alerts", {
   index("alerts_user_idx").on(table.userId),
 ]);
 
+// =============================================================================
+// Company Master & Fundamentals Tables
+// =============================================================================
+
+export const companies = pgTable("companies", {
+  id: text("id").primaryKey(), // symbol as ID for simplicity
+  symbol: text("symbol").notNull().unique(),
+  name: text("name").notNull(),
+  exchange: text("exchange").notNull(),
+  isin: text("isin"),
+  sector: text("sector"),
+  industry: text("industry"),
+  marketCap: numeric("market_cap", { precision: 24, scale: 2 }),
+  peRatio: numeric("pe_ratio", { precision: 8, scale: 4 }),
+  pbRatio: numeric("pb_ratio", { precision: 8, scale: 4 }),
+  roe: numeric("roe", { precision: 8, scale: 4 }),
+  dividendYield: numeric("dividend_yield", { precision: 8, scale: 4 }),
+  eps: numeric("eps", { precision: 8, scale: 4 }),
+  debtToEquity: numeric("debt_to_equity", { precision: 8, scale: 4 }),
+  faceValue: numeric("face_value", { precision: 8, scale: 4 }),
+  isActive: boolean("is_active").default(true),
+  lastFundamentalsUpdate: timestamp("last_fundamentals_update", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index("companies_symbol_idx").on(table.symbol),
+  index("companies_sector_idx").on(table.sector),
+  index("companies_exchange_idx").on(table.exchange),
+]);
+
+export const fundamentals = pgTable("fundamentals", {
+  id: text("id").primaryKey(), // year-quarter as ID
+  companyId: text("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  periodDate: timestamp("period_date", { withTimezone: true }).notNull(),
+  periodType: text("period_type").notNull().default("quarterly"), // quarterly | annual
+  peRatio: numeric("pe_ratio", { precision: 8, scale: 4 }),
+  pbRatio: numeric("pb_ratio", { precision: 8, scale: 4 }),
+  roe: numeric("roe", { precision: 8, scale: 4 }),
+  marketCap: numeric("market_cap", { precision: 24, scale: 2 }),
+  dividendYield: numeric("dividend_yield", { precision: 8, scale: 4 }),
+  eps: numeric("eps", { precision: 8, scale: 4 }),
+  debtToEquity: numeric("debt_to_equity", { precision: 8, scale: 4 }),
+  revenue: numeric("revenue", { precision: 24, scale: 2 }),
+  netIncome: numeric("net_income", { precision: 24, scale: 2 }),
+  source: text("source").notNull().default("nse"),
+  raw: jsonb("raw"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index("fundamentals_company_idx").on(table.companyId, table.periodDate),
+]);
+
