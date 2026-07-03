@@ -305,3 +305,66 @@ export const marketCapClassifications = pgTable("market_cap_classifications", {
   index("market_cap_classification_bucket_idx").on(table.bucket, table.effectiveFrom),
 ]);
 
+// =============================================================================
+// Data Quality & Audit Tables
+// =============================================================================
+
+export const sourceAudit = pgTable("source_audit", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: text("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  dataSource: text("data_source").notNull(),
+  dataType: text("data_type").notNull(),
+  operation: text("operation").notNull(),
+  success: boolean("success").notNull(),
+  message: text("message"),
+  durationMs: integer("duration_ms"),
+  recordsProcessed: integer("records_processed"),
+  recordsInserted: integer("records_inserted"),
+  recordsUpdated: integer("records_updated"),
+  errors: jsonb("errors"),
+  retryCount: integer("retry_count").default(0),
+  priority: text("priority").notNull().default("normal"),
+  batchId: text("batch_id"),
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("source_audit_company_idx").on(table.companyId),
+  index("source_audit_source_type_idx").on(table.dataSource, table.dataType),
+  index("source_audit_operation_idx").on(table.operation),
+  index("source_audit_created_idx").on(table.createdAt),
+  index("source_audit_completed_idx").on(table.completedAt),
+]);
+
+export const anomalyFlags = pgTable("anomaly_flags", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: text("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  dataType: text("data_type").notNull(),
+  checkType: text("check_type").notNull(),
+  severity: text("severity").notNull(),
+  description: text("description").notNull(),
+  details: jsonb("details"),
+  valueExpected: numeric("value_expected"),
+  valueActual: numeric("value_actual"),
+  threshold: numeric("threshold"),
+  isResolved: boolean("is_resolved").default(false),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  resolvedBy: text("resolved_by"),
+  resolutionNote: text("resolution_note"),
+  detectedAt: timestamp("detected_at", { withTimezone: true }).notNull().defaultNow(),
+  lastNotified: timestamp("last_notified", { withTimezone: true }),
+  notificationCount: integer("notification_count").default(0),
+  frequency: text("frequency"),
+  suppressionUntil: timestamp("suppression_until", { withTimezone: true }),
+  source: text("source").notNull(),
+  batchId: text("batch_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("anomaly_flags_company_idx").on(table.companyId),
+  index("anomaly_flags_type_severity_idx").on(table.dataType, table.severity),
+  index("anomaly_flags_check_type_idx").on(table.checkType),
+  index("anomaly_flags_resolved_idx").on(table.isResolved, table.detectedAt),
+  index("anomaly_flags_detected_idx").on(table.detectedAt),
+]);
+

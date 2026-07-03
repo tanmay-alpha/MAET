@@ -11,7 +11,7 @@
  *   bun run server/scripts/screener-v4-smoke-test.ts
  */
 
-import { db, sqlClient, getSqlClient } from "../data/drizzle/client";
+import { closeDb, db, getSqlClient } from "../data/drizzle/client";
 import { sql } from "drizzle-orm";
 import {
   candles,
@@ -26,6 +26,7 @@ import { getNseCompanyMaster } from "../data/sources/nse-company-master";
 import { getCandles, getQuote } from "../data/sources/yahoo";
 import { getYahooFundamentals } from "../data/sources/yahoo-fundamentals";
 import { resolveMarketSymbol } from "../domain/market/symbol";
+import { closeRedis, getRedis } from "../data/redis/client";
 
 // Test symbols as specified
 const TEST_SYMBOLS = ["RELIANCE", "HDFCBANK", "TCS", "INFY", "20MICRONS"];
@@ -109,11 +110,25 @@ async function fetchNseCompanyIdentity(symbol: string): Promise<{
   }
 }
 
-async function fetchQuoteSnapshot(symbol: string): Promise<{ price: number; volume: number; changePct?: number } | null> {
+type SmokeQuote = {
+  price: number;
+  volume: number;
+  changePct?: number;
+  asOf: Date;
+  source: "angelone" | "yahoo" | "nse";
+};
+
+async function fetchQuoteSnapshot(symbol: string): Promise<SmokeQuote | null> {
   try {
     const resolved = resolveMarketSymbol(symbol);
     const tick = await getQuote(resolved.symbol, resolved.ticker);
-    return { price: tick.price, volume: tick.volume, changePct: tick.changePct };
+    return {
+      price: tick.price,
+      volume: tick.volume,
+      changePct: tick.changePct,
+      asOf: new Date(tick.ts),
+      source: tick.source,
+    };
   } catch (err) {
     console.warn(`  ⚠ Quote fetch failed for ${symbol}: ${err}`);
     return null;
@@ -123,7 +138,7 @@ async function fetchQuoteSnapshot(symbol: string): Promise<{ price: number; volu
 async function storeCompanyAndIdentity(
   symbol: string,
   identity: { name: string; isin: string | null; listingDate?: string; faceValue?: number; marketLot?: number },
-  quote?: { price: number; volume: number; changePct?: number }
+  quote?: SmokeQuote
 ): Promise<boolean> {
   try {
     const now = new Date();
@@ -201,16 +216,15 @@ async function storeCompanyAndIdentity(
         price: quote.price.toString(),
         changePct: quote.changePct?.toString(),
         volume: quote.volume,
-        asOf: now,
-        source: "yahoo",
+        asOf: quote.asOf,
+        source: quote.source,
       }).onConflictDoUpdate({
         target: [quoteSnapshots.companyId, quoteSnapshots.asOf],
         set: {
           price: quote.price.toString(),
           changePct: quote.changePct?.toString(),
           volume: quote.volume,
-          asOf: now,
-          source: "yahoo",
+          source: quote.source,
         },
       });
     }
@@ -407,8 +421,19 @@ async function main() {
   console.log(`  UPSTASH_REDIS_URL: ${redisUrl ? "✓ set" : "✗ NOT SET"}`);
 
   if (!dbUrl) {
-    console.error("\n✗ FATAL: SUPABASE_DB_URL is not set. Cannot proceed.");
+    console.error("\nFATAL: SUPABASE_DB_URL is not set. Cannot proceed.");
     process.exit(1);
+  }
+
+  console.log("\nConnection checks:");
+  await getSqlClient()`select 1`;
+  console.log("  Supabase PostgreSQL: reachable");
+  if (redisUrl) {
+    const redisReply = await getRedis().ping();
+    if (redisReply !== "PONG") throw new Error(`Redis ping returned ${redisReply}`);
+    console.log("  Redis: reachable");
+  } else {
+    console.log("  Redis: not configured; cache verification skipped");
   }
 
   // Record initial counts
@@ -434,7 +459,7 @@ async function main() {
 
   // Step 2: Fetch quote snapshots
   console.log("\n📈 Step 2: Fetching quote snapshots from Yahoo...");
-  const quotes: Map<string, { price: number; volume: number; changePct?: number }> = new Map();
+  const quotes = new Map<string, SmokeQuote>();
   for (const symbol of TEST_SYMBOLS) {
     const quote = await fetchQuoteSnapshot(symbol);
     if (quote) {
@@ -483,6 +508,24 @@ async function main() {
   console.log("\n📊 Counting rows AFTER ingestion...");
   const afterCounts = await countRows();
   printCounts("Row count changes:", beforeCounts, afterCounts);
+
+  // Repeat the exact writes once. Keys come from the source timestamps and
+  // reporting periods, so a safe upsert must not increase any row count.
+  console.log("\nVerifying idempotent rerun...");
+  for (const symbol of TEST_SYMBOLS) {
+    const identity = nseIdentities.get(symbol);
+    if (identity) await storeCompanyAndIdentity(symbol, identity, quotes.get(symbol));
+    await fetchYahooCandles(symbol);
+    await fetchFundamentals(symbol);
+  }
+  const rerunCounts = await countRows();
+  const duplicateTables = Object.keys(afterCounts).filter(
+    (table) => rerunCounts[table as keyof RowCounts] !== afterCounts[table as keyof RowCounts]
+  );
+  if (duplicateTables.length > 0) {
+    throw new Error(`Idempotency check failed; row counts changed in: ${duplicateTables.join(", ")}`);
+  }
+  console.log("  Row counts unchanged on the second pass");
 
   // Summary
   console.log("\n" + "=".repeat(60));
@@ -538,27 +581,31 @@ async function main() {
     console.log(`   (none - all tables have data)`);
   } else {
     emptyTables.forEach(t => console.log(`   ⚠ ${t.name}: 0 rows`));
-    console.log(`\n   Possible reasons:`);
-    console.log(`   - Yahoo fundamentals API returned 401/429 (expected for some symbols)`);
-    console.log(`   - SUPABASE_DB_URL not configured on this environment`);
-    console.log(`   - Data sources (NSE/Yahoo) temporarily unavailable`);
+    if (fundamentalsFetched === 0) {
+      console.log(`\n   Yahoo fundamentals were unavailable (401/429/null); no values were fabricated.`);
+    }
+    console.log(`   Financial statements and market-cap classifications are not populated by this bounded smoke test.`);
   }
 
-  console.log(`\n6. Exact command for full backfill:`);
-  console.log(`   bun run server/scripts/screener-v4-smoke-test.ts`);
-  console.log(`   `);
-  console.log(`   Or use DailyProcessor for full Nifty 50 backfill:`);
-  console.log(`   bun run server/orchestrator.ts  # runs daily processor at 18:30 IST`);
+  console.log(`\n6. Commands:`);
+  console.log(`   Bounded verification: bun run smoke:screener-v4`);
+  console.log(`   Scheduled ingestion: bun run server/orchestrator.ts`);
+  console.log(`   The orchestrator runs the configured universe after market close; this smoke script is not a full backfill.`);
 
-  console.log(`\n7. Commit status:`);
-  console.log(`   No code changes needed - smoke test script created successfully`);
+  console.log(`\n7. Idempotency:`);
+  console.log(`   Verified: row counts were unchanged on the second pass.`);
 
   console.log("\n" + "=".repeat(60));
   console.log(`Completed at: ${new Date().toISOString()}`);
   console.log("=".repeat(60));
 }
 
-main().catch((err) => {
-  console.error("\n✗ FATAL ERROR:", err);
-  process.exit(1);
-});
+main()
+  .catch((err) => {
+    console.error("\nFATAL ERROR:", err);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await closeRedis();
+    await closeDb();
+  });

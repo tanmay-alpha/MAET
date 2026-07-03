@@ -31,6 +31,12 @@ export default defineConfig({
         "@": __dirname,
       },
     },
+    // The Vite root is the workspace root, so React is also declared there.
+    // Keeping it external lets Node load its CommonJS entry correctly during
+    // local SSR instead of evaluating it as native ESM (`module` undefined).
+    ssr: {
+      external: ["react", "react-dom"],
+    },
   },
   // TanStack Start plugin options.
   // - server.entry: "server" so Nitro builds from src/server.ts (our SSR

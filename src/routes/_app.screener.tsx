@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
-  BarChart3, BookmarkPlus, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink,
+  BarChart3, BookmarkPlus, Building2, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink,
   Eye, EyeOff, MoreHorizontal, RefreshCw, Search, SlidersHorizontal, Trash2, X,
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -112,7 +112,9 @@ function buildColumns(view: ViewId): Column[] {
     ],
     performance: [...base, price, change, volume, relVolume,
       { id: "high52", label: "52W high", align: "right", render: (c) => <DataCell value={c.fiftyTwoWeekHigh} reason="52-week high unavailable: insufficient stored daily history" mode="money" /> },
+      { id: "high52Distance", label: "% from high", align: "right", render: (c, q) => { const p = quoteFor(c, q)?.price ?? c.price; return p === undefined || !c.fiftyTwoWeekHigh ? <Missing reason="52-week high distance unavailable: price or stored 52-week high missing" /> : <span>{(((p / c.fiftyTwoWeekHigh) - 1) * 100).toFixed(2)}%</span>; } },
       { id: "low52", label: "52W low", align: "right", render: (c) => <DataCell value={c.fiftyTwoWeekLow} reason="52-week low unavailable: insufficient stored daily history" mode="money" /> },
+      { id: "low52Distance", label: "% from low", align: "right", render: (c, q) => { const p = quoteFor(c, q)?.price ?? c.price; return p === undefined || !c.fiftyTwoWeekLow ? <Missing reason="52-week low distance unavailable: price or stored 52-week low missing" /> : <span>{(((p / c.fiftyTwoWeekLow) - 1) * 100).toFixed(2)}%</span>; } },
     ],
     technicals: [...base, price, relVolume,
       { id: "avg20", label: "Avg 20D volume", align: "right", render: (c) => <DataCell value={c.average20DayVolume} reason="20-day average volume has not been computed" /> },
@@ -258,6 +260,47 @@ function Screener() {
     ["value", "Deep value", Boolean(availability.pe?.available && availability.pb?.available)], ["roe", "High ROE", Boolean(availability.roe?.available)],
     ["dividend", "High dividend", Boolean(availability.dividendYield?.available)],
   ] as const;
+
+  const presetTitles: Record<string, string> = {
+    "all": "Show the full available NSE company universe",
+    "gainers": "Stocks with positive day change — up day movers",
+    "losers": "Stocks with negative day change — down day movers",
+    "high-volume": "Stocks with volume above 10 lakh shares today",
+    "price-1000": "Stocks trading above ₹1,000 — premium segment",
+    "active": "Stocks gaining more than 1% in the latest verified quote snapshot",
+    "large": "Market cap bucket: Large cap (top ~100 NSE companies by market cap)",
+    "mid": "Market cap bucket: Mid cap (~100–300 ranked by market cap)",
+    "small": "Market cap bucket: Small cap (ranked 300+ by market cap)",
+    "value": "P/E < 20 AND P/B < 3 — value stocks with reasonable valuations",
+    "roe": "Return on Equity > 15% — profitable companies",
+    "dividend": "Dividend yield > 1% — companies returning cash to shareholders",
+  };
+
+  // Detect search mode from the deferred (debounced) query
+  const searchMode = useMemo((): "symbol" | "isin" | "company" => {
+    const q = deferredQuery.trim();
+    if (q.length === 12 && /^[A-Z0-9]{12}$/.test(q)) return "isin";
+    if (q.includes(" ")) return "company";
+    return "symbol";
+  }, [deferredQuery]);
+
+  // Compute which preset is currently active by comparing filters state
+  const activePreset = useMemo((): string | null => {
+    const f = filters;
+    if (Object.keys(f).length === 0) return "all";
+    if (f.change_pct_min === "0.01" && Object.keys(f).length === 1) return "gainers";
+    if (f.change_pct_max === "-0.01" && Object.keys(f).length === 1) return "losers";
+    if (f.volume_min === "1000000" && Object.keys(f).length === 1) return "high-volume";
+    if (f.price_min === "1000" && Object.keys(f).length === 1) return "price-1000";
+    if (f.change_pct_min === "1" && Object.keys(f).length === 1) return "active";
+    if (f.bucket_in === "large" && Object.keys(f).length === 1) return "large";
+    if (f.bucket_in === "mid" && Object.keys(f).length === 1) return "mid";
+    if (f.bucket_in === "small" && Object.keys(f).length === 1) return "small";
+    if (f.pe_max === "20" && f.pb_max === "3" && Object.keys(f).length === 2) return "value";
+    if (f.roe_min === "15" && Object.keys(f).length === 1) return "roe";
+    if (f.dividend_yield_min === "0.01" && Object.keys(f).length === 1) return "dividend";
+    return null;
+  }, [filters]);
   const filterGroups: Array<[string, ReadonlyArray<readonly [string, string]>]> = [
     ["Price & Volume", NUMERIC_FILTERS.slice(0, 8)],
     ["Valuation", NUMERIC_FILTERS.slice(8, 14)],
@@ -272,7 +315,11 @@ function Screener() {
           <div><div className="flex items-center gap-2"><h1 className="text-2xl font-semibold tracking-tight">Stock Screener</h1><span className="rounded bg-primary/15 px-2 py-0.5 font-mono text-[10px] text-primary">NSE</span></div>
             <p className="mt-1 text-xs text-muted-foreground">Database-first Indian equity scanner · live broker quotes where connected · delayed Yahoo history</p></div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="rounded border border-border bg-background px-2 py-1"><strong>{companiesQuery.data?.total.toLocaleString("en-IN") ?? "—"}</strong> results</span>
+            <span className="rounded border border-border bg-background px-2 py-1">
+              <strong>{visibleCompanies.length.toLocaleString("en-IN")}</strong>
+              {visibleCompanies.length !== (companiesQuery.data?.total ?? 0) && <> – <strong>{(companiesQuery.data?.total ?? 0).toLocaleString("en-IN")}</strong> total</>}
+              {" results"}
+            </span>
             <span className="rounded border border-border bg-background px-2 py-1 text-muted-foreground">Universe {companiesQuery.data?.universeTotal.toLocaleString("en-IN") ?? "—"}</span>
             <span className="rounded border border-border bg-background px-2 py-1 text-muted-foreground">Updated {companiesQuery.data?.generatedAt ? new Date(companiesQuery.data.generatedAt).toLocaleTimeString("en-IN") : "—"}</span>
             <button type="button" onClick={saveCurrent} className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 hover:bg-accent"><BookmarkPlus className="h-3.5 w-3.5" />Save</button>
@@ -299,7 +346,32 @@ function Screener() {
           <button type="button" onClick={() => setShowColumns((current) => !current)} className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-2 text-xs hover:bg-accent"><Eye className="h-3.5 w-3.5" />Columns</button>
           <button type="button" onClick={() => setShowSaved((current) => !current)} className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-2 text-xs hover:bg-accent">Saved <span className="rounded bg-accent px-1">{savedViews.length}</span></button>
         </div>
-        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">{presets.map(([id, label, enabled]) => <button key={id} type="button" disabled={!enabled} onClick={() => applyPreset(id)} title={enabled ? undefined : "Requires verified stored data for this field"} className="whitespace-nowrap rounded-full border border-border bg-panel px-2.5 py-1 text-[11px] hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-35">{label}</button>)}</div>
+        {/* Search mode badge */}
+        <div className="mt-1.5 flex items-center gap-2">
+          {query.trim().length > 0 && (
+            <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${searchMode === "isin" ? "bg-purple-500/15 text-purple-400" : searchMode === "company" ? "bg-blue-500/15 text-blue-400" : "bg-muted text-muted-foreground"}`}>
+              {searchMode === "isin" ? "ISIN search" : searchMode === "company" ? "Company search" : "Symbol/name search"}
+            </span>
+          )}
+        </div>
+        {/* Preset filter chips */}
+        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
+          {presets.map(([id, label, enabled]) => {
+            const isActive = activePreset === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                disabled={!enabled}
+                onClick={() => applyPreset(id)}
+                title={presetTitles[id] ?? (enabled ? undefined : "Requires verified stored data for this field")}
+                className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-35 ${isActive ? "border-primary bg-primary/10 text-primary" : "border-border bg-panel text-foreground"}`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {showAdvanced && <div className="border-b border-border bg-panel/70 px-5 py-4">
@@ -331,7 +403,47 @@ function Screener() {
             <td className="border-b border-border/40 px-3 py-2.5"><div className="flex justify-end gap-1 opacity-60 group-hover:opacity-100"><button type="button" onClick={() => navigate({ to: `/stock/${company.symbol}` })} className="rounded p-1.5 hover:bg-accent" title="Open company detail"><Building2Icon /></button><button type="button" onClick={() => navigate({ to: `/chart/${company.symbol}` })} className="rounded p-1.5 hover:bg-accent" title="Open chart"><BarChart3 className="h-3.5 w-3.5" /></button><a href={getTradingViewUrl(company.symbol)} target="_blank" rel="noreferrer" className="rounded p-1.5 hover:bg-accent" title="Open TradingView"><ExternalLink className="h-3.5 w-3.5" /></a><button type="button" onClick={() => void navigator.clipboard.writeText(company.symbol)} className="rounded p-1.5 hover:bg-accent" title="Copy symbol"><Copy className="h-3.5 w-3.5" /></button></div></td>
           </tr>)}
             {companiesQuery.isFetching && companies.length === 0 && Array.from({ length: 8 }, (_, index) => <tr key={index}>{columns.map((column) => <td key={column.id} className="border-b border-border/40 px-3 py-3"><div className="h-4 animate-pulse rounded bg-accent" /></td>)}<td /></tr>)}
-            {!companiesQuery.isFetching && visibleCompanies.length === 0 && <tr><td colSpan={columns.length + 1} className="px-6 py-16 text-center"><div className="text-sm font-medium">{companiesQuery.isError ? "Screener API unavailable" : "No companies match these filters"}</div><p className="mt-2 text-xs text-muted-foreground">{companiesQuery.isError ? (companiesQuery.error instanceof Error ? companiesQuery.error.message : "Try again shortly") : companiesQuery.data?.source === "nse-fallback" && hasFilter ? hasQuoteFilter ? "No companies on this live page match the price, change, or volume filter. Stored fundamental filters require PostgreSQL snapshots." : "These filters require stored database snapshots; the NSE identity fallback cannot evaluate them honestly." : "Try clearing filters or searching another symbol, company, or ISIN."}</p>{hasFilter && <button type="button" onClick={() => setFilters({})} className="mt-3 rounded border border-border px-3 py-1.5 text-xs hover:bg-accent">Clear filters</button>}</td></tr>}
+            {!companiesQuery.isFetching && visibleCompanies.length === 0 && (
+              <tr>
+                <td colSpan={columns.length + 1} className="px-6 py-16 text-center">
+                  <div className="text-sm font-medium">
+                    {companiesQuery.isError ? "Screener API unavailable" : deferredQuery ? `No companies found for '${deferredQuery}'` : "No companies match these filters"}
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {companiesQuery.isError
+                      ? (companiesQuery.error instanceof Error ? companiesQuery.error.message : "Try again shortly")
+                      : deferredQuery
+                        ? "Check spelling or try a different symbol/name/ISIN."
+                        : companiesQuery.data?.source === "nse-fallback" && hasFilter
+                          ? hasQuoteFilter
+                            ? "No companies on this live page match the price, change, or volume filter. Stored fundamental filters require PostgreSQL snapshots."
+                            : "These filters require stored database snapshots; the NSE identity fallback cannot evaluate them honestly."
+                          : "Try widening the criteria or clearing filters."
+                    }
+                  </p>
+                  {deferredQuery && (
+                    <div className="mt-3">
+                      <p className="text-xs text-muted-foreground mb-1">Try these common symbols:</p>
+                      <div className="flex flex-wrap gap-1 justify-center">
+                        {["RELIANCE", "HDFCBANK", "TCS", "INFY", "NESTLEIND"].map(symbol => (
+                          <button
+                            key={symbol}
+                            type="button"
+                            onClick={() => setQuery(symbol)}
+                            className="rounded border border-border px-2 py-1 text-xs hover:bg-accent hover:text-primary font-mono"
+                          >
+                            {symbol}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {hasFilter && !deferredQuery && (
+                    <button type="button" onClick={() => setFilters({})} className="mt-3 rounded border border-border px-3 py-1.5 text-xs hover:bg-accent">Clear filters</button>
+                  )}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -343,5 +455,5 @@ function Screener() {
 }
 
 function Building2Icon() {
-  return <span className="text-[11px] font-semibold">↗</span>;
+  return <Building2 className="h-3.5 w-3.5" />;
 }

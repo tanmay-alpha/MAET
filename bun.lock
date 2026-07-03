@@ -5,6 +5,8 @@
     "": {
       "name": "tanstack_start_ts",
       "dependencies": {
+        "react": "^19.2.0",
+        "react-dom": "^19.2.0",
         "ws": "^8",
       },
       "devDependencies": {

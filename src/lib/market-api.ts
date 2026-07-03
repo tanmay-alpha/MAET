@@ -157,7 +157,7 @@ export type ChartTimeframe = {
   "1h": { label: string; range: string };
   "6mo": { label: string; range: string };
   "1D": { label: string; range: string };
-  "1W": { label: string; range: string };
+  "3Y": { label: string; range: string };
   "5y": { label: string; range: string };
   "max": { label: string; range: string };
 };
