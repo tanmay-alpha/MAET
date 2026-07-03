@@ -39,6 +39,15 @@ const SAVED_KEY = "maet:screener-v4:views";
 const QUOTE_FILTER_KEYS = new Set([
   "price_min", "price_max", "change_pct_min", "change_pct_max", "volume_min", "volume_max",
 ]);
+const FILTER_AVAILABILITY_KEY: Record<string, string> = {
+  rel_volume_min: "relVolume", rel_volume_max: "relVolume",
+  market_cap_min: "marketCap", market_cap_max: "marketCap",
+  pe_min: "pe", pe_max: "pe", pb_min: "pb", pb_max: "pb",
+  roe_min: "roe", roe_max: "roe", roce_min: "roce", roce_max: "roce",
+  dividend_yield_min: "dividendYield", dividend_yield_max: "dividendYield",
+  debt_to_equity_max: "debtToEquity", current_ratio_min: "currentRatio",
+  sales_growth_min: "salesGrowth", profit_growth_min: "profitGrowth",
+};
 const NUMERIC_FILTERS = [
   ["price_min", "Min price"], ["price_max", "Max price"], ["change_pct_min", "Min change %"], ["change_pct_max", "Max change %"],
   ["volume_min", "Min volume"], ["volume_max", "Max volume"], ["rel_volume_min", "Min rel volume"], ["rel_volume_max", "Max rel volume"],
@@ -216,6 +225,15 @@ function Screener() {
   const availability = companiesQuery.data?.fieldAvailability ?? {};
   const hasFilter = Object.values(filters).some(Boolean);
   const hasQuoteFilter = Object.entries(filters).some(([key, value]) => Boolean(value) && QUOTE_FILTER_KEYS.has(key));
+  const filterAvailability = (key: string) => {
+    if (QUOTE_FILTER_KEYS.has(key)) return { available: true, reason: undefined };
+    const field = FILTER_AVAILABILITY_KEY[key];
+    const status = field ? availability[field] : undefined;
+    return {
+      available: Boolean(status?.available),
+      reason: status?.reason ?? "This filter requires a verified stored data field",
+    };
+  };
 
   function updateFilter(key: string, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -375,15 +393,16 @@ function Screener() {
       </div>
 
       {showAdvanced && <div className="border-b border-border bg-panel/70 px-5 py-4">
+        {sourceMode === "nse-fallback" && <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">PostgreSQL is unavailable. Price, change, and volume filters still apply to the loaded live page; stored fundamental filters are disabled until the database connection is restored.</div>}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {filterGroups.map(([title, fields]) => <fieldset key={title} className="rounded-lg border border-border bg-background/60 p-3"><legend className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</legend>
-            <div className="grid grid-cols-2 gap-2">{fields.map(([key, label]) => <label key={key} className="text-[10px] text-muted-foreground">{label}<input value={filters[key] ?? ""} onChange={(event) => updateFilter(key, event.target.value)} inputMode="decimal" className="mt-1 w-full rounded border border-border bg-panel px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary/50" /></label>)}</div></fieldset>)}
+            <div className="grid grid-cols-2 gap-2">{fields.map(([key, label]) => { const status = filterAvailability(key); return <label key={key} className={`text-[10px] text-muted-foreground ${status.available ? "" : "opacity-45"}`} title={status.reason}>{label}<input value={filters[key] ?? ""} disabled={!status.available} onChange={(event) => updateFilter(key, event.target.value)} inputMode="decimal" className="mt-1 w-full rounded border border-border bg-panel px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary/50 disabled:cursor-not-allowed" /></label>; })}</div></fieldset>)}
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2"><label className="text-xs text-muted-foreground">Cap bucket <select value={filters.bucket_in ?? ""} onChange={(event) => updateFilter("bucket_in", event.target.value)} className="ml-2 rounded border border-border bg-panel px-2 py-1.5 text-foreground"><option value="">Any</option><option value="large">Large</option><option value="mid">Mid</option><option value="small">Small</option><option value="unknown">Unknown</option></select></label>
-          <label className="text-xs text-muted-foreground">Sector <input value={filters.sector_in ?? ""} onChange={(event) => updateFilter("sector_in", event.target.value)} placeholder="e.g. Technology" className="ml-2 rounded border border-border bg-panel px-2 py-1.5 text-foreground outline-none" /></label>
-          <label className="text-xs text-muted-foreground">Industry <input value={filters.industry_in ?? ""} onChange={(event) => updateFilter("industry_in", event.target.value)} placeholder="e.g. Software" className="ml-2 rounded border border-border bg-panel px-2 py-1.5 text-foreground outline-none" /></label>
-          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><input type="checkbox" checked={filters.fifty_two_week_high_breakout === "true"} onChange={(event) => updateFilter("fifty_two_week_high_breakout", event.target.checked ? "true" : "")} />52W breakout</label>
-          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><input type="checkbox" checked={filters.fifty_two_week_low_near === "true"} onChange={(event) => updateFilter("fifty_two_week_low_near", event.target.checked ? "true" : "")} />Near 52W low</label>
+        <div className="mt-3 flex flex-wrap items-center gap-2"><label className={`text-xs text-muted-foreground ${availability.marketCap?.available ? "" : "opacity-45"}`} title={availability.marketCap?.reason}>Cap bucket <select value={filters.bucket_in ?? ""} disabled={!availability.marketCap?.available} onChange={(event) => updateFilter("bucket_in", event.target.value)} className="ml-2 rounded border border-border bg-panel px-2 py-1.5 text-foreground disabled:cursor-not-allowed"><option value="">Any</option><option value="large">Large</option><option value="mid">Mid</option><option value="small">Small</option><option value="unknown">Unknown</option></select></label>
+          <label className={`text-xs text-muted-foreground ${availability.sector?.available ? "" : "opacity-45"}`} title={availability.sector?.reason}>Sector <input value={filters.sector_in ?? ""} disabled={!availability.sector?.available} onChange={(event) => updateFilter("sector_in", event.target.value)} placeholder="e.g. Technology" className="ml-2 rounded border border-border bg-panel px-2 py-1.5 text-foreground outline-none disabled:cursor-not-allowed" /></label>
+          <label className={`text-xs text-muted-foreground ${availability.industry?.available ? "" : "opacity-45"}`} title={availability.industry?.reason}>Industry <input value={filters.industry_in ?? ""} disabled={!availability.industry?.available} onChange={(event) => updateFilter("industry_in", event.target.value)} placeholder="e.g. Software" className="ml-2 rounded border border-border bg-panel px-2 py-1.5 text-foreground outline-none disabled:cursor-not-allowed" /></label>
+          <label className={`inline-flex items-center gap-1.5 text-xs text-muted-foreground ${availability.fiftyTwoWeekHigh?.available ? "" : "opacity-45"}`} title={availability.fiftyTwoWeekHigh?.reason}><input type="checkbox" disabled={!availability.fiftyTwoWeekHigh?.available} checked={filters.fifty_two_week_high_breakout === "true"} onChange={(event) => updateFilter("fifty_two_week_high_breakout", event.target.checked ? "true" : "")} />52W breakout</label>
+          <label className={`inline-flex items-center gap-1.5 text-xs text-muted-foreground ${availability.fiftyTwoWeekLow?.available ? "" : "opacity-45"}`} title={availability.fiftyTwoWeekLow?.reason}><input type="checkbox" disabled={!availability.fiftyTwoWeekLow?.available} checked={filters.fifty_two_week_low_near === "true"} onChange={(event) => updateFilter("fifty_two_week_low_near", event.target.checked ? "true" : "")} />Near 52W low</label>
           <button type="button" onClick={() => setFilters({})} className="ml-auto rounded px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent">Reset all</button></div>
       </div>}
 

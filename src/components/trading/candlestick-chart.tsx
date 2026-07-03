@@ -65,6 +65,7 @@ export function CandlestickChart({
   const showSMA = indicators.sma;
   const showEMA = indicators.ema;
   const showRSI = indicators.rsi;
+  const showMACD = indicators.macd;
   const showVolume = indicators.volume;
 
   // Indicator calculations
@@ -615,6 +616,51 @@ export function CandlestickChart({
           </div>
         </div>
       )}
+
+      {/* MACD sub-panel */}
+      {showMACD && indicatorData && (() => {
+        const line = indicatorData.macd.line.slice(visibleStart, visibleEnd);
+        const signal = indicatorData.macd.signal.slice(visibleStart, visibleEnd);
+        const histogram = indicatorData.macd.histogram.slice(visibleStart, visibleEnd);
+        const values = [...line, ...signal, ...histogram].filter((value) => Number.isFinite(value));
+        if (values.length < 2) return null;
+        const low = Math.min(0, ...values);
+        const high = Math.max(0, ...values);
+        const range = high - low || 1;
+        const point = (value: number, index: number, length: number) => ({
+          x: (index / Math.max(1, length - 1)) * 100,
+          y: 100 - ((value - low) / range) * 100,
+        });
+        const pathFor = (series: number[]) => series.reduce<string[]>((parts, value, index) => {
+          if (!Number.isFinite(value)) return parts;
+          const p = point(value, index, series.length);
+          parts.push(`${parts.length === 0 ? "M" : "L"} ${p.x} ${p.y}`);
+          return parts;
+        }, []).join(" ");
+        const zeroY = point(0, 0, 1).y;
+        return (
+          <div
+            className="absolute left-0 right-14 h-16 border-t border-border bg-panel/90"
+            style={{ bottom: showRSI ? "4rem" : 0 }}
+            data-testid="macd-panel"
+            role="img"
+            aria-label="MACD indicator panel with signal line and histogram"
+          >
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
+              <line x1="0" x2="100" y1={zeroY} y2={zeroY} stroke="var(--color-border)" strokeWidth="0.15" />
+              {histogram.map((value, index) => {
+                if (!Number.isFinite(value)) return null;
+                const p = point(value, index, histogram.length);
+                const width = 80 / Math.max(1, histogram.length);
+                return <rect key={index} x={p.x - width / 2} y={Math.min(p.y, zeroY)} width={width} height={Math.max(0.5, Math.abs(zeroY - p.y))} fill={value >= 0 ? "#14b8a6" : "#f43f5e"} opacity="0.55" />;
+              })}
+              <path d={pathFor(line)} stroke="#3b82f6" strokeWidth="0.3" fill="none" />
+              <path d={pathFor(signal)} stroke="#f59e0b" strokeWidth="0.3" fill="none" />
+            </svg>
+            <div className="pointer-events-none absolute left-2 top-1 text-tv-legend text-muted-foreground">MACD 12 26 9</div>
+          </div>
+        );
+      })()}
 
       {/* Hover elements */}
       {hover && (

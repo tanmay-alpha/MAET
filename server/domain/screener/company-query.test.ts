@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseCompanyScreenerParams } from "./company-query";
+import { matchesCompanyScreenerRow, parseCompanyScreenerParams } from "./company-query";
 
 describe("company screener query parser", () => {
   it("accepts full-universe search, pagination, filters, buckets and safe sorting", () => {
@@ -21,5 +21,17 @@ describe("company screener query parser", () => {
 
   it("rejects untrusted sort columns", () => {
     expect(() => parseCompanyScreenerParams(new URLSearchParams({ sortBy: "drop table" }))).toThrow("Unsupported sortBy");
+  });
+
+  it("treats user-entered percentage filters as percentages and sector names case-insensitively", () => {
+    const input = parseCompanyScreenerParams(new URLSearchParams({
+      roe_min: "15",
+      dividend_yield_min: "1",
+      sector_in: "technology",
+    }));
+    expect(matchesCompanyScreenerRow({
+      symbol: "INFY", name: "Infosys", exchange: "NSE", series: "EQ", isin: "INE009A01021",
+      marketCapBucket: "large", roe: 0.18, dividendYield: 0.025, sector: "Technology", source: "database",
+    }, input)).toBeTrue();
   });
 });

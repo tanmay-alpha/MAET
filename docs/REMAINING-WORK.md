@@ -12,8 +12,9 @@ Last audited: 2026-07-03
   binary quote decoding, reconnect limits, and on-demand symbol tokens.
 - tRPC protected procedures reject unauthenticated callers.
 - Screener identity search, pagination, sorting, and available-field filters execute server-side.
-- The scanner company universe is loaded from NSE's official equity master:
-  2,071 EQ-series companies were returned in the 2026-07-02 verification.
+- The scanner company universe is loaded from NSE's official equity master.
+  The 2026-07-03 database sync stored 2,058 active EQ-series companies and
+  6,174 verified symbol/ISIN/Yahoo identifiers.
 - Company search covers symbol, company name, and ISIN; only the visible 50 symbols
   subscribe to broker/Yahoo quotes at a time.
 - Angel One's instrument master enriches the NSE universe with live-feed tokens
@@ -25,13 +26,18 @@ Last audited: 2026-07-03
   Angel token hydration remains independent of that fallback.
 - Normalized company, identifier, quote-snapshot, financial-statement,
   calculated-fundamental, and cap-classification schemas are included through
-  migration `0003_screener_v4.sql`.
+  migration `0003_screener_v4.sql`; migration `0004_quality_audit_tables.sql`
+  adds ingestion audit and anomaly tables.
+- Yahoo `quoteSummary` still returns HTTP 401, but the verified public
+  fundamentals-timeseries fallback now supplies normalized annual/quarterly
+  statements and market ratios. The five-symbol smoke universe currently has
+  five snapshots and 46 statement periods stored without duplicates.
 - Profitability, liquidity, leverage, efficiency, growth, cash-flow, and
   valuation ratios are calculated by a deterministic, unit-tested engine.
 - Drizzle was upgraded past the identifier SQL-injection advisory.
 - Render configuration installs from the workspace lockfile and declares the
   required Supabase database URL.
-- Unit baseline: 93 passing, 9 environment-dependent tests skipped.
+- Unit baseline: 101 passing, 9 environment-dependent tests skipped.
 
 ## Required Before Production Deployment
 
@@ -45,18 +51,36 @@ Last audited: 2026-07-03
    PostgreSQL connection string.
 3. Confirm the Render dashboard uses the commands in `render.yaml`; dashboard
    settings can override repository configuration.
-4. Run `bun run smoke:screener-v4` from an environment containing the same
-   database and Redis URLs. It processes only RELIANCE, HDFCBANK, TCS, INFY,
-   and 20MICRONS, logs before/after counts, and fails if a second pass creates
-   duplicate rows.
+4. Repeat `bun run smoke:screener-v4` after production credential changes. The
+   2026-07-03 local run passed for RELIANCE, HDFCBANK, TCS, INFY, and
+   20MICRONS, including statements and an idempotent second pass.
+
+## Screenshot Todo Audit
+
+- [x] Phase 0: tests, typecheck, server build, frontend lint/build.
+- [x] Phase 1.1: symbol, company-name, and ISIN search.
+- [x] Phase 1.2: filter chips, active states, unavailable tooltips.
+- [x] Phase 1.3: loading, API error, and empty-result states.
+- [x] Phase 1.4: screener tabs, sortable columns, visibility controls.
+- [x] Phase 2: 2,058-company NSE identity universe stored in PostgreSQL.
+- [ ] Phase 3 (partial): Yahoo timeseries enrichment works and is stored for five
+  verified symbols; full-universe batching remains.
+- [x] Phase 4: Angel One quote/token/WebSocket integration.
+- [ ] Phase 5 (partial): local Supabase and Redis pipeline verified; Render's separate
+  PostgreSQL/REST credentials remain unhealthy.
+- [x] Phase 6: 1D, 5D, 1M, 6M, 1Y, 3Y, 5Y, and All chart ranges.
+- [x] Phase 7: volume, SMA/EMA, RSI, and MACD are exposed on the chart.
+- [x] Phase 8: safe NSE TradingView links on screener and chart views.
+- [ ] Phase 9 (partial): Vercel and GitHub deployment verification pass; Render health
+  remains degraded until its environment variables are corrected.
+- [x] Phase 10: final local verification and main-branch push workflow.
 
 ## Product Gaps
 
-- The normalized fundamentals pipeline and Yahoo adapter are ready, but Yahoo
-  quoteSummary returned HTTP 401 from both query hosts on 2026-07-03.
-  Production statement data therefore still requires a reachable verified
-  provider and a configured database. Filters stay disabled until sourced data
-  has been stored and validated.
+- Only five companies are fundamentals-enriched today. Expanding enrichment to
+  the full 2,058-company universe must be rate-limited and resumed in batches.
+  Market-cap buckets deliberately stay unknown until at least 250 verified
+  market caps exist; ranking a five-company partial universe would be false.
 - Saved screeners currently persist in browser local storage. The tRPC saved
   screener procedures still need a database table and ownership-scoped CRUD.
 - Portfolio day P&L, Sharpe, drawdown, beta, sector allocation, and realized
@@ -77,8 +101,8 @@ Last audited: 2026-07-03
 - Run a market-hours soak test for Angel One reconnects and token subscriptions.
 - Re-run deployed scanner search/pagination and broker-stream browser journeys
   after each production deployment.
-- The 2026-07-03 local five-symbol smoke test reached PostgreSQL and Redis,
-  confirmed real NSE identities/ISINs, stored five new Yahoo quote snapshots,
-  retained 115 deduplicated daily candles, and left unavailable fundamentals
-  empty. A repeated pass changed no row counts. Render still needs its separate
-  database connection fixed as described above.
+- The 2026-07-03 local smoke test reached PostgreSQL and Redis, synchronized
+  2,058 companies and 6,174 identifiers, verified five fundamentals snapshots
+  and 46 financial-statement periods, and changed no row counts on a repeated
+  pass. Render still needs its separate database connection fixed as described
+  above.

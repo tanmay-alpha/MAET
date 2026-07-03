@@ -58,6 +58,7 @@ function ChartPage() {
   const [showVolume, setShowVolume] = useState(true);
   const [showMA, setShowMA] = useState(false);
   const [showRSI, setShowRSI] = useState(false);
+  const [showMACD, setShowMACD] = useState(false);
   const [selectedChartType, setSelectedChartType] = useState<"candles" | "line" | "area">("candles");
   const [selectedTool, setSelectedTool] = useState<string | null>(null);
   const [chartState, setChartState] = useState<ChartState>({ zoom: 1, panOffset: 0, drawings: [] });
@@ -76,6 +77,7 @@ function ChartPage() {
       setShowVolume(layout.indicators.volume);
       setShowMA(layout.indicators.ma);
       setShowRSI(layout.indicators.rsi);
+      setShowMACD(layout.indicators.macd);
       setSelectedTool(layout.drawingTool);
     }
   }, [layout]);
@@ -89,11 +91,11 @@ function ChartPage() {
         volume: showVolume,
         ma: showMA,
         rsi: showRSI,
-        macd: false,
+        macd: showMACD,
       },
       drawingTool: selectedTool,
     });
-  }, [selectedTF, selectedChartType, showVolume, showMA, showRSI, selectedTool, updateLayout]);
+  }, [selectedTF, selectedChartType, showVolume, showMA, showRSI, showMACD, selectedTool, updateLayout]);
 
   // Keyboard shortcuts
   useChartShortcuts({
@@ -157,7 +159,7 @@ function ChartPage() {
         chartState,
         selectedTF,
         selectedChartType,
-        indicators: { volume: showVolume, ma: showMA, rsi: showRSI },
+        indicators: { volume: showVolume, ma: showMA, rsi: showRSI, macd: showMACD },
       };
       localStorage.setItem(`maet_chart_layouts_${symbol}`, JSON.stringify(layouts));
       alert(`Layout "${layoutName}" saved!`);
@@ -180,6 +182,7 @@ function ChartPage() {
       setShowVolume(loaded.indicators.volume);
       setShowMA(loaded.indicators.ma);
       setShowRSI(loaded.indicators.rsi);
+      setShowMACD(Boolean(loaded.indicators.macd));
     }
   };
 
@@ -410,7 +413,7 @@ function ChartPage() {
                       chartState={chartState}
                       onChartStateChange={setChartState}
                       drawingTool={selectedTool}
-                      indicators={{ sma: showMA, ema: showMA, rsi: showRSI, macd: false, volume: showVolume }}
+                      indicators={{ sma: showMA, ema: showMA, rsi: showRSI, macd: showMACD, volume: showVolume }}
                     />
                   </div>
                 )}
@@ -471,10 +474,8 @@ function ChartPage() {
                   />
                   <IndicatorCard
                     name="MACD"
-                    enabled={false}
-                    onChange={() => {}}
-                    disabled
-                    reason="MACD is calculated internally but its chart panel is not implemented yet"
+                    enabled={showMACD}
+                    onChange={setShowMACD}
                   />
                 </div>
               </div>
