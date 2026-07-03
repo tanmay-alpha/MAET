@@ -22,11 +22,11 @@ export interface PerformanceMetrics {
 }
 
 export interface RiskMetrics {
-  sharpeRatio: number;
-  maxDrawdown: number;
-  maxDrawdownPct: number;
-  volatility: number;
-  beta: number;
+  sharpeRatio: number | null;
+  maxDrawdown: number | null;
+  maxDrawdownPct: number | null;
+  volatility: number | null;
+  beta: number | null;
 }
 
 export interface TradeStats {
@@ -57,10 +57,7 @@ export interface PortfolioAnalytics {
 }
 
 // Constants
-const TRADING_DAYS_PER_YEAR = 252;
-const RISK_FREE_RATE = 0.05; // 5% annual risk-free rate
-
-// Generate mock equity curve from trades for visualization
+// Build a minimal equity history from verified paper fills.
 function generateEquityCurve(
   orders: PaperOrder[],
   initialCash: number
@@ -242,38 +239,14 @@ export function usePortfolioAnalytics() {
       avgHoldingDays,
     };
 
-    // Calculate risk metrics
-    // For Sharpe ratio, we need historical returns
-    // Using simplified approach: daily returns from position changes
-    const returns = tradePnlList.map((p) => totalCost > 0 ? p / totalCost : 0);
-
-    // Add some mock volatility for demonstration
-    const avgReturn = returns.length > 0
-      ? returns.reduce((a, b) => a + b, 0) / returns.length
-      : 0;
-    const variance = returns.length > 1
-      ? returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / (returns.length - 1)
-      : 0.01; // Default 1% daily variance
-    const stdDev = Math.sqrt(variance);
-
-    // Annualized Sharpe ratio
-    const dailySharpe = stdDev > 0 ? (avgReturn - RISK_FREE_RATE / TRADING_DAYS_PER_YEAR) / stdDev : 0;
-    const sharpeRatio = dailySharpe * Math.sqrt(TRADING_DAYS_PER_YEAR);
-
-    // Max drawdown (simplified)
-    const peakValue = Math.max(account.initialCash, totalValue);
-    const maxDrawdown = peakValue - totalValue;
-    const maxDrawdownPct = peakValue > 0 ? (maxDrawdown / peakValue) * 100 : 0;
-
-    // Volatility (annualized)
-    const volatility = stdDev * Math.sqrt(TRADING_DAYS_PER_YEAR) * 100;
-
+    // Risk metrics require a verified daily portfolio return series and a
+    // benchmark series. Paper fills alone are not sufficient evidence.
     const risk: RiskMetrics = {
-      sharpeRatio: isFinite(sharpeRatio) ? sharpeRatio : 0,
-      maxDrawdown,
-      maxDrawdownPct,
-      volatility,
-      beta: 1, // Would need benchmark data
+      sharpeRatio: null,
+      maxDrawdown: null,
+      maxDrawdownPct: null,
+      volatility: null,
+      beta: null,
     };
 
     // Generate equity curve

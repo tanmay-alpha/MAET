@@ -96,11 +96,11 @@ Last audited: 2026-07-03
 - Saved screeners currently persist in browser local storage for unauthenticated
   visitors. The existing `screener_runs` table and ownership-scoped tRPC CRUD
   can be used after the frontend has a verified authenticated user session.
-- Portfolio day P&L, Sharpe, drawdown, beta, sector allocation, and realized
-  trade P&L still contain TODO implementations.
-- Some unused legacy financial and analytics helpers still contain demonstration
-  generators. The user-visible options-chain route is now honest and unavailable;
-  remaining generators must not be connected to production views.
+- Portfolio day P&L uses available quote previous-close values. Sharpe, drawdown,
+  volatility, and beta now show unavailable instead of synthetic values until
+  verified daily portfolio and benchmark histories are stored.
+- Legacy random financial, shareholding, and option-chain generators were
+  removed. User-visible financial statements remain database-backed.
 - Paper-order placement has persistence paths, but a complete fill lifecycle,
   idempotency middleware, and production integration tests remain necessary.
 - The NSE holiday calendar needs a maintained source or an operations process.

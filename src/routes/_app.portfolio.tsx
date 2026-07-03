@@ -366,25 +366,27 @@ function PortfolioPage() {
                 <div className="space-y-3 text-sm">
                   <div className="flex justify-between items-center">
                     <span className="text-muted-foreground">Sharpe Ratio</span>
-                    <span className={`font-mono font-medium ${
-                      risk.sharpeRatio > 1 ? "text-bull" : risk.sharpeRatio > 0 ? "text-yellow-600" : "text-muted-foreground"
-                    }`}>
-                      {risk.sharpeRatio.toFixed(2)}
+                    <span className="font-mono text-muted-foreground" title="Unavailable: verified daily portfolio returns are not stored">
+                      {risk.sharpeRatio?.toFixed(2) ?? "—"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-muted-foreground">Max Drawdown</span>
-                    <span className="font-mono font-medium text-bear">
-                      {risk.maxDrawdownPct.toFixed(2)}%
+                    <span className="font-mono text-muted-foreground" title="Unavailable: a historical daily portfolio value series is required">
+                      {risk.maxDrawdownPct !== null ? `${risk.maxDrawdownPct.toFixed(2)}%` : "—"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-muted-foreground">Volatility</span>
-                    <span className="font-mono">{risk.volatility.toFixed(1)}%</span>
+                    <span className="font-mono text-muted-foreground" title="Unavailable: verified daily portfolio returns are not stored">
+                      {risk.volatility !== null ? `${risk.volatility.toFixed(1)}%` : "—"}
+                    </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-muted-foreground">Beta</span>
-                    <span className="font-mono">{risk.beta.toFixed(2)}</span>
+                    <span className="font-mono text-muted-foreground" title="Unavailable: portfolio and benchmark return histories are required">
+                      {risk.beta?.toFixed(2) ?? "—"}
+                    </span>
                   </div>
                 </div>
               </div>
