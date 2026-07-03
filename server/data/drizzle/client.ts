@@ -26,9 +26,15 @@ export function getDb() {
       );
     }
 
-    // Create postgres client (no pool by default - uses default pool size of 10)
+    // Supabase's transaction pooler should receive a small bounded application
+    // pool. Connection timeouts also prevent health/smoke processes from
+    // remaining alive indefinitely when credentials or host details are wrong.
     sqlClientInstance = postgres(connectionString, {
-      prepare: false, // Disable prepared statements for serverless compatibility
+      prepare: false,
+      max: 5,
+      connect_timeout: 10,
+      idle_timeout: 20,
+      max_lifetime: 60 * 30,
     });
 
     // Create Drizzle instance
@@ -47,15 +53,23 @@ export function getSqlClient() {
   return sqlClientInstance!;
 }
 
+/** Close the pool and wait for its sockets/timers to be released. */
+export async function closeDb(): Promise<void> {
+  const current = sqlClientInstance;
+  dbInstance = null;
+  sqlClientInstance = null;
+  if (!current) return;
+  await current.end({ timeout: 1 });
+}
+
 /**
  * Reset the database client (useful for testing)
  */
 export function resetDb() {
-  if (sqlClientInstance) {
-    sqlClientInstance.end();
-  }
+  const current = sqlClientInstance;
   dbInstance = null;
   sqlClientInstance = null;
+  if (current) void current.end({ timeout: 0 });
 }
 
 // Named export for convenience - Drizzle ORM instance
