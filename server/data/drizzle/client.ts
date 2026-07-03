@@ -8,7 +8,7 @@ import postgres from "postgres";
 import * as schema from "../../db/schema";
 
 let dbInstance: ReturnType<typeof drizzle> | null = null;
-let sqlClient: postgres.Sql | null = null;
+let sqlClientInstance: postgres.Sql | null = null;
 
 /**
  * Initialize or get the Drizzle database client
@@ -27,29 +27,38 @@ export function getDb() {
     }
 
     // Create postgres client (no pool by default - uses default pool size of 10)
-    sqlClient = postgres(connectionString, {
+    sqlClientInstance = postgres(connectionString, {
       prepare: false, // Disable prepared statements for serverless compatibility
     });
 
     // Create Drizzle instance
-    dbInstance = drizzle(sqlClient, { schema });
+    dbInstance = drizzle(sqlClientInstance, { schema });
   }
 
   return dbInstance;
 }
 
 /**
+ * Get the raw postgres client for direct SQL queries
+ * Useful for operations that Drizzle doesn't handle well (e.g., ON CONFLICT with composite PK)
+ */
+export function getSqlClient() {
+  getDb(); // Ensure client is initialized
+  return sqlClientInstance!;
+}
+
+/**
  * Reset the database client (useful for testing)
  */
 export function resetDb() {
-  if (sqlClient) {
-    sqlClient.end();
+  if (sqlClientInstance) {
+    sqlClientInstance.end();
   }
   dbInstance = null;
-  sqlClient = null;
+  sqlClientInstance = null;
 }
 
-// Named export for convenience
+// Named export for convenience - Drizzle ORM instance
 export const db = new Proxy({} as ReturnType<typeof drizzle>, {
   get(_target, prop) {
     const instance = getDb();

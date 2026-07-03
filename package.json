@@ -11,7 +11,8 @@
     "build": "npm run build --prefix src",
     "dev": "bun run server/orchestrator.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke:screener-v4": "bun run server/scripts/screener-v4-smoke-test.ts"
   },
   "dependencies": {
     "ws": "^8"

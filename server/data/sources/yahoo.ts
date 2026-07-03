@@ -173,39 +173,41 @@ export async function getCandles(
     const q = r.indicators.quote[0];
     if (!q) throw new UpstreamPermanentError("yahoo: empty quote data");
     const out: Candle[] = [];
-    for (let i = 0; i < ts.length; i++) {
-      const open = q.open[i];
-      const high = q.high[i];
-      const low = q.low[i];
-      const close = q.close[i];
-      const volume = q.volume[i];
+    if (q && q.open && q.high && q.low && q.close && q.volume && ts) {
+      for (let i = 0; i < ts.length; i++) {
+        const open = q.open[i];
+        const high = q.high[i];
+        const low = q.low[i];
+        const close = q.close[i];
+        const volume = q.volume[i];
 
-      // Yahoo can include placeholder rows for future or incomplete sessions.
-      // Those rows have null/zero OHLC values and must never reach charts or
-      // strategy calculations as if they were real trades.
-      if (
-        !Number.isFinite(open) ||
-        !Number.isFinite(high) ||
-        !Number.isFinite(low) ||
-        !Number.isFinite(close) ||
-        open! <= 0 ||
-        high! <= 0 ||
-        low! <= 0 ||
-        close! <= 0
-      ) {
-        continue;
+        // Yahoo can include placeholder rows for future or incomplete sessions.
+        // Those rows have null/zero OHLC values and must never reach charts or
+        // strategy calculations as if they were real trades.
+        if (
+          !Number.isFinite(open) ||
+          !Number.isFinite(high) ||
+          !Number.isFinite(low) ||
+          !Number.isFinite(close) ||
+          open! <= 0 ||
+          high! <= 0 ||
+          low! <= 0 ||
+          close! <= 0
+        ) {
+          continue;
+        }
+
+        out.push({
+          symbol: fullTicker.replace(/\.(NS|BO)$/, ""),
+          tf,
+          ts: new Date(ts[i] * 1000).toISOString(),
+          open: open!,
+          high: high!,
+          low: low!,
+          close: close!,
+          volume: Number.isFinite(volume) && volume! >= 0 ? volume! : 0,
+        });
       }
-
-      out.push({
-        symbol: fullTicker.replace(/\.(NS|BO)$/, ""),
-        tf,
-        ts: new Date(ts[i] * 1000).toISOString(),
-        open: open!,
-        high: high!,
-        low: low!,
-        close: close!,
-        volume: Number.isFinite(volume) && volume! >= 0 ? volume! : 0,
-      });
     }
 
     // Write through to Redis cache (1 hour TTL)
