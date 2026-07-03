@@ -54,7 +54,7 @@ export default defineConfig({
   // legacy `nitro.config.ts` at the project root (which uses the old
   // `nitropack/config` API incompatible with Nitro v3).
   nitro: {
-    preset: "vercel",
+    preset: process.env.MAET_NITRO_PRESET ?? "vercel",
     rootDir: ".",
     externals: {
       inline: [

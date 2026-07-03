@@ -5,6 +5,8 @@ Last audited: 2026-07-03
 ## Completed And Verified
 
 - Frontend and backend production builds pass.
+- `bun run preview --prefix src -- --port 8080` builds and starts a local
+  Node-server preset instead of trying to execute Vercel function output.
 - Nitro production bundle includes health, quote, candle, SSE, backtest, and
   tRPC routes.
 - Yahoo quote, candle, and SSE fallback paths return real market data.
@@ -37,6 +39,8 @@ Last audited: 2026-07-03
   verified Yahoo results and reports the next offset without fetching candles.
 - Profitability, liquidity, leverage, efficiency, growth, cash-flow, and
   valuation ratios are calculated by a deterministic, unit-tested engine.
+- The options-chain route no longer renders randomly generated market values;
+  it shows an explicit unavailable state until a verified derivatives feed exists.
 - Drizzle was upgraded past the identifier SQL-injection advisory.
 - Render configuration installs from the workspace lockfile and declares the
   required Supabase database URL.
@@ -92,9 +96,9 @@ Last audited: 2026-07-03
   can be used after the frontend has a verified authenticated user session.
 - Portfolio day P&L, Sharpe, drawdown, beta, sector allocation, and realized
   trade P&L still contain TODO implementations.
-- Options-chain open interest/volume, some financial panels, and some analytics
-  helpers still generate demonstration values. They must not be represented as
-  broker/live data.
+- Some unused legacy financial and analytics helpers still contain demonstration
+  generators. The user-visible options-chain route is now honest and unavailable;
+  remaining generators must not be connected to production views.
 - Paper-order placement has persistence paths, but a complete fill lifecycle,
   idempotency middleware, and production integration tests remain necessary.
 - The NSE holiday calendar needs a maintained source or an operations process.
