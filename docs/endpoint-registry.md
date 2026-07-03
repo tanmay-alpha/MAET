@@ -15,6 +15,8 @@ Backend: Node / Nitro / H3. Base URL: `VITE_API_URL` (Vite env).
 | healthShort    | GET    | `/health`                  |
 | quotes         | GET    | `/api/market/quotes`       |
 | candles        | GET    | `/api/market/candles`      |
+| companies      | GET    | `/api/market/companies`    |
+| companyDetail  | GET    | `/api/market/company`      |
 | marketStream   | SSE    | `/api/market/stream`       |
 | backtestRun    | POST   | `/api/backtest/run`        |
 
@@ -22,11 +24,11 @@ Backend: Node / Nitro / H3. Base URL: `VITE_API_URL` (Vite env).
 
 | Name        | Method | Path                  | Reason |
 | ----------- | ------ | --------------------- | ------ |
-| search      | GET    | `/api/search`         | Symbol search not connected yet |
-| instruments | GET    | `/api/instruments`    | NSE/BSE universe pipeline pending |
+| search      | GET    | `/api/search`         | Global search endpoint pending; screener search is live through `/api/market/companies?q=` |
+| instruments | GET    | `/api/instruments`    | Dedicated endpoint pending; the NSE universe is live through `/api/market/companies` |
 | indexDetail | GET    | `/api/index/:symbol`  | Index constituents API pending |
 | watchlists  | GET    | `/api/watchlists`     | Persistent watchlists pending — using localStorage |
-| screenerRun | POST   | `/api/screener/run`   | Server-side screener pending |
+| screenerRun | POST   | `/api/screener/run`   | Dedicated saved-run endpoint pending; database-backed filtering is live on the companies endpoint |
 
 ## Phase 2
 

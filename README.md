@@ -171,8 +171,8 @@ flowchart TB
 | NSE company master | Company universe, symbols, ISIN, listed companies | Gives official Indian company list | Implemented |
 | Angel One SmartAPI | Live quotes, tokens, snapshots | Useful for live market feed | Implemented |
 | Yahoo Finance | Delayed quotes, historical candles, fallback data | Helps when live data is unavailable | Implemented |
-| Supabase PostgreSQL | Own database | Stores scanner/company/market data | Schema created |
-| Redis / Upstash | Cache and real-time support | Reduces repeated API calls and supports fast backend flow | Added |
+| Supabase PostgreSQL | Own database | Stores scanner/company/market data | Migrations applied; Render connection still needs verification |
+| Redis / Upstash | Cache and real-time support | Reduces repeated API calls and supports fast backend flow | Production health check reachable |
 | TradingView link | External chart open | Lets user open selected stock chart externally | Added |
 
 Important rule:
@@ -208,8 +208,11 @@ The database is needed because for 500+ companies, the scanner should not call Y
 | `screener_runs` | Screener execution history |
 | `backtest_runs` | Backtest execution history |
 | `companies` | Company master data |
+| `company_identifiers` | NSE symbol, ISIN, and Yahoo-symbol crosswalk |
+| `quote_snapshots` | Source-tagged quote history |
 | `financial_statements` | Raw financial statement data |
 | `fundamentals` | Calculated or stored fundamental metrics |
+| `market_cap_classifications` | Versioned Indian market-cap rank buckets |
 | `idempotency` | Prevents duplicate backend operations |
 
 ### Target production database design
@@ -532,7 +535,7 @@ bun test
 Expected current result:
 
 ```text
-93 pass
+99 pass
 9 skip
 0 fail
 ```
@@ -577,6 +580,17 @@ ANGELONE_PIN=
 ANGELONE_TOTP_SECRET=
 ```
 
+`SUPABASE_DB_URL` must be a PostgreSQL pooler connection URI, normally port
+`6543` with `sslmode=require`. URL-encode special characters in the database
+password. Supabase REST API keys are not database connection strings.
+
+Run the bounded five-symbol ingestion check only after the database URL is
+available in the current shell:
+
+```bash
+bun run smoke:screener-v4
+```
+
 ---
 
 ## 17. Demo Script
@@ -587,7 +601,7 @@ Use this to explain the project:
 
 > In this demo, the foundation is working: company universe, scanner UI, symbol/name/ISIN search, quote data, server-side filters for stored fields, chart view, moving average and RSI toggles, PostgreSQL schema, backend APIs, and deployment setup.
 
-> Missing fundamentals remain blank instead of fake values. The ingestion and normalization paths exist, but production must apply migration `0003_screener_v4.sql`, configure `SUPABASE_DB_URL`, and use a reachable verified statements source. Yahoo quoteSummary returned HTTP 401 during the 2026-07-03 verification, so those values are not presented as available unless a stored snapshot exists.
+> Missing fundamentals remain blank instead of fake values. The operator reports migrations `0001` through `0003` are applied, but the Render health check must report `database: reachable` before persistence is considered verified. Yahoo quoteSummary may return HTTP 401/429, so those values are not presented unless a real stored snapshot exists.
 
 ---
 
@@ -608,7 +622,7 @@ flowchart LR
     B --> B3[Fundamentals sync]
     B --> B4[Ratio calculation pipeline]
 
-    C[Next Phase] --> C1[Top 500 data enrichment]
+    C[Next Phase] --> C1[Production database population]
     C --> C2[Full fundamentals provider]
     C --> C3[Peer comparison]
     C --> C4[Anomaly dashboard]
@@ -628,9 +642,9 @@ flowchart LR
 - Chart opens
 - Indicators toggle correctly
 
-### Phase 2 — Top 500 company dataset
+### Phase 2 — Production scanner dataset
 
-- Build top 500 company universe
+- Persist the existing 2,000+ NSE company universe
 - Store daily OHLCV
 - Store sector and industry
 - Store market cap

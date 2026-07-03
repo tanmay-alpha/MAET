@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, BarChart3, Layers, LineChart, Download, Upload, Settings, TrendingDown, TrendingUp } from "lucide-react";
+import { ArrowLeft, BarChart3, Layers, LineChart, Download, Upload, Settings, TrendingDown, TrendingUp, ExternalLink } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
@@ -8,6 +8,7 @@ import { TiltCard } from "@/components/trading/tilt-card";
 import { ContractPanel } from "@/components/common/contract-panel";
 import { CandlestickChart } from "@/components/trading/candlestick-chart";
 import { ChartToolbar, DRAWING_TOOLS } from "@/components/trading/chart-toolbar";
+import { getTradingViewUrl } from "@/lib/tradingview";
 import type { MarketCandle } from "@/lib/market-api";
 import type { ChartState } from "@/components/trading/candlestick-chart";
 import type { ChartLayout } from "@/hooks/use-chart-layout";
@@ -27,19 +28,22 @@ const TIMEFRAMES = {
   "1h": { timeframe: "1h", range: "3mo", label: "3 Months" },
   "6mo": { timeframe: "1d", range: "6mo", label: "6 Months" },
   "1D": { timeframe: "1d", range: "1y", label: "1 Year" },
-  "1W": { timeframe: "1wk", range: "2y", label: "2 Years" },
+  "3Y": { timeframe: "1wk", range: "3y", label: "3 Years" },
   "5y": { timeframe: "1wk", range: "5y", label: "5 Years" },
-  "max": { timeframe: "1mo", range: "max", label: "Max" },
+  "max": { timeframe: "1wk", range: "max", label: "All" },
 };
 
-function IndicatorCard({ name, enabled, onChange }: { name: string; enabled: boolean; onChange: (enabled: boolean) => void }) {
+function IndicatorCard({ name, enabled, onChange, disabled = false, reason }: { name: string; enabled: boolean; onChange: (enabled: boolean) => void; disabled?: boolean; reason?: string }) {
   return (
     <button
+      type="button"
+      disabled={disabled}
+      title={reason}
       onClick={() => onChange(!enabled)}
       className={`rounded-lg border p-3 text-left transition-colors ${
         enabled
           ? "border-primary bg-primary/10 text-foreground"
-          : "border-border bg-panel text-muted-foreground hover:bg-accent/50"
+          : "border-border bg-panel text-muted-foreground hover:bg-accent/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-panel"
       }`}
     >
       <div className="font-medium">{name}</div>
@@ -238,6 +242,15 @@ function ChartPage() {
             <div className="font-mono text-xl font-semibold">
               {currentPrice?.toFixed(2) || "—"}
             </div>
+            <a
+              href={getTradingViewUrl(symbol)}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg border border-border bg-panel p-2 hover:bg-accent"
+              title="Open TradingView"
+            >
+              <ExternalLink className="h-4 w-4" />
+            </a>
           </div>
         </div>
       </div>
@@ -460,6 +473,8 @@ function ChartPage() {
                     name="MACD"
                     enabled={false}
                     onChange={() => {}}
+                    disabled
+                    reason="MACD is calculated internally but its chart panel is not implemented yet"
                   />
                 </div>
               </div>

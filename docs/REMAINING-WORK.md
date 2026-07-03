@@ -35,13 +35,20 @@ Last audited: 2026-07-03
 
 ## Required Before Production Deployment
 
-1. In Render, configure every variable listed in `.env.example`, especially
-   `SUPABASE_DB_URL`. Existing Supabase API keys are not a Postgres connection
-   string.
-2. Confirm the Render dashboard uses the commands in `render.yaml`; dashboard
+1. The operator reports migrations `0001` through `0003` are applied, but the
+   2026-07-03 Render health check still reports `database: Failed query: select
+   1`. Correct `SUPABASE_DB_URL` until `/api/health` reports the database as
+   reachable. Use the Supabase transaction-pooler URI (normally port 6543,
+   `sslmode=require`) and URL-encode password special characters.
+2. Redis now reports reachable on Render. Supabase REST still reports HTTP 401,
+   so verify `SUPABASE_URL` and `SUPABASE_ANON_KEY` independently of the
+   PostgreSQL connection string.
+3. Confirm the Render dashboard uses the commands in `render.yaml`; dashboard
    settings can override repository configuration.
-3. Apply and verify migrations `0001` through `0003` before enabling persisted
-   orders, alerts, portfolios, or saved screeners.
+4. Run `bun run smoke:screener-v4` from an environment containing the same
+   database and Redis URLs. It processes only RELIANCE, HDFCBANK, TCS, INFY,
+   and 20MICRONS, logs before/after counts, and fails if a second pass creates
+   duplicate rows.
 
 ## Product Gaps
 
@@ -70,3 +77,8 @@ Last audited: 2026-07-03
 - Run a market-hours soak test for Angel One reconnects and token subscriptions.
 - Re-run deployed scanner search/pagination and broker-stream browser journeys
   after each production deployment.
+- The 2026-07-03 local five-symbol smoke test reached PostgreSQL and Redis,
+  confirmed real NSE identities/ISINs, stored five new Yahoo quote snapshots,
+  retained 115 deduplicated daily candles, and left unavailable fundamentals
+  empty. A repeated pass changed no row counts. Render still needs its separate
+  database connection fixed as described above.
