@@ -41,6 +41,14 @@ export type DailyProcessorOptions = {
   backfillDays?: number;
   /** Whether to sync fundamentals. Default: true. */
   syncFundamentals?: boolean;
+  /** Whether to refresh the NSE company master. Default: true. */
+  syncCompanyMaster?: boolean;
+  /** Whether to fetch candles and quote snapshots. Default: true. */
+  syncMarketData?: boolean;
+  /** Whether to refresh market-cap buckets after ingestion. Default: true. */
+  refreshClassifications?: boolean;
+  /** Whether to remove candles older than the retention window. Default: true. */
+  cleanupStaleData?: boolean;
   /** Dry run: log actions without writing to DB. Default: false. */
   dryRun?: boolean;
 };
@@ -60,7 +68,7 @@ const DEFAULT_SYMBOLS = [
 const DEFAULT_TIMEFRAMES: Candle["tf"][] = ["1d", "1wk"];
 const MAX_CONCURRENT = 4;
 
-interface ProcessingStats {
+export interface ProcessingStats {
   companiesSynced: number;
   symbolsProcessed: number;
   candlesWritten: number;
@@ -96,6 +104,10 @@ export class DailyProcessor {
   private timeframes: Candle["tf"][];
   private backfillDays: number;
   private syncFundamentals: boolean;
+  private syncCompanyMaster: boolean;
+  private syncMarketData: boolean;
+  private refreshClassifications: boolean;
+  private cleanupEnabled: boolean;
   private dryRun: boolean;
   private running = false;
 
@@ -104,6 +116,10 @@ export class DailyProcessor {
     this.timeframes = opts.timeframes ?? DEFAULT_TIMEFRAMES;
     this.backfillDays = opts.backfillDays ?? 365;
     this.syncFundamentals = opts.syncFundamentals ?? true;
+    this.syncCompanyMaster = opts.syncCompanyMaster ?? true;
+    this.syncMarketData = opts.syncMarketData ?? true;
+    this.refreshClassifications = opts.refreshClassifications ?? true;
+    this.cleanupEnabled = opts.cleanupStaleData ?? true;
     this.dryRun = opts.dryRun ?? false;
   }
 
@@ -127,13 +143,21 @@ export class DailyProcessor {
 
     try {
       log.info({ symbols: this.symbols.length, timeframes: this.timeframes }, "starting daily processor");
-      stats.companiesSynced = await this.syncCompanyMaster(log);
-      await this.processSymbols(stats, log);
+      if (this.syncCompanyMaster) {
+        stats.companiesSynced = await this.syncCompanyMasterEntries(log);
+      }
+      if (this.syncMarketData) {
+        await this.processSymbols(stats, log);
+      }
       if (this.syncFundamentals) {
         await this.processFundamentals(stats, log);
       }
-      stats.classificationsSynced = await this.refreshMarketCapClassifications(log);
-      await this.cleanupStaleData(stats, log);
+      if (this.refreshClassifications) {
+        stats.classificationsSynced = await this.refreshMarketCapClassifications(log);
+      }
+      if (this.cleanupEnabled) {
+        await this.cleanupStaleData(stats, log);
+      }
     } catch (err) {
       log.error({ err }, "daily processor fatal error");
       stats.errors.push(String(err));
@@ -146,7 +170,7 @@ export class DailyProcessor {
     return stats;
   }
 
-  private async syncCompanyMaster(log: ProcessorLogger): Promise<number> {
+  private async syncCompanyMasterEntries(log: ProcessorLogger): Promise<number> {
     const master = await getNseCompanyMaster(true);
     if (this.dryRun) {
       log.info({ count: master.length }, "company master dry run complete");
