@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, ne } from "drizzle-orm";
 import { db } from "../../data/drizzle/client";
 import { companies, fundamentals, quoteSnapshots } from "../../db/schema";
 import { getNseCompanyMaster, searchNseCompanyMaster } from "../../data/sources/nse-company-master";
@@ -165,11 +165,11 @@ function inRange(value: number | undefined, min: number | undefined, max: number
 
 function percentInRange(value: number | undefined, min: number | undefined, max: number | undefined): boolean {
   const normalize = (bound: number | undefined) =>
-    value !== undefined && Math.abs(value) <= 1 && bound !== undefined && Math.abs(bound) > 1 ? bound / 100 : bound;
+    value !== undefined && Math.abs(value) <= 1 && bound !== undefined && Math.abs(bound) >= 1 ? bound / 100 : bound;
   return inRange(value, normalize(min), normalize(max));
 }
 
-function matches(row: CompanyScreenerRow, input: CompanyScreenerParams): boolean {
+export function matchesCompanyScreenerRow(row: CompanyScreenerRow, input: CompanyScreenerParams): boolean {
   const q = input.q.toLocaleLowerCase("en-IN");
   if (q && ![row.symbol, row.name, row.isin, row.bseCode ?? ""].some((value) => value.toLocaleLowerCase("en-IN").includes(q))) return false;
   const n = input.numbers;
@@ -188,8 +188,8 @@ function matches(row: CompanyScreenerRow, input: CompanyScreenerParams): boolean
   if (!percentInRange(row.salesGrowth, n.sales_growth_min, undefined)) return false;
   if (!percentInRange(row.profitGrowth, n.profit_growth_min, undefined)) return false;
   if (input.buckets.length > 0 && !input.buckets.includes(row.marketCapBucket)) return false;
-  if (input.sectors.length > 0 && (!row.sector || !input.sectors.includes(row.sector))) return false;
-  if (input.industries.length > 0 && (!row.industry || !input.industries.includes(row.industry))) return false;
+  if (input.sectors.length > 0 && (!row.sector || !input.sectors.some((sector) => sector.toLocaleLowerCase("en-IN") === row.sector!.toLocaleLowerCase("en-IN")))) return false;
+  if (input.industries.length > 0 && (!row.industry || !input.industries.some((industry) => industry.toLocaleLowerCase("en-IN") === row.industry!.toLocaleLowerCase("en-IN")))) return false;
   if (input.highBreakout && (row.price === undefined || row.fiftyTwoWeekHigh === undefined || row.price < row.fiftyTwoWeekHigh)) return false;
   if (input.lowNear && (row.price === undefined || row.fiftyTwoWeekLow === undefined || row.price > row.fiftyTwoWeekLow * 1.05)) return false;
   return true;
@@ -216,6 +216,8 @@ function fieldAvailability(rows: CompanyScreenerRow[]): FieldAvailability {
   return {
     identity: { available: rows.length > 0, source: "NSE official company master" },
     isin: make("isin", "ISIN missing from the NSE company master", "NSE official company master"),
+    sector: make("sector", "Sector unavailable from the verified company snapshot"),
+    industry: make("industry", "Industry unavailable from the verified company snapshot"),
     price: make("price", "No persisted quote snapshot; live page quotes may still be available", "Angel One / Yahoo quote snapshot"),
     changePct: make("changePct", "No persisted quote change snapshot", "Angel One / Yahoo quote snapshot"),
     volume: make("volume", "No persisted quote volume snapshot", "Angel One / Yahoo quote snapshot"),
@@ -226,6 +228,12 @@ function fieldAvailability(rows: CompanyScreenerRow[]): FieldAvailability {
     roe: make("roe", "ROE unavailable: verified net income and equity were not stored"),
     roce: make("roce", "ROCE unavailable: capital employed could not be derived"),
     dividendYield: make("dividendYield", "Dividend yield unavailable from the verified stored sources"),
+    debtToEquity: make("debtToEquity", "Debt/equity unavailable: verified debt or equity is missing"),
+    currentRatio: make("currentRatio", "Current ratio unavailable: current assets or liabilities are missing"),
+    salesGrowth: make("salesGrowth", "Sales growth unavailable: comparable annual periods are missing"),
+    profitGrowth: make("profitGrowth", "Profit growth unavailable: comparable annual periods are missing"),
+    fiftyTwoWeekHigh: make("fiftyTwoWeekHigh", "52-week high unavailable: insufficient stored daily history"),
+    fiftyTwoWeekLow: make("fiftyTwoWeekLow", "52-week low unavailable: insufficient stored daily history"),
     financialStatements: { available: false, source: "Stored normalized statements", reason: "Availability is reported by the company detail endpoint" },
   };
 }
@@ -236,6 +244,7 @@ async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScree
     db.selectDistinctOn([quoteSnapshots.companyId]).from(quoteSnapshots)
       .orderBy(quoteSnapshots.companyId, desc(quoteSnapshots.asOf)),
     db.selectDistinctOn([fundamentals.companyId]).from(fundamentals)
+      .where(ne(fundamentals.periodType, "market"))
       .orderBy(fundamentals.companyId, desc(fundamentals.periodDate)),
     db.selectDistinctOn([fundamentals.companyId]).from(fundamentals)
       .where(eq(fundamentals.periodType, "market"))
@@ -297,7 +306,7 @@ async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScree
       source: "database",
     };
   });
-  const filtered = allRows.filter((row) => matches(row, input)).sort((a, b) => compareRows(a, b, input));
+  const filtered = allRows.filter((row) => matchesCompanyScreenerRow(row, input)).sort((a, b) => compareRows(a, b, input));
   const start = (input.page - 1) * input.limit;
   const generatedAt = new Date().toISOString();
   return {

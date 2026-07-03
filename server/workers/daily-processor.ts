@@ -555,17 +555,24 @@ export class DailyProcessor {
           revenue: current?.revenue?.toString(),
           netIncome: current?.netIncome?.toString(),
           source: "yahoo",
-          sourceFlags: { quoteSummary: true, normalizedStatements: statements.length > 0 },
+          sourceFlags: { provider: yahoo.source, normalizedStatements: statements.length > 0 },
           isStale: false,
           raw: yahoo.raw,
         }).onConflictDoUpdate({
           target: fundamentals.id,
           set: {
-            marketCap: yahoo.marketCap?.toString(), peRatio: yahoo.trailingPe?.toString(), forwardPe: yahoo.forwardPe?.toString(),
-            pbRatio: yahoo.pb?.toString(), roe: yahoo.roe?.toString(), dividendYield: yahoo.dividendYield?.toString(),
-            eps: yahoo.epsTtm?.toString(), bookValuePerShare: yahoo.bookValuePerShare?.toString(),
-            debtToEquity: yahoo.debtToEquity?.toString(), currentRatio: yahoo.currentRatio?.toString(),
-            raw: yahoo.raw, sourceFlags: { quoteSummary: true, normalizedStatements: statements.length > 0 }, isStale: false,
+            marketCap: yahoo.marketCap?.toString(), peRatio: (yahoo.trailingPe ?? calculated.peRatio)?.toString(), forwardPe: yahoo.forwardPe?.toString(),
+            pbRatio: (yahoo.pb ?? calculated.pbRatio)?.toString(), roe: (yahoo.roe ?? calculated.roe)?.toString(),
+            roce: calculated.roce?.toString(), returnOnAssets: calculated.returnOnAssets?.toString(),
+            dividendYield: yahoo.dividendYield?.toString(), eps: (yahoo.epsTtm ?? calculated.eps)?.toString(),
+            bookValuePerShare: yahoo.bookValuePerShare?.toString(),
+            debtToEquity: (yahoo.debtToEquity ?? calculated.debtToEquity)?.toString(),
+            currentRatio: (yahoo.currentRatio ?? calculated.currentRatio)?.toString(),
+            operatingMargin: calculated.operatingMargin?.toString(), netMargin: calculated.netMargin?.toString(),
+            revenueGrowth: calculated.revenueGrowth?.toString(), netIncomeGrowth: calculated.netIncomeGrowth?.toString(),
+            fiftyTwoWeekHigh: yahoo.fiftyTwoWeekHigh?.toString(), fiftyTwoWeekLow: yahoo.fiftyTwoWeekLow?.toString(),
+            revenue: current?.revenue?.toString(), netIncome: current?.netIncome?.toString(),
+            raw: yahoo.raw, sourceFlags: { provider: yahoo.source, normalizedStatements: statements.length > 0 }, isStale: false,
           },
         });
         log.debug({ symbol, statements: statements.length, pe: yahoo.trailingPe }, "Yahoo fundamentals synced");
@@ -665,6 +672,11 @@ export class DailyProcessor {
   private async refreshMarketCapClassifications(log: ProcessorLogger): Promise<number> {
     if (this.dryRun) return 0;
     const rows = await db.select({ companyId: companies.id, marketCap: companies.marketCap }).from(companies);
+    const rankedCoverage = rows.filter((row) => row.marketCap !== null && Number(row.marketCap) > 0).length;
+    if (rankedCoverage < 250) {
+      log.warn({ rankedCoverage, universe: rows.length }, "market-cap classification skipped: fewer than 250 verified market caps");
+      return 0;
+    }
     const classifications = classifyByMarketCapRank(rows.map((row) => ({
       companyId: row.companyId,
       marketCap: row.marketCap ? Number(row.marketCap) : undefined,

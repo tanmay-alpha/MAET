@@ -50,6 +50,7 @@ export type YahooFundamentals = {
   fiftyTwoWeekHigh?: number;
   fiftyTwoWeekLow?: number;
   statements: YahooStatement[];
+  source: "yahoo_quote_summary" | "yahoo_timeseries";
   raw: Record<string, unknown>;
 };
 
@@ -59,6 +60,33 @@ const MODULES = [
   "balanceSheetHistory", "balanceSheetHistoryQuarterly",
   "cashflowStatementHistory", "cashflowStatementHistoryQuarterly",
 ].join(",");
+
+let quoteSummaryRequiresCrumb = false;
+
+const TIMESERIES_FIELDS = [
+  "TotalRevenue", "CostOfRevenue", "OperatingIncome", "EBITDA", "EBIT",
+  "InterestExpense", "TaxProvision", "NetIncome", "TotalAssets", "CurrentAssets",
+  "Inventory", "CashCashEquivalentsAndShortTermInvestments",
+  "TotalLiabilitiesNetMinorityInterest", "CurrentLiabilities", "TotalDebt",
+  "StockholdersEquity", "OperatingCashFlow", "CapitalExpenditure",
+  "CashDividendsPaid", "DilutedAverageShares",
+] as const;
+
+const TIMESERIES_TYPES = [
+  "trailingMarketCap", "trailingPeRatio", "trailingPbRatio", "trailingDividendYield",
+  ...TIMESERIES_FIELDS.flatMap((name) => [`annual${name}`, `quarterly${name}`]),
+];
+
+const TIMESERIES_FIELD_MAP: Record<string, keyof YahooStatement> = {
+  TotalRevenue: "revenue", CostOfRevenue: "costOfRevenue", OperatingIncome: "operatingIncome",
+  EBITDA: "ebitda", EBIT: "ebit", InterestExpense: "interestExpense", TaxProvision: "taxExpense",
+  NetIncome: "netIncome", TotalAssets: "totalAssets", CurrentAssets: "currentAssets",
+  Inventory: "inventory", CashCashEquivalentsAndShortTermInvestments: "cashAndEquivalents",
+  TotalLiabilitiesNetMinorityInterest: "totalLiabilities", CurrentLiabilities: "currentLiabilities",
+  TotalDebt: "totalDebt", StockholdersEquity: "shareholdersEquity",
+  OperatingCashFlow: "operatingCashFlow", CapitalExpenditure: "capitalExpenditure",
+  CashDividendsPaid: "dividendsPaid", DilutedAverageShares: "sharesOutstanding",
+};
 
 function raw(value: YahooValue): number | undefined {
   if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
@@ -160,8 +188,125 @@ export function parseYahooFundamentals(symbol: string, payload: unknown): YahooF
     fiftyTwoWeekHigh: raw(summary.fiftyTwoWeekHigh as YahooValue),
     fiftyTwoWeekLow: raw(summary.fiftyTwoWeekLow as YahooValue),
     statements: [...merged.values()].sort((left, right) => right.periodDate.localeCompare(left.periodDate)),
+    source: "yahoo_quote_summary",
     raw: result,
   };
+}
+
+type YahooTimeseriesPoint = {
+  asOfDate?: string;
+  currencyCode?: string;
+  reportedValue?: YahooValue;
+};
+
+function safeRatio(numerator: number | undefined, denominator: number | undefined): number | undefined {
+  if (numerator === undefined || denominator === undefined || denominator === 0) return undefined;
+  const result = numerator / denominator;
+  return Number.isFinite(result) ? result : undefined;
+}
+
+/** Normalize Yahoo's public fundamentals-timeseries response. */
+export function parseYahooTimeseriesFundamentals(
+  symbol: string,
+  payload: unknown,
+  chartMeta: unknown = {},
+): YahooFundamentals | null {
+  const root = record(payload);
+  const timeseries = record(root.timeseries);
+  const results = Array.isArray(timeseries.result) ? timeseries.result.map(record) : [];
+  if (results.length === 0) return null;
+
+  const statements = new Map<string, YahooStatement>();
+  const metrics = new Map<string, number>();
+  for (const result of results) {
+    const meta = record(result.meta);
+    const types = Array.isArray(meta.type) ? meta.type : [];
+    const type = typeof types[0] === "string" ? types[0] : undefined;
+    if (!type) continue;
+    const points = Array.isArray(result[type]) ? result[type].map(record) as YahooTimeseriesPoint[] : [];
+    const latest = points.at(-1);
+    const latestValue = raw(latest?.reportedValue);
+    if (latestValue !== undefined && type.startsWith("trailing")) metrics.set(type, latestValue);
+
+    const match = /^(annual|quarterly)(.+)$/u.exec(type);
+    if (!match) continue;
+    const periodType = match[1] as YahooStatement["periodType"];
+    const statementField = TIMESERIES_FIELD_MAP[match[2]];
+    if (!statementField) continue;
+    for (const point of points) {
+      const value = raw(point.reportedValue);
+      if (!point.asOfDate || value === undefined) continue;
+      const key = `${periodType}:${point.asOfDate}`;
+      const current = statements.get(key) ?? {
+        periodDate: new Date(`${point.asOfDate}T00:00:00Z`).toISOString(),
+        periodType,
+        fiscalYear: Number(point.asOfDate.slice(0, 4)),
+        currency: point.currencyCode ?? "INR",
+        raw: {},
+      };
+      (current as unknown as Record<string, unknown>)[statementField] = value;
+      current.raw[type] = point;
+      statements.set(key, current);
+    }
+  }
+
+  const normalizedStatements = [...statements.values()].sort((a, b) => b.periodDate.localeCompare(a.periodDate));
+  const quarterly = normalizedStatements.filter((statement) => statement.periodType === "quarterly");
+  const latestBalance = normalizedStatements.find((statement) =>
+    statement.shareholdersEquity !== undefined || statement.totalAssets !== undefined
+  );
+  const latestFour = quarterly.slice(0, 4);
+  const ttmNetIncome = latestFour.length === 4 && latestFour.every((statement) => statement.netIncome !== undefined)
+    ? latestFour.reduce((sum, statement) => sum + (statement.netIncome ?? 0), 0)
+    : undefined;
+  const shares = quarterly.find((statement) => statement.sharesOutstanding !== undefined)?.sharesOutstanding
+    ?? latestBalance?.sharesOutstanding;
+  const meta = record(chartMeta);
+
+  return {
+    symbol: symbol.toUpperCase(),
+    asOf: new Date().toISOString(),
+    marketCap: metrics.get("trailingMarketCap"),
+    trailingPe: metrics.get("trailingPeRatio"),
+    pb: metrics.get("trailingPbRatio"),
+    epsTtm: safeRatio(ttmNetIncome, shares),
+    bookValuePerShare: safeRatio(latestBalance?.shareholdersEquity, shares),
+    dividendYield: metrics.get("trailingDividendYield"),
+    roe: safeRatio(ttmNetIncome, latestBalance?.shareholdersEquity),
+    debtToEquity: safeRatio(latestBalance?.totalDebt, latestBalance?.shareholdersEquity),
+    currentRatio: safeRatio(latestBalance?.currentAssets, latestBalance?.currentLiabilities),
+    fiftyTwoWeekHigh: raw(meta.fiftyTwoWeekHigh as YahooValue),
+    fiftyTwoWeekLow: raw(meta.fiftyTwoWeekLow as YahooValue),
+    statements: normalizedStatements,
+    source: "yahoo_timeseries",
+    raw: { timeseries: root, chartMeta: meta },
+  };
+}
+
+async function getYahooTimeseriesFundamentals(symbol: string): Promise<YahooFundamentals | null> {
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  const fromSeconds = nowSeconds - 6 * 366 * 24 * 60 * 60;
+  const ticker = `${symbol}.NS`;
+  const timeseriesUrl = new URL(`https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/${encodeURIComponent(ticker)}`);
+  timeseriesUrl.searchParams.set("type", TIMESERIES_TYPES.join(","));
+  timeseriesUrl.searchParams.set("period1", String(fromSeconds));
+  timeseriesUrl.searchParams.set("period2", String(nowSeconds + 86_400));
+  const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=1y&interval=1d`;
+  const headers = { "user-agent": "Mozilla/5.0 (compatible; MAET/1.0)", accept: "application/json" };
+  const [timeseriesResponse, chartResponse] = await Promise.all([
+    fetch(timeseriesUrl, { headers, signal: AbortSignal.timeout(20_000) }),
+    fetch(chartUrl, { headers, signal: AbortSignal.timeout(20_000) }),
+  ]);
+  if (!timeseriesResponse.ok) return null;
+  const timeseriesPayload = await timeseriesResponse.json();
+  let chartMeta: unknown = {};
+  if (chartResponse.ok) {
+    const chartPayload = record(await chartResponse.json());
+    const chart = record(chartPayload.chart);
+    const chartResults = Array.isArray(chart.result) ? chart.result.map(record) : [];
+    chartMeta = record(chartResults[0]?.meta);
+  }
+  return parseYahooTimeseriesFundamentals(symbol, timeseriesPayload, chartMeta);
 }
 
 /**
@@ -170,17 +315,21 @@ export function parseYahooFundamentals(symbol: string, payload: unknown): YahooF
  */
 export async function getYahooFundamentals(symbol: string): Promise<YahooFundamentals | null> {
   const normalized = symbol.trim().toUpperCase().replace(/\.NS$/u, "");
-  const cacheKey = `${RedisKeys.fundamentals(normalized)}:yahoo:v1`;
+  const cacheKey = `${RedisKeys.fundamentals(normalized)}:yahoo:v2`;
   const cached = await getCachedJson<YahooFundamentals>(cacheKey);
   if (cached) return cached;
   try {
-    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(`${normalized}.NS`)}?modules=${encodeURIComponent(MODULES)}`;
-    const response = await fetch(url, {
-      headers: { "user-agent": "MAET market scanner/1.0", accept: "application/json" },
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!response.ok) return null;
-    const parsed = parseYahooFundamentals(normalized, await response.json());
+    let parsed: YahooFundamentals | null = null;
+    if (!quoteSummaryRequiresCrumb) {
+      const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(`${normalized}.NS`)}?modules=${encodeURIComponent(MODULES)}`;
+      const response = await fetch(url, {
+        headers: { "user-agent": "MAET market scanner/1.0", accept: "application/json" },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (response.status === 401 || response.status === 403) quoteSummaryRequiresCrumb = true;
+      if (response.ok) parsed = parseYahooFundamentals(normalized, await response.json());
+    }
+    if (!parsed) parsed = await getYahooTimeseriesFundamentals(normalized);
     if (parsed) await setCachedJson(cacheKey, parsed, 24 * 60 * 60);
     return parsed;
   } catch {

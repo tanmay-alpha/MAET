@@ -2,7 +2,9 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "../../data/drizzle/client";
 import { candles, companies, financialStatements, fundamentals, quoteSnapshots } from "../../db/schema";
 import { getCandles } from "../../data/sources/yahoo";
+import { getYahooFundamentals, type YahooStatement } from "../../data/sources/yahoo-fundamentals";
 import { getNseCompanyMaster } from "../../data/sources/nse-company-master";
+import { calculateFundamentalRatios } from "../fundamentals/ratios";
 import { loadQuote } from "../market/quote-service";
 import { resolveMarketSymbol } from "../market/symbol";
 
@@ -42,6 +44,16 @@ function statementRow(row: typeof financialStatements.$inferSelect) {
     sharesOutstanding: numeric(row.sharesOutstanding),
     source: row.source,
     asOf: row.asOf.toISOString(),
+  };
+}
+
+function yahooStatementRow(symbol: string, row: YahooStatement, asOf: string) {
+  return {
+    id: `${symbol}-${row.periodType}-${row.periodDate.slice(0, 10)}`,
+    ...row,
+    statementType: "combined",
+    source: "yahoo_timeseries",
+    asOf,
   };
 }
 
@@ -147,21 +159,52 @@ export async function getCompanyDetail(symbolInput: string) {
 
   const fund = stored?.fund;
   const marketMetrics = stored?.marketMetrics;
+  const needsYahooFallback = !fund || (stored?.statements.length ?? 0) === 0 || [
+    fund.roce, fund.returnOnAssets, fund.currentRatio, fund.operatingMargin,
+    fund.netMargin, fund.revenueGrowth, fund.netIncomeGrowth, fund.bookValuePerShare,
+  ].some((value) => value === null || value === undefined);
+  const yahoo = needsYahooFallback ? await getYahooFundamentals(symbol).catch(() => null) : null;
+  const yahooStatements = yahoo?.statements.map((statement) => yahooStatementRow(symbol, statement, yahoo.asOf)) ?? [];
+  const annual = yahoo?.statements.filter((statement) => statement.periodType === "annual") ?? [];
+  const calculated = annual[0]
+    ? calculateFundamentalRatios(annual[0], annual[1], { price: quote?.price, marketCap: yahoo?.marketCap })
+    : {};
   const fundamentalsResult = fund ? {
-    asOf: fund.periodDate.toISOString(), source: fund.source, stale: fund.isStale,
-    marketCap: numeric(fund.marketCap ?? master.marketCap), trailingPe: numeric(fund.peRatio ?? master.peRatio),
-    forwardPe: numeric(fund.forwardPe), pb: numeric(fund.pbRatio ?? master.pbRatio), epsTtm: numeric(fund.eps ?? master.eps),
-    bookValuePerShare: numeric(fund.bookValuePerShare), dividendYield: numeric(fund.dividendYield ?? master.dividendYield),
-    roe: numeric(fund.roe ?? master.roe), roce: numeric(fund.roce), roa: numeric(fund.returnOnAssets),
-    debtToEquity: numeric(fund.debtToEquity ?? master.debtToEquity), currentRatio: numeric(fund.currentRatio),
-    salesGrowth: numeric(fund.revenueGrowth), profitGrowth: numeric(fund.netIncomeGrowth),
-    operatingMargin: numeric(fund.operatingMargin), netMargin: numeric(fund.netMargin),
-    fiftyTwoWeekHigh: numeric(marketMetrics?.fiftyTwoWeekHigh ?? fund.fiftyTwoWeekHigh),
-    fiftyTwoWeekLow: numeric(marketMetrics?.fiftyTwoWeekLow ?? fund.fiftyTwoWeekLow),
+    asOf: fund.periodDate.toISOString(), source: yahoo ? `${fund.source}+${yahoo.source}` : fund.source, stale: fund.isStale,
+    marketCap: numeric(fund.marketCap ?? master.marketCap) ?? yahoo?.marketCap,
+    trailingPe: numeric(fund.peRatio ?? master.peRatio) ?? yahoo?.trailingPe ?? calculated.peRatio,
+    forwardPe: numeric(fund.forwardPe) ?? yahoo?.forwardPe,
+    pb: numeric(fund.pbRatio ?? master.pbRatio) ?? yahoo?.pb ?? calculated.pbRatio,
+    epsTtm: numeric(fund.eps ?? master.eps) ?? yahoo?.epsTtm ?? calculated.eps,
+    bookValuePerShare: numeric(fund.bookValuePerShare) ?? yahoo?.bookValuePerShare,
+    dividendYield: numeric(fund.dividendYield ?? master.dividendYield) ?? yahoo?.dividendYield,
+    roe: numeric(fund.roe ?? master.roe) ?? yahoo?.roe ?? calculated.roe,
+    roce: numeric(fund.roce) ?? calculated.roce, roa: numeric(fund.returnOnAssets) ?? calculated.returnOnAssets,
+    debtToEquity: numeric(fund.debtToEquity ?? master.debtToEquity) ?? yahoo?.debtToEquity ?? calculated.debtToEquity,
+    currentRatio: numeric(fund.currentRatio) ?? yahoo?.currentRatio ?? calculated.currentRatio,
+    salesGrowth: numeric(fund.revenueGrowth) ?? calculated.revenueGrowth,
+    profitGrowth: numeric(fund.netIncomeGrowth) ?? calculated.netIncomeGrowth,
+    operatingMargin: numeric(fund.operatingMargin) ?? calculated.operatingMargin,
+    netMargin: numeric(fund.netMargin) ?? calculated.netMargin,
+    fiftyTwoWeekHigh: numeric(marketMetrics?.fiftyTwoWeekHigh ?? fund.fiftyTwoWeekHigh) ?? yahoo?.fiftyTwoWeekHigh,
+    fiftyTwoWeekLow: numeric(marketMetrics?.fiftyTwoWeekLow ?? fund.fiftyTwoWeekLow) ?? yahoo?.fiftyTwoWeekLow,
     average20DayVolume: marketMetrics?.average20DayVolume ?? fund.average20DayVolume ?? undefined,
     relVolume: numeric(marketMetrics?.relativeVolume ?? fund.relativeVolume),
+  } : yahoo ? {
+    asOf: yahoo.asOf, source: yahoo.source, stale: false,
+    marketCap: yahoo.marketCap, trailingPe: yahoo.trailingPe ?? calculated.peRatio,
+    forwardPe: yahoo.forwardPe, pb: yahoo.pb ?? calculated.pbRatio,
+    epsTtm: yahoo.epsTtm ?? calculated.eps, bookValuePerShare: yahoo.bookValuePerShare,
+    dividendYield: yahoo.dividendYield, roe: yahoo.roe ?? calculated.roe,
+    roce: calculated.roce, roa: calculated.returnOnAssets,
+    debtToEquity: yahoo.debtToEquity ?? calculated.debtToEquity,
+    currentRatio: yahoo.currentRatio ?? calculated.currentRatio,
+    salesGrowth: calculated.revenueGrowth, profitGrowth: calculated.netIncomeGrowth,
+    operatingMargin: calculated.operatingMargin, netMargin: calculated.netMargin,
+    fiftyTwoWeekHigh: yahoo.fiftyTwoWeekHigh, fiftyTwoWeekLow: yahoo.fiftyTwoWeekLow,
+    average20DayVolume: undefined, relVolume: undefined,
   } : undefined;
-  const statements = stored?.statements ?? [];
+  const statements = (stored?.statements.length ?? 0) > 0 ? stored!.statements : yahooStatements;
   const has = (value: unknown) => value !== undefined && value !== null;
 
   return {
