@@ -32,8 +32,8 @@ Last audited: 2026-07-03
   adds ingestion audit and anomaly tables.
 - Yahoo `quoteSummary` still returns HTTP 401, but the verified public
   fundamentals-timeseries fallback now supplies normalized annual/quarterly
-  statements and market ratios. After the first bounded Nifty 500 batch, the
-  database has verified market caps for 15 companies and 142 statement periods.
+  statements and market ratios. The database currently has 288 verified market
+  caps, 2,715 statement periods, and 293 fundamentals rows.
 - Official Nifty 500 fundamentals enrichment is resumable in bounded batches:
   `ENRICH_OFFSET=0 ENRICH_LIMIT=25 bun run enrich:nifty500`. Each run upserts
   verified Yahoo results and reports the next offset without fetching candles.
@@ -70,8 +70,9 @@ Last audited: 2026-07-03
 - [x] Phase 1.3: loading, API error, and empty-result states.
 - [x] Phase 1.4: screener tabs, sortable columns, visibility controls.
 - [x] Phase 2: 2,058-company NSE identity universe stored in PostgreSQL.
-- [ ] Phase 3 (partial): Yahoo timeseries enrichment works and a resumable Nifty
-  500 batch command is available; the production batches still need to finish.
+- [ ] Phase 3 (partial): Yahoo timeseries enrichment works, 288 Nifty 500
+  companies are enriched, and the resumable production batches continue at
+  offset 285.
 - [x] Phase 4: Angel One quote/token/WebSocket integration.
 - [ ] Phase 5 (partial): local Supabase and Redis pipeline verified; Render's separate
   PostgreSQL/REST credentials remain unhealthy.
@@ -84,13 +85,14 @@ Last audited: 2026-07-03
 
 ## Product Gaps
 
-- Fifteen companies are fundamentals-enriched after two bounded batches. Run the
+- 288 companies are fundamentals-enriched. Continue the Nifty 500 batches at
+  `ENRICH_OFFSET=285`; run the
   Nifty 500 enrichment in small sequential batches, advancing `ENRICH_OFFSET`
   only to the reported next offset. A partially failed batch reports its symbols
   and keeps the same offset so the idempotent batch can be retried safely.
   Yahoo availability still controls actual coverage.
-  Market-cap buckets deliberately stay unknown until at least 250 verified
-  market caps exist; ranking a five-company partial universe would be false.
+  Market-cap buckets are now active using the documented Indian rank method:
+  100 large, 150 mid, and 38 small from the currently verified universe.
 - Saved screeners currently persist in browser local storage for unauthenticated
   visitors. The existing `screener_runs` table and ownership-scoped tRPC CRUD
   can be used after the frontend has a verified authenticated user session.

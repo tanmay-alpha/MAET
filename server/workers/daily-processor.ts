@@ -714,9 +714,17 @@ export class DailyProcessor {
     const classifications = classifyByMarketCapRank(rows.map((row) => ({
       companyId: row.companyId,
       marketCap: row.marketCap ? Number(row.marketCap) : undefined,
-    })));
+    }))).filter((classification) => classification.bucket !== "unknown");
     const effectiveFrom = new Date();
     const classificationVersion = effectiveFrom.toISOString().slice(0, 10);
+    await db.update(companies).set({
+      marketCapBucket: "unknown",
+      updatedAt: effectiveFrom,
+    }).where(sql`${companies.marketCap} is null or ${companies.marketCap} <= 0`);
+    await db.delete(marketCapClassifications).where(sql`
+      ${marketCapClassifications.classificationVersion} = ${classificationVersion}
+      and ${marketCapClassifications.bucket} = 'unknown'
+    `);
     for (let index = 0; index < classifications.length; index += 50) {
       const batch = classifications.slice(index, index + 50);
       await Promise.all(batch.map(async (classification) => {
