@@ -31,7 +31,7 @@ Last audited: 2026-07-03
 - Yahoo `quoteSummary` still returns HTTP 401, but the verified public
   fundamentals-timeseries fallback now supplies normalized annual/quarterly
   statements and market ratios. After the first bounded Nifty 500 batch, the
-  database has verified market caps for 10 companies and 94 statement periods.
+  database has verified market caps for 15 companies and 142 statement periods.
 - Official Nifty 500 fundamentals enrichment is resumable in bounded batches:
   `ENRICH_OFFSET=0 ENRICH_LIMIT=25 bun run enrich:nifty500`. Each run upserts
   verified Yahoo results and reports the next offset without fetching candles.
@@ -80,13 +80,16 @@ Last audited: 2026-07-03
 
 ## Product Gaps
 
-- Ten companies are fundamentals-enriched after the first bounded batch. Run the
+- Fifteen companies are fundamentals-enriched after two bounded batches. Run the
   Nifty 500 enrichment in small sequential batches, advancing `ENRICH_OFFSET`
-  by the reported next offset. Yahoo availability still controls actual coverage.
+  only to the reported next offset. A partially failed batch reports its symbols
+  and keeps the same offset so the idempotent batch can be retried safely.
+  Yahoo availability still controls actual coverage.
   Market-cap buckets deliberately stay unknown until at least 250 verified
   market caps exist; ranking a five-company partial universe would be false.
-- Saved screeners currently persist in browser local storage. The tRPC saved
-  screener procedures still need a database table and ownership-scoped CRUD.
+- Saved screeners currently persist in browser local storage for unauthenticated
+  visitors. The existing `screener_runs` table and ownership-scoped tRPC CRUD
+  can be used after the frontend has a verified authenticated user session.
 - Portfolio day P&L, Sharpe, drawdown, beta, sector allocation, and realized
   trade P&L still contain TODO implementations.
 - Options-chain open interest/volume, some financial panels, and some analytics

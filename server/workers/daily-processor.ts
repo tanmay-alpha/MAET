@@ -73,6 +73,7 @@ export interface ProcessingStats {
   symbolsProcessed: number;
   candlesWritten: number;
   fundamentalsSynced: number;
+  fundamentalsFailed: string[];
   quoteSnapshotsWritten: number;
   classificationsSynced: number;
   errors: string[];
@@ -134,6 +135,7 @@ export class DailyProcessor {
       symbolsProcessed: 0,
       candlesWritten: 0,
       fundamentalsSynced: 0,
+      fundamentalsFailed: [],
       quoteSnapshotsWritten: 0,
       classificationsSynced: 0,
       errors: [],
@@ -431,9 +433,17 @@ export class DailyProcessor {
       const results = await Promise.allSettled(
         batch.map((sym) => this.syncSymbolFundamentals(sym, log))
       );
-      for (const r of results) {
-        if (r.status === "fulfilled" && r.value) stats.fundamentalsSynced++;
-        else if (r.status === "rejected") stats.errors.push(r.reason?.message ?? "fundamental sync failed");
+      for (let resultIndex = 0; resultIndex < results.length; resultIndex++) {
+        const result = results[resultIndex];
+        const symbol = batch[resultIndex];
+        if (result.status === "fulfilled" && result.value) {
+          stats.fundamentalsSynced++;
+        } else {
+          stats.fundamentalsFailed.push(symbol);
+          if (result.status === "rejected") {
+            stats.errors.push(result.reason?.message ?? `fundamental sync failed for ${symbol}`);
+          }
+        }
       }
     }
   }

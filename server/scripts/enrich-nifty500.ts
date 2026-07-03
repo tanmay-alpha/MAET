@@ -37,14 +37,16 @@ async function main(): Promise<void> {
     cleanupStaleData: false,
   });
   const nextOffset = offset + symbols.length;
+  const batchComplete = stats.fundamentalsFailed.length === 0;
   console.log(JSON.stringify({
     event: "nifty500_enrichment_finished",
     fundamentalsSynced: stats.fundamentalsSynced,
+    fundamentalsFailed: stats.fundamentalsFailed,
     classificationsSynced: stats.classificationsSynced,
     errors: stats.errors.length,
-    nextOffset: nextOffset < universe.length ? nextOffset : null,
+    nextOffset: batchComplete && nextOffset < universe.length ? nextOffset : batchComplete ? null : offset,
   }));
-  if (stats.errors.length > 0) process.exitCode = 1;
+  if (!batchComplete || stats.errors.length > 0) process.exitCode = 1;
 }
 
 main()
