@@ -14,19 +14,19 @@ Run after extracting the bundle into your MAET workspace.
 - [ ] Top-bar **search** opens with Cmd-K, shows fallback symbols, selecting a symbol updates the chip in the header.
 - [ ] `/dashboard` shows the existing dashboard, with the selected symbol reflected.
 - [ ] `/indices` renders index tiles with live-tick badges.
-- [ ] `/universe` shows an honest empty state ("NSE/BSE universe pipeline pending") — no fake rows.
-- [ ] `/screener` shell renders, filters reflect URL params.
+- [ ] `/universe` renders real NSE company-master rows or an honest source error.
+- [ ] `/screener` searches symbol, company name, and ISIN; unavailable fundamentals remain `—`.
 
 ## Phase 2 — TradingView-style analysis
 
-- [ ] `/chart/RELIANCE` renders with toolbar, timeframes, indicators toggleable, mock badge visible.
+- [ ] `/chart/RELIANCE` renders real candles for 1D, 5D, 1M, 6M, 1Y, 3Y, 5Y, and All; SMA/EMA/RSI/volume toggles work.
 - [ ] `/chart/grid` renders a 2×2 grid of tiles.
 - [ ] `/compare` renders normalized % overlays for 3 symbols and accepts add/remove.
 - [ ] `/heatmap` renders the mock heatmap with a ContractPanel for live sector data.
 
 ## Phase 3 — Discovery & fundamentals
 
-- [ ] `/stock/RELIANCE` renders Overview live (price ticks) and all other tabs show ContractPanel — never fake numbers.
+- [ ] `/stock/RELIANCE` renders live/delayed source labels and stored statements, or explicit unavailable reasons — never fake numbers.
 
 ## Phase 4 — Derivatives
 
@@ -53,4 +53,5 @@ Run after extracting the bundle into your MAET workspace.
 
 - [ ] `VITE_API_URL` set; `/api/health` returns 200.
 - [ ] `/api/market/quotes`, `/api/market/candles`, `/api/market/stream`, `/api/backtest/run` all reachable.
+- [ ] `bun run smoke:screener-v4` passes twice without increasing row counts on the second pass when database credentials are available.
 - [ ] All other endpoints in `src/lib/api/endpoints.ts` marked `contract` until the backend lands.
