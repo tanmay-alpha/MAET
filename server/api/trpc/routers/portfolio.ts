@@ -7,8 +7,8 @@ import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
-import { orders, fills, candles, watchlist } from "../../../db/schema";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { orders, fills, candles, companies, watchlist } from "../../../db/schema";
+import { eq, desc, and, inArray } from "drizzle-orm";
 
 export const portfolioRouter = createRouter({
   // Get user's portfolio summary
@@ -323,8 +323,74 @@ export const portfolioRouter = createRouter({
   // Get sector allocation
   getSectorAllocation: protectedProcedure
     .query(async ({ ctx }) => {
-      // TODO: Implement sector classification and calculate allocation
-      return [];
+      const userOrders = await db.select().from(orders)
+        .where(eq(orders.userId, ctx.userId));
+
+      const userOrderIds = userOrders.map(o => o.id);
+      let userFills: any[] = [];
+      if (userOrderIds.length > 0) {
+        for (const orderId of userOrderIds) {
+          const orderFills = await db.select().from(fills)
+            .where(eq(fills.orderId, orderId));
+          userFills = [...userFills, ...orderFills];
+        }
+      }
+
+      // Get unique symbols from orders
+      const symbols: string[] = [...new Set<string>(
+        userFills
+          .map(f => userOrders.find(o => o.id === f.orderId))
+          .filter(Boolean)
+          .map((o: any) => o.symbol)
+      )];
+
+      // Fetch company data for sector mapping
+      const companyData = symbols.length > 0
+        ? await db.select({ symbol: companies.symbol, sector: companies.sector })
+            .from(companies)
+            .where(inArray(companies.symbol, symbols))
+        : [];
+
+      const sectorMap = new Map(companyData.map(c => [c.symbol, c.sector || 'Unknown']));
+
+      // Aggregate exposure by sector (long positions only)
+      const sectorExposure: Record<string, { invested: number; currentValue: number; pnl: number }> = {};
+      const symbolFills: Record<string, any[]> = {};
+      userFills.forEach(fill => {
+        const order = userOrders.find(o => o.id === fill.orderId);
+        if (!order) return;
+        const symbol = order.symbol;
+        if (!symbolFills[symbol]) symbolFills[symbol] = [];
+        symbolFills[symbol].push({ ...fill, side: order.side });
+      });
+
+      for (const [symbol, fills] of Object.entries(symbolFills)) {
+        let buyQty = 0, buyCost = 0, sellQty = 0, sellRevenue = 0;
+        for (const fill of fills) {
+          if (fill.side === 'BUY') { buyQty += fill.qty; buyCost += fill.price * fill.qty + Number(fill.fee); }
+          else { sellQty += fill.qty; sellRevenue += fill.price * fill.qty - Number(fill.fee); }
+        }
+        const netQty = buyQty - sellQty;
+        if (netQty <= 0) continue;
+
+        const avgBuy = buyCost / buyQty;
+        const sector = sectorMap.get(symbol) || 'Unknown';
+        if (!sectorExposure[sector]) sectorExposure[sector] = { invested: 0, currentValue: 0, pnl: 0 };
+        sectorExposure[sector].invested += avgBuy * netQty;
+        sectorExposure[sector].currentValue += avgBuy * netQty;
+      }
+
+      const totalInvested = Object.values(sectorExposure).reduce((s, e) => s + e.invested, 0);
+      const allocation = Object.entries(sectorExposure).map(([sector, exposure]) => ({
+        sector,
+        invested: exposure.invested,
+        currentValue: exposure.currentValue,
+        pnl: exposure.pnl,
+        pnlPercent: exposure.invested > 0 ? (exposure.pnl / exposure.invested) * 100 : 0,
+        allocationPercent: totalInvested > 0 ? (exposure.invested / totalInvested) * 100 : 0,
+      }));
+
+      return allocation;
     }),
 
   // Get analytics

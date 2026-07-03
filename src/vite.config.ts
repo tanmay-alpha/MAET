@@ -37,6 +37,9 @@ export default defineConfig({
     ssr: {
       external: ["react", "react-dom"],
     },
+    optimizeDeps: {
+      include: ["use-sync-external-store/shim/with-selector"],
+    },
   },
   // TanStack Start plugin options.
   // - server.entry: "server" so Nitro builds from src/server.ts (our SSR
