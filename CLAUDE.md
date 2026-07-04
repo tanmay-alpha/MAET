@@ -14,7 +14,8 @@ real-money trading platform.
 
 ## Engineering rules
 
-- Read `AGENTS.md`, `README.md`, and `docs/REMAINING-WORK.md` before broad work.
+- Read `AGENTS.md`, `README.md`, `docs/PROJECT-ARCHITECTURE.md`, and
+  `docs/REMAINING-WORK.md` before broad work.
 - Never invent market, ratio, financial-statement, or broker data.
 - Missing fields render as `—` with an honest source reason.
 - Preserve the database-first screener and existing chart behavior.

@@ -8,6 +8,10 @@ Backend target: Render service
 Database: Supabase PostgreSQL  
 Main focus: **Stock Screener / Scanner**
 
+Detailed system design, pull timing, database model and operations:
+[`docs/PROJECT-ARCHITECTURE.md`](docs/PROJECT-ARCHITECTURE.md). Active gaps are
+tracked in [`docs/REMAINING-WORK.md`](docs/REMAINING-WORK.md).
+
 ---
 
 ## 1. Founder Line
