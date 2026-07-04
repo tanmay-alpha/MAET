@@ -239,17 +239,37 @@ function fieldAvailability(rows: CompanyScreenerRow[]): FieldAvailability {
 }
 
 async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScreenerResponse> {
-  const [companyRows, latestQuotes, latestFundamentals, latestMarketMetrics] = await Promise.all([
-    db.select().from(companies).where(eq(companies.isActive, true)),
-    db.selectDistinctOn([quoteSnapshots.companyId]).from(quoteSnapshots)
-      .orderBy(quoteSnapshots.companyId, desc(quoteSnapshots.asOf)),
-    db.selectDistinctOn([fundamentals.companyId]).from(fundamentals)
-      .where(ne(fundamentals.periodType, "market"))
-      .orderBy(fundamentals.companyId, desc(fundamentals.periodDate)),
-    db.selectDistinctOn([fundamentals.companyId]).from(fundamentals)
-      .where(eq(fundamentals.periodType, "market"))
-      .orderBy(fundamentals.companyId, desc(fundamentals.periodDate)),
-  ]);
+  const companyRows = await db.select().from(companies).where(eq(companies.isActive, true));
+  const quoteFields = ["price_min", "price_max", "change_pct_min", "change_pct_max", "volume_min", "volume_max"];
+  const detailedFundamentalFields = [
+    "rel_volume_min", "rel_volume_max", "roce_min", "roce_max", "current_ratio_min",
+    "sales_growth_min", "profit_growth_min",
+  ];
+  const needsQuotes = quoteFields.some((field) => input.numbers[field] !== undefined) ||
+    ["price", "change_pct", "volume"].includes(input.sortBy);
+  const needsDetailedFundamentals = detailedFundamentalFields.some((field) => input.numbers[field] !== undefined) ||
+    ["rel_volume", "roce", "current_ratio", "sales_growth", "profit_growth"].includes(input.sortBy);
+  const needsMarketMetrics = input.highBreakout || input.lowNear ||
+    input.numbers.rel_volume_min !== undefined || input.numbers.rel_volume_max !== undefined ||
+    input.sortBy === "rel_volume";
+
+  // Keep the common symbol/name/ISIN and core valuation path to one database
+  // round trip. Supabase transaction poolers can become slow when every
+  // keystroke fans out into several concurrent DISTINCT ON queries.
+  const latestQuotes = needsQuotes
+    ? await db.selectDistinctOn([quoteSnapshots.companyId]).from(quoteSnapshots)
+        .orderBy(quoteSnapshots.companyId, desc(quoteSnapshots.asOf))
+    : [];
+  const latestFundamentals = needsDetailedFundamentals
+    ? await db.selectDistinctOn([fundamentals.companyId]).from(fundamentals)
+        .where(ne(fundamentals.periodType, "market"))
+        .orderBy(fundamentals.companyId, desc(fundamentals.periodDate))
+    : [];
+  const latestMarketMetrics = needsMarketMetrics
+    ? await db.selectDistinctOn([fundamentals.companyId]).from(fundamentals)
+        .where(eq(fundamentals.periodType, "market"))
+        .orderBy(fundamentals.companyId, desc(fundamentals.periodDate))
+    : [];
   const quoteByCompany = new Map(latestQuotes.map((row) => [row.companyId, row]));
   const fundamentalsByCompany = new Map(latestFundamentals.map((row) => [row.companyId, row]));
   const marketMetricsByCompany = new Map(latestMarketMetrics.map((row) => [row.companyId, row]));
