@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { createApp } from "../app";
 import { dependencyErrorDetail, supabaseRestProbeUrl } from "./health";
+import { inspectDatabaseUrl } from "./database-diagnostics";
 
 describe("app health", () => {
   it("GET /health returns 200 with status ok", async () => {
@@ -36,6 +37,18 @@ describe("dependency health probes", () => {
     const error = new Error("Failed query: select 1", {
       cause: Object.assign(new Error("password authentication failed for user postgres.project"), { code: "28P01" }),
     });
-    expect(dependencyErrorDetail(error)).toBe("authentication failed (28P01)");
+    expect(dependencyErrorDetail(error)).toBe("database authentication failed (28P01)");
+  });
+
+  it("exposes only redacted database URL metadata", () => {
+    expect(inspectDatabaseUrl("postgresql://postgres.project:[PASSWORD]@pooler.example.com:6543/postgres?sslmode=require"))
+      .toEqual({
+        dbUrlSet: true,
+        dbHost: "pooler.example.com",
+        dbPort: "6543",
+        dbUserPrefix: "postgres",
+        sslmodeRequire: true,
+        prepareDisabled: true,
+      });
   });
 });

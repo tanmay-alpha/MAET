@@ -12,6 +12,7 @@
     "dev": "bun run server/orchestrator.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "check:db": "bun --env-file=.env run server/scripts/check-db-connection.ts",
     "smoke:screener-v4": "bun run server/scripts/screener-v4-smoke-test.ts",
     "enrich:nifty500": "bun run server/scripts/enrich-nifty500.ts"
   },

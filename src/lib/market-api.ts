@@ -221,7 +221,10 @@ async function fetchMarketEndpoint(path: string, signal?: AbortSignal): Promise<
 
   const primaryUrl = `${API_BASE_URL}${path}`;
   const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), 4_000);
+  // Render free instances and the Supabase transaction pooler can need several
+  // seconds after an idle period. Keep a bounded timeout, but do not abandon a
+  // healthy database query before the backend has had a fair chance to reply.
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), 12_000);
   const abortPrimary = () => controller.abort();
   signal?.addEventListener("abort", abortPrimary, { once: true });
 

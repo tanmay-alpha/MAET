@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import { inspectDatabaseUrl, redactDatabaseError, type DatabaseDiagnostics } from "./database-diagnostics";
 
 export type HealthCheck = {
   name: string;
@@ -10,6 +11,7 @@ export type HealthReport = {
   status: "ok" | "degraded" | "down";
   uptime: number;
   checks: Record<string, HealthCheck>;
+  database: DatabaseDiagnostics;
   version: string;
 };
 
@@ -18,6 +20,7 @@ const version = process.env.GIT_SHA ?? "dev";
 const checks: Record<string, HealthCheck> = {};
 let lastDependencyRefresh = 0;
 let refreshInFlight: Promise<void> | undefined;
+let lastDatabaseError: { code: string; message: string } | undefined;
 
 export function supabaseRestProbeUrl(baseUrl: string): string {
   // Supabase's PostgREST root/OpenAPI endpoint requires a secret API key.
@@ -27,26 +30,8 @@ export function supabaseRestProbeUrl(baseUrl: string): string {
 }
 
 export function dependencyErrorDetail(error: unknown): string {
-  const queue: unknown[] = [error];
-  const seen = new Set<unknown>();
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current || seen.has(current)) continue;
-    seen.add(current);
-    if (typeof current === "object") {
-      const value = current as { code?: unknown; cause?: unknown; errors?: unknown[]; message?: unknown };
-      const code = typeof value.code === "string" ? value.code : undefined;
-      if (code === "28P01") return "authentication failed (28P01)";
-      if (code === "3D000") return "database not found (3D000)";
-      if (code === "ENOTFOUND") return "database host not found (ENOTFOUND)";
-      if (code === "ECONNREFUSED") return "database connection refused (ECONNREFUSED)";
-      if (code === "ETIMEDOUT") return "database connection timed out (ETIMEDOUT)";
-      if (value.cause) queue.push(value.cause);
-      if (Array.isArray(value.errors)) queue.push(...value.errors);
-      if (value.message === "timeout") return "database connection timed out";
-    }
-  }
-  return "database query failed; verify the transaction-pooler URI and credentials";
+  const detail = redactDatabaseError(error);
+  return `${detail.message} (${detail.code})`;
 }
 
 export function registerCheck(name: string, ok: boolean, detail?: string): void {
@@ -59,6 +44,10 @@ export function healthHandler(): HealthReport {
     status: Object.keys(checks).length === 0 || allOk ? "ok" : "degraded",
     uptime: Math.floor((Date.now() - startedAt) / 1000),
     checks,
+    database: {
+      ...inspectDatabaseUrl(process.env.SUPABASE_DB_URL ?? process.env.DATABASE_URL ?? process.env.POSTGRES_URL),
+      ...(lastDatabaseError ? { dbErrorCode: lastDatabaseError.code, dbErrorMessage: lastDatabaseError.message } : {}),
+    },
     version,
   };
 }
@@ -109,8 +98,14 @@ export function refreshDependencyChecks(force = false): Promise<void> {
     const database = databaseUrl
       ? import("../data/drizzle/client")
           .then(({ getDb }) => timed(getDb().execute(sql`select 1`)))
-          .then(() => registerCheck("database", true, "reachable"))
-          .catch((error: unknown) => registerCheck("database", false, dependencyErrorDetail(error)))
+          .then(() => {
+            lastDatabaseError = undefined;
+            registerCheck("database", true, "reachable");
+          })
+          .catch((error: unknown) => {
+            lastDatabaseError = redactDatabaseError(error);
+            registerCheck("database", false, dependencyErrorDetail(error));
+          })
       : Promise.resolve(registerCheck("database", false, "not configured"));
 
     const brokerConfigured = Boolean(
