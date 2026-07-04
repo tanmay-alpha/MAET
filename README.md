@@ -69,24 +69,16 @@ The current project demonstrates the foundation of a real screener.
 - Render backend deployment setup
 - Vercel frontend deployment setup
 - Honest unavailable-data UI for missing fundamentals
+- Persisted light, dark, and system appearance modes
+- Functional notification and settings header controls
+- Completed Nifty 500 fundamentals enrichment pass
 
-### Partially ready
+### Current boundaries
 
-- Fundamentals database tables
-- Ratio calculation foundation
-- Historical candle support
-- Daily processor / scheduled data pipeline
-- Redis caching layer
-
-### Still remaining
-
-- Reliable production financial data provider
-- Fully populated financial statements
-- P/E, P/B, ROE, ROCE, dividend, growth filters using verified stored data
-- Peer comparison
-- Anomaly review dashboard
-- Database-backed saved screeners
-- Production monitoring and alerting
+- Yahoo availability varies by company and field; unavailable values stay blank.
+- Options and futures remain unavailable until a verified derivatives provider is connected.
+- Saved screeners use browser storage for unauthenticated visitors.
+- Audit/anomaly tables exist, but the review dashboard is not exposed in the UI.
 
 ---
 
@@ -175,7 +167,7 @@ flowchart TB
 | NSE company master | Company universe, symbols, ISIN, listed companies | Gives official Indian company list | Implemented |
 | Angel One SmartAPI | Live quotes, tokens, snapshots | Useful for live market feed | Implemented |
 | Yahoo Finance | Delayed quotes, historical candles, fallback data | Helps when live data is unavailable | Implemented |
-| Supabase PostgreSQL | Own database | Stores scanner/company/market data | Migrations applied; Render connection still needs verification |
+| Supabase PostgreSQL | Own database | Stores scanner/company/market data | Production connection verified |
 | Redis / Upstash | Cache and real-time support | Reduces repeated API calls and supports fast backend flow | Production health check reachable |
 | TradingView link | External chart open | Lets user open selected stock chart externally | Added |
 
@@ -298,14 +290,11 @@ Reliance Industries
 
 ### Filters
 
-Currently working filter categories:
+Working filter categories when their verified fields are available:
 
 - price
 - change %
 - volume
-
-Planned advanced filters:
-
 - market cap
 - P/E
 - P/B
@@ -319,11 +308,14 @@ Planned advanced filters:
 - RSI
 - moving average signals
 
+Unavailable source fields render as `—`; their controls remain disabled rather
+than applying a misleading filter.
+
 ### Charts
 
 The chart page supports candlestick visualization and indicator toggles.
 
-Current/planned chart ranges:
+Current chart ranges:
 
 ```text
 1D

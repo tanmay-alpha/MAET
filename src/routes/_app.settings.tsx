@@ -3,8 +3,9 @@ import { useState, useEffect } from "react";
 import { Settings, Bell, Database, Palette, Keyboard, BookOpen, User, Shield, Moon, Sun, Monitor, Save, RotateCcw, Check, ArrowUpRight } from "lucide-react";
 import { PaperModeBanner } from "@/components/common/paper-mode-banner";
 import { ContractPanel } from "@/components/common/contract-panel";
+import { applyTheme, SETTINGS_STORAGE_KEY, type AppTheme } from "@/lib/theme";
 
-type Theme = "light" | "dark" | "system";
+type Theme = AppTheme;
 
 const THEME_OPTIONS: { value: Theme; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "Light", icon: Sun },
@@ -121,19 +122,37 @@ function SettingsPage() {
   const [activeSection, setActiveSection] = useState("general");
   const [settings, setSettings] = useState<SettingsState>(() => {
     // Load from localStorage
-    const saved = localStorage.getItem("maet.settings");
-    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+    try {
+      const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) ?? "null") as Partial<SettingsState> | null;
+      return saved ? {
+        general: { ...DEFAULT_SETTINGS.general, ...saved.general },
+        notifications: { ...DEFAULT_SETTINGS.notifications, ...saved.notifications },
+        data: { ...DEFAULT_SETTINGS.data, ...saved.data },
+        appearance: { ...DEFAULT_SETTINGS.appearance, ...saved.appearance },
+      } : DEFAULT_SETTINGS;
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
   });
 
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
 
   // Save settings to localStorage when they change
   useEffect(() => {
-    localStorage.setItem("maet.settings", JSON.stringify(settings));
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
     setSaveStatus("saved");
     const timer = setTimeout(() => setSaveStatus("idle"), 1500);
     return () => clearTimeout(timer);
   }, [settings]);
+
+  useEffect(() => {
+    applyTheme(settings.appearance.theme);
+    if (settings.appearance.theme !== "system") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const syncSystemTheme = () => applyTheme("system");
+    media.addEventListener("change", syncSystemTheme);
+    return () => media.removeEventListener("change", syncSystemTheme);
+  }, [settings.appearance.theme]);
 
   const updateSetting = <K extends keyof SettingsState>(
     section: K,
@@ -246,7 +265,7 @@ function SettingsPage() {
           <div className="space-y-6">
             <div>
               <div className="font-medium mb-3">Theme</div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 {THEME_OPTIONS.map((opt) => {
                   const Icon = opt.icon;
                   const isSelected = settings.appearance.theme === opt.value;
@@ -400,9 +419,9 @@ function SettingsPage() {
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* Header */}
-      <div className="border-b border-border px-6 py-4 flex items-center justify-between">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6 sm:py-4">
         <div>
           <h1 className="text-xl font-semibold">Settings</h1>
           <p className="text-xs text-muted-foreground">Application preferences</p>
@@ -426,15 +445,15 @@ function SettingsPage() {
       </div>
 
       {/* Layout */}
-      <div className="flex-1 overflow-hidden flex">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
         {/* Sidebar */}
-        <div className="w-48 border-r border-border overflow-y-auto">
+        <div className="flex w-full shrink-0 overflow-x-auto border-b border-border md:block md:w-52 md:overflow-y-auto md:border-b-0 md:border-r">
           {SETTINGS_SECTIONS.map((section) => (
             <button
               key={section.id}
               type="button"
               onClick={() => setActiveSection(section.id)}
-              className={`w-full text-left px-4 py-3 text-sm flex items-center gap-3 transition-colors ${
+              className={`flex min-w-max items-center gap-3 px-4 py-3 text-left text-sm transition-colors md:w-full ${
                 activeSection === section.id
                   ? "bg-accent text-foreground font-medium"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
@@ -447,7 +466,7 @@ function SettingsPage() {
         </div>
 
         {/* Main content */}
-        <div className="flex-1 overflow-auto p-6">
+        <div className="min-w-0 flex-1 overflow-auto p-4 sm:p-6">
           <div className="max-w-2xl mx-auto">
             <div className="mb-6">
               <h2 className="text-xl font-semibold mb-1">{SETTINGS_SECTIONS.find(s => s.id === activeSection)?.title}</h2>

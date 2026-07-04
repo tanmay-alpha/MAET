@@ -1,4 +1,4 @@
-# Remaining Work
+# Production Status and Known Limits
 
 Last audited: 2026-07-04
 
@@ -34,10 +34,11 @@ Last audited: 2026-07-04
   migration `0003_screener_v4.sql`; migration `0004_quality_audit_tables.sql`
   adds ingestion audit and anomaly tables.
 - Yahoo `quoteSummary` may return HTTP 401, but the verified public
-  fundamentals-timeseries fallback now supplies normalized annual/quarterly
-  statements and market ratios. After the bounded offset-285 batch, the
-  database has 313 verified market caps, 2,944 statement periods, and 318
-  fundamentals rows.
+  fundamentals-timeseries fallback supplies normalized annual/quarterly
+  statements and market ratios. The full 500-company Nifty enrichment pass
+  completed on 2026-07-04 with no failed symbols and `nextOffset: null`.
+- The current database contains 508 fundamentals snapshots, 4,722 normalized
+  financial-statement rows, and 789 versioned market-cap classification rows.
 - Official Nifty 500 fundamentals enrichment is resumable in bounded batches:
   `ENRICH_OFFSET=0 ENRICH_LIMIT=25 bun run enrich:nifty500`. Each run upserts
   verified Yahoo results and reports the next offset without fetching candles.
@@ -66,7 +67,7 @@ Last audited: 2026-07-04
 4. The 2026-07-04 local smoke run passed for RELIANCE, HDFCBANK, TCS, INFY and
    20MICRONS, including statements and an idempotent second pass.
 
-## Screenshot Todo Audit
+## Completion Audit
 
 - [x] Phase 0: tests, typecheck, server build, frontend lint/build.
 - [x] Phase 1.1: symbol, company-name, and ISIN search.
@@ -74,9 +75,8 @@ Last audited: 2026-07-04
 - [x] Phase 1.3: loading, API error, and empty-result states.
 - [x] Phase 1.4: screener tabs, sortable columns, visibility controls.
 - [x] Phase 2: 2,058-company NSE identity universe stored in PostgreSQL.
-- [ ] Phase 3 (partial): Yahoo timeseries enrichment works, 313 Nifty 500
-  companies are enriched, and the resumable production batches continue at
-  offset 310.
+- [x] Phase 3: all 500 Nifty constituents passed through verified Yahoo
+  timeseries enrichment; the final batch returned `nextOffset: null`.
 - [x] Phase 4: Angel One quote/token/WebSocket integration.
 - [x] Phase 5: local and Render PostgreSQL, Supabase REST and Redis connections verified.
 - [x] Phase 6: 1D, 5D, 1M, 6M, 1Y, 3Y, 5Y, and All chart ranges.
@@ -85,16 +85,12 @@ Last audited: 2026-07-04
 - [x] Phase 9: Vercel, GitHub and Render deployment health verified.
 - [x] Phase 10: final local verification and main-branch push workflow.
 
-## Product Gaps
+## Known Product Boundaries
 
-- 313 companies are fundamentals-enriched. Continue the Nifty 500 batches at
-  `ENRICH_OFFSET=310`; run the
-  Nifty 500 enrichment in small sequential batches, advancing `ENRICH_OFFSET`
-  only to the reported next offset. A partially failed batch reports its symbols
-  and keeps the same offset so the idempotent batch can be retried safely.
-  Yahoo availability still controls actual coverage.
-  Market-cap buckets are now active using the documented Indian rank method:
-  100 large, 150 mid, and 63 small from the currently verified universe.
+- The Nifty 500 enrichment pass is complete. Yahoo availability still controls
+  which individual fields exist; missing source values remain unavailable.
+  Market-cap buckets use the documented Indian rank method and are recalculated
+  from verified stored market caps.
 - Saved screeners currently persist in browser local storage for unauthenticated
   visitors. The existing `screener_runs` table and ownership-scoped tRPC CRUD
   can be used after the frontend has a verified authenticated user session.
@@ -107,7 +103,7 @@ Last audited: 2026-07-04
   idempotency middleware, and production integration tests remain necessary.
 - The NSE holiday calendar needs a maintained source or an operations process.
 
-## Test Gaps
+## Operational Boundaries
 
 - Redis/idempotency/rate-limit/SSE-hub integration tests are skipped unless a
   test Redis instance is available.

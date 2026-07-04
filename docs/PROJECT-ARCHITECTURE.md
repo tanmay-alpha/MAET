@@ -171,9 +171,10 @@ second pass and fails if counts change unexpectedly.
 - 6,174 verified identifiers.
 - 55 quote snapshots.
 - 491 candles.
-- 318 fundamentals snapshots.
-- 2,944 normalized financial-statement rows.
-- 313 current market-cap classifications: 100 large, 150 mid and 63 small.
+- 508 fundamentals snapshots.
+- 4,722 normalized financial-statement rows.
+- 789 versioned market-cap classification rows; the latest Nifty 500 refresh
+  classified 501 stored companies with verified market caps.
 
 These numbers are an audit snapshot, not hard-coded application limits.
 
