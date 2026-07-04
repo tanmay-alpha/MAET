@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+package-lock.json
 dist
 dist-ssr
 .output
@@ -18,6 +19,7 @@ dist-ssr
 
 # Environment files - NEVER COMMIT REAL CREDENTIALS!
 .env
+.env.backup
 .env.local
 .env.production
 .env.*.local
@@ -45,6 +47,7 @@ dist-ssr
 # Playwright MCP server artifacts (ephemeral browser session recordings,
 # console logs, and page snapshots — not source code).
 .playwright-mcp/
+.codex-tmp/
 
 # Temporary files left behind by FUSE/overlay filesystem operations.
 .fuse_hidden*
