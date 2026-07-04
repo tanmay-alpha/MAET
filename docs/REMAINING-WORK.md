@@ -57,8 +57,10 @@ Last audited: 2026-07-04
 
 1. Render `/api/health` reports PostgreSQL, Supabase REST, Redis, Yahoo, Angel
    One and the instrument master reachable.
-2. Render uses the Supabase shared transaction-pooler URI on port 6543 with
-   `sslmode=require`; the current connection works without an IPv4 add-on.
+2. Render uses the Supabase shared transaction-pooler URI on port 6543 and the
+   current connection works without an IPv4 add-on. Runtime diagnostics still
+   reports `sslmodeRequire: false`; confirm the Render value ends with
+   `?sslmode=require` during the next environment review.
 3. `bun run check:db` prints only redacted connection metadata and verifies
    `select 1`, company count and fundamentals count.
 4. The 2026-07-04 local smoke run passed for RELIANCE, HDFCBANK, TCS, INFY and
