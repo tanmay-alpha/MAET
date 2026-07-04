@@ -53,3 +53,16 @@ dist-ssr
 .fuse_hidden*
 
 .vercel
+
+# Local AI / helper markdown files
+CLAUDE.md
+AGENTS.md
+
+# Local docs / checklists
+docs/smoke-test-checklist.md
+
+# Old phase, prompt, report, and duplicate contract files
+*phase*.md
+*prompt*.md
+*report*.md
+*placeholder*.md
