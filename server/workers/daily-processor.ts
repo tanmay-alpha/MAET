@@ -717,6 +717,12 @@ export class DailyProcessor {
     }))).filter((classification) => classification.bucket !== "unknown");
     const effectiveFrom = new Date();
     const classificationVersion = effectiveFrom.toISOString().slice(0, 10);
+    await db.update(marketCapClassifications).set({
+      effectiveTo: effectiveFrom,
+    }).where(sql`
+      ${marketCapClassifications.effectiveTo} is null
+      and ${marketCapClassifications.classificationVersion} <> ${classificationVersion}
+    `);
     await db.update(companies).set({
       marketCapBucket: "unknown",
       updatedAt: effectiveFrom,
@@ -745,6 +751,7 @@ export class DailyProcessor {
             bucket: classification.bucket,
             methodology: classification.methodology,
             effectiveFrom,
+            effectiveTo: null,
             source: "derived_stored_market_cap_rank",
           },
         });

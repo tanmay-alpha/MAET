@@ -19,6 +19,36 @@ const checks: Record<string, HealthCheck> = {};
 let lastDependencyRefresh = 0;
 let refreshInFlight: Promise<void> | undefined;
 
+export function supabaseRestProbeUrl(baseUrl: string): string {
+  // Supabase's PostgREST root/OpenAPI endpoint requires a secret API key.
+  // A zero-row query verifies the project URL, publishable/anon key and REST
+  // access without returning company data.
+  return `${baseUrl.replace(/\/$/, "")}/rest/v1/companies?select=id&limit=0`;
+}
+
+export function dependencyErrorDetail(error: unknown): string {
+  const queue: unknown[] = [error];
+  const seen = new Set<unknown>();
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) continue;
+    seen.add(current);
+    if (typeof current === "object") {
+      const value = current as { code?: unknown; cause?: unknown; errors?: unknown[]; message?: unknown };
+      const code = typeof value.code === "string" ? value.code : undefined;
+      if (code === "28P01") return "authentication failed (28P01)";
+      if (code === "3D000") return "database not found (3D000)";
+      if (code === "ENOTFOUND") return "database host not found (ENOTFOUND)";
+      if (code === "ECONNREFUSED") return "database connection refused (ECONNREFUSED)";
+      if (code === "ETIMEDOUT") return "database connection timed out (ETIMEDOUT)";
+      if (value.cause) queue.push(value.cause);
+      if (Array.isArray(value.errors)) queue.push(...value.errors);
+      if (value.message === "timeout") return "database connection timed out";
+    }
+  }
+  return "database query failed; verify the transaction-pooler URI and credentials";
+}
+
 export function registerCheck(name: string, ok: boolean, detail?: string): void {
   checks[name] = { name, ok, detail };
 }
@@ -62,7 +92,7 @@ export function refreshDependencyChecks(force = false): Promise<void> {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_ANON_KEY;
     const supabase = supabaseUrl && supabaseKey
-      ? timed(fetch(`${supabaseUrl.replace(/\/$/, "")}/rest/v1/`, {
+      ? timed(fetch(supabaseRestProbeUrl(supabaseUrl), {
           headers: { apikey: supabaseKey, authorization: `Bearer ${supabaseKey}` },
         })).then((response) => {
           registerCheck("supabase", response.ok, response.ok ? "reachable" : `HTTP ${response.status}`);
@@ -80,7 +110,7 @@ export function refreshDependencyChecks(force = false): Promise<void> {
       ? import("../data/drizzle/client")
           .then(({ getDb }) => timed(getDb().execute(sql`select 1`)))
           .then(() => registerCheck("database", true, "reachable"))
-          .catch((error: Error) => registerCheck("database", false, error.message))
+          .catch((error: unknown) => registerCheck("database", false, dependencyErrorDetail(error)))
       : Promise.resolve(registerCheck("database", false, "not configured"));
 
     const brokerConfigured = Boolean(

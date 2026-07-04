@@ -582,7 +582,10 @@ ANGELONE_TOTP_SECRET=
 
 `SUPABASE_DB_URL` must be a PostgreSQL pooler connection URI, normally port
 `6543` with `sslmode=require`. URL-encode special characters in the database
-password. Supabase REST API keys are not database connection strings.
+password. For the shared transaction pooler, the username is normally
+`postgres.<project-ref>` and the host is an `aws-<region>.pooler.supabase.com`
+address copied from Supabase's Connect dialog. Supabase REST API keys are not
+database connection strings.
 
 Run the bounded five-symbol ingestion check only after the database URL is
 available in the current shell:
@@ -601,7 +604,11 @@ Use this to explain the project:
 
 > In this demo, the foundation is working: company universe, scanner UI, symbol/name/ISIN search, quote data, server-side filters for stored fields, chart view, moving average and RSI toggles, PostgreSQL schema, backend APIs, and deployment setup.
 
-> Missing fundamentals remain blank instead of fake values. The operator reports migrations `0001` through `0003` are applied, but the Render health check must report `database: reachable` before persistence is considered verified. Yahoo quoteSummary may return HTTP 401/429, so those values are not presented unless a real stored snapshot exists.
+> Missing fundamentals remain blank instead of fake values. Migrations `0001`
+> through `0004` are applied to the verified local Supabase project, but
+> Render's separate transaction-pooler credential must still report
+> `database: reachable` before production persistence is considered healthy.
+> Yahoo values are shown only after a real normalized snapshot is stored.
 
 ---
 

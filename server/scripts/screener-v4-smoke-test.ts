@@ -21,6 +21,8 @@ import {
   fundamentals,
   marketCapClassifications,
   quoteSnapshots,
+  sourceAudit,
+  anomalyFlags,
 } from "../db/schema";
 import { getNseCompanyMaster } from "../data/sources/nse-company-master";
 import { getCandles, getQuote } from "../data/sources/yahoo";
@@ -40,6 +42,8 @@ interface RowCounts {
   fundamentals: number;
   financial_statements: number;
   market_cap_classifications: number;
+  source_audit: number;
+  anomaly_flags: number;
 }
 
 async function countRows(): Promise<RowCounts> {
@@ -51,6 +55,8 @@ async function countRows(): Promise<RowCounts> {
     fundamentalsCount,
     statementsCount,
     classificationsCount,
+    sourceAuditCount,
+    anomalyFlagsCount,
   ] = await Promise.all([
     db.execute(sql<{ count: number }>`SELECT COUNT(*)::int as count FROM companies`),
     db.execute(sql<{ count: number }>`SELECT COUNT(*)::int as count FROM company_identifiers`),
@@ -59,6 +65,8 @@ async function countRows(): Promise<RowCounts> {
     db.execute(sql<{ count: number }>`SELECT COUNT(*)::int as count FROM fundamentals`),
     db.execute(sql<{ count: number }>`SELECT COUNT(*)::int as count FROM financial_statements`),
     db.execute(sql<{ count: number }>`SELECT COUNT(*)::int as count FROM market_cap_classifications`),
+    db.select({ count: sql<number>`COUNT(*)::int` }).from(sourceAudit),
+    db.select({ count: sql<number>`COUNT(*)::int` }).from(anomalyFlags),
   ]);
 
   return {
@@ -69,6 +77,8 @@ async function countRows(): Promise<RowCounts> {
     fundamentals: Number((fundamentalsCount[0] as { count: number })?.count ?? 0),
     financial_statements: Number((statementsCount[0] as { count: number })?.count ?? 0),
     market_cap_classifications: Number((classificationsCount[0] as { count: number })?.count ?? 0),
+    source_audit: Number(sourceAuditCount[0]?.count ?? 0),
+    anomaly_flags: Number(anomalyFlagsCount[0]?.count ?? 0),
   };
 }
 
@@ -82,6 +92,8 @@ function printCounts(label: string, before: RowCounts, after: RowCounts): void {
   console.log(`{"fundamentals":${before.fundamentals} → ${after.fundamentals}, "delta":${after.fundamentals - before.fundamentals}}`);
   console.log(`{"financial_statements":${before.financial_statements} → ${after.financial_statements}, "delta":${after.financial_statements - before.financial_statements}}`);
   console.log(`{"market_cap_classifications":${before.market_cap_classifications} → ${after.market_cap_classifications}, "delta":${after.market_cap_classifications - before.market_cap_classifications}}`);
+  console.log(JSON.stringify({ table: "source_audit", before: before.source_audit, after: after.source_audit, delta: after.source_audit - before.source_audit }));
+  console.log(JSON.stringify({ table: "anomaly_flags", before: before.anomaly_flags, after: after.anomaly_flags, delta: after.anomaly_flags - before.anomaly_flags }));
 }
 
 async function fetchNseCompanyIdentity(symbol: string): Promise<{
@@ -558,6 +570,8 @@ async function main() {
     { name: "fundamentals", before: beforeCounts.fundamentals, after: afterCounts.fundamentals },
     { name: "financial_statements", before: beforeCounts.financial_statements, after: afterCounts.financial_statements },
     { name: "market_cap_classifications", before: beforeCounts.market_cap_classifications, after: afterCounts.market_cap_classifications },
+    { name: "source_audit", before: beforeCounts.source_audit, after: afterCounts.source_audit },
+    { name: "anomaly_flags", before: beforeCounts.anomaly_flags, after: afterCounts.anomaly_flags },
   ].filter(t => t.after > t.before);
 
   if (tablesWithData.length === 0) {
@@ -575,6 +589,8 @@ async function main() {
     { name: "fundamentals", count: afterCounts.fundamentals },
     { name: "financial_statements", count: afterCounts.financial_statements },
     { name: "market_cap_classifications", count: afterCounts.market_cap_classifications },
+    { name: "source_audit", count: afterCounts.source_audit },
+    { name: "anomaly_flags", count: afterCounts.anomaly_flags },
   ].filter(t => t.count === 0);
 
   if (emptyTables.length === 0) {
