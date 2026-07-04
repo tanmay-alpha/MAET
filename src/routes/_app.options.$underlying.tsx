@@ -36,10 +36,10 @@ function OptionsChain() {
               <ShieldAlert className="h-6 w-6" />
             </div>
             <div className="space-y-2">
-              <h2 className="text-base font-semibold">Verified options feed not connected</h2>
+              <h2 className="text-base font-semibold">Verified NSE derivatives provider is not connected yet</h2>
               <p className="text-sm leading-6 text-muted-foreground">
-                MAET does not currently have a verified NSE derivatives provider for {symbol}. Prices, open interest,
-                volume, implied volatility, PCR, and Greeks remain unavailable rather than being estimated or simulated.
+                MAET does not currently have a verified NSE derivatives provider for {symbol}. No simulated option-chain
+                values are shown; prices, open interest, volume, implied volatility, PCR, and Greeks remain unavailable.
               </p>
             </div>
           </div>

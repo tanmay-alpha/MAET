@@ -1,6 +1,6 @@
-import { Search } from "lucide-react";
 import type { MarketQuote } from "@/lib/market-api";
-import { WATCHLIST } from "@/lib/market-catalog";
+import { WATCHLIST, type MarketCatalogItem } from "@/lib/market-catalog";
+import { CompanySearchInput } from "@/components/market/company-search-input";
 
 export function Watchlist({
   active,
@@ -8,16 +8,15 @@ export function Watchlist({
   quotes,
 }: {
   active: string;
-  onSelect: (symbol: string) => void;
+  onSelect: (company: MarketCatalogItem) => void;
   quotes: Map<string, MarketQuote>;
 }) {
   return (
     <div className="flex h-full flex-col bg-panel">
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <Search className="h-3.5 w-3.5 text-muted-foreground" />
-        <input
-          placeholder="Search NSE / BSE"
-          className="w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+      <div className="border-b border-border p-2">
+        <CompanySearchInput
+          placeholder="Search NSE symbol, company, or ISIN"
+          onSelect={(company) => onSelect({ symbol: company.symbol, name: company.name })}
         />
       </div>
       <div className="grid grid-cols-12 border-b border-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -33,7 +32,7 @@ export function Watchlist({
           return (
             <button
               key={item.symbol}
-              onClick={() => onSelect(item.symbol)}
+              onClick={() => onSelect(item)}
               className={`grid w-full grid-cols-12 items-center px-3 py-2 text-xs transition-colors hover:bg-accent ${active === item.symbol ? "bg-accent" : ""}`}
             >
               <div className="col-span-5 text-left">

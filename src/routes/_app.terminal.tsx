@@ -7,7 +7,7 @@ import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { settlePaperOrders, usePaperAccount } from "@/hooks/use-paper-account";
 import type { MarketCandle } from "@/lib/market-api";
-import { WATCHLIST } from "@/lib/market-catalog";
+import { WATCHLIST, type MarketCatalogItem } from "@/lib/market-catalog";
 
 export const Route = createFileRoute("/_app/terminal")({
   head: () => ({ meta: [{ title: "Terminal — MAET" }] }),
@@ -26,10 +26,11 @@ const INTERVAL_CONFIG: Record<string, { timeframe: MarketCandle["tf"]; range: st
 const WATCHLIST_SYMBOLS = WATCHLIST.map((item) => item.symbol);
 
 function Terminal() {
-  const [active, setActive] = useState("RELIANCE");
+  const [current, setCurrent] = useState<MarketCatalogItem>(WATCHLIST[0]);
   const [interval, setInterval] = useState("5m");
-  const current = WATCHLIST.find((item) => item.symbol === active) ?? WATCHLIST[0];
-  const { quoteMap, streamConnected, isError: quoteError } = useMarketQuotes(WATCHLIST_SYMBOLS);
+  const active = current.symbol;
+  const quoteSymbols = useMemo(() => [...new Set([...WATCHLIST_SYMBOLS, active])], [active]);
+  const { quoteMap, streamConnected, isError: quoteError } = useMarketQuotes(quoteSymbols);
   const { account, placeOrder } = usePaperAccount();
   const liveQuote = quoteMap.get(active);
   const intervalConfig = INTERVAL_CONFIG[interval];
@@ -57,7 +58,7 @@ function Terminal() {
   return (
     <div className="grid h-[calc(100vh-7rem)] grid-cols-[260px_1fr_260px]">
       <div className="border-r border-border">
-        <Watchlist active={active} onSelect={setActive} quotes={quoteMap} />
+        <Watchlist active={active} onSelect={setCurrent} quotes={quoteMap} />
       </div>
 
       <div className="flex flex-col">

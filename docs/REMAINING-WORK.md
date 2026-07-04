@@ -19,6 +19,9 @@ Last audited: 2026-07-04
   6,174 verified symbol/ISIN/Yahoo identifiers.
 - Company search covers symbol, company name, and ISIN; only the visible 50 symbols
   subscribe to broker/Yahoo quotes at a time.
+- Terminal, Universe and Chart Grid now use the same full-universe company
+  search API. Selecting WIPRO updates Terminal quote, chart and paper-order
+  context; Chart Grid selections persist locally.
 - Angel One's instrument master enriches the NSE universe with live-feed tokens
   without replacing NSE as the canonical source for company identity.
 - Angel One's authenticated REST quote snapshot supplies last traded prices
@@ -42,26 +45,23 @@ Last audited: 2026-07-04
   valuation ratios are calculated by a deterministic, unit-tested engine.
 - The options-chain route no longer renders randomly generated market values;
   it shows an explicit unavailable state until a verified derivatives feed exists.
+- The futures route no longer derives contracts, basis, expiry or margin from
+  cash quotes; it shows a professional unavailable state until a verified F&O
+  provider is connected.
 - Drizzle was upgraded past the identifier SQL-injection advisory.
 - Render configuration installs from the workspace lockfile and declares the
   required Supabase database URL.
-- Unit baseline: 104 passing, 9 environment-dependent tests skipped.
+- Unit baseline: 105 passing, 9 environment-dependent tests skipped.
 
-## Required Before Production Deployment
+## Production Configuration Verified
 
-1. Local PostgreSQL access and writes pass, but Render still reports a failed
-   `select 1`. Replace Render's `SUPABASE_DB_URL` with the exact Supabase shared
-   transaction-pooler URI (port 6543, `sslmode=require`, URL-encoded password)
-   and redeploy. The direct `db.<project>.supabase.co:5432` URI is not the
-   expected Render configuration.
-2. Redis reports reachable on Render. The previous Supabase REST 401 came from
-   probing the secret-key-only PostgREST OpenAPI root. The health probe now uses
-   a zero-row `companies` query, which verified the local project URL and anon
-   key with HTTP 200; redeploy to activate this corrected probe on Render.
-3. Confirm the Render dashboard uses the commands in `render.yaml`; dashboard
-   settings can override repository configuration.
-4. Repeat `bun run smoke:screener-v4` after production credential changes. The
-   2026-07-04 local run passed for RELIANCE, HDFCBANK, TCS, INFY, and
+1. Render `/api/health` reports PostgreSQL, Supabase REST, Redis, Yahoo, Angel
+   One and the instrument master reachable.
+2. Render uses the Supabase shared transaction-pooler URI on port 6543 with
+   `sslmode=require`; the current connection works without an IPv4 add-on.
+3. `bun run check:db` prints only redacted connection metadata and verifies
+   `select 1`, company count and fundamentals count.
+4. The 2026-07-04 local smoke run passed for RELIANCE, HDFCBANK, TCS, INFY and
    20MICRONS, including statements and an idempotent second pass.
 
 ## Screenshot Todo Audit
@@ -76,13 +76,11 @@ Last audited: 2026-07-04
   companies are enriched, and the resumable production batches continue at
   offset 310.
 - [x] Phase 4: Angel One quote/token/WebSocket integration.
-- [ ] Phase 5 (partial): local Supabase and Redis pipeline verified; Render's separate
-  PostgreSQL/REST credentials remain unhealthy.
+- [x] Phase 5: local and Render PostgreSQL, Supabase REST and Redis connections verified.
 - [x] Phase 6: 1D, 5D, 1M, 6M, 1Y, 3Y, 5Y, and All chart ranges.
 - [x] Phase 7: volume, SMA/EMA, RSI, and MACD are exposed on the chart.
 - [x] Phase 8: safe NSE TradingView links on screener and chart views.
-- [ ] Phase 9 (partial): Vercel and GitHub deployment verification pass; Render health
-  remains degraded until its environment variables are corrected.
+- [x] Phase 9: Vercel, GitHub and Render deployment health verified.
 - [x] Phase 10: final local verification and main-branch push workflow.
 
 ## Product Gaps
@@ -119,8 +117,7 @@ Last audited: 2026-07-04
 - The 2026-07-04 local smoke test reached PostgreSQL and Redis, synchronized
   2,058 companies and 6,174 identifiers, verified five fundamentals snapshots
   and 46 financial-statement periods, and changed no row counts on a repeated
-  pass. Render still needs its separate database connection fixed as described
-  above.
+  pass. Render's separate transaction-pooler connection now reports reachable.
 - Migration `0004_quality_audit_tables.sql` was applied on 2026-07-04. The new
   `source_audit` and `anomaly_flags` tables currently contain zero rows because
   audit/anomaly writers have not yet been connected to ingestion operations.
