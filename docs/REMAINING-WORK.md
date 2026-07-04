@@ -1,6 +1,6 @@
 # Remaining Work
 
-Last audited: 2026-07-03
+Last audited: 2026-07-04
 
 ## Completed And Verified
 
@@ -30,10 +30,11 @@ Last audited: 2026-07-03
   calculated-fundamental, and cap-classification schemas are included through
   migration `0003_screener_v4.sql`; migration `0004_quality_audit_tables.sql`
   adds ingestion audit and anomaly tables.
-- Yahoo `quoteSummary` still returns HTTP 401, but the verified public
+- Yahoo `quoteSummary` may return HTTP 401, but the verified public
   fundamentals-timeseries fallback now supplies normalized annual/quarterly
-  statements and market ratios. The database currently has 288 verified market
-  caps, 2,715 statement periods, and 293 fundamentals rows.
+  statements and market ratios. After the bounded offset-285 batch, the
+  database has 313 verified market caps, 2,944 statement periods, and 318
+  fundamentals rows.
 - Official Nifty 500 fundamentals enrichment is resumable in bounded batches:
   `ENRICH_OFFSET=0 ENRICH_LIMIT=25 bun run enrich:nifty500`. Each run upserts
   verified Yahoo results and reports the next offset without fetching candles.
@@ -44,22 +45,23 @@ Last audited: 2026-07-03
 - Drizzle was upgraded past the identifier SQL-injection advisory.
 - Render configuration installs from the workspace lockfile and declares the
   required Supabase database URL.
-- Unit baseline: 101 passing, 9 environment-dependent tests skipped.
+- Unit baseline: 104 passing, 9 environment-dependent tests skipped.
 
 ## Required Before Production Deployment
 
-1. The operator reports migrations `0001` through `0003` are applied, but the
-   2026-07-03 Render health check still reports `database: Failed query: select
-   1`. Correct `SUPABASE_DB_URL` until `/api/health` reports the database as
-   reachable. Use the Supabase transaction-pooler URI (normally port 6543,
-   `sslmode=require`) and URL-encode password special characters.
-2. Redis now reports reachable on Render. Supabase REST still reports HTTP 401,
-   so verify `SUPABASE_URL` and `SUPABASE_ANON_KEY` independently of the
-   PostgreSQL connection string.
+1. Local PostgreSQL access and writes pass, but Render still reports a failed
+   `select 1`. Replace Render's `SUPABASE_DB_URL` with the exact Supabase shared
+   transaction-pooler URI (port 6543, `sslmode=require`, URL-encoded password)
+   and redeploy. The direct `db.<project>.supabase.co:5432` URI is not the
+   expected Render configuration.
+2. Redis reports reachable on Render. The previous Supabase REST 401 came from
+   probing the secret-key-only PostgREST OpenAPI root. The health probe now uses
+   a zero-row `companies` query, which verified the local project URL and anon
+   key with HTTP 200; redeploy to activate this corrected probe on Render.
 3. Confirm the Render dashboard uses the commands in `render.yaml`; dashboard
    settings can override repository configuration.
 4. Repeat `bun run smoke:screener-v4` after production credential changes. The
-   2026-07-03 local run passed for RELIANCE, HDFCBANK, TCS, INFY, and
+   2026-07-04 local run passed for RELIANCE, HDFCBANK, TCS, INFY, and
    20MICRONS, including statements and an idempotent second pass.
 
 ## Screenshot Todo Audit
@@ -70,9 +72,9 @@ Last audited: 2026-07-03
 - [x] Phase 1.3: loading, API error, and empty-result states.
 - [x] Phase 1.4: screener tabs, sortable columns, visibility controls.
 - [x] Phase 2: 2,058-company NSE identity universe stored in PostgreSQL.
-- [ ] Phase 3 (partial): Yahoo timeseries enrichment works, 288 Nifty 500
+- [ ] Phase 3 (partial): Yahoo timeseries enrichment works, 313 Nifty 500
   companies are enriched, and the resumable production batches continue at
-  offset 285.
+  offset 310.
 - [x] Phase 4: Angel One quote/token/WebSocket integration.
 - [ ] Phase 5 (partial): local Supabase and Redis pipeline verified; Render's separate
   PostgreSQL/REST credentials remain unhealthy.
@@ -85,14 +87,14 @@ Last audited: 2026-07-03
 
 ## Product Gaps
 
-- 288 companies are fundamentals-enriched. Continue the Nifty 500 batches at
-  `ENRICH_OFFSET=285`; run the
+- 313 companies are fundamentals-enriched. Continue the Nifty 500 batches at
+  `ENRICH_OFFSET=310`; run the
   Nifty 500 enrichment in small sequential batches, advancing `ENRICH_OFFSET`
   only to the reported next offset. A partially failed batch reports its symbols
   and keeps the same offset so the idempotent batch can be retried safely.
   Yahoo availability still controls actual coverage.
   Market-cap buckets are now active using the documented Indian rank method:
-  100 large, 150 mid, and 38 small from the currently verified universe.
+  100 large, 150 mid, and 63 small from the currently verified universe.
 - Saved screeners currently persist in browser local storage for unauthenticated
   visitors. The existing `screener_runs` table and ownership-scoped tRPC CRUD
   can be used after the frontend has a verified authenticated user session.
@@ -114,8 +116,11 @@ Last audited: 2026-07-03
 - Run a market-hours soak test for Angel One reconnects and token subscriptions.
 - Re-run deployed scanner search/pagination and broker-stream browser journeys
   after each production deployment.
-- The 2026-07-03 local smoke test reached PostgreSQL and Redis, synchronized
+- The 2026-07-04 local smoke test reached PostgreSQL and Redis, synchronized
   2,058 companies and 6,174 identifiers, verified five fundamentals snapshots
   and 46 financial-statement periods, and changed no row counts on a repeated
   pass. Render still needs its separate database connection fixed as described
   above.
+- Migration `0004_quality_audit_tables.sql` was applied on 2026-07-04. The new
+  `source_audit` and `anomaly_flags` tables currently contain zero rows because
+  audit/anomaly writers have not yet been connected to ingestion operations.
