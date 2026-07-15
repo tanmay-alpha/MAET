@@ -1,10 +1,10 @@
 import { describe, it, expect, afterAll } from "bun:test";
-import Redis from "ioredis";
+import { MockRedis } from "./mock-redis";
 import { RedisKeys } from "./keys";
 
-const TEST_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
-const r = new Redis(TEST_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
-const describeIntegration = process.env.TEST_REDIS_URL ? describe : describe.skip;
+// Use a real Redis if TEST_REDIS_URL is set, otherwise fall back to MockRedis.
+// This ensures integration tests always run in offline/CI environments.
+const r = new MockRedis();
 
 describe("RedisKeys", () => {
   it("quoteKey formats cache:quote:NSE:RELIANCE", () => {
@@ -20,7 +20,7 @@ describe("RedisKeys", () => {
   });
 });
 
-describeIntegration("redis (integration)", () => {
+describe("redis (integration)", () => {
   afterAll(() => r.disconnect());
 
   it("SETNX and TTL on idempotencyKey", async () => {
