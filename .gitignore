@@ -66,3 +66,5 @@ docs/smoke-test-checklist.md
 *prompt*.md
 *report*.md
 *placeholder*.md
+# Performance tracing outputs
+trace.json

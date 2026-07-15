@@ -1,0 +1,643 @@
+import { eq, and, or, sql } from "drizzle-orm";
+import { db } from "../../data/drizzle/client";
+import {
+  paperAccounts,
+  paperOrders,
+  paperPositions,
+  companies,
+  fundamentals,
+} from "../../db/schema";
+import { calculateSlippage } from "./slippage";
+
+export interface MatchingReceipt {
+  orderId: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  price: number;
+  slippageApplied: number;
+  transactionFee: number;
+  executionTimestamp: string;
+  status: "FILLED" | "REJECTED";
+  rejectReason?: string;
+  updatedMarginLocked: number;
+  cashBalance: number;
+}
+
+// In-memory cache for company metadata to avoid DB roundtrips on every tick
+interface CompanyMetadata {
+  marketCapBucket?: string;
+  avgVolume?: number;
+}
+
+const metadataCache = new Map<string, CompanyMetadata>();
+
+async function getCompanyMetadata(symbol: string): Promise<CompanyMetadata> {
+  let cached = metadataCache.get(symbol);
+  if (!cached) {
+    try {
+      const results = await db
+        .select({
+          marketCapBucket: companies.marketCapBucket,
+          avgVolume: fundamentals.average20DayVolume,
+        })
+        .from(companies)
+        .leftJoin(fundamentals, eq(companies.id, fundamentals.companyId))
+        .where(eq(companies.symbol, symbol))
+        .limit(1);
+
+      if (results.length > 0) {
+        cached = {
+          marketCapBucket: results[0].marketCapBucket,
+          avgVolume: results[0].avgVolume || undefined,
+        };
+      } else {
+        cached = {};
+      }
+      metadataCache.set(symbol, cached);
+    } catch (e) {
+      console.error(`Failed to fetch company metadata for ${symbol}:`, e);
+      return {};
+    }
+  }
+  return cached;
+}
+
+// In-memory queue / mutex locks per symbol to process ticks sequentially
+const symbolLocks = new Map<string, Promise<void>>();
+
+async function runLocked<T>(symbol: string, fn: () => Promise<T>): Promise<T> {
+  const previous = symbolLocks.get(symbol) || Promise.resolve();
+  let resolveLock: () => void;
+  const next = new Promise<void>((resolve) => {
+    resolveLock = resolve;
+  });
+  symbolLocks.set(symbol, next);
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    resolveLock!();
+    if (symbolLocks.get(symbol) === next) {
+      symbolLocks.delete(symbol);
+    }
+  }
+}
+
+/**
+ * Hot path called by Angel One WebSocket when a tick is received.
+ * Coordinates order matching, bracket order triggers, slippage, and margin.
+ */
+export async function onTick(
+  symbol: string,
+  ltp: number,
+  bid: number,
+  ask: number,
+  volume: number
+): Promise<MatchingReceipt[]> {
+  return runLocked(symbol, async () => {
+    const meta = await getCompanyMetadata(symbol);
+    const receipts: MatchingReceipt[] = [];
+
+    // Ensure bid and ask default to ltp if they are not provided (or 0)
+    const executionBid = bid > 0 ? bid : ltp;
+    const executionAsk = ask > 0 ? ask : ltp;
+
+    // 1. First run the liquidation check for all users holding an active position in this symbol
+    const activePositions = await db
+      .select()
+      .from(paperPositions)
+      .where(eq(paperPositions.symbol, symbol));
+
+    for (const pos of activePositions) {
+      try {
+        await db.transaction(async (tx) => {
+          const [account] = await tx
+            .select()
+            .from(paperAccounts)
+            .where(eq(paperAccounts.userId, pos.userId))
+            .for("update");
+
+          if (!account) return;
+
+          // Select and lock all positions of this user to find current total unrealized PnL
+          const userPositions = await tx
+            .select()
+            .from(paperPositions)
+            .where(eq(paperPositions.userId, pos.userId))
+            .for("update");
+
+          let totalUnrealizedPnl = 0;
+          for (const p of userPositions) {
+            if (p.symbol === symbol) {
+              const shares = p.totalShares;
+              const avgPrice = Number(p.averageEntryPrice);
+              const pnl =
+                shares > 0
+                  ? shares * (ltp - avgPrice)
+                  : Math.abs(shares) * (avgPrice - ltp);
+              totalUnrealizedPnl += pnl;
+            } else {
+              totalUnrealizedPnl += Number(p.unrealizedPnl);
+            }
+          }
+
+          const cashBalance = Number(account.cashBalance);
+          const allocatedMargin = Number(account.allocatedMargin);
+          const maintenanceMargin = Number(account.maintenanceMargin);
+          const equity = cashBalance + totalUnrealizedPnl;
+
+          if (equity < maintenanceMargin) {
+            // Trigger auto-liquidation
+            await liquidateAccount(tx, pos.userId, ltp);
+          } else {
+            // Recalculate and update the unrealized P&L of the position in the db
+            const currentPosition = userPositions.find((p) => p.symbol === symbol);
+            if (currentPosition) {
+              const shares = currentPosition.totalShares;
+              const avgPrice = Number(currentPosition.averageEntryPrice);
+              const currentPnl =
+                shares > 0
+                  ? shares * (ltp - avgPrice)
+                  : Math.abs(shares) * (avgPrice - ltp);
+              
+              await tx
+                .update(paperPositions)
+                .set({
+                  unrealizedPnl: currentPnl.toString(),
+                  updatedAt: new Date(),
+                })
+                .where(eq(paperPositions.id, currentPosition.id));
+            }
+          }
+        });
+      } catch (err) {
+        console.error(`Liquidation check transaction error for user ${pos.userId}:`, err);
+      }
+    }
+
+    // 2. Fetch pending paper orders for this symbol
+    const pendingOrders = await db
+      .select()
+      .from(paperOrders)
+      .where(
+        and(
+          eq(paperOrders.symbol, symbol),
+          or(
+            eq(paperOrders.status, "PENDING"),
+            eq(paperOrders.status, "TRIGGER_PENDING")
+          )
+        )
+      );
+
+    for (const order of pendingOrders) {
+      let isTriggered = false;
+      let isMatched = false;
+      let fillPrice = 0;
+      let slippage = 0;
+
+      if (order.status === "TRIGGER_PENDING") {
+        // Trigger verification for STOP_LOSS_LIMIT orders
+        if (order.type === "STOP_LOSS_LIMIT" && order.stopPrice) {
+          const stopPriceNum = Number(order.stopPrice);
+          if (order.side === "BUY" && ltp >= stopPriceNum) {
+            isTriggered = true;
+          } else if (order.side === "SELL" && ltp <= stopPriceNum) {
+            isTriggered = true;
+          }
+        }
+
+        // If triggered, update status to PENDING
+        if (isTriggered) {
+          await db
+            .update(paperOrders)
+            .set({ status: "PENDING", updatedAt: new Date() })
+            .where(eq(paperOrders.id, order.id));
+          order.status = "PENDING";
+        }
+      }
+
+      if (order.status === "PENDING") {
+        if (order.type === "MARKET") {
+          isMatched = true;
+          // Apply slippage penalty for market orders
+          slippage = calculateSlippage(
+            ltp,
+            order.qty,
+            meta.avgVolume,
+            meta.marketCapBucket
+          );
+          if (order.side === "BUY") {
+            fillPrice = executionAsk + slippage;
+          } else {
+            fillPrice = Math.max(0.05, executionBid - slippage);
+          }
+        } else if (order.type === "LIMIT") {
+          const limitPriceNum = Number(order.limitPrice);
+          if (order.side === "BUY" && executionAsk <= limitPriceNum) {
+            isMatched = true;
+            fillPrice = limitPriceNum;
+          } else if (order.side === "SELL" && executionBid >= limitPriceNum) {
+            isMatched = true;
+            fillPrice = limitPriceNum;
+          }
+        } else if (order.type === "STOP_LOSS_LIMIT" && isTriggered) {
+          const limitPriceNum = Number(order.limitPrice);
+          slippage = calculateSlippage(
+            ltp,
+            order.qty,
+            meta.avgVolume,
+            meta.marketCapBucket
+          );
+          if (order.side === "BUY" && executionAsk <= limitPriceNum) {
+            isMatched = true;
+            fillPrice = limitPriceNum + slippage;
+          } else if (order.side === "SELL" && executionBid >= limitPriceNum) {
+            isMatched = true;
+            fillPrice = Math.max(0.05, limitPriceNum - slippage);
+          }
+        }
+      }
+
+      if (!isMatched) continue;
+
+      // 3. Execute matching transaction
+      try {
+        const receipt = await db.transaction(async (tx) => {
+          // Select and lock the account
+          const [account] = await tx
+            .select()
+            .from(paperAccounts)
+            .where(eq(paperAccounts.userId, order.userId))
+            .for("update");
+
+          if (!account) {
+            throw new Error(`Paper account not found for user ${order.userId}`);
+          }
+
+          // Select and lock current position for this symbol
+          const [position] = await tx
+            .select()
+            .from(paperPositions)
+            .where(
+              and(
+                eq(paperPositions.userId, order.userId),
+                eq(paperPositions.symbol, symbol),
+                eq(paperPositions.exchange, order.exchange)
+              )
+            )
+            .for("update");
+
+          // Fetch all other positions for unrealized PnL calculation
+          const allPositions = await tx
+            .select()
+            .from(paperPositions)
+            .where(eq(paperPositions.userId, order.userId));
+
+          let otherUnrealizedPnl = 0;
+          for (const pos of allPositions) {
+            if (pos.symbol !== symbol) {
+              otherUnrealizedPnl += Number(pos.unrealizedPnl);
+            }
+          }
+
+          const oldShares = position ? position.totalShares : 0;
+          const oldAvgPrice = position ? Number(position.averageEntryPrice) : 0;
+          const oldMarginLocked = position ? Number(position.marginLocked) : 0;
+
+          // Transaction fees: NSE charges 0.00345%
+          const transactionFee = fillPrice * order.qty * 0.0000345;
+
+          let newShares = oldShares;
+          let newAvgPrice = oldAvgPrice;
+          let realizedPnl = 0;
+
+          if (order.side === "BUY") {
+            newShares = oldShares + order.qty;
+          } else {
+            newShares = oldShares - order.qty;
+          }
+
+          // Calculate realized P&L and average price
+          if (oldShares === 0) {
+            newAvgPrice = fillPrice;
+          } else if (Math.sign(oldShares) === Math.sign(newShares)) {
+            newAvgPrice =
+              (Math.abs(oldShares) * oldAvgPrice + order.qty * fillPrice) /
+              Math.abs(newShares);
+          } else {
+            const closedQty = Math.min(order.qty, Math.abs(oldShares));
+            const direction = Math.sign(oldShares);
+
+            if (direction > 0) {
+              realizedPnl = closedQty * (fillPrice - oldAvgPrice);
+            } else {
+              realizedPnl = closedQty * (oldAvgPrice - fillPrice);
+            }
+
+            const remainderQty = order.qty - closedQty;
+            if (remainderQty > 0) {
+              newShares = direction > 0 ? -remainderQty : remainderQty;
+              newAvgPrice = fillPrice;
+            } else {
+              newAvgPrice = oldAvgPrice;
+            }
+          }
+
+          const newUnrealizedPnl =
+            newShares === 0
+              ? 0
+              : newShares > 0
+              ? newShares * (ltp - newAvgPrice)
+              : Math.abs(newShares) * (newAvgPrice - ltp);
+
+          const leverage = account.leverageFactor;
+          const newMarginLocked =
+            newShares === 0 ? 0 : (Math.abs(newShares) * newAvgPrice) / leverage;
+
+          const marginIncrement = newMarginLocked - oldMarginLocked;
+
+          // Margin check
+          const cashBalance = Number(account.cashBalance);
+          const currentAllocatedMargin = Number(account.allocatedMargin);
+          const totalUnrealizedPnl = otherUnrealizedPnl + newUnrealizedPnl;
+          const equity = cashBalance + totalUnrealizedPnl;
+          const freeMargin = equity - currentAllocatedMargin;
+
+          if (marginIncrement > 0 && freeMargin < marginIncrement) {
+            await tx
+              .update(paperOrders)
+              .set({
+                status: "REJECTED",
+                rejectReason: "Insufficient margin",
+                updatedAt: new Date(),
+              })
+              .where(eq(paperOrders.id, order.id));
+
+            return {
+              orderId: order.id,
+              symbol,
+              side: order.side,
+              qty: order.qty,
+              price: fillPrice,
+              slippageApplied: slippage,
+              transactionFee,
+              executionTimestamp: new Date().toISOString(),
+              status: "REJECTED" as const,
+              rejectReason: "Insufficient margin",
+              updatedMarginLocked: currentAllocatedMargin,
+              cashBalance,
+            };
+          }
+
+          // Update position
+          if (newShares === 0) {
+            await tx
+              .delete(paperPositions)
+              .where(
+                and(
+                  eq(paperPositions.userId, order.userId),
+                  eq(paperPositions.symbol, symbol),
+                  eq(paperPositions.exchange, order.exchange)
+                )
+              );
+          } else {
+            await tx
+              .insert(paperPositions)
+              .values({
+                id: position?.id || crypto.randomUUID(),
+                userId: order.userId,
+                symbol,
+                exchange: order.exchange,
+                averageEntryPrice: newAvgPrice.toString(),
+                totalShares: newShares,
+                realizedPnl: ((position ? Number(position.realizedPnl) : 0) + realizedPnl).toString(),
+                unrealizedPnl: newUnrealizedPnl.toString(),
+                marginLocked: newMarginLocked.toString(),
+                updatedAt: new Date(),
+              })
+              .onConflictDoUpdate({
+                target: [
+                  paperPositions.userId,
+                  paperPositions.symbol,
+                  paperPositions.exchange,
+                ],
+                set: {
+                  averageEntryPrice: newAvgPrice.toString(),
+                  totalShares: newShares,
+                  realizedPnl: ((position ? Number(position.realizedPnl) : 0) + realizedPnl).toString(),
+                  unrealizedPnl: newUnrealizedPnl.toString(),
+                  marginLocked: newMarginLocked.toString(),
+                  updatedAt: new Date(),
+                },
+              });
+          }
+
+          const updatedAllocatedMargin = currentAllocatedMargin + marginIncrement;
+          const updatedMaintenanceMargin = updatedAllocatedMargin * 0.8;
+
+          // Update account
+          const newCashBalance = cashBalance + realizedPnl - transactionFee;
+          await tx
+            .update(paperAccounts)
+            .set({
+              cashBalance: newCashBalance.toString(),
+              allocatedMargin: updatedAllocatedMargin.toString(),
+              maintenanceMargin: updatedMaintenanceMargin.toString(),
+              updatedAt: new Date(),
+            })
+            .where(eq(paperAccounts.userId, order.userId));
+
+          // Update order status to FILLED
+          await tx
+            .update(paperOrders)
+            .set({
+              status: "FILLED",
+              filledQty: order.qty,
+              averageFillPrice: fillPrice.toString(),
+              slippageApplied: slippage.toString(),
+              transactionFee: transactionFee.toString(),
+              filledAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(paperOrders.id, order.id));
+
+          // 4. Bracket order chain management
+          if (
+            (order.takeProfitPrice && Number(order.takeProfitPrice) > 0) ||
+            (order.stopLossPrice && Number(order.stopLossPrice) > 0)
+          ) {
+            const childSide = order.side === "BUY" ? "SELL" : "BUY";
+
+            if (order.takeProfitPrice && Number(order.takeProfitPrice) > 0) {
+              await tx.insert(paperOrders).values({
+                id: crypto.randomUUID(),
+                userId: order.userId,
+                parentOrderId: order.id,
+                symbol,
+                exchange: order.exchange,
+                side: childSide,
+                type: "LIMIT",
+                status: "PENDING",
+                executionType: "GOOD_TILL_CANCELLED",
+                qty: order.qty,
+                limitPrice: order.takeProfitPrice,
+              });
+            }
+
+            if (order.stopLossPrice && Number(order.stopLossPrice) > 0) {
+              await tx.insert(paperOrders).values({
+                id: crypto.randomUUID(),
+                userId: order.userId,
+                parentOrderId: order.id,
+                symbol,
+                exchange: order.exchange,
+                side: childSide,
+                type: "STOP_LOSS_LIMIT",
+                status: "TRIGGER_PENDING",
+                executionType: "GOOD_TILL_CANCELLED",
+                qty: order.qty,
+                stopPrice: order.stopLossPrice,
+                limitPrice: order.stopLossPrice,
+              });
+            }
+          }
+
+          // If this is a filled child order, cancel the sibling order (OCO)
+          if (order.parentOrderId) {
+            const siblings = await tx
+              .select()
+              .from(paperOrders)
+              .where(
+                and(
+                  eq(paperOrders.parentOrderId, order.parentOrderId),
+                  sql`${paperOrders.id} != ${order.id}`
+                )
+              );
+
+            for (const sibling of siblings) {
+              if (
+                sibling.status === "PENDING" ||
+                sibling.status === "TRIGGER_PENDING"
+              ) {
+                await tx
+                  .update(paperOrders)
+                  .set({
+                    status: "CANCELLED",
+                    updatedAt: new Date(),
+                  })
+                  .where(eq(paperOrders.id, sibling.id));
+              }
+            }
+          }
+
+          // 5. Margin Liquidation Check
+          const freshEquity = newCashBalance + totalUnrealizedPnl;
+          if (freshEquity < updatedMaintenanceMargin) {
+            await liquidateAccount(tx, order.userId, ltp);
+          }
+
+          return {
+            orderId: order.id,
+            symbol,
+            side: order.side,
+            qty: order.qty,
+            price: fillPrice,
+            slippageApplied: slippage,
+            transactionFee,
+            executionTimestamp: new Date().toISOString(),
+            status: "FILLED" as const,
+            updatedMarginLocked: newShares === 0 ? 0 : updatedAllocatedMargin,
+            cashBalance: newCashBalance,
+          };
+        });
+
+        if (receipt) {
+          receipts.push(receipt);
+        }
+      } catch (err) {
+        console.error(`Matching transaction error for order ${order.id}:`, err);
+      }
+    }
+
+    return receipts;
+  });
+}
+
+/**
+ * Liquidation of all open positions in the database for the given user.
+ */
+async function liquidateAccount(tx: any, userId: string, ltp: number) {
+  console.warn(`[MARGIN CALL] Auto-liquidating account for user ${userId}`);
+
+  // Fetch all open positions
+  const openPositions = await tx
+    .select()
+    .from(paperPositions)
+    .where(eq(paperPositions.userId, userId))
+    .for("update");
+
+  for (const pos of openPositions) {
+    const qty = pos.totalShares;
+    if (qty === 0) continue;
+
+    const side = qty > 0 ? "SELL" : "BUY";
+    const absQty = Math.abs(qty);
+    const avgPrice = Number(pos.averageEntryPrice);
+
+    const meta = await getCompanyMetadata(pos.symbol);
+    const slippage = calculateSlippage(
+      ltp,
+      absQty,
+      meta.avgVolume,
+      meta.marketCapBucket
+    );
+
+    const fillPrice =
+      side === "BUY" ? ltp + slippage : Math.max(0.05, ltp - slippage);
+    const fee = fillPrice * absQty * 0.0000345;
+
+    const realizedPnl =
+      qty > 0 ? absQty * (fillPrice - avgPrice) : absQty * (avgPrice - fillPrice);
+
+    await tx.insert(paperOrders).values({
+      id: crypto.randomUUID(),
+      userId,
+      symbol: pos.symbol,
+      exchange: pos.exchange,
+      side,
+      type: "MARKET",
+      status: "FILLED",
+      executionType: "GOOD_TILL_CANCELLED",
+      qty: absQty,
+      filledQty: absQty,
+      averageFillPrice: fillPrice.toString(),
+      slippageApplied: slippage.toString(),
+      transactionFee: fee.toString(),
+      placedAt: new Date(),
+      filledAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await tx
+      .delete(paperPositions)
+      .where(eq(paperPositions.id, pos.id));
+
+    const [acc] = await tx
+      .select()
+      .from(paperAccounts)
+      .where(eq(paperAccounts.userId, userId))
+      .for("update");
+
+    const newCash = Number(acc.cashBalance) + realizedPnl - fee;
+    await tx
+      .update(paperAccounts)
+      .set({
+        cashBalance: newCash.toString(),
+        allocatedMargin: "0.0000",
+        maintenanceMargin: "0.0000",
+        updatedAt: new Date(),
+      })
+      .where(eq(paperAccounts.userId, userId));
+  }
+}

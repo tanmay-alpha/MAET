@@ -21,6 +21,140 @@ function mergeQuote(response: MarketQuotesResponse | undefined, tick: MarketQuot
   };
 }
 
+type StreamCallback = (type: "tick" | "snapshot", data: any) => void;
+
+class MarketStreamManager {
+  private static instance: MarketStreamManager | null = null;
+  private eventSource: EventSource | null = null;
+  private listeners = new Map<string, Set<StreamCallback>>();
+  private statusListeners = new Set<(connected: boolean) => void>();
+  private activeSymbols = new Set<string>();
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private isConnected = false;
+
+  private constructor() {}
+
+  public static getInstance(): MarketStreamManager {
+    if (!MarketStreamManager.instance) {
+      MarketStreamManager.instance = new MarketStreamManager();
+    }
+    return MarketStreamManager.instance;
+  }
+
+  public subscribe(symbols: string[], callback: StreamCallback, onStatusChange: (connected: boolean) => void): () => void {
+    symbols.forEach(symbol => {
+      let symbolListeners = this.listeners.get(symbol);
+      if (!symbolListeners) {
+        symbolListeners = new Set();
+        this.listeners.set(symbol, symbolListeners);
+      }
+      symbolListeners.add(callback);
+      this.activeSymbols.add(symbol);
+    });
+
+    this.statusListeners.add(onStatusChange);
+    onStatusChange(this.isConnected);
+
+    this.debounceReconnect();
+
+    return () => {
+      symbols.forEach(symbol => {
+        const symbolListeners = this.listeners.get(symbol);
+        if (symbolListeners) {
+          symbolListeners.delete(callback);
+          if (symbolListeners.size === 0) {
+            this.listeners.delete(symbol);
+            this.activeSymbols.delete(symbol);
+          }
+        }
+      });
+      
+      this.statusListeners.delete(onStatusChange);
+      this.debounceReconnect();
+    };
+  }
+
+  private debounceReconnect() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnect();
+    }, 400); // 400ms debounce
+  }
+
+  private reconnect() {
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+
+    if (this.activeSymbols.size === 0) {
+      if (this.isConnected) {
+        this.isConnected = false;
+        this.notifyStatus(false);
+      }
+      return;
+    }
+
+    const sortedSymbols = Array.from(this.activeSymbols).sort();
+    const params = new URLSearchParams();
+    sortedSymbols.forEach(s => params.append("symbols", s));
+    const url = `${API_BASE_URL}/api/market/stream?${params}`;
+
+    try {
+      const source = new EventSource(url);
+      this.eventSource = source;
+
+      source.onopen = () => {
+        this.isConnected = true;
+        this.notifyStatus(true);
+      };
+
+      const handleMessage = (type: "tick" | "snapshot") => (event: MessageEvent<string>) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if (type === "snapshot") {
+            const quotes = data.quotes || [];
+            quotes.forEach((quote: any) => {
+              const symbol = quote.symbol;
+              const symbolListeners = this.listeners.get(symbol);
+              if (symbolListeners) {
+                symbolListeners.forEach(cb => cb("snapshot", { quotes: [quote], errors: [] }));
+              }
+            });
+          } else {
+            const symbol = data.symbol;
+            const symbolListeners = this.listeners.get(symbol);
+            if (symbolListeners) {
+              symbolListeners.forEach(cb => cb("tick", data));
+            }
+          }
+        } catch (e) {
+          console.error("Failed to parse market stream message:", e);
+        }
+      };
+
+      source.addEventListener("snapshot", handleMessage("snapshot") as EventListener);
+      source.addEventListener("tick", handleMessage("tick") as EventListener);
+
+      source.onerror = () => {
+        this.isConnected = false;
+        this.notifyStatus(false);
+        source.close();
+      };
+    } catch (err) {
+      console.error("Error creating EventSource:", err);
+    }
+  }
+
+  private notifyStatus(connected: boolean) {
+    this.statusListeners.forEach(listener => listener(connected));
+  }
+}
+
 export function useMarketQuotes(symbols: string[]) {
   const symbolInput = symbols.join(",");
   const normalized = useMemo(
@@ -44,37 +178,28 @@ export function useMarketQuotes(symbols: string[]) {
 
   useEffect(() => {
     if (typeof window === "undefined" || normalized.length === 0 || !API_BASE_URL) return;
-    const params = new URLSearchParams({ symbols: symbolKey });
-    const source = new EventSource(`${API_BASE_URL}/api/market/stream?${params}`);
 
-    source.onopen = () => setStreamConnected(true);
-    source.addEventListener("tick", (event) => {
-      const tick = JSON.parse((event as MessageEvent<string>).data) as MarketQuote;
-      queryClient.setQueryData<MarketQuotesResponse>(queryKey, (current) => mergeQuote(current, tick));
-    });
-    source.addEventListener("snapshot", (event) => {
-      const snapshot = JSON.parse((event as MessageEvent<string>).data) as Pick<
-        MarketQuotesResponse,
-        "quotes" | "errors"
-      >;
-      queryClient.setQueryData<MarketQuotesResponse>(queryKey, (current) => ({
-        asOf: new Date().toISOString(),
-        source: current?.source ?? "yahoo",
-        delayed: current?.delayed ?? true,
-        quotes: snapshot.quotes,
-        errors: snapshot.errors,
-      }));
-    });
-    source.onerror = () => {
-      setStreamConnected(false);
-      source.close();
-    };
+    const manager = MarketStreamManager.getInstance();
+    const unsubscribe = manager.subscribe(
+      normalized,
+      (type, data) => {
+        if (type === "tick") {
+          queryClient.setQueryData<MarketQuotesResponse>(queryKey, (current) => mergeQuote(current, data));
+        } else if (type === "snapshot") {
+          data.quotes.forEach((quote: any) => {
+            queryClient.setQueryData<MarketQuotesResponse>(queryKey, (current) => mergeQuote(current, quote));
+          });
+        }
+      },
+      (connected) => {
+        setStreamConnected(connected);
+      }
+    );
 
     return () => {
-      source.close();
-      setStreamConnected(false);
+      unsubscribe();
     };
-  }, [normalized.length, queryClient, queryKey, symbolKey]);
+  }, [symbolKey, queryClient, queryKey]);
 
   const quoteMap = useMemo(
     () => new Map((query.data?.quotes ?? []).map((quote) => [quote.symbol, quote])),

@@ -18,6 +18,10 @@ export const orderSide = pgEnum("order_side", ["BUY", "SELL"]);
 export const orderType = pgEnum("order_type", ["MARKET", "LIMIT", "SL", "SL-M"]);
 export const orderStatus = pgEnum("order_status", ["pending", "partial", "filled", "cancelled", "rejected"]);
 
+export const paperOrderType = pgEnum("paper_order_type", ["LIMIT", "MARKET", "STOP_LOSS_LIMIT"]);
+export const paperOrderStatus = pgEnum("paper_order_status", ["TRIGGER_PENDING", "PENDING", "PARTIALLY_FILLED", "FILLED", "REJECTED", "CANCELLED"]);
+export const paperExecutionType = pgEnum("paper_execution_type", ["IMMEDIATE_OR_CANCEL", "GOOD_TILL_CANCELLED"]);
+
 export const users = pgTable("users", {
   id: uuid("id").primaryKey(),
   email: text("email").notNull(),
@@ -366,5 +370,68 @@ export const anomalyFlags = pgTable("anomaly_flags", {
   index("anomaly_flags_check_type_idx").on(table.checkType),
   index("anomaly_flags_resolved_idx").on(table.isResolved, table.detectedAt),
   index("anomaly_flags_detected_idx").on(table.detectedAt),
+]);
+
+// =============================================================================
+// Paper Trading Tables
+// =============================================================================
+
+export const paperAccounts = pgTable("paper_accounts", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  cashBalance: numeric("cash_balance", { precision: 18, scale: 4 }).notNull().default("10000000.0000"),
+  allocatedMargin: numeric("allocated_margin", { precision: 18, scale: 4 }).notNull().default("0.0000"),
+  maintenanceMargin: numeric("maintenance_margin", { precision: 18, scale: 4 }).notNull().default("0.0000"),
+  leverageFactor: integer("leverage_factor").notNull().default(5),
+  liquidationThreshold: numeric("liquidation_threshold", { precision: 10, scale: 4 }).notNull().default("0.1000"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const paperOrders = pgTable("paper_orders", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  parentOrderId: uuid("parent_order_id").references((): any => paperOrders.id, { onDelete: "cascade" }),
+  symbol: text("symbol").notNull(),
+  exchange: text("exchange").notNull().default("NSE"),
+  side: orderSide("side").notNull(),
+  type: paperOrderType("type").notNull(),
+  status: paperOrderStatus("status").notNull().default("PENDING"),
+  executionType: paperExecutionType("execution_type").notNull().default("GOOD_TILL_CANCELLED"),
+  qty: integer("qty").notNull(),
+  limitPrice: numeric("limit_price", { precision: 18, scale: 4 }),
+  stopPrice: numeric("stop_price", { precision: 18, scale: 4 }),
+  stopLossPrice: numeric("stop_loss_price", { precision: 18, scale: 4 }),
+  takeProfitPrice: numeric("take_profit_price", { precision: 18, scale: 4 }),
+  filledQty: integer("filled_qty").notNull().default(0),
+  averageFillPrice: numeric("average_fill_price", { precision: 18, scale: 4 }),
+  slippageApplied: numeric("slippage_applied", { precision: 18, scale: 4 }).default("0.0000"),
+  transactionFee: numeric("transaction_fee", { precision: 18, scale: 4 }).default("0.0000"),
+  rejectReason: text("reject_reason"),
+  placedAt: timestamp("placed_at", { withTimezone: true }).notNull().defaultNow(),
+  filledAt: timestamp("filled_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("paper_orders_user_idx").on(table.userId),
+  index("paper_orders_symbol_idx").on(table.symbol),
+  index("paper_orders_parent_idx").on(table.parentOrderId),
+  index("paper_orders_status_idx").on(table.status),
+]);
+
+export const paperPositions = pgTable("paper_positions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  symbol: text("symbol").notNull(),
+  exchange: text("exchange").notNull().default("NSE"),
+  averageEntryPrice: numeric("average_entry_price", { precision: 18, scale: 4 }).notNull(),
+  totalShares: integer("total_shares").notNull(),
+  realizedPnl: numeric("realized_pnl", { precision: 18, scale: 4 }).notNull().default("0.0000"),
+  unrealizedPnl: numeric("unrealized_pnl", { precision: 18, scale: 4 }).notNull().default("0.0000"),
+  marginLocked: numeric("margin_locked", { precision: 18, scale: 4 }).notNull().default("0.0000"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("paper_positions_user_symbol_exchange_unique").on(table.userId, table.symbol, table.exchange),
+  index("paper_positions_user_idx").on(table.userId),
+  index("paper_positions_symbol_idx").on(table.symbol),
 ]);
 
