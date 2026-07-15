@@ -68,14 +68,14 @@ function Terminal() {
             <div className="text-xs text-muted-foreground">{current.name} · NSE</div>
           </div>
           <div className="flex items-baseline gap-4">
-            <div className="font-mono tabular text-xl font-semibold">{currentPrice?.toFixed(2) ?? "—"}</div>
-            <div className={`font-mono tabular text-sm ${(currentChange ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+            <div className="font-mono tabular tabular-nums text-xl font-semibold">{currentPrice?.toFixed(2) ?? "—"}</div>
+            <div className={`font-mono tabular tabular-nums text-sm ${(currentChange ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
               {currentChange === undefined
                 ? "Loading quote"
                 : `${currentChange >= 0 ? "+" : ""}${currentChange.toFixed(2)} (${(currentChangePct ?? 0).toFixed(2)}%)`}
             </div>
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              {quoteError ? "Quote unavailable" : streamConnected ? "Yahoo delayed" : "Connecting"}
+              {quoteError ? "Quote unavailable" : streamConnected ? "● Angel One Live Feed (NSE Stream Connected)" : "Connecting"}
             </div>
           </div>
         </div>
@@ -99,7 +99,7 @@ function Terminal() {
             <button key={item} className="rounded px-2 py-1 text-muted-foreground hover:text-foreground">{item}</button>
           ))}
           {lastCandle && (
-            <div className="ml-auto flex items-center gap-3 text-[11px] font-mono tabular text-muted-foreground">
+            <div className="ml-auto flex items-center gap-3 text-[11px] font-mono tabular tabular-nums text-muted-foreground">
               <span>O <span className="text-foreground">{lastCandle.o.toFixed(2)}</span></span>
               <span>H <span className="text-bull">{lastCandle.h.toFixed(2)}</span></span>
               <span>L <span className="text-bear">{lastCandle.l.toFixed(2)}</span></span>
@@ -137,10 +137,10 @@ function Terminal() {
                   return (
                     <tr key={position.symbol} className="border-t border-border hover:bg-accent/50">
                       <td className="px-4 py-2 font-medium">{position.symbol}</td>
-                      <td className="text-right font-mono tabular">{position.qty}</td>
-                      <td className="text-right font-mono tabular">{position.avgPrice.toFixed(2)}</td>
-                      <td className="text-right font-mono tabular">{ltp?.toFixed(2) ?? "—"}</td>
-                      <td className={`px-4 text-right font-mono tabular ${(pnl ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                      <td className="text-right font-mono tabular tabular-nums">{position.qty}</td>
+                      <td className="text-right font-mono tabular tabular-nums">{position.avgPrice.toFixed(2)}</td>
+                      <td className="text-right font-mono tabular tabular-nums">{ltp?.toFixed(2) ?? "—"}</td>
+                      <td className={`px-4 text-right font-mono tabular tabular-nums ${(pnl ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
                         {pnl === undefined ? "—" : `${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}`}
                       </td>
                     </tr>

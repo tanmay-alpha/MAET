@@ -42,8 +42,8 @@ function StatCard({
         <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
         <Icon className="h-4 w-4 text-muted-foreground" />
       </div>
-      <div className="mt-2 font-mono text-2xl font-semibold tabular">{value}</div>
-      <div className={`mt-1 flex items-center gap-1 font-mono text-xs tabular ${trend === "up" ? "text-bull" : trend === "down" ? "text-bear" : "text-muted-foreground"}`}>
+      <div className="mt-2 font-mono text-2xl font-semibold tabular tabular-nums">{value}</div>
+      <div className={`mt-1 flex items-center gap-1 font-mono text-xs tabular tabular-nums ${trend === "up" ? "text-bull" : trend === "down" ? "text-bear" : "text-muted-foreground"}`}>
         {trend === "up" && <ArrowUpRight className="h-3 w-3" />}
         {trend === "down" && <ArrowDownRight className="h-3 w-3" />}
         {sub}
@@ -78,7 +78,7 @@ function Dashboard() {
         <div>
           <h1 className="text-xl font-semibold">Paper trading dashboard</h1>
           <p className="text-xs text-muted-foreground">
-            {isError ? "Market quote service unavailable" : streamConnected ? "Yahoo delayed quotes connected" : "Connecting to market quotes"}
+            {isError ? "Market quote service unavailable" : streamConnected ? "● Angel One Live Feed (NSE Stream Connected)" : "Connecting to market quotes"}
             {" · "}paper account is stored in this browser
           </p>
         </div>
@@ -116,10 +116,10 @@ function Dashboard() {
                   return (
                     <tr key={position.symbol} className="border-t border-border">
                       <td className="px-4 py-2.5 font-medium">{position.symbol}</td>
-                      <td className="text-right font-mono tabular">{position.qty}</td>
-                      <td className="text-right font-mono tabular">{position.avgPrice.toFixed(2)}</td>
-                      <td className="text-right font-mono tabular">{ltp?.toFixed(2) ?? "—"}</td>
-                      <td className={`px-4 text-right font-mono tabular ${(pnl ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                      <td className="text-right font-mono tabular tabular-nums">{position.qty}</td>
+                      <td className="text-right font-mono tabular tabular-nums">{position.avgPrice.toFixed(2)}</td>
+                      <td className="text-right font-mono tabular tabular-nums">{ltp?.toFixed(2) ?? "—"}</td>
+                      <td className={`px-4 text-right font-mono tabular tabular-nums ${(pnl ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
                         {pnl === undefined ? "—" : `${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}`}
                       </td>
                     </tr>
@@ -142,8 +142,8 @@ function Dashboard() {
                 <div key={index.symbol} className="flex items-center justify-between px-4 py-2.5 text-xs">
                   <div className="font-medium">{index.symbol}</div>
                   <div className="text-right">
-                    <div className="font-mono tabular">{quote?.price.toLocaleString("en-IN") ?? "—"}</div>
-                    <div className={`font-mono text-[10px] tabular ${(quote?.changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                    <div className="font-mono tabular tabular-nums">{quote?.price.toLocaleString("en-IN") ?? "—"}</div>
+                    <div className={`font-mono text-[10px] tabular tabular-nums ${(quote?.changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
                       {quote?.changePct === undefined ? "Waiting for quote" : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}%`}
                     </div>
                   </div>
@@ -167,11 +167,11 @@ function Dashboard() {
             <tbody>
               {account.orders.slice(0, 20).map((order) => (
                 <tr key={order.id} className="border-t border-border">
-                  <td className="px-4 py-2.5 font-mono tabular text-muted-foreground">{new Date(order.placedAt).toLocaleTimeString("en-IN")}</td>
+                  <td className="px-4 py-2.5 font-mono tabular tabular-nums text-muted-foreground">{new Date(order.placedAt).toLocaleTimeString("en-IN")}</td>
                   <td className="font-medium">{order.symbol}</td>
                   <td className="text-center"><span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${order.side === "BUY" ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"}`}>{order.side}</span></td>
-                  <td className="text-right font-mono tabular">{order.qty}</td>
-                  <td className="text-right font-mono tabular">{(order.fillPrice ?? order.triggerPrice)?.toFixed(2) ?? "—"}</td>
+                  <td className="text-right font-mono tabular tabular-nums">{order.qty}</td>
+                  <td className="text-right font-mono tabular tabular-nums">{(order.fillPrice ?? order.triggerPrice)?.toFixed(2) ?? "—"}</td>
                   <td className={`px-4 text-right ${order.status === "filled" ? "text-bull" : order.status === "rejected" ? "text-bear" : "text-muted-foreground"}`} title={order.rejectReason}>{order.status}</td>
                 </tr>
               ))}

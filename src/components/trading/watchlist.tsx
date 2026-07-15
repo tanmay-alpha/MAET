@@ -39,8 +39,8 @@ export function Watchlist({
                 <div className="font-medium">{item.symbol}</div>
                 <div className="truncate text-[10px] text-muted-foreground">{item.name}</div>
               </div>
-              <div className="col-span-4 text-right font-mono tabular">{price?.toFixed(2) ?? "—"}</div>
-              <div className={`col-span-3 text-right font-mono tabular ${(changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+              <div className="col-span-4 text-right font-mono tabular tabular-nums">{price?.toFixed(2) ?? "—"}</div>
+              <div className={`col-span-3 text-right font-mono tabular tabular-nums ${(changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
                 {changePct === undefined ? "—" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`}
               </div>
             </button>
