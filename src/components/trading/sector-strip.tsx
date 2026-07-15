@@ -18,8 +18,8 @@ export function SectorStrip() {
           <div key={sector.name} className="bg-panel/80 p-3">
             <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{sector.name}</div>
             <div className="mt-1 flex items-baseline justify-between gap-2">
-              <span className="font-mono text-sm font-semibold tabular">{quote?.price.toLocaleString("en-IN") ?? "—"}</span>
-              <span className={`font-mono text-xs font-semibold tabular ${bull ? "text-bull" : "text-bear"}`}>
+              <span className="font-mono text-sm font-semibold tabular tabular-nums">{quote?.price.toLocaleString("en-IN") ?? "—"}</span>
+              <span className={`font-mono text-xs font-semibold tabular tabular-nums ${bull ? "text-bull" : "text-bear"}`}>
                 {change === undefined ? "Waiting for quote" : `${bull ? "+" : ""}${change.toFixed(2)}%`}
               </span>
             </div>

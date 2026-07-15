@@ -29,8 +29,8 @@ export function TickerTape() {
         {items.map((item, index) => (
           <div key={index} className="flex items-center gap-2 px-6 text-xs">
             <span className="font-semibold text-foreground">{item.symbol}</span>
-            <span className="font-mono tabular">{item.price?.toLocaleString("en-IN") ?? "—"}</span>
-            <span className={`font-mono tabular ${(item.change ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+            <span className="font-mono tabular tabular-nums">{item.price?.toLocaleString("en-IN") ?? "—"}</span>
+            <span className={`font-mono tabular tabular-nums ${(item.change ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
               {item.change === undefined || item.changePct === undefined
                 ? "Waiting for quote"
                 : `${item.change >= 0 ? "▲" : "▼"} ${Math.abs(item.change).toFixed(2)} (${item.changePct.toFixed(2)}%)`}

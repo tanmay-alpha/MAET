@@ -16,6 +16,10 @@ export type PaperOrder = {
   placedAt: string;
   filledAt?: string;
   rejectReason?: string;
+  stopLossPrice?: number;
+  takeProfitPrice?: number;
+  trailingDistance?: number;
+  isTrailingPercent?: boolean;
 };
 
 export type PaperPosition = {
@@ -39,6 +43,10 @@ export type PlacePaperOrder = {
   type: PaperOrderType;
   triggerPrice?: number;
   marketPrice?: number;
+  stopLossPrice?: number;
+  takeProfitPrice?: number;
+  trailingDistance?: number;
+  isTrailingPercent?: boolean;
 };
 
 const STORAGE_KEY = "maet.paper-account.v1";
@@ -171,6 +179,10 @@ export function placePaperOrder(input: PlacePaperOrder): { ok: boolean; message:
     triggerPrice: input.type === "MARKET" ? undefined : input.triggerPrice,
     status: "pending",
     placedAt: new Date().toISOString(),
+    stopLossPrice: input.stopLossPrice,
+    takeProfitPrice: input.takeProfitPrice,
+    trailingDistance: input.trailingDistance,
+    isTrailingPercent: input.isTrailingPercent,
   };
   const withOrder = { ...account, orders: [order, ...account.orders].slice(0, 200) };
 
