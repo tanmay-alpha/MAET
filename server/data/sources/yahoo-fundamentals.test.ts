@@ -9,16 +9,31 @@ describe("parseYahooFundamentals", () => {
       summaryDetail: { marketCap: v(20_000), dividendYield: v(0.004), fiftyTwoWeekHigh: v(1600), fiftyTwoWeekLow: v(1100) },
       defaultKeyStatistics: { trailingPE: v(25), priceToBook: v(2.5), trailingEps: v(50), bookValue: v(500) },
       financialData: { returnOnEquity: v(0.12), currentRatio: v(1.4) },
+      assetProfile: { sector: "Energy", industry: "Oil & Gas Integrated" },
       incomeStatementHistory: { incomeStatementHistory: [{ endDate: v(1_735_603_200), totalRevenue: v(1000), netIncome: v(100) }] },
       balanceSheetHistory: { balanceSheetStatements: [{ endDate: v(1_735_603_200), totalAssets: v(5000), totalStockholderEquity: v(2000) }] },
       cashflowStatementHistory: { cashflowStatements: [{ endDate: v(1_735_603_200), totalCashFromOperatingActivities: v(300) }] },
     }] } });
     expect(parsed?.marketCap).toBe(20_000);
     expect(parsed?.trailingPe).toBe(25);
+    expect(parsed?.sector).toBe("Energy");
+    expect(parsed?.industry).toBe("Oil & Gas Integrated");
     expect(parsed?.statements).toHaveLength(1);
     expect(parsed?.statements[0].revenue).toBe(1000);
     expect(parsed?.statements[0].totalAssets).toBe(5000);
     expect(parsed?.statements[0].operatingCashFlow).toBe(300);
+  });
+
+  it("returns undefined sector/industry when assetProfile is missing", () => {
+    const parsed = parseYahooFundamentals("TCS", { quoteSummary: { result: [{
+      summaryDetail: { marketCap: v(7_000) },
+      defaultKeyStatistics: { trailingPE: v(14) },
+      financialData: {},
+      // no assetProfile
+    }] } });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.sector).toBeUndefined();
+    expect(parsed?.industry).toBeUndefined();
   });
 
   it("returns null for a Yahoo error payload", () => {

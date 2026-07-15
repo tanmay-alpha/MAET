@@ -53,8 +53,10 @@ export type DailyProcessorOptions = {
   dryRun?: boolean;
 };
 
-// Nifty 50 default symbols
+// Default symbols include Nifty 50 plus additional large/mid-cap stocks for
+// broader quote and fundamentals coverage on every daily run.
 const DEFAULT_SYMBOLS = [
+  // Nifty 50 core
   "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "HINDUNILVR", "ITC", "KOTAKBANK",
   "LT", "SBIN", "AXISBANK", "ASIANPAINT", "MARUTI", "BAJFINANCE", "TITAN", "NESTLEIND",
   "M&M", "SUNPHARMA", "ULTRACEMCO", "TATASTEEL", "WIPRO", "ADANIPORTS", "POWERGRID",
@@ -63,6 +65,31 @@ const DEFAULT_SYMBOLS = [
   "TECHM", "BAJAJ-AUTO", "ADANIPOWER", "SHRIRAMFIN", "INDUSINDBK", "APOLLOHOSP",
   "BPCL", "CONCOR", "GAIL", "IOC", "LICI", "NHPC", "OFSS", "PFC", "RECLTD",
   "RVNL", "SAIL", "TVSMOTOR", "ZOMATO", "PAYTM", "DELHIVERY", "LODHA",
+  // Additional large-cap IT
+  "LTIM", "MPHASIS", "PERSISTENT", "COFORGE", "KPITTECH",
+  // Banking & NBFC
+  "BANDHANBNK", "FEDERALBNK", "IDFCFIRSTB", "BANKBARODA", "PNB", "CANBK",
+  "BAJAJFINSV", "CHOLAFIN", "MUTHOOTFIN", "MANAPPURAM",
+  // Auto & ancillaries
+  "TATAMOTORS", "BAJAJ-AUTO", "TVSMOTOR", "MOTHERSON", "BALKRISIND", "MRF",
+  // Energy & utilities
+  "TATAPOWER", "TORNTPOWER", "CESC", "SJVN", "IREDA",
+  // Pharma
+  "AUROPHARMA", "LUPIN", "TORNTPHARM", "ALKEM", "IPCALAB",
+  // Consumer
+  "GODREJCP", "DABUR", "EMAMILTD", "MARICO", "COLPAL",
+  // Metals & Mining
+  "HINDALCO", "VEDL", "NMDC", "MOIL",
+  // Infra & capital goods
+  "SIEMENS", "ABB", "BHEL", "TIINDIA",
+  // Telecom & media
+  "BHARTIARTL", "IDEA",
+  // Real estate
+  "DLF", "GODREJPROP", "OBEROIRLTY",
+  // Chemical
+  "PIDILITIND", "SRF", "DEEPAKNTR",
+  // Insurance
+  "ICICIPRULI", "ICICIGI", "STARHEALTH",
 ];
 
 const DEFAULT_TIMEFRAMES: Candle["tf"][] = ["1d", "1wk"];
@@ -479,6 +506,9 @@ export class DailyProcessor {
           dividendYield: yahoo.dividendYield?.toString(),
           eps: yahoo.epsTtm?.toString(),
           debtToEquity: yahoo.debtToEquity?.toString(),
+          // Write sector/industry from Yahoo assetProfile when available.
+          ...(yahoo.sector ? { sector: yahoo.sector } : {}),
+          ...(yahoo.industry ? { industry: yahoo.industry } : {}),
           lastFundamentalsUpdate: now,
           updatedAt: now,
         }).onConflictDoUpdate({
@@ -492,6 +522,9 @@ export class DailyProcessor {
             dividendYield: yahoo.dividendYield?.toString(),
             eps: yahoo.epsTtm?.toString(),
             debtToEquity: yahoo.debtToEquity?.toString(),
+            // Only overwrite sector/industry if Yahoo returned a non-null value.
+            ...(yahoo.sector ? { sector: yahoo.sector } : {}),
+            ...(yahoo.industry ? { industry: yahoo.industry } : {}),
             lastFundamentalsUpdate: now,
             updatedAt: now,
           },
