@@ -49,13 +49,19 @@ export type YahooFundamentals = {
   currentRatio?: number;
   fiftyTwoWeekHigh?: number;
   fiftyTwoWeekLow?: number;
+  /** Sector from Yahoo assetProfile (e.g. "Technology", "Financial Services") */
+  sector?: string;
+  /** Industry from Yahoo assetProfile (e.g. "Software—Application") */
+  industry?: string;
   statements: YahooStatement[];
   source: "yahoo_quote_summary" | "yahoo_timeseries";
   raw: Record<string, unknown>;
 };
 
+// assetProfile contains sector, industry, and company description from Yahoo.
 const MODULES = [
   "summaryDetail", "defaultKeyStatistics", "financialData",
+  "assetProfile",
   "incomeStatementHistory", "incomeStatementHistoryQuarterly",
   "balanceSheetHistory", "balanceSheetHistoryQuarterly",
   "cashflowStatementHistory", "cashflowStatementHistoryQuarterly",
@@ -125,6 +131,13 @@ export function parseYahooFundamentals(symbol: string, payload: unknown): YahooF
   const summary = record(result.summaryDetail);
   const stats = record(result.defaultKeyStatistics);
   const financial = record(result.financialData);
+  const assetProfile = record(result.assetProfile);
+
+  // Extract sector and industry strings from assetProfile
+  const sector = typeof assetProfile.sector === "string" && assetProfile.sector.trim()
+    ? assetProfile.sector.trim() : undefined;
+  const industry = typeof assetProfile.industry === "string" && assetProfile.industry.trim()
+    ? assetProfile.industry.trim() : undefined;
 
   const merged = new Map<string, YahooStatement>();
   const mergeRows = (values: Record<string, unknown>[], periodType: YahooStatement["periodType"], kind: string) => {
@@ -187,6 +200,8 @@ export function parseYahooFundamentals(symbol: string, payload: unknown): YahooF
     currentRatio: raw(financial.currentRatio as YahooValue),
     fiftyTwoWeekHigh: raw(summary.fiftyTwoWeekHigh as YahooValue),
     fiftyTwoWeekLow: raw(summary.fiftyTwoWeekLow as YahooValue),
+    sector,
+    industry,
     statements: [...merged.values()].sort((left, right) => right.periodDate.localeCompare(left.periodDate)),
     source: "yahoo_quote_summary",
     raw: result,
