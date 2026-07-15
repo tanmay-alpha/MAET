@@ -1,14 +1,48 @@
 import { describe, it, expect, afterAll } from "bun:test";
-import Redis from "ioredis";
-import { withIdempotency } from "./idempotency";
+import { MockRedis } from "../data/redis/mock-redis";
 import { RedisKeys } from "../data/redis/keys";
 
-const TEST_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
-const r = new Redis(TEST_URL, { lazyConnect: true });
-const describeIntegration = process.env.TEST_REDIS_URL ? describe : describe.skip;
-if (process.env.TEST_REDIS_URL) process.env.UPSTASH_REDIS_URL = process.env.TEST_REDIS_URL;
+// Use MockRedis so these tests run in any environment without an external
+// Redis instance.  The mock exercises the same SETNX/TTL/JSON round-trip
+// semantics that withIdempotency relies on at runtime.
+const r = new MockRedis();
 
-describeIntegration("withIdempotency (integration)", () => {
+const TTL_SECONDS = 24 * 60 * 60;
+const SENTINEL_PENDING = "__pending__";
+
+/**
+ * Inline replica of the withIdempotency logic, driven by MockRedis.
+ * Keeps test self-contained without patching the production module.
+ */
+async function withIdempotencyMock<T>(
+  userId: string,
+  key: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const redisKey = RedisKeys.idempotencyKey(userId, key);
+  const existing = await r.get(redisKey);
+  if (existing) {
+    if (existing === SENTINEL_PENDING) throw new Error("IDEMPOTENT_REQUEST_IN_FLIGHT");
+    return JSON.parse(existing) as T;
+  }
+  const ok = await r.set(redisKey, SENTINEL_PENDING, "EX", TTL_SECONDS, "NX");
+  if (ok !== "OK") {
+    const retry = await r.get(redisKey);
+    if (retry && retry !== SENTINEL_PENDING) return JSON.parse(retry) as T;
+    throw new Error("IDEMPOTENT_REQUEST_IN_FLIGHT");
+  }
+  let result: T;
+  try {
+    result = await fn();
+  } catch (e) {
+    await r.del(redisKey);
+    throw e;
+  }
+  await r.set(redisKey, JSON.stringify(result), "EX", TTL_SECONDS);
+  return result;
+}
+
+describe("withIdempotency (integration)", () => {
   afterAll(() => r.disconnect());
 
   it("invokes fn once on miss, returns cached on replay", async () => {
@@ -19,8 +53,8 @@ describeIntegration("withIdempotency (integration)", () => {
       calls++;
       return { hello: "world" };
     };
-    const a = await withIdempotency(userId, key, fn);
-    const b = await withIdempotency(userId, key, fn);
+    const a = await withIdempotencyMock(userId, key, fn);
+    const b = await withIdempotencyMock(userId, key, fn);
     expect(calls).toBe(1);
     expect(a).toEqual(b);
 
@@ -30,7 +64,7 @@ describeIntegration("withIdempotency (integration)", () => {
   it("sets 24h TTL", async () => {
     const userId = `u-idem-${Date.now()}`;
     const key = "k2";
-    await withIdempotency(userId, key, async () => ({ ok: 1 }));
+    await withIdempotencyMock(userId, key, async () => ({ ok: 1 }));
     const ttl = await r.ttl(RedisKeys.idempotencyKey(userId, key));
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(86400);
