@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, useEffect, useCallback, type MouseEvent, typ
 
 type Candle = { t: number; o: number; h: number; l: number; c: number; v: number };
 
-type Hover = { idx: number; px: number; py: number; price: number };
+type Hover = { idx: number; px: number; py: number; price: number; innerW: number };
 
 export interface DrawingLine {
   id: string;
@@ -199,7 +199,7 @@ export function CandlestickChart({
     const visibleCount = end - start;
     const idx = Math.max(0, Math.min(data.length - 1, Math.floor((x / innerW) * visibleCount) + start));
     const price = yToPrice(yPx);
-    return { idx, px: x, py: yPx, price };
+    return { idx, px: x, py: yPx, price, innerW };
   }
 
   function onMove(e: MouseEvent<HTMLDivElement>) {
@@ -340,7 +340,7 @@ export function CandlestickChart({
   const c = hover ? data[hover.idx] : null;
   const tooltipW = 168;
   const tooltipH = 110;
-  const innerW = wrapRef.current ? wrapRef.current.clientWidth - 56 : 0;
+  const innerW = hover ? hover.innerW : (wrapRef.current ? wrapRef.current.clientWidth - 56 : 0);
   const preferRight = hover ? hover.px + tooltipW + 20 < innerW : true;
   const tooltipLeft = hover
     ? preferRight
@@ -758,7 +758,7 @@ export function CandlestickChartSimple({
     const yPx = Math.max(0, Math.min(r.height, clientY - r.top));
     const idx = Math.max(0, Math.min(data.length - 1, Math.floor((x / innerW) * data.length)));
     const price = hi - (yPx / r.height) * (hi - lo);
-    return { idx, px: x, py: yPx, price };
+    return { idx, px: x, py: yPx, price, innerW };
   }
 
   function onMove(e: MouseEvent<HTMLDivElement>) {
@@ -784,7 +784,7 @@ export function CandlestickChartSimple({
   const c = hover ? data[hover.idx] : null;
   const tooltipW = 168;
   const tooltipH = 110;
-  const innerW = wrapRef.current ? wrapRef.current.clientWidth - 56 : 0;
+  const innerW = hover ? hover.innerW : (wrapRef.current ? wrapRef.current.clientWidth - 56 : 0);
   const preferRight = hover ? hover.px + tooltipW + 20 < innerW : true;
   const tooltipLeft = hover
     ? preferRight
