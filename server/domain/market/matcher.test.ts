@@ -448,4 +448,80 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     expect(Number(mockAccounts[0].allocatedMargin)).toBe(0);
     expect(Number(mockAccounts[0].maintenanceMargin)).toBe(0);
   });
+
+  it("tracks HWM and triggers trailing stops", async () => {
+    mockOrders = [];
+    mockPositions = [];
+    mockAccounts[0].isLocked = false;
+    mockAccounts[0].cashBalance = "1000000.0000";
+    mockAccounts[0].allocatedMargin = "0.0000";
+    mockAccounts[0].maintenanceMargin = "0.0000";
+
+    const trailingOrder = {
+      id: "trailing-1",
+      userId: testUserId,
+      symbol: TEST_SYMBOL,
+      exchange: "NSE",
+      side: "SELL",
+      type: "STOP_LOSS_LIMIT",
+      status: "TRIGGER_PENDING",
+      qty: 10,
+      trailingDistance: "10.0000",
+      isTrailingPercent: false,
+      trailingHwm: null,
+      trailingLwm: null,
+      stopPrice: null,
+    };
+    mockOrders.push(trailingOrder);
+
+    // First tick: initialize HWM and stopPrice
+    let receipts = await onTick(TEST_SYMBOL, 1000, 1000, 1000, 1000);
+    expect(receipts.length).toBe(0);
+    expect(trailingOrder.trailingHwm).toBe("1000");
+    expect(trailingOrder.stopPrice).toBe("990");
+    expect(trailingOrder.status).toBe("TRIGGER_PENDING");
+
+    // Second tick: price goes up to 1010, HWM should update, stopPrice updates to 1000
+    receipts = await onTick(TEST_SYMBOL, 1010, 1010, 1010, 1000);
+    expect(receipts.length).toBe(0);
+    expect(trailingOrder.trailingHwm).toBe("1010");
+    expect(trailingOrder.stopPrice).toBe("1000");
+
+    // Third tick: price falls to 1005 (above stopPrice), nothing triggers
+    receipts = await onTick(TEST_SYMBOL, 1005, 1005, 1005, 1000);
+    expect(receipts.length).toBe(0);
+    expect(trailingOrder.trailingHwm).toBe("1010");
+    expect(trailingOrder.stopPrice).toBe("1000");
+
+    // Fourth tick: price falls to 999 (below stopPrice), triggers market sell order
+    receipts = await onTick(TEST_SYMBOL, 999, 999, 999, 1000);
+    expect(receipts.length).toBe(1);
+    expect(receipts[0].status).toBe("FILLED");
+    expect(trailingOrder.status).toBe("FILLED");
+  });
+
+  it("rejects orders for locked accounts", async () => {
+    mockOrders = [];
+    mockPositions = [];
+    mockAccounts[0].isLocked = true;
+
+    const normalOrder = {
+      id: "order-locked",
+      userId: testUserId,
+      symbol: TEST_SYMBOL,
+      exchange: "NSE",
+      side: "BUY",
+      type: "LIMIT",
+      status: "PENDING",
+      qty: 10,
+      limitPrice: "1000.0000",
+    };
+    mockOrders.push(normalOrder);
+
+    const receipts = await onTick(TEST_SYMBOL, 990, 990, 990, 1000);
+    expect(receipts.length).toBe(1);
+    expect(receipts[0].status).toBe("REJECTED");
+    expect(receipts[0].rejectReason).toBe("Account locked due to margin call");
+    expect(normalOrder.status).toBe("REJECTED");
+  });
 });

@@ -3,6 +3,7 @@ import { MarketClockWorker } from "./workers/market-clock";
 import { ScreenerRunner } from "./workers/screener-runner";
 import { YahooPoller } from "./workers/yahoo-poller";
 import { AngelOneWorker } from "./workers/angelone-ws";
+import { OrderMatcherWorker } from "./workers/order-matcher";
 import { quoteStore } from "./domain/market/quote-store";
 import { closeRedis } from "./data/redis/client";
 import { login, setAngelOneMarketSession } from "./data/sources/angelone/client";
@@ -19,6 +20,7 @@ const angelOne = new AngelOneWorker();
 const candleWriter = new CandleWriter();
 const marketClock = new MarketClockWorker();
 const screenerRunner = new ScreenerRunner();
+const orderMatcher = new OrderMatcherWorker();
 const subscriptionRefs = new Map<string, number>();
 let started = false;
 let angelRetryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -112,6 +114,7 @@ export function startOrchestrator(): void {
   marketClock.start();
   screenerRunner.start();
   yahooPoller.start();
+  orderMatcher.start();
   angelReadyOff = bus.on("user:angelone:ready", ({ userId }) => {
     if (userId === ANGEL_FEED_USER) registerCheck("angelone", true, "live stream connected");
   });
@@ -146,6 +149,7 @@ export async function stopOrchestrator(): Promise<void> {
   await angelOne.stop();
   setAngelOneMarketSession(undefined);
   screenerRunner.stop();
+  orderMatcher.stop();
   marketClock.stop();
   candleWriter.stop();
   quoteStore.stop();

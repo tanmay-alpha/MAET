@@ -383,6 +383,7 @@ export const paperAccounts = pgTable("paper_accounts", {
   maintenanceMargin: numeric("maintenance_margin", { precision: 18, scale: 4 }).notNull().default("0.0000"),
   leverageFactor: integer("leverage_factor").notNull().default(5),
   liquidationThreshold: numeric("liquidation_threshold", { precision: 10, scale: 4 }).notNull().default("0.1000"),
+  isLocked: boolean("is_locked").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -407,6 +408,10 @@ export const paperOrders = pgTable("paper_orders", {
   slippageApplied: numeric("slippage_applied", { precision: 18, scale: 4 }).default("0.0000"),
   transactionFee: numeric("transaction_fee", { precision: 18, scale: 4 }).default("0.0000"),
   rejectReason: text("reject_reason"),
+  trailingDistance: numeric("trailing_distance", { precision: 18, scale: 4 }),
+  trailingHwm: numeric("trailing_hwm", { precision: 18, scale: 4 }),
+  trailingLwm: numeric("trailing_lwm", { precision: 18, scale: 4 }),
+  isTrailingPercent: boolean("is_trailing_percent").default(false),
   placedAt: timestamp("placed_at", { withTimezone: true }).notNull().defaultNow(),
   filledAt: timestamp("filled_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
