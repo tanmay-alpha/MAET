@@ -8,6 +8,7 @@ import {
   fundamentals,
 } from "../../db/schema";
 import { calculateSlippage } from "./slippage";
+import { quoteStore } from "./quote-store";
 
 export interface MatchingReceipt {
   orderId: string;
@@ -149,7 +150,7 @@ export async function onTick(
 
           if (equity < maintenanceMargin) {
             // Trigger auto-liquidation
-            await liquidateAccount(tx, pos.userId, ltp);
+            await liquidateAccount(tx, pos.userId, symbol, ltp);
           } else {
             // Recalculate and update the unrealized P&L of the position in the db
             const currentPosition = userPositions.find((p) => p.symbol === symbol);
@@ -196,7 +197,80 @@ export async function onTick(
       let fillPrice = 0;
       let slippage = 0;
 
-      if (order.status === "TRIGGER_PENDING") {
+      // Trailing stop trigger check
+      let trailingStopTriggered = false;
+      if (order.trailingDistance && Number(order.trailingDistance) > 0) {
+        const dist = Number(order.trailingDistance);
+        const isPercent = !!order.isTrailingPercent;
+
+        if (order.side === "SELL") {
+          let hwm = order.trailingHwm ? Number(order.trailingHwm) : null;
+          if (hwm === null || hwm === 0 || ltp > hwm) {
+            hwm = ltp;
+            const stopPrice = isPercent
+              ? hwm * (1 - dist / 100)
+              : hwm - dist;
+
+            await db
+              .update(paperOrders)
+              .set({
+                trailingHwm: hwm.toString(),
+                stopPrice: stopPrice.toString(),
+                updatedAt: new Date(),
+              })
+              .where(eq(paperOrders.id, order.id));
+
+            order.trailingHwm = hwm.toString();
+            order.stopPrice = stopPrice.toString();
+          }
+
+          const currentStopPrice = order.stopPrice ? Number(order.stopPrice) : 0;
+          if (ltp <= currentStopPrice) {
+            trailingStopTriggered = true;
+          }
+        } else if (order.side === "BUY") {
+          let lwm = order.trailingLwm ? Number(order.trailingLwm) : null;
+          if (lwm === null || lwm === 0 || ltp < lwm) {
+            lwm = ltp;
+            const stopPrice = isPercent
+              ? lwm * (1 + dist / 100)
+              : lwm + dist;
+
+            await db
+              .update(paperOrders)
+              .set({
+                trailingLwm: lwm.toString(),
+                stopPrice: stopPrice.toString(),
+                updatedAt: new Date(),
+              })
+              .where(eq(paperOrders.id, order.id));
+
+            order.trailingLwm = lwm.toString();
+            order.stopPrice = stopPrice.toString();
+          }
+
+          const currentStopPrice = order.stopPrice ? Number(order.stopPrice) : 0;
+          if (ltp >= currentStopPrice) {
+            trailingStopTriggered = true;
+          }
+        }
+      }
+
+      if (trailingStopTriggered) {
+        order.status = "PENDING";
+        isTriggered = true;
+        await db
+          .update(paperOrders)
+          .set({
+            status: "PENDING",
+            type: "MARKET",
+            updatedAt: new Date(),
+          })
+          .where(eq(paperOrders.id, order.id));
+        order.type = "MARKET";
+      }
+
+      if (order.status === "TRIGGER_PENDING" && !trailingStopTriggered) {
         // Trigger verification for STOP_LOSS_LIMIT orders
         if (order.type === "STOP_LOSS_LIMIT" && order.stopPrice) {
           const stopPriceNum = Number(order.stopPrice);
@@ -273,6 +347,32 @@ export async function onTick(
 
           if (!account) {
             throw new Error(`Paper account not found for user ${order.userId}`);
+          }
+
+          if (account.isLocked) {
+            await tx
+              .update(paperOrders)
+              .set({
+                status: "REJECTED",
+                rejectReason: "Account locked due to margin call",
+                updatedAt: new Date(),
+              })
+              .where(eq(paperOrders.id, order.id));
+
+            return {
+              orderId: order.id,
+              symbol,
+              side: order.side,
+              qty: order.qty,
+              price: 0,
+              slippageApplied: 0,
+              transactionFee: 0,
+              executionTimestamp: new Date().toISOString(),
+              status: "REJECTED" as const,
+              rejectReason: "Account locked due to margin call",
+              updatedMarginLocked: Number(account.allocatedMargin),
+              cashBalance: Number(account.cashBalance),
+            };
           }
 
           // Select and lock current position for this symbol
@@ -534,7 +634,7 @@ export async function onTick(
           // 5. Margin Liquidation Check
           const freshEquity = newCashBalance + totalUnrealizedPnl;
           if (freshEquity < updatedMaintenanceMargin) {
-            await liquidateAccount(tx, order.userId, ltp);
+            await liquidateAccount(tx, order.userId, symbol, ltp);
           }
 
           return {
@@ -567,8 +667,30 @@ export async function onTick(
 /**
  * Liquidation of all open positions in the database for the given user.
  */
-async function liquidateAccount(tx: any, userId: string, ltp: number) {
+export async function liquidateAccount(
+  tx: any,
+  userId: string,
+  triggeredBySymbol?: string,
+  ltp?: number
+) {
   console.warn(`[MARGIN CALL] Auto-liquidating account for user ${userId}`);
+
+  // Cancel all pending/trigger pending orders for this user
+  await tx
+    .update(paperOrders)
+    .set({
+      status: "CANCELLED",
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(paperOrders.userId, userId),
+        or(
+          eq(paperOrders.status, "PENDING"),
+          eq(paperOrders.status, "TRIGGER_PENDING")
+        )
+      )
+    );
 
   // Fetch all open positions
   const openPositions = await tx
@@ -576,6 +698,9 @@ async function liquidateAccount(tx: any, userId: string, ltp: number) {
     .from(paperPositions)
     .where(eq(paperPositions.userId, userId))
     .for("update");
+
+  let totalRealizedPnl = 0;
+  let totalFees = 0;
 
   for (const pos of openPositions) {
     const qty = pos.totalShares;
@@ -585,20 +710,31 @@ async function liquidateAccount(tx: any, userId: string, ltp: number) {
     const absQty = Math.abs(qty);
     const avgPrice = Number(pos.averageEntryPrice);
 
+    // Resolve current price from quoteStore or fallback
+    const tick = quoteStore.get(pos.symbol);
+    const price = tick
+      ? tick.price
+      : triggeredBySymbol && pos.symbol === triggeredBySymbol && ltp
+      ? ltp
+      : Number(pos.averageEntryPrice);
+
     const meta = await getCompanyMetadata(pos.symbol);
     const slippage = calculateSlippage(
-      ltp,
+      price,
       absQty,
       meta.avgVolume,
       meta.marketCapBucket
     );
 
     const fillPrice =
-      side === "BUY" ? ltp + slippage : Math.max(0.05, ltp - slippage);
+      side === "BUY" ? price + slippage : Math.max(0.05, price - slippage);
     const fee = fillPrice * absQty * 0.0000345;
 
     const realizedPnl =
       qty > 0 ? absQty * (fillPrice - avgPrice) : absQty * (avgPrice - fillPrice);
+
+    totalRealizedPnl += realizedPnl;
+    totalFees += fee;
 
     await tx.insert(paperOrders).values({
       id: crypto.randomUUID(),
@@ -622,20 +758,24 @@ async function liquidateAccount(tx: any, userId: string, ltp: number) {
     await tx
       .delete(paperPositions)
       .where(eq(paperPositions.id, pos.id));
+  }
 
-    const [acc] = await tx
-      .select()
-      .from(paperAccounts)
-      .where(eq(paperAccounts.userId, userId))
-      .for("update");
+  // Update paper account - lock it and clear margin
+  const [acc] = await tx
+    .select()
+    .from(paperAccounts)
+    .where(eq(paperAccounts.userId, userId))
+    .for("update");
 
-    const newCash = Number(acc.cashBalance) + realizedPnl - fee;
+  if (acc) {
+    const newCash = Number(acc.cashBalance) + totalRealizedPnl - totalFees;
     await tx
       .update(paperAccounts)
       .set({
         cashBalance: newCash.toString(),
         allocatedMargin: "0.0000",
         maintenanceMargin: "0.0000",
+        isLocked: true,
         updatedAt: new Date(),
       })
       .where(eq(paperAccounts.userId, userId));
