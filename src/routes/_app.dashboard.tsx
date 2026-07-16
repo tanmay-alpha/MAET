@@ -52,8 +52,18 @@ function StatCard({
   );
 }
 
+import { useState } from "react";
+import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
+import { PlusCircle } from "lucide-react";
+
 function Dashboard() {
-  const { account, reset } = usePaperAccount();
+  const { account, reset, placeOrder } = usePaperAccount();
+  const [tradeModal, setTradeModal] = useState<{ isOpen: boolean; symbol: string; side: "BUY" | "SELL" }>({
+    isOpen: false,
+    symbol: "",
+    side: "BUY",
+  });
+
   const symbols = useMemo(
     () => [...new Set([...account.positions.map((position) => position.symbol), ...Object.values(INDEX_KEYS)])],
     [account.positions]
@@ -74,7 +84,7 @@ function Dashboard() {
 
   return (
     <div className="h-full overflow-y-auto p-4">
-      <div className="mb-4 flex items-end justify-between">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Paper trading dashboard</h1>
           <p className="text-xs text-muted-foreground">
@@ -82,13 +92,23 @@ function Dashboard() {
             {" · "}paper account is stored in this browser
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => window.confirm("Reset all paper positions and orders?") && reset()}
-          className="rounded-md border border-border bg-panel px-3 py-1.5 text-xs hover:bg-accent"
-        >
-          Reset paper account
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setTradeModal({ isOpen: true, symbol: "", side: "BUY" })}
+            className="flex items-center gap-1.5 rounded-md bg-primary hover:bg-primary/95 text-primary-foreground px-3.5 py-1.5 text-xs font-bold transition-all shadow"
+          >
+            <PlusCircle className="h-4 w-4" />
+            Quick Trade
+          </button>
+          <button
+            type="button"
+            onClick={() => window.confirm("Reset all paper positions and orders?") && reset()}
+            className="rounded-md border border-border bg-panel px-3 py-1.5 text-xs hover:bg-accent transition-all"
+          >
+            Reset paper account
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -106,21 +126,52 @@ function Dashboard() {
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
-              <thead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                <tr><th className="px-4 py-2 text-left">Symbol</th><th className="text-right">Qty</th><th className="text-right">Avg</th><th className="text-right">LTP</th><th className="px-4 text-right">P&amp;L</th></tr>
+              <thead className="text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border bg-accent/20">
+                <tr>
+                  <th className="px-4 py-2 text-left">Symbol</th>
+                  <th className="text-right">Qty</th>
+                  <th className="text-right">Avg</th>
+                  <th className="text-right">LTP</th>
+                  <th className="text-right">P&amp;L</th>
+                  <th className="px-4 py-2 text-right">Actions</th>
+                </tr>
               </thead>
               <tbody>
                 {account.positions.map((position) => {
-                  const ltp = quoteMap.get(position.symbol)?.price;
-                  const pnl = ltp === undefined ? undefined : (ltp - position.avgPrice) * position.qty;
+                  const ltp = quoteMap.get(position.symbol)?.price ?? position.avgPrice;
+                  const isLong = position.qty > 0;
+                  const pnl = (ltp - position.avgPrice) * position.qty;
                   return (
-                    <tr key={position.symbol} className="border-t border-border">
-                      <td className="px-4 py-2.5 font-medium">{position.symbol}</td>
-                      <td className="text-right font-mono tabular tabular-nums">{position.qty}</td>
-                      <td className="text-right font-mono tabular tabular-nums">{position.avgPrice.toFixed(2)}</td>
-                      <td className="text-right font-mono tabular tabular-nums">{ltp?.toFixed(2) ?? "—"}</td>
-                      <td className={`px-4 text-right font-mono tabular tabular-nums ${(pnl ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
-                        {pnl === undefined ? "—" : `${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}`}
+                    <tr key={position.symbol} className="border-t border-border hover:bg-accent/40 transition-colors">
+                      <td className="px-4 py-2.5 font-sans font-semibold text-foreground">{position.symbol}</td>
+                      <td className="text-right font-mono tabular-nums">{position.qty}</td>
+                      <td className="text-right font-mono tabular-nums">₹{position.avgPrice.toFixed(2)}</td>
+                      <td className="text-right font-mono tabular-nums">₹{ltp.toFixed(2)}</td>
+                      <td className={`text-right font-mono tabular-nums font-semibold ${(pnl ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                        {pnl === undefined ? "—" : `${pnl >= 0 ? "+" : ""}₹${pnl.toFixed(2)}`}
+                      </td>
+                      <td className="px-4 py-2.5 text-right flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => setTradeModal({ isOpen: true, symbol: position.symbol, side: isLong ? "BUY" : "SELL" })}
+                          className="rounded bg-accent hover:bg-accent-elevated border border-border text-foreground px-2 py-0.5 text-[10px] font-semibold transition"
+                        >
+                          Trade
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Are you sure you want to close your position in ${position.symbol}?`)) {
+                              placeOrder({
+                                symbol: position.symbol,
+                                side: isLong ? "SELL" : "BUY",
+                                qty: Math.abs(position.qty),
+                                type: "MARKET"
+                              });
+                            }
+                          }}
+                          className="rounded bg-bear hover:bg-bear/90 text-white px-2 py-0.5 text-[10px] font-semibold transition"
+                        >
+                          Exit
+                        </button>
                       </td>
                     </tr>
                   );
@@ -187,6 +238,13 @@ function Dashboard() {
         <div className="text-sm font-medium">No saved strategy runs</div>
         <div className="mt-1 text-xs text-muted-foreground">The previous performance table contained demo numbers and has been removed.</div>
       </div>
+
+      <QuickTradeModal
+        isOpen={tradeModal.isOpen}
+        onClose={() => setTradeModal({ ...tradeModal, isOpen: false })}
+        initialSymbol={tradeModal.symbol}
+        initialSide={tradeModal.side}
+      />
     </div>
   );
 }
