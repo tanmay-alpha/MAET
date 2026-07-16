@@ -12,6 +12,7 @@ import { lookupSymbol } from "./domain/market/symbol";
 import { bus } from "./infra/bus";
 import { registerCheck } from "./infra/health";
 import { hydrateAngelOneCompanyTokens } from "./data/sources/nse-company-master";
+import { marketDataMultiplexer } from "./domain/market/data-multiplexer";
 
 // Yahoo quotes are delayed and do not benefit from tick-grade polling. A
 // one-minute cadence avoids unnecessary upstream throttling on the free service.
@@ -115,6 +116,7 @@ export function startOrchestrator(): void {
   screenerRunner.start();
   yahooPoller.start();
   orderMatcher.start();
+  marketDataMultiplexer.start();
   angelReadyOff = bus.on("user:angelone:ready", ({ userId }) => {
     if (userId === ANGEL_FEED_USER) registerCheck("angelone", true, "live stream connected");
   });
@@ -153,6 +155,7 @@ export async function stopOrchestrator(): Promise<void> {
   marketClock.stop();
   candleWriter.stop();
   quoteStore.stop();
+  marketDataMultiplexer.stop();
   subscriptionRefs.clear();
   await closeRedis();
 }
@@ -168,6 +171,7 @@ export function subscribeMarketSymbols(symbols: string[]): () => void {
   }
   if (newlySubscribed.length > 0) yahooPoller.subscribe(newlySubscribed);
   syncAngelSubscriptions();
+  marketDataMultiplexer.subscribe(normalized);
   void yahooPoller.refresh();
 
   return () => {
@@ -181,7 +185,10 @@ export function subscribeMarketSymbols(symbols: string[]): () => void {
         subscriptionRefs.set(symbol, next);
       }
     }
-    if (unused.length > 0) yahooPoller.unsubscribe(unused);
+    if (unused.length > 0) {
+      yahooPoller.unsubscribe(unused);
+      marketDataMultiplexer.unsubscribe(unused);
+    }
     syncAngelSubscriptions();
   };
 }

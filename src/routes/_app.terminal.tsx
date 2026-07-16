@@ -9,6 +9,8 @@ import { settlePaperOrders, usePaperAccount } from "@/hooks/use-paper-account";
 import type { MarketCandle } from "@/lib/market-api";
 import { WATCHLIST, type MarketCatalogItem } from "@/lib/market-catalog";
 import { Clock, ShieldAlert, Ban, RefreshCw, Layers, ClipboardList, History, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { useTerminalStore } from "@/store/useTerminalStore";
+import { DepthMeter } from "@/components/trading/depth-meter";
 
 export const Route = createFileRoute("/_app/terminal")({
   head: () => ({ meta: [{ title: "Terminal — MAET" }] }),
@@ -27,11 +29,13 @@ const INTERVAL_CONFIG: Record<string, { timeframe: MarketCandle["tf"]; range: st
 const WATCHLIST_SYMBOLS = WATCHLIST.map((item) => item.symbol);
 
 function Terminal() {
-  const [current, setCurrent] = useState<MarketCatalogItem>(WATCHLIST[0]);
+  const active = useTerminalStore((state) => state.activeSymbol);
   const [interval, setInterval] = useState("5m");
   const [activeTab, setActiveTab] = useState<"positions" | "orders" | "history">("positions");
   
-  const active = current.symbol;
+  const current = useMemo(() => {
+    return WATCHLIST.find((item) => item.symbol === active) || { symbol: active, name: active };
+  }, [active]);
   const quoteSymbols = useMemo(() => {
     return [...new Set([...WATCHLIST_SYMBOLS, active])];
   }, [active]);
@@ -145,7 +149,7 @@ function Terminal() {
       <div className="grid flex-1 grid-cols-[250px_1fr_270px] overflow-hidden">
         {/* Left pane: Watchlist */}
         <div className="border-r border-border overflow-y-auto">
-          <Watchlist active={active} onSelect={setCurrent} quotes={quoteMap} />
+          <Watchlist onSelect={(item) => useTerminalStore.getState().setActiveSymbol(item.symbol)} quotes={quoteMap} />
         </div>
 
         {/* Middle pane: Chart & Position Panel */}
@@ -434,14 +438,15 @@ function Terminal() {
           </div>
         </div>
 
-        {/* Right pane: Order entry panel */}
-        <div className="border-l border-border">
+        {/* Right pane: Order entry panel & Market Depth */}
+        <div className="border-l border-border flex flex-col gap-4 overflow-y-auto bg-panel p-3">
           <OrderPanel
-            symbol={current.symbol}
+            symbol={active}
             price={currentPrice}
             availableCash={account.cash}
             onPlace={placeOrder}
           />
+          <DepthMeter />
         </div>
       </div>
     </div>

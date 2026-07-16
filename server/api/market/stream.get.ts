@@ -42,9 +42,21 @@ export default defineEventHandler(async (event) => {
   const initial = await loadQuotes(symbols);
   send("snapshot", initial);
 
+  const pendingTicks = new Map<string, any>();
   const offTick = bus.on("tick", (tick) => {
-    if (symbolSet.has(tick.symbol)) send("tick", tick);
+    if (symbolSet.has(tick.symbol)) {
+      pendingTicks.set(tick.symbol, tick);
+    }
   });
+
+  const flushInterval = setInterval(() => {
+    if (closed || pendingTicks.size === 0) return;
+    for (const tick of pendingTicks.values()) {
+      send("tick", tick);
+    }
+    pendingTicks.clear();
+  }, 200);
+
   const heartbeat = setInterval(() => send("heartbeat", { ts: new Date().toISOString() }), 15_000);
 
   const close = () => {
@@ -52,6 +64,7 @@ export default defineEventHandler(async (event) => {
     closed = true;
     activeConnections = Math.max(0, activeConnections - 1);
     clearInterval(heartbeat);
+    clearInterval(flushInterval);
     offTick();
     releaseSubscription();
   };

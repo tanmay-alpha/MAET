@@ -39,11 +39,15 @@ describe("SseHub (integration)", () => {
       source: "yahoo" as const,
     };
     bus.emit("tick", tick);
-    await new Promise((res) => setTimeout(res, 50));
+    await new Promise((res) => setTimeout(res, 250));
 
-    expect(a.events.length).toBeGreaterThanOrEqual(1);
-    expect(b.events.length).toBeGreaterThanOrEqual(1);
-    expect((a.events[0][1] as { price: number }).price).toBe(2500);
-    expect((a.events[0][1] as { symbol: string }).symbol).toBe("RELIANCE");
+    try {
+      expect(a.events.length).toBeGreaterThanOrEqual(1);
+      expect(b.events.length).toBeGreaterThanOrEqual(1);
+      expect((a.events[0][1] as { price: number }).price).toBe(2500);
+      expect((a.events[0][1] as { symbol: string }).symbol).toBe("RELIANCE");
+    } finally {
+      hub.destroy();
+    }
   });
 });
