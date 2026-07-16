@@ -146,7 +146,7 @@ class QueryBuilder {
 
     if (this.operation === "select") {
       if (isOrdersTable) {
-        return mockOrders.filter(o => o.status === "PENDING" || o.status === "TRIGGER_PENDING");
+        return mockOrders.filter(o => o.status === "PENDING" || o.status === "TRIGGER_PENDING" || o.status === "PARTIALLY_FILLED");
       }
       if (isAccountsTable) {
         return mockAccounts;
@@ -302,7 +302,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
 
     const slippage = Number(mockOrders[0].slippageApplied);
     const fillPrice = Number(mockOrders[0].averageFillPrice);
-    expect(fillPrice).toBe(1001 + slippage);
+    expect(fillPrice).toBeCloseTo(1001 + slippage, 4);
 
     expect(mockPositions.length).toBe(1);
     expect(mockPositions[0].totalShares).toBe(100);
@@ -523,5 +523,124 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     expect(receipts[0].status).toBe("REJECTED");
     expect(receipts[0].rejectReason).toBe("Account locked due to margin call");
     expect(normalOrder.status).toBe("REJECTED");
+  });
+
+  it("handles partial fills based on tick volume", async () => {
+    mockOrders = [];
+    mockPositions = [];
+    mockAccounts[0].isLocked = false;
+    mockAccounts[0].cashBalance = "1000000.0000";
+
+    const largeLimitOrder = {
+      id: "large-limit-1",
+      userId: testUserId,
+      symbol: TEST_SYMBOL,
+      exchange: "NSE",
+      side: "BUY",
+      type: "LIMIT",
+      status: "PENDING",
+      qty: 100,
+      filledQty: 0,
+      limitPrice: "1000.0000",
+    };
+    mockOrders.push(largeLimitOrder);
+
+    // Tick volume is 30, so fill qty should be capped at 30
+    let receipts = await onTick(TEST_SYMBOL, 990, 990, 990, 30);
+    expect(receipts.length).toBe(1);
+    expect(receipts[0].status).toBe("PARTIALLY_FILLED");
+    expect(largeLimitOrder.status).toBe("PARTIALLY_FILLED");
+    expect(largeLimitOrder.filledQty).toBe(30);
+    expect(mockPositions.length).toBe(1);
+    expect(mockPositions[0].totalShares).toBe(30);
+
+    // Next tick volume is 80, remaining is 70, so it should fully fill
+    receipts = await onTick(TEST_SYMBOL, 990, 990, 990, 80);
+    expect(receipts.length).toBe(1);
+    expect(receipts[0].status).toBe("FILLED");
+    expect(largeLimitOrder.status).toBe("FILLED");
+    expect(largeLimitOrder.filledQty).toBe(100);
+    expect(mockPositions[0].totalShares).toBe(100);
+  });
+
+  it("triggers stop-loss limit order during a gap-down (market conversion)", async () => {
+    mockOrders = [];
+    mockPositions = [];
+    mockAccounts[0].isLocked = false;
+    mockAccounts[0].cashBalance = "1000000.0000";
+
+    const slLimitOrder = {
+      id: "sl-limit-gap",
+      userId: testUserId,
+      symbol: TEST_SYMBOL,
+      exchange: "NSE",
+      side: "SELL",
+      type: "STOP_LOSS_LIMIT",
+      status: "TRIGGER_PENDING",
+      qty: 10,
+      filledQty: 0,
+      stopPrice: "1000.0000",
+      limitPrice: "995.0000",
+    };
+    mockOrders.push(slLimitOrder);
+
+    // Price gaps down from 1010 to 980 (below stopPrice of 1000 AND limitPrice of 995)
+    // Gap protection should convert it to a MARKET order and match it at 980
+    const receipts = await onTick(TEST_SYMBOL, 980, 980, 980, 1000);
+    expect(receipts.length).toBe(1);
+    expect(receipts[0].status).toBe("FILLED");
+    expect(slLimitOrder.type).toBe("MARKET");
+    expect(slLimitOrder.status).toBe("FILLED");
+    expect(Number(slLimitOrder.averageFillPrice)).toBeLessThan(995); // filled at gap price
+  });
+
+  it("cancels OCO sibling order completely or adjusts size on partial fill", async () => {
+    mockOrders = [];
+    mockPositions = [];
+    mockAccounts[0].isLocked = false;
+
+    const parentId = "bracket-parent-oco";
+    const tpOrder = {
+      id: "tp-oco",
+      parentOrderId: parentId,
+      userId: testUserId,
+      symbol: TEST_SYMBOL,
+      exchange: "NSE",
+      side: "SELL",
+      type: "LIMIT",
+      status: "PENDING",
+      qty: 10,
+      filledQty: 0,
+      limitPrice: "1010.0000",
+    };
+    const slOrder = {
+      id: "sl-oco",
+      parentOrderId: parentId,
+      userId: testUserId,
+      symbol: TEST_SYMBOL,
+      exchange: "NSE",
+      side: "SELL",
+      type: "STOP_LOSS_LIMIT",
+      status: "TRIGGER_PENDING",
+      qty: 10,
+      filledQty: 0,
+      stopPrice: "990.0000",
+      limitPrice: "990.0000",
+    };
+    mockOrders.push(tpOrder, slOrder);
+
+    // 1. Partial fill TP order by 3 shares. Sibling SL order should have quantity reduced by 3
+    let receipts = await onTick(TEST_SYMBOL, 1010, 1010, 1010, 3);
+    expect(receipts.length).toBe(1);
+    expect(receipts[0].orderId).toBe("tp-oco");
+    expect(receipts[0].status).toBe("PARTIALLY_FILLED");
+    expect(tpOrder.filledQty).toBe(3);
+    expect(slOrder.qty).toBe(7); // reduced qty to match remaining position size
+
+    // 2. Full fill TP order on next tick. Sibling SL order should be completely cancelled
+    receipts = await onTick(TEST_SYMBOL, 1010, 1010, 1010, 1000);
+    expect(receipts.length).toBe(1);
+    expect(receipts[0].status).toBe("FILLED");
+    expect(slOrder.status).toBe("CANCELLED");
   });
 });

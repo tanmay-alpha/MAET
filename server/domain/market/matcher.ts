@@ -186,7 +186,8 @@ export async function onTick(
           eq(paperOrders.symbol, symbol),
           or(
             eq(paperOrders.status, "PENDING"),
-            eq(paperOrders.status, "TRIGGER_PENDING")
+            eq(paperOrders.status, "TRIGGER_PENDING"),
+            eq(paperOrders.status, "PARTIALLY_FILLED")
           )
         )
       );
@@ -283,15 +284,27 @@ export async function onTick(
 
         // If triggered, update status to PENDING
         if (isTriggered) {
+          const stopPriceNum = order.stopPrice ? Number(order.stopPrice) : 0;
+          // GAP-DOWN PROTECTION: Convert to MARKET order if price gaps beyond target trigger price
+          const isGap = order.side === "BUY" ? ltp > stopPriceNum : ltp < stopPriceNum;
+          const targetType = isGap ? "MARKET" : "LIMIT";
+
           await db
             .update(paperOrders)
-            .set({ status: "PENDING", updatedAt: new Date() })
+            .set({ 
+              status: "PENDING", 
+              type: targetType, 
+              rejectReason: isGap ? "Stop loss limit gap-down fallback applied" : null,
+              updatedAt: new Date() 
+            })
             .where(eq(paperOrders.id, order.id));
+
           order.status = "PENDING";
+          order.type = targetType;
         }
       }
 
-      if (order.status === "PENDING") {
+      if (order.status === "PENDING" || order.status === "PARTIALLY_FILLED") {
         if (order.type === "MARKET") {
           isMatched = true;
           // Apply slippage penalty for market orders
@@ -335,6 +348,18 @@ export async function onTick(
 
       if (!isMatched) continue;
 
+      // Extract remaining quantity to fill
+      const remainingQty = order.qty - (order.filledQty || 0);
+      if (remainingQty <= 0) continue;
+
+      // PARTIAL FILLS: Cap the fill quantity in this tick by the tick's available volume
+      const availableVolume = volume > 0 ? volume : 1000;
+      const fillQty = (order.type === "LIMIT" || order.type === "STOP_LOSS_LIMIT")
+        ? Math.min(remainingQty, availableVolume)
+        : remainingQty;
+
+      if (fillQty <= 0) continue;
+
       // 3. Execute matching transaction
       try {
         const receipt = await db.transaction(async (tx) => {
@@ -363,7 +388,7 @@ export async function onTick(
               orderId: order.id,
               symbol,
               side: order.side,
-              qty: order.qty,
+              qty: fillQty,
               price: 0,
               slippageApplied: 0,
               transactionFee: 0,
@@ -406,27 +431,27 @@ export async function onTick(
           const oldMarginLocked = position ? Number(position.marginLocked) : 0;
 
           // Transaction fees: NSE charges 0.00345%
-          const transactionFee = fillPrice * order.qty * 0.0000345;
+          const transactionFee = fillPrice * fillQty * 0.0000345;
 
           let newShares = oldShares;
           let newAvgPrice = oldAvgPrice;
           let realizedPnl = 0;
 
           if (order.side === "BUY") {
-            newShares = oldShares + order.qty;
+            newShares = oldShares + fillQty;
           } else {
-            newShares = oldShares - order.qty;
+            newShares = oldShares - fillQty;
           }
 
-          // Calculate realized P&L and average price
+          // Calculate realized P&L and average price using actual fillQty
           if (oldShares === 0) {
             newAvgPrice = fillPrice;
           } else if (Math.sign(oldShares) === Math.sign(newShares)) {
             newAvgPrice =
-              (Math.abs(oldShares) * oldAvgPrice + order.qty * fillPrice) /
+              (Math.abs(oldShares) * oldAvgPrice + fillQty * fillPrice) /
               Math.abs(newShares);
           } else {
-            const closedQty = Math.min(order.qty, Math.abs(oldShares));
+            const closedQty = Math.min(fillQty, Math.abs(oldShares));
             const direction = Math.sign(oldShares);
 
             if (direction > 0) {
@@ -435,7 +460,7 @@ export async function onTick(
               realizedPnl = closedQty * (oldAvgPrice - fillPrice);
             }
 
-            const remainderQty = order.qty - closedQty;
+            const remainderQty = fillQty - closedQty;
             if (remainderQty > 0) {
               newShares = direction > 0 ? -remainderQty : remainderQty;
               newAvgPrice = fillPrice;
@@ -478,7 +503,7 @@ export async function onTick(
               orderId: order.id,
               symbol,
               side: order.side,
-              qty: order.qty,
+              qty: fillQty,
               price: fillPrice,
               slippageApplied: slippage,
               transactionFee,
@@ -548,24 +573,34 @@ export async function onTick(
             })
             .where(eq(paperAccounts.userId, order.userId));
 
-          // Update order status to FILLED
+          // Set order status based on fill completion
+          const totalFilledQty = (order.filledQty || 0) + fillQty;
+          const isFullyFilled = totalFilledQty === order.qty;
+          const newStatus = isFullyFilled ? "FILLED" : "PARTIALLY_FILLED";
+          const accumulatedFee = Number(order.transactionFee || 0) + transactionFee;
+
+          // Compute new weighted average fill price
+          const existingFillVal = (order.filledQty || 0) * Number(order.averageFillPrice || 0);
+          const newAvgFillPrice = (existingFillVal + fillQty * fillPrice) / totalFilledQty;
+
           await tx
             .update(paperOrders)
             .set({
-              status: "FILLED",
-              filledQty: order.qty,
-              averageFillPrice: fillPrice.toString(),
+              status: newStatus,
+              filledQty: totalFilledQty,
+              averageFillPrice: newAvgFillPrice.toString(),
               slippageApplied: slippage.toString(),
-              transactionFee: transactionFee.toString(),
-              filledAt: new Date(),
+              transactionFee: accumulatedFee.toString(),
+              filledAt: isFullyFilled ? new Date() : null,
               updatedAt: new Date(),
             })
             .where(eq(paperOrders.id, order.id));
 
-          // 4. Bracket order chain management
+          // 4. Bracket order chain management - only triggers when fully filled
           if (
-            (order.takeProfitPrice && Number(order.takeProfitPrice) > 0) ||
-            (order.stopLossPrice && Number(order.stopLossPrice) > 0)
+            isFullyFilled &&
+            ((order.takeProfitPrice && Number(order.takeProfitPrice) > 0) ||
+             (order.stopLossPrice && Number(order.stopLossPrice) > 0))
           ) {
             const childSide = order.side === "BUY" ? "SELL" : "BUY";
 
@@ -603,7 +638,7 @@ export async function onTick(
             }
           }
 
-          // If this is a filled child order, cancel the sibling order (OCO)
+          // If this is a child order, manage the sibling order (OCO) with row locks
           if (order.parentOrderId) {
             const siblings = await tx
               .select()
@@ -613,20 +648,34 @@ export async function onTick(
                   eq(paperOrders.parentOrderId, order.parentOrderId),
                   sql`${paperOrders.id} != ${order.id}`
                 )
-              );
+              )
+              .for("update");
 
             for (const sibling of siblings) {
               if (
                 sibling.status === "PENDING" ||
                 sibling.status === "TRIGGER_PENDING"
               ) {
-                await tx
-                  .update(paperOrders)
-                  .set({
-                    status: "CANCELLED",
-                    updatedAt: new Date(),
-                  })
-                  .where(eq(paperOrders.id, sibling.id));
+                if (isFullyFilled) {
+                  // Fully filled -> Cancel sibling completely
+                  await tx
+                    .update(paperOrders)
+                    .set({
+                      status: "CANCELLED",
+                      updatedAt: new Date(),
+                    })
+                    .where(eq(paperOrders.id, sibling.id));
+                } else {
+                  // Partially filled -> Reduce sibling quantity by fillQty
+                  const newSiblingQty = Math.max(1, sibling.qty - fillQty);
+                  await tx
+                    .update(paperOrders)
+                    .set({
+                      qty: newSiblingQty,
+                      updatedAt: new Date(),
+                    })
+                    .where(eq(paperOrders.id, sibling.id));
+                }
               }
             }
           }
@@ -641,12 +690,12 @@ export async function onTick(
             orderId: order.id,
             symbol,
             side: order.side,
-            qty: order.qty,
+            qty: fillQty,
             price: fillPrice,
             slippageApplied: slippage,
             transactionFee,
             executionTimestamp: new Date().toISOString(),
-            status: "FILLED" as const,
+            status: newStatus as any,
             updatedMarginLocked: newShares === 0 ? 0 : updatedAllocatedMargin,
             cashBalance: newCashBalance,
           };
@@ -687,7 +736,8 @@ export async function liquidateAccount(
         eq(paperOrders.userId, userId),
         or(
           eq(paperOrders.status, "PENDING"),
-          eq(paperOrders.status, "TRIGGER_PENDING")
+          eq(paperOrders.status, "TRIGGER_PENDING"),
+          eq(paperOrders.status, "PARTIALLY_FILLED")
         )
       )
     );
@@ -768,7 +818,13 @@ export async function liquidateAccount(
     .for("update");
 
   if (acc) {
-    const newCash = Number(acc.cashBalance) + totalRealizedPnl - totalFees;
+    let newCash = Number(acc.cashBalance) + totalRealizedPnl - totalFees;
+    
+    // GAP-DOWN DEBT FLOOR: Cap the realized liquidation cash at 0 to prevent negative balance
+    if (newCash < 0) {
+      newCash = 0;
+    }
+
     await tx
       .update(paperAccounts)
       .set({
