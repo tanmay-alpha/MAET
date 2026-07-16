@@ -8,6 +8,8 @@ import { TiltCard } from "@/components/trading/tilt-card";
 import { ContractPanel } from "@/components/common/contract-panel";
 import { EquityCurveChart } from "@/components/chart/equity-curve-chart";
 import type { MarketQuote } from "@/lib/market-api";
+import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
+import { PlusCircle } from "lucide-react";
 
 export const Route = createFileRoute("/_app/portfolio")({
   head: () => ({
@@ -91,10 +93,15 @@ function PositionCard({
 }
 
 function PortfolioPage() {
-  const { account, reset } = usePaperAccount();
+  const { account, reset, placeOrder } = usePaperAccount();
   const { metrics, risk, trades, history, hasData } = usePortfolioAnalytics();
   const navigate = useNavigate();
   const [selectedPeriod, setSelectedPeriod] = useState<"1W" | "1M" | "3M" | "1Y" | "ALL">("ALL");
+  const [tradeModal, setTradeModal] = useState<{ isOpen: boolean; symbol: string; side: "BUY" | "SELL" }>({
+    isOpen: false,
+    symbol: "",
+    side: "BUY",
+  });
 
   // Get all unique symbols from positions
   const positionSymbols = useMemo(
@@ -161,13 +168,23 @@ function PortfolioPage() {
                   : "Connecting to market data"}
               </span>
             </div>
-            <button
-              type="button"
-              onClick={() => window.confirm("Reset all positions and cash to ₹1,000,000? This cannot be undone.") && reset()}
-              className="rounded-lg border border-border bg-panel px-3 py-2 text-sm hover:bg-accent"
-            >
-              Reset
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setTradeModal({ isOpen: true, symbol: "", side: "BUY" })}
+                className="flex items-center gap-1.5 rounded-lg bg-primary hover:bg-primary/95 text-primary-foreground px-3.5 py-2 text-sm font-bold shadow transition-all"
+              >
+                <PlusCircle className="h-4 w-4" />
+                Quick Trade
+              </button>
+              <button
+                type="button"
+                onClick={() => window.confirm("Reset all positions and cash to ₹1,000,000? This cannot be undone.") && reset()}
+                className="rounded-lg border border-border bg-panel px-3 py-2 text-sm hover:bg-accent transition-all"
+              >
+                Reset
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -301,6 +318,29 @@ function PortfolioPage() {
                           <div className={`text-xs font-medium ${changePct >= 0 ? "text-bull" : "text-bear"}`}>
                             {changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%
                           </div>
+                        </div>
+                        <div className="mt-3 pt-2 border-t border-border/50 flex justify-end gap-1.5">
+                          <button
+                            onClick={() => setTradeModal({ isOpen: true, symbol: position.symbol, side: position.qty > 0 ? "BUY" : "SELL" })}
+                            className="rounded bg-accent hover:bg-accent-elevated border border-border text-foreground px-2.5 py-1 text-[10px] font-semibold transition"
+                          >
+                            Trade
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Are you sure you want to close your position in ${position.symbol}?`)) {
+                                placeOrder({
+                                  symbol: position.symbol,
+                                  side: position.qty > 0 ? "SELL" : "BUY",
+                                  qty: Math.abs(position.qty),
+                                  type: "MARKET"
+                                });
+                              }
+                            }}
+                            className="rounded bg-bear hover:bg-bear/90 text-white px-2.5 py-1 text-[10px] font-semibold transition"
+                          >
+                            Exit
+                          </button>
                         </div>
                       </div>
                     );
@@ -467,6 +507,13 @@ function PortfolioPage() {
           </div>
         </div>
       </div>
+
+      <QuickTradeModal
+        isOpen={tradeModal.isOpen}
+        onClose={() => setTradeModal({ ...tradeModal, isOpen: false })}
+        initialSymbol={tradeModal.symbol}
+        initialSide={tradeModal.side}
+      />
     </div>
   );
 }
