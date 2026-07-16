@@ -22,10 +22,28 @@ const SLOW_TIMEOUT_MS = 1_000;
 export class SseHub {
   private conns = new Map<string, Connection>();
   private writeQueueTimeoutMs: number;
+  private pendingTicks = new Map<string, Tick>();
+  private flushInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: { writeQueueTimeoutMs?: number } = {}) {
     this.writeQueueTimeoutMs = opts.writeQueueTimeoutMs ?? SLOW_TIMEOUT_MS;
-    bus.on("tick", (t) => this.broadcastTick(t));
+    bus.on("tick", (t) => this.queueTick(t));
+    this.startFlushInterval();
+  }
+
+  private queueTick(tick: Tick): void {
+    this.pendingTicks.set(tick.symbol, tick);
+  }
+
+  private startFlushInterval(): void {
+    this.flushInterval = setInterval(() => {
+      if (this.pendingTicks.size === 0) return;
+      const ticks = Array.from(this.pendingTicks.values());
+      this.pendingTicks.clear();
+      for (const t of ticks) {
+        this.broadcastTick(t);
+      }
+    }, 200);
   }
 
   register(connId: string, userId: string, symbols: string[], send: SendFn, close: CloseFn): void {
@@ -47,6 +65,13 @@ export class SseHub {
     tx.del(RedisKeys.sseConnKey(connId));
     tx.exec();
     this.conns.delete(connId);
+  }
+
+  destroy(): void {
+    if (this.flushInterval) {
+      clearInterval(this.flushInterval);
+      this.flushInterval = null;
+    }
   }
 
   broadcastTick(tick: Tick): void {

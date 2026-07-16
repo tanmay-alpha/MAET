@@ -1,22 +1,27 @@
 import type { MarketQuote } from "@/lib/market-api";
 import { WATCHLIST, type MarketCatalogItem } from "@/lib/market-catalog";
 import { CompanySearchInput } from "@/components/market/company-search-input";
+import { useTerminalStore } from "@/store/useTerminalStore";
 
 export function Watchlist({
-  active,
   onSelect,
   quotes,
 }: {
-  active: string;
   onSelect: (company: MarketCatalogItem) => void;
   quotes: Map<string, MarketQuote>;
 }) {
+  const active = useTerminalStore((state) => state.activeSymbol);
+  const setActiveSymbol = useTerminalStore((state) => state.setActiveSymbol);
+
   return (
     <div className="flex h-full flex-col bg-panel">
       <div className="border-b border-border p-2">
         <CompanySearchInput
           placeholder="Search NSE symbol, company, or ISIN"
-          onSelect={(company) => onSelect({ symbol: company.symbol, name: company.name })}
+          onSelect={(company) => {
+            setActiveSymbol(company.symbol);
+            onSelect({ symbol: company.symbol, name: company.name });
+          }}
         />
       </div>
       <div className="grid grid-cols-12 border-b border-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -32,7 +37,10 @@ export function Watchlist({
           return (
             <button
               key={item.symbol}
-              onClick={() => onSelect(item)}
+              onClick={() => {
+                setActiveSymbol(item.symbol);
+                onSelect(item);
+              }}
               className={`grid w-full grid-cols-12 items-center px-3 py-2 text-xs transition-colors hover:bg-accent ${active === item.symbol ? "bg-accent" : ""}`}
             >
               <div className="col-span-5 text-left">
