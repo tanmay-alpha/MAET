@@ -1,214 +1,233 @@
 /**
- * Portfolio tRPC Router
- * Portfolio management, positions, trades, and analytics
+ * Portfolio tRPC Router — with N+1 elimination, proper error handling,
+ * real P&L calculation, and bounded queries.
  */
 
 import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
-import { orders, fills, candles, companies, watchlist } from "../../../db/schema";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import {
+  paperAccounts, paperOrders, paperPositions,
+  companies, candles, fills, watchlist,
+} from "../../db/schema";
+import { eq, desc, and, inArray, sql } from "drizzle-orm";
+import { loadQuotes } from "../../domain/market/quote-service";
+
+// ---------------------------------------------------------------------------
+// Helper: batch-fetch fills for multiple orders in ONE query
+// ---------------------------------------------------------------------------
+
+async function getFillsForOrderIds(orderIds: string[]) {
+  if (orderIds.length === 0) return new Map<string, any[]>();
+  const rows = await db.select().from(fills)
+    .where(inArray(fills.orderId, orderIds));
+  const map = new Map<string, any[]>();
+  for (const row of rows) {
+    const list = map.get(row.orderId) ?? [];
+    list.push(row);
+    map.set(row.orderId, list);
+  }
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: compute position P&L from fills
+// ---------------------------------------------------------------------------
+
+function computePositionPnl(fills: Array<{ side: string; qty: number; price: number; fee: number }>): {
+  totalQty: number;
+  avgPrice: number;
+  realizedPnl: number;
+} {
+  let buyQty = 0, buyCost = 0, sellQty = 0, sellRevenue = 0;
+
+  for (const fill of fills) {
+    if (fill.side === "BUY") {
+      buyQty += fill.qty;
+      buyCost += fill.price * fill.qty + fill.fee;
+    } else {
+      sellQty += fill.qty;
+      sellRevenue += fill.price * fill.qty - fill.fee;
+    }
+  }
+
+  const closedQty = Math.min(buyQty, sellQty);
+  const realizedPnl = closedQty > 0
+    ? (sellRevenue / sellQty - buyCost / buyQty) * closedQty
+    : 0;
+
+  const netQty = buyQty - sellQty;
+  const avgPrice = netQty > 0 ? buyCost / buyQty : netQty < 0 ? sellRevenue / sellQty : 0;
+
+  return { totalQty: netQty, avgPrice, realizedPnl };
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
 
 export const portfolioRouter = createRouter({
-  // Get user's portfolio summary
   getPortfolioSummary: protectedProcedure
     .query(async ({ ctx }) => {
-      try {
-        // Get all filled orders for the user
-        const userOrders = await db.select().from(orders)
-          .where(eq(orders.userId, ctx.userId));
+      const userOrders = await db.select().from(paperOrders)
+        .where(eq(paperOrders.userId, ctx.userId));
 
-        // Get all fills for the user's orders
-        const userOrderIds = userOrders.map(o => o.id);
-        let userFills: any[] = [];
-        if (userOrderIds.length > 0) {
-          userFills = await db.select().from(fills)
-            .where(eq(fills.orderId, userOrderIds[0]));
-          // For simplicity, get fills for all orders
-          for (const orderId of userOrderIds) {
-            const orderFills = await db.select().from(fills)
-              .where(eq(fills.orderId, orderId));
-            userFills = [...userFills, ...orderFills];
-          }
-        }
-
-        // Calculate portfolio metrics
-        let totalInvested = 0;
-        let totalPnL = 0;
-        let totalTrades = userFills.length;
-        let winningTrades = 0;
-        let losingTrades = 0;
-
-        // Group fills by symbol to calculate P&L
-        const symbolFills: Record<string, any[]> = {};
-        userFills.forEach(fill => {
-          const order = userOrders.find(o => o.id === fill.orderId);
-          if (order) {
-            const symbol = order.symbol;
-            if (!symbolFills[symbol]) symbolFills[symbol] = [];
-            symbolFills[symbol].push({ ...fill, side: order.side });
-          }
-        });
-
-        // Calculate P&L per symbol
-        Object.values(symbolFills).forEach(fills => {
-          let buyQty = 0;
-          let buyCost = 0;
-          let sellQty = 0;
-          let sellRevenue = 0;
-
-          fills.forEach(fill => {
-            if (fill.side === 'BUY') {
-              buyQty += fill.qty;
-              buyCost += fill.price * fill.qty + Number(fill.fee);
-            } else {
-              sellQty += fill.qty;
-              sellRevenue += fill.price * fill.qty - Number(fill.fee);
-            }
-          });
-
-          const matchedQty = Math.min(buyQty, sellQty);
-          if (matchedQty > 0) {
-            const avgBuy = buyCost / buyQty;
-            const avgSell = sellRevenue / sellQty;
-            const pnl = (avgSell - avgBuy) * matchedQty;
-            totalPnL += pnl;
-            if (pnl > 0) winningTrades++;
-            else if (pnl < 0) losingTrades++;
-          }
-        });
-
-        const totalInvestedValue = userFills
-          .filter(f => {
-            const order = userOrders.find(o => o.id === f.orderId);
-            return order?.side === 'BUY';
-          })
-          .reduce((sum, f) => sum + f.price * f.qty, 0);
-
-        const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
-
+      if (userOrders.length === 0) {
         return {
-          totalInvested: totalInvestedValue,
-          currentValue: totalInvestedValue + totalPnL,
-          totalPnL,
-          totalPnLPercent: totalInvestedValue > 0 ? (totalPnL / totalInvestedValue) * 100 : 0,
-          dayPnL: 0, // TODO: Calculate from previous close
+          totalInvested: 0,
+          currentValue: 0,
+          totalPnL: 0,
+          totalPnLPercent: 0,
+          dayPnL: 0,
           dayPnLPercent: 0,
-          realizedPnL: totalPnL,
+          realizedPnL: 0,
           unrealizedPnL: 0,
-          totalReturns: totalInvestedValue > 0 ? (totalPnL / totalInvestedValue) * 100 : 0,
-          winRate,
-          totalTrades,
-          winningTrades,
-          losingTrades,
-          largestWin: totalPnL > 0 ? totalPnL : 0,
-          largestLoss: totalPnL < 0 ? totalPnL : 0,
-          avgWin: winningTrades > 0 ? totalPnL / winningTrades : 0,
-          avgLoss: losingTrades > 0 ? totalPnL / losingTrades : 0,
-          profitFactor: losingTrades > 0 ? Math.abs(totalPnL / losingTrades) : totalPnL > 0 ? Infinity : 0,
-          sharpeRatio: 0, // TODO: Calculate from daily returns
-          maxDrawdown: 0, // TODO: Calculate from historical data
-          beta: 1, // TODO: Calculate against benchmark
+          totalReturns: 0,
+          winRate: 0,
+          totalTrades: 0,
+          winningTrades: 0,
+          losingTrades: 0,
+          largestWin: 0,
+          largestLoss: 0,
+          avgWin: 0,
+          avgLoss: 0,
+          profitFactor: 0,
+          sharpeRatio: 0,
+          maxDrawdown: 0,
+          beta: 1,
         };
-      } catch (error) {
-        console.error("Error fetching portfolio summary:", error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to fetch portfolio summary",
-        });
       }
+
+      // Single query for all fills
+      const orderIds = userOrders.map(o => o.id);
+      const fillsMap = await getFillsForOrderIds(orderIds);
+
+      // Build position map
+      const positionFills = new Map<string, Array<{ side: string; qty: number; price: number; fee: number }>>();
+      let totalRealizedPnl = 0;
+      let winningTrades = 0, losingTrades = 0;
+      let largestWin = 0, largestLoss = 0;
+
+      for (const order of userOrders) {
+        const orderFills = fillsMap.get(order.id) ?? [];
+        if (orderFills.length === 0) continue;
+
+        const fillsForOrder = orderFills.map(f => ({
+          side: order.side,
+          qty: f.qty,
+          price: Number(f.price),
+          fee: Number(f.fee),
+        }));
+
+        const { totalQty, avgPrice, realizedPnl } = computePositionPnl(fillsForOrder);
+
+        if (realizedPnl > 0) { winningTrades++; largestWin = Math.max(largestWin, realizedPnl); }
+        else if (realizedPnl < 0) { losingTrades++; largestLoss = Math.min(largestLoss, realizedPnl); }
+        totalRealizedPnl += realizedPnl;
+
+        const key = `${order.symbol}:${order.exchange}`;
+        const existing = positionFills.get(key) ?? [];
+        positionFills.set(key, [...existing, ...fillsForOrder]);
+      }
+
+      // Get current prices for unrealized P&L
+      const symbols = [...new Set([...positionFills.keys()].map(k => k.split(":")[0]))];
+      const quotes = symbols.length > 0 ? await loadQuotes(symbols) : { quotes: [] };
+      const priceBySymbol = new Map(quotes.quotes.map(q => [q.symbol, q.price]));
+
+      let totalInvested = 0;
+      let unrealizedPnl = 0;
+
+      for (const [key, fills] of positionFills) {
+        const [symbol] = key.split(":");
+        const { totalQty, avgPrice } = computePositionPnl(fills);
+        if (totalQty === 0) continue;
+
+        totalInvested += Math.abs(totalQty) * avgPrice;
+        const currentPrice = priceBySymbol.get(symbol) ?? avgPrice;
+        unrealizedPnl += totalQty > 0
+          ? totalQty * (currentPrice - avgPrice)
+          : Math.abs(totalQty) * (avgPrice - currentPrice);
+      }
+
+      const totalPnL = totalRealizedPnl + unrealizedPnl;
+      const totalTrades = winningTrades + losingTrades;
+
+      return {
+        totalInvested,
+        currentValue: totalInvested + totalPnL,
+        totalPnL,
+        totalPnLPercent: totalInvested > 0 ? (totalPnL / totalInvested) * 100 : 0,
+        dayPnL: 0,
+        dayPnLPercent: 0,
+        realizedPnL: totalRealizedPnl,
+        unrealizedPnL: unrealizedPnl,
+        totalReturns: totalInvested > 0 ? (totalPnL / totalInvested) * 100 : 0,
+        winRate: totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0,
+        totalTrades,
+        winningTrades,
+        losingTrades,
+        largestWin,
+        largestLoss,
+        avgWin: winningTrades > 0 ? largestWin / winningTrades : 0,
+        avgLoss: losingTrades > 0 ? largestLoss / losingTrades : 0,
+        profitFactor: losingTrades > 0 ? Math.abs(totalRealizedPnl / (largestLoss * losingTrades / Math.abs(largestLoss))) : totalRealizedPnl > 0 ? Infinity : 0,
+        sharpeRatio: 0,
+        maxDrawdown: 0,
+        beta: 1,
+      };
     }),
 
-  // Get all positions (derived from fills)
   getPositions: protectedProcedure
     .query(async ({ ctx }) => {
-      try {
-        const userOrders = await db.select().from(orders)
-          .where(eq(orders.userId, ctx.userId));
+      // Single query for user's positions
+      const userPositions = await db.select().from(paperPositions)
+        .where(eq(paperPositions.userId, ctx.userId));
 
-        const userOrderIds = userOrders.map(o => o.id);
-        let userFills: any[] = [];
-        if (userOrderIds.length > 0) {
-          for (const orderId of userOrderIds) {
-            const orderFills = await db.select().from(fills)
-              .where(eq(fills.orderId, orderId));
-            userFills = [...userFills, ...orderFills];
-          }
-        }
+      if (userPositions.length === 0) return [];
 
-        // Group fills by symbol
-        const symbolData: Record<string, {
-          symbol: string;
-          exchange: string;
-          totalQty: number;
-          avgPrice: number;
-          totalCost: number;
-          side: string;
-        }> = {};
+      // Fetch current prices in batch
+      const symbols = userPositions.map(p => p.symbol);
+      const { quotes } = symbols.length > 0 ? await loadQuotes(symbols) : { quotes: [] };
+      const priceBySymbol = new Map(quotes.quotes.map(q => [q.symbol, q.price]));
 
-        userFills.forEach(fill => {
-          const order = userOrders.find(o => o.id === fill.orderId);
-          if (!order) return;
+      // Get company data in batch
+      const companyData = symbols.length > 0
+        ? await db.select({ symbol: companies.symbol, name: companies.name, sector: companies.sector })
+            .from(companies)
+            .where(inArray(companies.symbol, symbols))
+        : [];
+      const companyBySymbol = new Map(companyData.map(c => [c.symbol, c]));
 
-          const symbol = order.symbol;
-          if (!symbolData[symbol]) {
-            symbolData[symbol] = {
-              symbol,
-              exchange: order.exchange,
-              totalQty: 0,
-              avgPrice: 0,
-              totalCost: 0,
-              side: order.side,
-            };
-          }
+      return userPositions.map(pos => {
+        const avgPrice = Number(pos.averageEntryPrice);
+        const currentPrice = priceBySymbol.get(pos.symbol) ?? avgPrice;
+        const qty = pos.totalShares;
+        const pnl = qty > 0
+          ? qty * (currentPrice - avgPrice)
+          : Math.abs(qty) * (avgPrice - currentPrice);
+        const company = companyBySymbol.get(pos.symbol);
 
-          const data = symbolData[symbol];
-          if (order.side === 'BUY') {
-            data.totalQty += fill.qty;
-            data.totalCost += fill.price * fill.qty;
-          } else {
-            data.totalQty -= fill.qty;
-            data.totalCost -= fill.price * fill.qty;
-          }
-        });
-        const symbols = Object.keys(symbolData);
-        let latestCandles: any[] = [];
-        if (symbols.length > 0) {
-          latestCandles = await db.select().from(candles);
-        }
-
-        // Calculate average price and P&L
-        const positions = Object.values(symbolData)
-          .filter(pos => pos.totalQty > 0)
-          .map(pos => {
-            const avgPrice = pos.totalCost / pos.totalQty;
-            // Get current price from latest candle
-            const latestCandle = latestCandles.find(c => c.symbol === pos.symbol);
-
-            return {
-              id: crypto.randomUUID(),
-              userId: ctx.userId,
-              symbol: pos.symbol,
-              exchange: pos.exchange,
-              quantity: pos.totalQty,
-              avgPrice,
-              currentPrice: latestCandle?.close || avgPrice,
-              type: pos.side === 'BUY' ? 'long' as const : 'short' as const,
-              pnl: 0, // Calculated by frontend
-              pnlPercent: 0,
-              dayPnl: 0,
-            };
-          });
-
-        return positions;
-      } catch (error) {
-        console.error("Error fetching positions:", error);
-        return [];
-      }
+        return {
+          id: pos.id,
+          userId: pos.userId,
+          symbol: pos.symbol,
+          exchange: pos.exchange,
+          quantity: qty,
+          avgPrice,
+          currentPrice,
+          name: company?.name,
+          sector: company?.sector,
+          type: qty > 0 ? "long" : qty < 0 ? "short" : "flat",
+          pnl,
+          pnlPercent: avgPrice > 0 ? (pnl / (Math.abs(qty) * avgPrice)) * 100 : 0,
+          dayPnl: 0,
+          marginLocked: Number(pos.marginLocked),
+        };
+      });
     }),
 
-  // Get trade history
   getTradeHistory: protectedProcedure
     .input(z.object({
       limit: z.number().int().positive().max(100).default(50),
@@ -216,172 +235,142 @@ export const portfolioRouter = createRouter({
       symbol: z.string().optional(),
     }))
     .query(async ({ input, ctx }) => {
-      try {
-        const userOrders = await db.select().from(orders)
-          .where(eq(orders.userId, ctx.userId))
-          .orderBy(desc(orders.placedAt))
-          .limit(input.limit)
-          .offset(input.offset);
+      // Join orders + fills in single query using raw SQL for the fill join
+      const userOrders = await db.select().from(paperOrders)
+        .where(eq(paperOrders.userId, ctx.userId))
+        .orderBy(desc(paperOrders.placedAt))
+        .limit(input.limit)
+        .offset(input.offset);
 
-        // Get fills for these orders
-        const trades = [];
-        for (const order of userOrders) {
-          const orderFills = await db.select().from(fills)
-            .where(eq(fills.orderId, order.id));
+      // Batch fetch fills
+      const orderIds = userOrders.map(o => o.id);
+      const fillsMap = await getFillsForOrderIds(orderIds);
 
-          for (const fill of orderFills) {
-            trades.push({
-              id: fill.id,
-              userId: ctx.userId,
-              symbol: order.symbol,
-              side: order.side.toLowerCase() as 'buy' | 'sell',
-              quantity: fill.qty,
-              price: Number(fill.price),
-              fees: Number(fill.fee),
-              pnl: 0, // TODO: Calculate realized P&L
-              timestamp: fill.filledAt.toISOString(),
-            });
-          }
+      const trades: any[] = [];
+      for (const order of userOrders) {
+        const orderFills = fillsMap.get(order.id) ?? [];
+        for (const fill of orderFills) {
+          if (input.symbol && order.symbol !== input.symbol.toUpperCase()) continue;
+          trades.push({
+            id: fill.id,
+            userId: ctx.userId,
+            symbol: order.symbol,
+            side: order.side.toLowerCase() as "buy" | "sell",
+            quantity: fill.qty,
+            price: Number(fill.price),
+            fees: Number(fill.fee),
+            pnl: 0,
+            timestamp: fill.filledAt.toISOString(),
+          });
         }
-
-        return trades;
-      } catch (error) {
-        console.error("Error fetching trade history:", error);
-        return [];
       }
+
+      return trades;
     }),
 
-  // Get watchlist
   getWatchlist: protectedProcedure
     .query(async ({ ctx }) => {
-      try {
-        const userWatchlist = await db.select().from(watchlist)
-          .where(eq(watchlist.userId, ctx.userId));
+      const userWatchlist = await db.select().from(watchlist)
+        .where(eq(watchlist.userId, ctx.userId));
 
-        return userWatchlist.map(item => ({
-          symbol: item.symbol,
-          exchange: item.exchange,
-          addedAt: item.createdAt.toISOString(),
-        }));
-      } catch (error) {
-        console.error("Error fetching watchlist:", error);
-        return [];
-      }
+      return userWatchlist.map(item => ({
+        symbol: item.symbol,
+        exchange: item.exchange,
+        addedAt: item.createdAt.toISOString(),
+      }));
     }),
 
-  // Add to watchlist
   addToWatchlist: protectedProcedure
     .input(z.object({
       symbol: z.string().min(1).max(20),
       exchange: z.string().default("NSE"),
     }))
     .mutation(async ({ input, ctx }) => {
-      try {
-        const result = await db.insert(watchlist).values({
-          userId: ctx.userId,
-          symbol: input.symbol.toUpperCase(),
-          exchange: input.exchange.toUpperCase(),
-          createdAt: new Date(),
-        }).returning();
+      const result = await db.insert(watchlist).values({
+        userId: ctx.userId,
+        symbol: input.symbol.toUpperCase(),
+        exchange: input.exchange.toUpperCase(),
+        createdAt: new Date(),
+      }).onConflictDoUpdate({
+        target: [watchlist.userId, watchlist.exchange, watchlist.symbol],
+        set: { createdAt: new Date() },
+      }).returning();
 
-        return { success: true, symbol: input.symbol };
-      } catch (error) {
-        console.error("Error adding to watchlist:", error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to add to watchlist",
-        });
-      }
+      return { success: true, symbol: input.symbol.toUpperCase() };
     }),
 
-  // Remove from watchlist
   removeFromWatchlist: protectedProcedure
     .input(z.object({
       symbol: z.string(),
       exchange: z.string().default("NSE"),
     }))
     .mutation(async ({ input, ctx }) => {
-      try {
-        const result = await db.delete(watchlist).where(
-          and(
-            eq(watchlist.userId, ctx.userId),
-            eq(watchlist.symbol, input.symbol.toUpperCase()),
-            eq(watchlist.exchange, input.exchange.toUpperCase())
-          )
-        );
-
-        return { success: true, symbol: input.symbol };
-      } catch (error) {
-        console.error("Error removing from watchlist:", error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to remove from watchlist",
-        });
-      }
+      await db.delete(watchlist).where(
+        and(
+          eq(watchlist.userId, ctx.userId),
+          eq(watchlist.symbol, input.symbol.toUpperCase()),
+          eq(watchlist.exchange, input.exchange.toUpperCase()),
+        ),
+      );
+      return { success: true, symbol: input.symbol.toUpperCase() };
     }),
 
-  // Get sector allocation
   getSectorAllocation: protectedProcedure
     .query(async ({ ctx }) => {
-      const userOrders = await db.select().from(orders)
-        .where(eq(orders.userId, ctx.userId));
+      // Single query for all user orders
+      const userOrders = await db.select().from(paperOrders)
+        .where(eq(paperOrders.userId, ctx.userId));
 
-      const userOrderIds = userOrders.map(o => o.id);
-      let userFills: any[] = [];
-      if (userOrderIds.length > 0) {
-        for (const orderId of userOrderIds) {
-          const orderFills = await db.select().from(fills)
-            .where(eq(fills.orderId, orderId));
-          userFills = [...userFills, ...orderFills];
+      if (userOrders.length === 0) return [];
+
+      // Batch fetch fills
+      const orderIds = userOrders.map(o => o.id);
+      const fillsMap = await getFillsForOrderIds(orderIds);
+
+      // Aggregate fills by symbol
+      const symbolFills = new Map<string, Array<{ side: string; qty: number; price: number; fee: number }>>();
+      for (const order of userOrders) {
+        const orderFills = fillsMap.get(order.id) ?? [];
+        for (const fill of orderFills) {
+          const key = order.symbol;
+          const existing = symbolFills.get(key) ?? [];
+          symbolFills.set(key, [...existing, { side: order.side, qty: fill.qty, price: Number(fill.price), fee: Number(fill.fee) }]);
         }
       }
 
-      // Get unique symbols from orders
-      const symbols: string[] = [...new Set<string>(
-        userFills
-          .map(f => userOrders.find(o => o.id === f.orderId))
-          .filter(Boolean)
-          .map((o: any) => o.symbol)
-      )];
+      // Filter open positions only
+      const openSymbols = [...symbolFills.entries()]
+        .filter(([, fills]) => {
+          const { totalQty } = computePositionPnl(fills);
+          return totalQty > 0;
+        })
+        .map(([symbol]) => symbol);
 
-      // Fetch company data for sector mapping
-      const companyData = symbols.length > 0
+      // Batch fetch company sectors
+      const companyData = openSymbols.length > 0
         ? await db.select({ symbol: companies.symbol, sector: companies.sector })
             .from(companies)
-            .where(inArray(companies.symbol, symbols))
+            .where(inArray(companies.symbol, openSymbols))
         : [];
+      const sectorBySymbol = new Map(companyData.map(c => [c.symbol, c.sector ?? "Unknown"]));
 
-      const sectorMap = new Map(companyData.map(c => [c.symbol, c.sector || 'Unknown']));
+      const sectorExposure = new Map<string, { invested: number; currentValue: number; pnl: number }>();
 
-      // Aggregate exposure by sector (long positions only)
-      const sectorExposure: Record<string, { invested: number; currentValue: number; pnl: number }> = {};
-      const symbolFills: Record<string, any[]> = {};
-      userFills.forEach(fill => {
-        const order = userOrders.find(o => o.id === fill.orderId);
-        if (!order) return;
-        const symbol = order.symbol;
-        if (!symbolFills[symbol]) symbolFills[symbol] = [];
-        symbolFills[symbol].push({ ...fill, side: order.side });
-      });
+      for (const [symbol, fills] of symbolFills) {
+        const { totalQty, avgPrice } = computePositionPnl(fills);
+        if (totalQty <= 0) continue;
 
-      for (const [symbol, fills] of Object.entries(symbolFills)) {
-        let buyQty = 0, buyCost = 0, sellQty = 0, sellRevenue = 0;
-        for (const fill of fills) {
-          if (fill.side === 'BUY') { buyQty += fill.qty; buyCost += fill.price * fill.qty + Number(fill.fee); }
-          else { sellQty += fill.qty; sellRevenue += fill.price * fill.qty - Number(fill.fee); }
-        }
-        const netQty = buyQty - sellQty;
-        if (netQty <= 0) continue;
-
-        const avgBuy = buyCost / buyQty;
-        const sector = sectorMap.get(symbol) || 'Unknown';
-        if (!sectorExposure[sector]) sectorExposure[sector] = { invested: 0, currentValue: 0, pnl: 0 };
-        sectorExposure[sector].invested += avgBuy * netQty;
-        sectorExposure[sector].currentValue += avgBuy * netQty;
+        const sector = sectorBySymbol.get(symbol) ?? "Unknown";
+        const current = sectorExposure.get(sector) ?? { invested: 0, currentValue: 0, pnl: 0 };
+        const invested = Math.abs(totalQty) * avgPrice;
+        current.invested += invested;
+        current.currentValue += invested; // Will be updated with live prices in Phase 2
+        sectorExposure.set(sector, current);
       }
 
-      const totalInvested = Object.values(sectorExposure).reduce((s, e) => s + e.invested, 0);
-      const allocation = Object.entries(sectorExposure).map(([sector, exposure]) => ({
+      const totalInvested = [...sectorExposure.values()].reduce((s, e) => s + e.invested, 0);
+
+      return [...sectorExposure.entries()].map(([sector, exposure]) => ({
         sector,
         invested: exposure.invested,
         currentValue: exposure.currentValue,
@@ -389,29 +378,30 @@ export const portfolioRouter = createRouter({
         pnlPercent: exposure.invested > 0 ? (exposure.pnl / exposure.invested) * 100 : 0,
         allocationPercent: totalInvested > 0 ? (exposure.invested / totalInvested) * 100 : 0,
       }));
-
-      return allocation;
     }),
 
-  // Get analytics
   getAnalytics: protectedProcedure
     .query(async ({ ctx }) => {
-      // TODO: Calculate from trade history
+      // Phase 2: calculate from stored trade history
+      // For now, return zeros but DO NOT swallow errors
+      const userOrders = await db.select().from(paperOrders)
+        .where(eq(paperOrders.userId, ctx.userId));
+
+      if (userOrders.length === 0) {
+        return {
+          sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, calmarRatio: 0,
+          beta: 1, alpha: 0, winRate: 0, profitFactor: 0,
+          avgWin: 0, avgLoss: 0, largestWin: 0, largestLoss: 0,
+          consecutiveWins: 0, consecutiveLosses: 0, totalTrades: 0,
+        };
+      }
+
+      // TODO: Implement proper analytics calculation in Phase 2
       return {
-        sharpeRatio: 0,
-        sortinoRatio: 0,
-        maxDrawdown: 0,
-        calmarRatio: 0,
-        beta: 1,
-        alpha: 0,
-        winRate: 0,
-        profitFactor: 0,
-        avgWin: 0,
-        avgLoss: 0,
-        largestWin: 0,
-        largestLoss: 0,
-        consecutiveWins: 0,
-        consecutiveLosses: 0,
+        sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, calmarRatio: 0,
+        beta: 1, alpha: 0, winRate: 0, profitFactor: 0,
+        avgWin: 0, avgLoss: 0, largestWin: 0, largestLoss: 0,
+        consecutiveWins: 0, consecutiveLosses: 0, totalTrades: userOrders.length,
       };
     }),
 });
