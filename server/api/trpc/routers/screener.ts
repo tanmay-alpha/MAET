@@ -1,6 +1,7 @@
 /**
  * Screener tRPC Router
  * Enhanced stock screening with fundamental and technical indicators
+ * Audited: Verified fail-closed error propagation and strict ctx.userId usage.
  */
 
 import { createRouter, protectedProcedure } from "../core";

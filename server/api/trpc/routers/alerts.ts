@@ -8,22 +8,37 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { alerts } from "../../../db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 export const alertsRouter = createRouter({
-  // Get all alerts for the current user
+  // Get all alerts for the current user with pagination and limits
   getAlerts: protectedProcedure
-    .query(async ({ ctx }) => {
-      try {
-        const userAlerts = await db.select().from(alerts).where(eq(alerts.userId, ctx.userId));
-        return userAlerts;
-      } catch (error) {
-        console.error("Error fetching alerts:", error);
-        return [];
+    .input(z.object({
+      limit: z.number().int().positive().max(200).default(50),
+      cursor: z.string().uuid().optional(),
+    }).optional())
+    .query(async ({ input, ctx }) => {
+      const { limit = 50, cursor } = input ?? {};
+      const conditions = [eq(alerts.userId, ctx.userId)];
+      if (cursor) {
+        conditions.push(sql`${alerts.id} > ${cursor}`);
       }
+
+      const rows = await db.select().from(alerts)
+        .where(and(...conditions))
+        .orderBy(alerts.id)
+        .limit(limit + 1);
+
+      const hasMore = rows.length > limit;
+      const items = hasMore ? rows.slice(0, -1) : rows;
+
+      return {
+        items,
+        nextCursor: hasMore ? items[items.length - 1]?.id : null,
+      };
     }),
 
-  // Create a new alert
+  // Create a new alert — bounded to max 100 active alerts of the same type
   createAlert: protectedProcedure
     .input(z.object({
       symbol: z.string().min(1).max(20),
@@ -34,30 +49,42 @@ export const alertsRouter = createRouter({
       message: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      try {
-        const newAlert = await db.insert(alerts).values({
-          id: crypto.randomUUID(),
-          userId: ctx.userId,
-          symbol: input.symbol.toUpperCase(),
-          exchange: input.exchange.toUpperCase(),
-          type: input.type,
-          condition: input.condition,
-          target: String(input.target),
-          message: input.message || null,
-          triggered: false,
-          triggeredAt: null,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        }).returning();
+      // Query active count first
+      const [countResult] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(alerts)
+        .where(
+          and(
+            eq(alerts.userId, ctx.userId),
+            eq(alerts.type, input.type),
+            eq(alerts.triggered, false),
+          ),
+        );
 
-        return newAlert[0];
-      } catch (error) {
-        console.error("Error creating alert:", error);
+      const activeCount = Number(countResult?.count ?? 0);
+      if (activeCount >= 100) {
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create alert",
+          code: "BAD_REQUEST",
+          message: `You cannot have more than 100 active ${input.type} alerts.`,
         });
       }
+
+      const newAlert = await db.insert(alerts).values({
+        id: crypto.randomUUID(),
+        userId: ctx.userId,
+        symbol: input.symbol.toUpperCase(),
+        exchange: input.exchange.toUpperCase(),
+        type: input.type,
+        condition: input.condition,
+        target: String(input.target),
+        message: input.message || null,
+        triggered: false,
+        triggeredAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }).returning();
+
+      return newAlert[0];
     }),
 
   // Delete an alert
@@ -66,32 +93,21 @@ export const alertsRouter = createRouter({
       alertId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
-      try {
-        const result = await db.delete(alerts).where(
-          and(
-            eq(alerts.id, input.alertId),
-            eq(alerts.userId, ctx.userId)
-          )
-        );
+      const result = await db.delete(alerts).where(
+        and(
+          eq(alerts.id, input.alertId),
+          eq(alerts.userId, ctx.userId)
+        )
+      ).returning();
 
-        if ((result as any).rowsAffected === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Alert not found",
-          });
-        }
-
-        return { success: true, alertId: input.alertId };
-      } catch (error) {
-        if (error instanceof TRPCError) {
-          throw error;
-        }
-        console.error("Error deleting alert:", error);
+      if (result.length === 0) {
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to delete alert",
+          code: "NOT_FOUND",
+          message: "Alert not found",
         });
       }
+
+      return { success: true, alertId: input.alertId };
     }),
 
   // Update an alert

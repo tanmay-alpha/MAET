@@ -20,11 +20,12 @@ export const companiesRouter = createRouter({
         isActive: z.boolean().optional(),
         search: z.string().optional(),
         cursor: z.string().optional(),
-        limit: z.number().int().positive().max(100).default(50),
+        limit: z.number().int().positive().max(200).default(50),
       }).optional()
     )
     .query(async ({ input }) => {
       const { sector, exchange, isActive, search, cursor, limit = 50 } = input ?? {};
+      const finalLimit = Math.min(limit, 200);
 
       let query = db.select().from(companies);
       const conditions = [];
@@ -48,9 +49,9 @@ export const companiesRouter = createRouter({
 
       const rows = await query
         .orderBy(companies.symbol)
-        .limit(limit + 1);
+        .limit(finalLimit + 1);
 
-      const hasMore = rows.length > limit;
+      const hasMore = rows.length > finalLimit;
       const items = hasMore ? rows.slice(0, -1) : rows;
       return {
         items,

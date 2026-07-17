@@ -14,7 +14,7 @@ import {
 } from "../../db/schema";
 import { calculateSlippage } from "./slippage";
 import { quoteStore } from "./quote-store";
-import { reconcilePosition, type ReconciliationResult } from "./position-reconcile";
+import { reconcilePosition, type ReconciliationResult } from "../portfolio/position-reconcile";
 import { AppError, UpstreamDegradedError } from "@shared/types/errors";
 
 // ---------------------------------------------------------------------------

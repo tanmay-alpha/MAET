@@ -55,12 +55,11 @@ function getJwks() {
 export async function verifyJwt(token: string): Promise<AuthContext | null> {
   try {
     const jwks = getJwks();
+    const cfg = getConfig();
     const { payload } = await jwtVerify(token, jwks, {
-      // Supabase uses `sub` for user id; we don't pin issuer/audience here
-      // because Supabase's defaults vary by project. Pinning them would
-      // require reading the project's API settings, which is overkill for
-      // an MVP — signature + expiration check is the floor.
       clockTolerance: 5,
+      issuer: `${cfg.supabaseUrl.replace(/\/+$/, "")}/auth/v1`,
+      audience: "authenticated",
     });
     if (typeof payload.sub !== "string" || payload.sub.length === 0) {
       return null;
@@ -72,6 +71,7 @@ export async function verifyJwt(token: string): Promise<AuthContext | null> {
   } catch (err) {
     if (err instanceof joseErrors.JWTExpired) return null;
     if (err instanceof joseErrors.JWSSignatureVerificationFailed) return null;
+    if (err instanceof joseErrors.JWTClaimValidationFailed) return null;
     if (err instanceof joseErrors.JWTInvalid) return null;
     if (err instanceof joseErrors.JOSEError) return null;
     // Network / JWKS fetch failure — let the caller decide whether to 503.

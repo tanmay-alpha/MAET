@@ -7,8 +7,51 @@ import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
-import { orders, paperAccounts, companies } from "../../db/schema";
+import { orders, paperAccounts, companies } from "../../../db/schema";
 import { eq, desc, and } from "drizzle-orm";
+import { getRedis } from "../../../data/redis/client";
+
+const memoryRateLimit = new Map<string, { count: number; windowStart: number }>();
+
+function checkInMemoryRateLimit(userId: string) {
+  const now = Date.now();
+  const minuteMs = 60_000;
+  const userRecord = memoryRateLimit.get(userId);
+
+  if (!userRecord || now - userRecord.windowStart > minuteMs) {
+    memoryRateLimit.set(userId, { count: 1, windowStart: now });
+  } else {
+    userRecord.count++;
+    if (userRecord.count > 30) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "Rate limit exceeded: maximum 30 mutations per minute",
+      });
+    }
+  }
+}
+
+async function checkMutationRateLimit(userId: string) {
+  try {
+    const r = getRedis();
+    const minute = Math.floor(Date.now() / 60_000).toString();
+    const key = `ratelimit:mutations:${userId}:${minute}`;
+    const count = await r.incr(key);
+    if (count === 1) {
+      await r.expire(key, 60);
+    }
+    if (count > 30) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "Rate limit exceeded: maximum 30 mutations per minute",
+      });
+    }
+  } catch (err) {
+    if (err instanceof TRPCError) throw err;
+    checkInMemoryRateLimit(userId);
+  }
+}
+
 
 // NSE minimum lot sizes for top stocks — fallback to 1 if unknown
 const MIN_LOT_SIZES: Record<string, number> = {
@@ -57,11 +100,28 @@ export const ordersRouter = createRouter({
       side: z.enum(["BUY", "SELL"]),
       type: z.enum(["MARKET", "LIMIT", "SL", "SL-M"]),
       qty: z.number().int().positive().max(1_000_000),
-      limitPrice: z.number().positive().optional(),
-      triggerPrice: z.number().positive().optional(),
-      idempotencyKey: z.string().min(8).max(128).optional(),
+      limitPrice: z.number().positive().refine(v => v >= 0.01, { message: "Price must be at least 0.01" }).optional(),
+      triggerPrice: z.number().positive().refine(v => v >= 0.01, { message: "Price must be at least 0.01" }).optional(),
+      idempotencyKey: z.string().min(32).max(128).optional(),
+    }).superRefine((data, ctx) => {
+      if (data.type === "LIMIT" && data.limitPrice === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "limitPrice is required for LIMIT orders",
+          path: ["limitPrice"],
+        });
+      }
+      if ((data.type === "SL" || data.type === "SL-M") && data.triggerPrice === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "triggerPrice is required for SL and SL-M orders",
+          path: ["triggerPrice"],
+        });
+      }
     }))
     .mutation(async ({ input, ctx }) => {
+      await checkMutationRateLimit(ctx.userId);
+
       const symbol = input.symbol.toUpperCase();
       const userId = ctx.userId;
 
@@ -101,45 +161,47 @@ export const ordersRouter = createRouter({
         ? `order:${userId}:${input.idempotencyKey}`
         : undefined;
 
-      // Check for existing order with same idempotency key
-      if (idempotencyKey) {
-        const [[existing]] = await db.select()
-          .from(orders)
-          .where(and(
-            eq(orders.userId, userId),
-            eq(orders.idempotencyKey, idempotencyKey),
-          ))
-          .limit(1);
+      const newOrder = await db.transaction(async (tx) => {
+        // Check for existing order with same idempotency key inside transaction
+        if (idempotencyKey) {
+          const [[existing]] = await tx.select()
+            .from(orders)
+            .where(and(
+              eq(orders.userId, userId),
+              eq(orders.idempotencyKey, idempotencyKey),
+            ))
+            .limit(1);
 
-        if (existing) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: "Duplicate order — this idempotency key was already used",
-            data: { existingOrderId: existing.id },
-          });
+          if (existing) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "Duplicate order — this idempotency key was already used",
+              data: { existingOrderId: existing.id },
+            });
+          }
         }
-      }
 
-      const orderId = crypto.randomUUID();
-      const finalIdempotencyKey = idempotencyKey || `order:${userId}:${Date.now()}-${orderId.slice(0, 9)}`;
+        const orderId = crypto.randomUUID();
+        const finalIdempotencyKey = idempotencyKey || `order:${userId}:${Date.now()}-${orderId.slice(0, 9)}`;
 
-      const newOrder = await db.insert(orders).values({
-        id: orderId,
-        userId,
-        symbol,
-        exchange: input.exchange.toUpperCase(),
-        side: input.side,
-        type: input.type,
-        qty: input.qty,
-        limitPrice: input.limitPrice ? String(input.limitPrice) : null,
-        triggerPrice: input.triggerPrice ? String(input.triggerPrice) : null,
-        status: "pending",
-        idempotencyKey: finalIdempotencyKey,
-        rejectReason: null,
-        placedAt: new Date(),
-        filledAt: null,
-        updatedAt: new Date(),
-      }).returning();
+        return await tx.insert(orders).values({
+          id: orderId,
+          userId,
+          symbol,
+          exchange: input.exchange.toUpperCase(),
+          side: input.side,
+          type: input.type,
+          qty: input.qty,
+          limitPrice: input.limitPrice ? String(input.limitPrice) : null,
+          triggerPrice: input.triggerPrice ? String(input.triggerPrice) : null,
+          status: "pending",
+          idempotencyKey: finalIdempotencyKey,
+          rejectReason: null,
+          placedAt: new Date(),
+          filledAt: null,
+          updatedAt: new Date(),
+        }).returning();
+      });
 
       return {
         ...newOrder[0],
