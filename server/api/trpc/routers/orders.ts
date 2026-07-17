@@ -129,7 +129,7 @@ export const ordersRouter = createRouter({
       validateLotSize(symbol, input.qty);
 
       // Pre-validation: check symbol exists in our universe
-      const [[company]] = await db.select()
+      const [company] = await db.select()
         .from(companies)
         .where(eq(companies.symbol, symbol))
         .limit(1);
@@ -143,7 +143,7 @@ export const ordersRouter = createRouter({
 
       // Pre-validation: check sufficient cash for BUY orders
       if (input.side === "BUY" && input.type === "MARKET") {
-        const [[account]] = await db.select()
+        const [account] = await db.select()
           .from(paperAccounts)
           .where(eq(paperAccounts.userId, userId))
           .limit(1);
@@ -164,7 +164,7 @@ export const ordersRouter = createRouter({
       const newOrder = await db.transaction(async (tx) => {
         // Check for existing order with same idempotency key inside transaction
         if (idempotencyKey) {
-          const [[existing]] = await tx.select()
+          const [existing] = await tx.select()
             .from(orders)
             .where(and(
               eq(orders.userId, userId),
