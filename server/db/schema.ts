@@ -35,7 +35,7 @@ export const brokers = pgTable("brokers", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   provider: text("provider").notNull().default("angelone"),
-  encryptedCredentials: text("encrypted_credentials").notNull(), // TODO: encrypt before insert
+  encryptedCredentials: text("encrypted_credentials").notNull(), // encrypt before insert via infra/encryption.ts
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

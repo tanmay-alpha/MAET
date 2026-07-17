@@ -61,6 +61,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { "http-equiv": "Content-Security-Policy", content: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" },
+      { "http-equiv": "X-Content-Type-Options", content: "nosniff" },
+      { name: "X-Frame-Options", content: "DENY" },
       { title: "MAET — Indian market research and paper trading" },
       { name: "description", content: "MAET provides delayed Indian equity quotes, historical backtests, screeners, and browser-only paper trading." },
       { property: "og:title", content: "MAET — Indian market research terminal" },

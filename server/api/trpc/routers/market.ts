@@ -27,7 +27,7 @@ export const marketRouter = createRouter({
   // Get quotes for a list of symbols with caching and freshness checks
   getQuotes: protectedProcedure
     .input(z.object({
-      symbols: z.array(z.string()),
+      symbols: z.array(z.string()).max(50),
     }))
     .query(async ({ input }) => {
       const now = Date.now();

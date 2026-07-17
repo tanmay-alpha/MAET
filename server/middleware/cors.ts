@@ -26,9 +26,10 @@ const allowedOrigins = new Set(configuredOrigins?.length ? configuredOrigins : D
 
 export const corsMiddleware = defineEventHandler((event) => {
   const origin = getRequestHeader(event, "origin");
+  // FIX 8: Always set Vary: Origin to prevent CDN cache poisoning
+  setResponseHeader(event, "vary", "Origin");
   if (origin && allowedOrigins.has(origin)) {
     setResponseHeader(event, "access-control-allow-origin", origin);
-    setResponseHeader(event, "vary", "Origin");
   }
 
   if (getMethod(event) === "OPTIONS") {

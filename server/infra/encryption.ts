@@ -7,6 +7,13 @@ export type EncryptedPayload = {
   authTag: Buffer;
 };
 
+export type BrokerCredentials = {
+  apiKey: string;
+  clientCode: string;
+  password: string;
+  totpSecret: string;
+};
+
 function getKey(): Buffer {
   const raw = getConfig().angeloneMasterKey;
   try {
@@ -38,4 +45,27 @@ export function decrypt(payload: EncryptedPayload): string {
   decipher.setAuthTag(payload.authTag);
   const pt = Buffer.concat([decipher.update(payload.ciphertext), decipher.final()]);
   return pt.toString("utf8");
+}
+
+/**
+ * Encrypt broker credentials into a single opaque string for safe storage.
+ *
+ * Usage:
+ *   const encrypted = encryptBrokerCredentials({ apiKey, clientCode, password, totpSecret });
+ *   // Store `encrypted` in the brokers.encrypted_credentials column
+ *
+ * Decryption:
+ *   const payload = JSON.parse(encryptedStr);
+ *   const plaintext = decrypt({ ciphertext: Buffer.from(payload.ciphertext, 'base64'), ... });
+ */
+export function encryptBrokerCredentials(credentials: BrokerCredentials): string {
+  const plaintext = JSON.stringify(credentials);
+  const payload = encrypt(plaintext);
+  // Serialise to a portable JSON string safe for a TEXT column
+  return JSON.stringify({
+    v: 1,
+    ciphertext: payload.ciphertext.toString("base64"),
+    iv: payload.iv.toString("base64"),
+    authTag: payload.authTag.toString("base64"),
+  });
 }
