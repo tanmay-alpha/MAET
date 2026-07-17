@@ -517,3 +517,48 @@ export const indexValuations = pgTable("index_valuations", {
   asOf: timestamp("as_of", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ---------------------------------------------------------------------------
+// Paper Trading Extensions: Ledger, Margin Audit, and Equity Snapshots
+// ---------------------------------------------------------------------------
+
+export const paperLedgers = pgTable("paper_ledgers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  amount: numeric("amount", { precision: 18, scale: 4 }).notNull(),
+  type: text("type").notNull(), // 'DEPOSIT', 'WITHDRAWAL', 'REALIZED_PNL', 'TRANSACTION_FEE', 'COMMISSION'
+  description: text("description"),
+  referenceId: uuid("reference_id"), // references paper_orders.id or similar
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("paper_ledgers_user_idx").on(table.userId),
+  index("paper_ledgers_type_idx").on(table.type),
+  index("paper_ledgers_created_idx").on(table.createdAt),
+]);
+
+export const paperMarginLogs = pgTable("paper_margin_logs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  allocatedMargin: numeric("allocated_margin", { precision: 18, scale: 4 }).notNull(),
+  maintenanceMargin: numeric("maintenance_margin", { precision: 18, scale: 4 }).notNull(),
+  leverageApplied: integer("leverage_applied").notNull().default(5),
+  logReason: text("log_reason").notNull(), // 'ORDER_PLACEMENT', 'ORDER_LIQUIDATION', 'POSITION_RECONCILE'
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("paper_margin_logs_user_idx").on(table.userId),
+  index("paper_margin_logs_created_idx").on(table.createdAt),
+]);
+
+export const paperPortfolioSnapshots = pgTable("paper_portfolio_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  cashBalance: numeric("cash_balance", { precision: 18, scale: 4 }).notNull(),
+  equity: numeric("equity", { precision: 18, scale: 4 }).notNull(), // cash_balance + unrealized_pnl
+  marginUsed: numeric("margin_used", { precision: 18, scale: 4 }).notNull(),
+  unrealizedPnl: numeric("unrealized_pnl", { precision: 18, scale: 4 }).notNull(),
+  realizedPnl: numeric("realized_pnl", { precision: 18, scale: 4 }).notNull(),
+  snapshotTime: timestamp("snapshot_time", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("paper_portfolio_snapshots_user_idx").on(table.userId),
+  index("paper_portfolio_snapshots_time_idx").on(table.snapshotTime),
+]);
+
