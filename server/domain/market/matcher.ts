@@ -123,7 +123,7 @@ export async function onTick(
     for (const pos of activePositions) {
       try {
         await db.transaction(async (tx) => {
-          const [[account]] = await tx
+          const [account] = await tx
             .select()
             .from(paperAccounts)
             .where(eq(paperAccounts.userId, pos.userId))
@@ -320,22 +320,22 @@ export async function onTick(
       // 3. Execute in transaction
       try {
         const receipt = await db.transaction(async (tx) => {
-          const [[account]] = await tx
+          const [account] = await tx
             .select()
             .from(paperAccounts)
             .where(eq(paperAccounts.userId, order.userId))
             .for("update");
 
           if (!account) {
-            return rejection(order, symbol, fillQty, "Paper account not found");
+            return await rejection(tx, order, symbol, fillQty, "Paper account not found");
           }
 
           if (account.isLocked) {
-            return rejection(order, symbol, fillQty, "Account locked due to margin call");
+            return await rejection(tx, order, symbol, fillQty, "Account locked due to margin call");
           }
 
           // Lock the current position
-          const [[position]] = await tx
+          const [position] = await tx
             .select()
             .from(paperPositions)
             .where(
@@ -365,7 +365,7 @@ export async function onTick(
             oldAvgPrice,
             newFillQty: fillQty,
             newFillSide: order.side as "BUY" | "SELL",
-            newFillPrice,
+            newFillPrice: fillPrice,
           });
 
           const newShares = reconciliation.newQty;
@@ -393,7 +393,7 @@ export async function onTick(
           const marginIncrement = newMarginLocked - oldMarginLocked;
 
           if (marginIncrement > 0 && freeMargin < marginIncrement) {
-            return rejection(order, symbol, fillQty, "Insufficient margin");
+            return await rejection(tx, order, symbol, fillQty, "Insufficient margin");
           }
 
           // Update or delete position
@@ -583,12 +583,21 @@ export async function onTick(
   });
 }
 
-function rejection(
-  order: typeof uniqueOrders[0],
+async function rejection(
+  tx: any,
+  order: any,
   symbol: string,
   qty: number,
   reason: string
-): MatchingReceipt {
+): Promise<MatchingReceipt> {
+  order.status = "REJECTED";
+  order.rejectReason = reason;
+
+  await tx
+    .update(paperOrders)
+    .set({ status: "REJECTED", rejectReason: reason, updatedAt: new Date() })
+    .where(eq(paperOrders.id, order.id));
+
   return {
     orderId: order.id,
     symbol,
@@ -686,7 +695,7 @@ export async function liquidateAccount(
     await tx.delete(paperPositions).where(eq(paperPositions.id, pos.id));
   }
 
-  const [[acc]] = await tx
+  const [acc] = await tx
     .select()
     .from(paperAccounts)
     .where(eq(paperAccounts.userId, userId))

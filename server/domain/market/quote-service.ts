@@ -4,8 +4,21 @@ import { bus } from "../../infra/bus";
 import { quoteStore } from "./quote-store";
 import { lookupSymbol, resolveMarketSymbol } from "./symbol";
 import { getAngelOneMarketQuotes } from "../../data/sources/angelone/client";
+import { computePhase } from "./clock";
+import { getConfig } from "../../config";
 
-const CACHE_TTL_MS = 15_000;
+function getCacheTtl(): number {
+  try {
+    const holidays = getConfig().nseHolidays;
+    const phase = computePhase(new Date(), holidays);
+    if (phase === "OPEN" || phase === "PRE_OPEN") {
+      return 15_000; // 15 seconds during market hours
+    }
+    return 1800_000; // 30 minutes when market is closed/holiday
+  } catch {
+    return 15_000; // fallback to 15s
+  }
+}
 const cache = new Map<string, { tick: Tick; fetchedAt: number }>();
 const inflight = new Map<string, Promise<Tick>>();
 
@@ -17,7 +30,8 @@ export type QuoteLoadResult = {
 export async function loadQuote(symbol: string, force = false): Promise<Tick> {
   const resolved = resolveMarketSymbol(symbol);
   const cached = cache.get(resolved.symbol);
-  if (!force && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.tick;
+  const ttl = getCacheTtl();
+  if (!force && cached && Date.now() - cached.fetchedAt < ttl) return cached.tick;
 
   const existing = inflight.get(resolved.symbol);
   if (existing) return existing;
@@ -43,9 +57,10 @@ export async function loadQuote(symbol: string, force = false): Promise<Tick> {
 
 export async function loadQuotes(symbols: string[], force = false): Promise<QuoteLoadResult> {
   const unique = [...new Set(symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean))];
+  const ttl = getCacheTtl();
   const missing = unique.filter((symbol) => {
     const existing = cache.get(symbol);
-    return force || !existing || Date.now() - existing.fetchedAt >= CACHE_TTL_MS;
+    return force || !existing || Date.now() - existing.fetchedAt >= ttl;
   });
   if (missing.length > 0) {
     try {

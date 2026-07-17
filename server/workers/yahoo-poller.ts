@@ -1,6 +1,18 @@
 import { bus } from "../infra/bus";
 import { getLogger } from "../infra/logger";
 import type { Tick } from "@shared/types";
+import { computePhase } from "../domain/market/clock";
+import { getConfig } from "../config";
+
+function isMarketOpen(): boolean {
+  try {
+    const holidays = getConfig().nseHolidays;
+    const phase = computePhase(new Date(), holidays);
+    return phase === "OPEN" || phase === "PRE_OPEN";
+  } catch {
+    return true; // default to true in tests/missing config
+  }
+}
 
 export type BatchFetch = (symbols: string[]) => Promise<Tick[]>;
 
@@ -95,6 +107,7 @@ export class YahooPoller {
   }
 
   private async tick(): Promise<void> {
+    if (!isMarketOpen()) return;
     const symbols = [...this.symbols];
     if (symbols.length === 0) return;
 
