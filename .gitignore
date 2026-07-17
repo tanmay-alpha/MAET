@@ -68,3 +68,4 @@ docs/smoke-test-checklist.md
 *placeholder*.md
 # Performance tracing outputs
 trace.json
+*.heapsnapshot
