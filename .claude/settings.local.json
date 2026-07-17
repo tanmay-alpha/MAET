@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": []
+  },
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "chrome-devtools-mcp@claude-plugins-official": true
+  }
+}

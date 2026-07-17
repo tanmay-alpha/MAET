@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { WATCHLIST } from "@/lib/market-catalog";
@@ -22,6 +22,7 @@ export function QuickTradeModal({
   const [type, setType] = useState<"MARKET" | "LIMIT">("MARKET");
   const [price, setPrice] = useState("");
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync state if modal props change
   useEffect(() => {
@@ -29,6 +30,16 @@ export function QuickTradeModal({
     setSide(initialSide);
     setMessage(null);
   }, [initialSymbol, initialSide, isOpen]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, []);
 
   // Load quotes for symbol to estimate margin
   const { quoteMap } = useMarketQuotes([symbol]);
@@ -74,7 +85,12 @@ export function QuickTradeModal({
 
     if (res.ok) {
       setMessage({ type: "success", text: res.message });
-      setTimeout(() => {
+      // Clear any existing timer to prevent stale callbacks
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
         onClose();
         setMessage(null);
       }, 1500);
@@ -178,7 +194,12 @@ export function QuickTradeModal({
                 min="1"
                 step="1"
                 value={qty}
-                onChange={(e) => setQty(Math.max(1, parseInt(e.target.value) || 1))}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  if (Number.isFinite(val) && val > 0) {
+                    setQty(val);
+                  }
+                }}
                 className="w-full rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs tabular-nums outline-none focus:border-primary"
               />
             </div>
@@ -191,7 +212,13 @@ export function QuickTradeModal({
               <input
                 type="text"
                 value={price}
-                onChange={(e) => setPrice(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  // Allow empty string (user clearing field) or valid numeric input
+                  if (val === "" || /^\d*\.?\d*$/.test(val)) {
+                    setPrice(val);
+                  }
+                }}
                 placeholder={currentPrice > 0 ? currentPrice.toFixed(2) : "0.00"}
                 className="w-full rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs tabular-nums outline-none focus:border-primary"
               />

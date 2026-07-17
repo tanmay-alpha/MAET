@@ -10,6 +10,19 @@ import { db } from "../../../data/drizzle/client";
 import { companies, fundamentals } from "../../../db/schema";
 import { desc, eq, ilike, and, sql, or } from "drizzle-orm";
 
+// FIX 4: Admin role check
+const ADMIN_USER_IDS = new Set(
+  (process.env.ADMIN_USER_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean)
+);
+
+function isAdmin(userId: string | undefined): boolean {
+  if (!userId) return false;
+  return ADMIN_USER_IDS.has(userId);
+}
+
 export const companiesRouter = createRouter({
   // List companies with optional filters and pagination
   getCompanies: protectedProcedure
@@ -143,6 +156,15 @@ export const companiesRouter = createRouter({
 
   // Upsert a company record (create or update)
   upsertCompany: protectedProcedure
+    .use(async ({ ctx, next }) => {
+      if (!isAdmin(ctx.userId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Admin access required",
+        });
+      }
+      return next();
+    })
     .input(
       z.object({
         symbol: z.string().min(1).max(20),
@@ -214,6 +236,15 @@ export const companiesRouter = createRouter({
 
   // Sync fundamentals for a symbol from NSE
   syncFundamentals: protectedProcedure
+    .use(async ({ ctx, next }) => {
+      if (!isAdmin(ctx.userId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Admin access required",
+        });
+      }
+      return next();
+    })
     .input(z.object({ symbol: z.string().min(1).max(20) }))
     .mutation(async ({ input }) => {
       const { getFundamentals: fetchNSEFundamentals } = await import(

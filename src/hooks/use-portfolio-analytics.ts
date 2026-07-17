@@ -132,14 +132,21 @@ export function usePortfolioAnalytics() {
 
     account.positions.forEach((position) => {
       const quote = quoteMap.get(position.symbol);
+      if (quote && (!Number.isFinite(quote.price) || quote.price <= 0)) {
+        return; // Skip positions with invalid quote data
+      }
       const currentPrice = quote?.price || position.avgPrice;
       const prevPrice = quote?.previousClose;
+
+      if (!Number.isFinite(currentPrice) || !Number.isFinite(position.avgPrice)) {
+        return; // Skip if price data is not finite
+      }
 
       positionsValue += currentPrice * position.qty;
       positionsCost += position.avgPrice * position.qty;
       unrealizedPnl += (currentPrice - position.avgPrice) * position.qty;
 
-      if (prevPrice && prevPrice > 0) {
+      if (prevPrice && prevPrice > 0 && Number.isFinite(prevPrice)) {
         dayPnl += (currentPrice - prevPrice) * position.qty;
       }
     });

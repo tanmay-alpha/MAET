@@ -46,6 +46,7 @@ async function runLocked<T>(symbol: string, fn: () => Promise<T>): Promise<T> {
 interface CompanyMetadata {
   marketCapBucket?: string;
   avgVolume?: number;
+  lastChecked?: number;
 }
 
 const metadataCache = new Map<string, CompanyMetadata>();
@@ -53,8 +54,9 @@ const METADATA_CACHE_TTL_MS = 5 * 60_000;
 
 async function getCompanyMetadata(symbol: string): Promise<CompanyMetadata> {
   const cached = metadataCache.get(symbol);
-  // Note: in production, add a timestamp check and refresh stale entries
-  if (cached) return cached;
+  if (cached && cached.lastChecked && (Date.now() - cached.lastChecked) < METADATA_CACHE_TTL_MS) {
+    return cached;
+  }
 
   try {
     const results = await db
@@ -71,8 +73,9 @@ async function getCompanyMetadata(symbol: string): Promise<CompanyMetadata> {
       ? {
           marketCapBucket: results[0].marketCapBucket ?? undefined,
           avgVolume: results[0].avgVolume ?? undefined,
+          lastChecked: Date.now(),
         }
-      : {};
+      : { lastChecked: Date.now() };
 
     metadataCache.set(symbol, meta);
     return meta;

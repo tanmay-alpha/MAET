@@ -7,7 +7,7 @@ import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
-import { orders, paperAccounts, companies } from "../../../db/schema";
+import { orders, paperAccounts, paperPositions, companies } from "../../../db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { getRedis } from "../../../data/redis/client";
 
@@ -141,21 +141,6 @@ export const ordersRouter = createRouter({
         });
       }
 
-      // Pre-validation: check sufficient cash for BUY orders
-      if (input.side === "BUY" && input.type === "MARKET") {
-        const [account] = await db.select()
-          .from(paperAccounts)
-          .where(eq(paperAccounts.userId, userId))
-          .limit(1);
-
-        if (account && Number(account.cashBalance) <= 0) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Account is locked or has zero balance",
-          });
-        }
-      }
-
       // Idempotency: use client-provided key if available
       const idempotencyKey = input.idempotencyKey
         ? `order:${userId}:${input.idempotencyKey}`
@@ -228,6 +213,15 @@ export const ordersRouter = createRouter({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Order not found or you don't have permission to cancel it",
+        });
+      }
+
+      // FIX 7: Verify order status is cancellable
+      const currentOrder = order[0];
+      if (currentOrder.status === "FILLED" || currentOrder.status === "CANCELLED" || currentOrder.status === "REJECTED") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Order is already settled and cannot be cancelled",
         });
       }
 

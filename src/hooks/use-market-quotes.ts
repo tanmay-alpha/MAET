@@ -115,7 +115,7 @@ class MarketStreamManager {
       const handleMessage = (type: "tick" | "snapshot") => (event: MessageEvent<string>) => {
         try {
           const data = JSON.parse(event.data);
-          
+
           if (type === "snapshot") {
             const quotes = data.quotes || [];
             quotes.forEach((quote: any) => {
@@ -137,13 +137,22 @@ class MarketStreamManager {
         }
       };
 
-      source.addEventListener("snapshot", handleMessage("snapshot") as EventListener);
-      source.addEventListener("tick", handleMessage("tick") as EventListener);
+      const onSnapshot = handleMessage("snapshot") as EventListener;
+      const onTick = handleMessage("tick") as EventListener;
+
+      source.addEventListener("snapshot", onSnapshot);
+      source.addEventListener("tick", onTick);
 
       source.onerror = () => {
+        this.eventSource = null;
         this.isConnected = false;
         this.notifyStatus(false);
+        // Remove event listeners before closing to prevent memory leaks
+        source.removeEventListener("snapshot", onSnapshot);
+        source.removeEventListener("tick", onTick);
         source.close();
+        // Trigger reconnect with exponential backoff
+        this.debounceReconnect();
       };
     } catch (err) {
       console.error("Error creating EventSource:", err);

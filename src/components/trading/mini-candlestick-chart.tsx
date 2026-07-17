@@ -10,7 +10,7 @@ export function MiniCandlestickChart({
 }) {
   const visible = useMemo(() => candles.slice(-72), [candles]);
 
-  if (visible.length < 2) {
+  if (visible.length === 0) {
     return (
       <div className="flex items-center justify-center text-xs text-muted-foreground" style={{ height }}>
         Waiting for market history…
@@ -18,8 +18,19 @@ export function MiniCandlestickChart({
     );
   }
 
-  const lowest = Math.min(...visible.map((candle) => candle.low));
-  const highest = Math.max(...visible.map((candle) => candle.high));
+  const lows = visible.map((candle) => candle.low).filter((v) => Number.isFinite(v));
+  const highs = visible.map((candle) => candle.high).filter((v) => Number.isFinite(v));
+
+  if (lows.length === 0 || highs.length === 0) {
+    return (
+      <div className="flex items-center justify-center text-xs text-muted-foreground" style={{ height }}>
+        Waiting for market history…
+      </div>
+    );
+  }
+
+  const lowest = Math.min(...lows);
+  const highest = Math.max(...highs);
   const range = highest - lowest || 1;
   const candleWidth = 100 / visible.length;
   const y = (value: number) => 96 - ((value - lowest) / range) * 90;

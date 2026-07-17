@@ -8,7 +8,7 @@ import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
-import { candles, screenerRuns, users } from "../../../db/schema";
+import { candles, companies, screenerRuns, users } from "../../../db/schema";
 import { desc, sql, and, or, gte, lte, eq, gt, lt, ilike, like } from "drizzle-orm";
 import { calculateAllIndicators } from "../../../domain/technical/indicators";
 import type { AllIndicators } from "../../../domain/technical/indicators";
@@ -71,17 +71,53 @@ const FIELD_MAP = {
 const CANDLE_QUERYABLE_FIELDS = ['volume', 'symbol', 'timeframe', 'source'] as const;
 type CandleQueryableField = typeof CANDLE_QUERYABLE_FIELDS[number];
 
-// NSE symbols list for screening
-const NSE_SYMBOLS = [
-  'RELIANCE', 'TCS', 'HDFCBANK', 'ICICIBANK', 'INFY', 'HINDUNILVR', 'ITC', 'KOTAKBANK',
-  'LT', 'SBIN', 'AXISBANK', 'ASIANPAINT', 'MARUTI', 'BAJFINANCE', 'TITAN', 'NESTLEIND',
-  'M&M', 'SUNPHARMA', 'ULTRACEMCO', 'TATASTEEL', 'WIPRO', 'ADANIPORTS', 'POWERGRID',
-  'NTPC', 'ONGC', 'COALINDIA', 'JSWSTEEL', 'ADANIENT', 'BRITANNIA', 'CIPLA', 'DRREDDY',
-  'EICHERMOT', 'GRASIM', 'HCLTECH', 'HEROMOTOCO', 'HDFCLIFE', 'DIVISLAB', 'SBILIFE',
-  'TECHM', 'BAJAJ-AUTO', 'ADANIPOWER', 'SHRIRAMFIN', 'INDUSINDBK', 'APOLLOHOSP',
-  'BPCL', 'CAIRN', 'CONCOR', 'GAIL', 'IOC', 'LICI', 'NHPC', 'OFSS', 'PFC', 'RECLTD',
-  'RVNL', 'SAIL', 'TVSMOTOR', 'ZOMATO', 'PAYTM', 'DELHIVERY', 'LODHA', 'PRINCEPIP'
-];
+// FIX 2: Removed hardcoded NSE_SYMBOLS whitelist (was 60 symbols).
+// The screener now queries the companies table for the full NSE universe.
+
+/**
+ * Get all active NSE-listed symbols from the companies table.
+ * Falls back to an empty array if the table is unreachable.
+ */
+async function getNSESymbols(): Promise<string[]> {
+  try {
+    const rows = await db
+      .select({ symbol: companies.symbol })
+      .from(companies)
+      .where(and(eq(companies.exchange, "NSE"), eq(companies.isActive, true)))
+      .orderBy(companies.symbol);
+    return rows.map((r) => r.symbol);
+  } catch (err) {
+    console.error("[screener] Failed to load NSE symbols from companies table:", err);
+    return [];
+  }
+}
+
+// Map of screener filter field → calculation_results indicator_name column value
+// Keys match ALLOWED_FILTER_FIELDS technical indicator entries.
+const INDICATOR_NAME_MAP: Record<string, string> = {
+  sma_20: "SMA_20",
+  ema_20: "EMA_20",
+  rsi_14: "RSI_14",
+  macd_value: "MACD_LINE",
+  bollinger_width: "BOLLINGER_WIDTH",
+  atr_14: "ATR_14",
+  stoch_k: "STOCH_K",
+  williams_r: "WILLIAMS_R",
+  adx_14: "ADX_14",
+  cci_20: "CCI_20",
+  mfi_14: "MFI_14",
+};
+
+// Fields whose latest value lives on the companies (fundamentals) table
+const FUNDAMENTAL_COMPANY_FIELDS: Record<string, keyof typeof companies> = {
+  pe_ratio: "peRatio",
+  pb_ratio: "pbRatio",
+  roe: "roe",
+  market_cap: "marketCap",
+  dividend_yield: "dividendYield",
+  eps: "eps",
+  debt_to_equity: "debtToEquity",
+};
 
 /**
  * Apply technical indicator filters to candle data
@@ -157,9 +193,9 @@ function applyTechnicalFilters(
 }
 
 /**
- * Stub for enhanced technical screening.
- * Fetches candles from Yahoo, computes indicators, and applies filters.
- * TODO: Implement with actual data fetching and indicator calculation.
+ * FIX 1: Implemented technical screener using calculation_results table.
+ * Queries pre-computed indicator values, applies filter conditions,
+ * and returns matching symbols with their indicator data.
  */
 async function runTechnicalScreen(params: {
   symbols: string[];
@@ -169,7 +205,7 @@ async function runTechnicalScreen(params: {
     value: number;
   }>;
   sortBy?: string;
-  sortOrder?: 'asc' | 'desc';
+  sortOrder?: "asc" | "desc";
   limit: number;
 }): Promise<Array<{
   symbol: string;
@@ -182,18 +218,89 @@ async function runTechnicalScreen(params: {
   volume: number;
   source: string;
 }>> {
-  // TODO: Implement enhanced screening:
-  // 1. Fetch candles for each symbol from Yahoo
-  // 2. Calculate all technical indicators using calculateAllIndicators
-  // 3. Apply technical filters using applyTechnicalFilters
-  // 4. Sort and limit results
+  if (params.symbols.length === 0) return [];
+  if (params.filters.length === 0) return [];
 
-  console.warn(
-    `[runTechnicalScreen] Technical indicator screening not yet implemented. ` +
-    `Requested ${params.filters.length} technical filter(s) across ${params.symbols.length} symbols.`
-  );
+  // Group filters by indicator_name for a single efficient query
+  // For each filter, resolve the indicator_name from the map
+  const indicatorFilters: Array<{
+    indicatorName: string;
+    operator: string;
+    value: number;
+  }> = [];
 
-  return [];
+  for (const f of params.filters) {
+    const indicatorName = INDICATOR_NAME_MAP[f.field];
+    if (!indicatorName) continue;
+    indicatorFilters.push({
+      indicatorName,
+      operator: f.operator,
+      value: f.value,
+    });
+  }
+
+  if (indicatorFilters.length === 0) return [];
+
+  try {
+    // Get the most recent date available in calculation_results for any of our symbols
+    const latestDateRow = await db.execute(sql`
+      SELECT MAX(date) as max_date
+      FROM calculation_results
+      WHERE symbol = ANY(${params.symbols}::text[])
+    `);
+    const latestDate = (latestDateRow as any[])[0]?.max_date;
+    if (!latestDate) return [];
+
+    // Fetch indicator values for the latest date across all requested symbols
+    // We build one query per indicator filter (separate WHERE conditions for each indicator_name)
+    // Get symbols that match ALL filter conditions using INTERSECT of symbol sets
+    let matchingSymbols: string[] = params.symbols;
+
+    for (const f of indicatorFilters) {
+      const symbolRows = await db.execute(sql`
+        SELECT DISTINCT symbol
+        FROM calculation_results
+        WHERE symbol = ANY(${params.symbols}::text[])
+          AND indicator_name = ${f.indicatorName}
+          AND date = ${latestDate}::date
+          AND indicator_value IS NOT NULL
+          ${f.operator === "gt" ? sql`AND indicator_value > ${f.value}::numeric` : ""}
+          ${f.operator === "gte" ? sql`AND indicator_value >= ${f.value}::numeric` : ""}
+          ${f.operator === "lt" ? sql`AND indicator_value < ${f.value}::numeric` : ""}
+          ${f.operator === "lte" ? sql`AND indicator_value <= ${f.value}::numeric` : ""}
+          ${f.operator === "eq" ? sql`AND ABS(indicator_value - ${f.value}::numeric) < 0.01` : ""}
+      `);
+
+      const filteredSymbols = (symbolRows as any[]).map((r) => r.symbol);
+      // Intersect: keep only symbols that pass this filter
+      matchingSymbols = matchingSymbols.filter((s) => filteredSymbols.includes(s));
+
+      if (matchingSymbols.length === 0) return [];
+    }
+
+    // Fetch candle data for matching symbols (most recent candle per symbol)
+    const candleRows = await db.execute(sql`
+      SELECT DISTINCT ON (symbol) symbol, timeframe, ts, open, high, low, close, volume, source
+      FROM candles
+      WHERE symbol = ANY(${matchingSymbols}::text[])
+      ORDER BY symbol, ts DESC
+    `);
+
+    return (candleRows as any[]).map((row) => ({
+      symbol: row.symbol,
+      timeframe: row.timeframe,
+      ts: new Date(row.ts),
+      open: Number(row.open),
+      high: Number(row.high),
+      low: Number(row.low),
+      close: Number(row.close),
+      volume: Number(row.volume),
+      source: row.source,
+    }));
+  } catch (error) {
+    console.error("[runTechnicalScreen] Error during technical screening:", error);
+    return [];
+  }
 }
 
 // Filter input type reused across procedures
@@ -246,14 +353,15 @@ export const screenerRouter = createRouter({
         }
       }
 
-      // If technical filters are present, delegate to the enhanced path (stub)
+      // If technical filters are present, delegate to the enhanced path
       if (technicalFilters.length > 0) {
         warnings.push(
           `${technicalFilters.length} technical/fundamental filter(s) require enhanced screening. ` +
           `Results are limited to candle-only filters.`
         );
+        const nseSymbols = await getNSESymbols();
         const enhancedResults = await runTechnicalScreen({
-          symbols: NSE_SYMBOLS,
+          symbols: nseSymbols,
           filters: technicalFilters,
           sortBy: input.sortBy,
           sortOrder: input.sortOrder,
