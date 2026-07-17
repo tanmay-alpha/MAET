@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const orderSide = pgEnum("order_side", ["BUY", "SELL"]);
 export const orderType = pgEnum("order_type", ["MARKET", "LIMIT", "SL", "SL-M"]);
@@ -439,4 +440,80 @@ export const paperPositions = pgTable("paper_positions", {
   index("paper_positions_user_idx").on(table.userId),
   index("paper_positions_symbol_idx").on(table.symbol),
 ]);
+
+// ---------------------------------------------------------------------------
+// Schema Expansion: Option Chain, Corporate Actions, Shareholding Patterns, Institutional Deals, Index Valuations
+// ---------------------------------------------------------------------------
+
+export const optionChain = pgTable("option_chain", {
+  symbol: text("symbol").notNull(),
+  expiryDate: timestamp("expiry_date", { withTimezone: true }).notNull(),
+  strikePrice: numeric("strike_price", { precision: 18, scale: 2 }).notNull(),
+  optionType: text("option_type").notNull(), // 'CE' or 'PE'
+  price: numeric("price", { precision: 18, scale: 4 }).notNull(),
+  openInterest: integer("open_interest").notNull().default(0),
+  changeInOi: integer("change_in_oi").notNull().default(0),
+  impliedVolatility: numeric("implied_volatility", { precision: 8, scale: 4 }),
+  delta: numeric("delta", { precision: 6, scale: 4 }),
+  gamma: numeric("gamma", { precision: 6, scale: 4 }),
+  theta: numeric("theta", { precision: 6, scale: 4 }),
+  vega: numeric("vega", { precision: 6, scale: 4 }),
+  asOf: timestamp("as_of", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.symbol, table.expiryDate, table.strikePrice, table.optionType, table.asOf] }),
+  index("option_chain_symbol_expiry_idx").on(table.symbol, table.expiryDate),
+]);
+
+export const corporateActions = pgTable("corporate_actions", {
+  id: text("id").primaryKey().default(sql`gen_random_uuid()::text`),
+  symbol: text("symbol").notNull(),
+  actionType: text("action_type").notNull(), // 'DIVIDEND', 'SPLIT', 'BONUS', 'RIGHTS', 'BOARD_MEETING'
+  announcementDate: timestamp("announcement_date", { withTimezone: true }),
+  recordDate: timestamp("record_date", { withTimezone: true }),
+  exDate: timestamp("ex_date", { withTimezone: true }),
+  details: text("details"),
+  ratioNumerator: integer("ratio_numerator"),
+  ratioDenominator: integer("ratio_denominator"),
+  amount: numeric("amount", { precision: 12, scale: 4 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("corp_actions_symbol_ex_date_idx").on(table.symbol, table.exDate),
+]);
+
+export const shareholdingPatterns = pgTable("shareholding_patterns", {
+  id: text("id").primaryKey().default(sql`gen_random_uuid()::text`),
+  symbol: text("symbol").notNull(),
+  quarterEndDate: timestamp("quarter_end_date", { withTimezone: true }).notNull(),
+  promoterPct: numeric("promoter_pct", { precision: 5, scale: 2 }).notNull(),
+  fiiPct: numeric("fii_pct", { precision: 5, scale: 2 }).notNull(),
+  diiPct: numeric("dii_pct", { precision: 5, scale: 2 }).notNull(),
+  publicPct: numeric("public_pct", { precision: 5, scale: 2 }).notNull(),
+  pledgedPct: numeric("pledged_pct", { precision: 5, scale: 2 }).default("0.00"),
+  asOf: timestamp("as_of", { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index("shareholding_symbol_date_idx").on(table.symbol, table.quarterEndDate),
+]);
+
+export const institutionalDeals = pgTable("institutional_deals", {
+  id: text("id").primaryKey().default(sql`gen_random_uuid()::text`),
+  symbol: text("symbol").notNull(),
+  dealDate: timestamp("deal_date", { withTimezone: true }).notNull(),
+  dealType: text("deal_type").notNull(), // 'BULK' or 'BLOCK'
+  clientName: text("client_name").notNull(),
+  transactionType: text("transaction_type").notNull(), // 'BUY' or 'SELL'
+  quantity: integer("quantity").notNull(),
+  price: numeric("price", { precision: 18, scale: 4 }).notNull(),
+  valueInCrs: numeric("value_in_crs", { precision: 12, scale: 2 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index("deals_symbol_date_idx").on(table.symbol, table.dealDate),
+]);
+
+export const indexValuations = pgTable("index_valuations", {
+  indexName: text("index_name").primaryKey(),
+  peRatio: numeric("pe_ratio", { precision: 8, scale: 2 }),
+  pbRatio: numeric("pb_ratio", { precision: 8, scale: 2 }),
+  dividendYield: numeric("dividend_yield", { precision: 5, scale: 2 }),
+  asOf: timestamp("as_of", { withTimezone: true }).notNull().defaultNow(),
+});
 
