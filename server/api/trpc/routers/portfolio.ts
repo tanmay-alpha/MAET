@@ -10,9 +10,52 @@ import { db } from "../../../data/drizzle/client";
 import {
   paperAccounts, paperOrders, paperPositions,
   companies, candles, fills, watchlist,
-} from "../../db/schema";
+} from "../../../db/schema";
 import { eq, desc, and, inArray, sql } from "drizzle-orm";
-import { loadQuotes } from "../../domain/market/quote-service";
+import { loadQuotes } from "../../../domain/market/quote-service";
+import { getRedis } from "../../../data/redis/client";
+
+const memoryRateLimit = new Map<string, { count: number; windowStart: number }>();
+
+function checkInMemoryRateLimit(userId: string) {
+  const now = Date.now();
+  const minuteMs = 60_000;
+  const userRecord = memoryRateLimit.get(userId);
+
+  if (!userRecord || now - userRecord.windowStart > minuteMs) {
+    memoryRateLimit.set(userId, { count: 1, windowStart: now });
+  } else {
+    userRecord.count++;
+    if (userRecord.count > 30) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "Rate limit exceeded: maximum 30 mutations per minute",
+      });
+    }
+  }
+}
+
+async function checkMutationRateLimit(userId: string) {
+  try {
+    const r = getRedis();
+    const minute = Math.floor(Date.now() / 60_000).toString();
+    const key = `ratelimit:mutations:${userId}:${minute}`;
+    const count = await r.incr(key);
+    if (count === 1) {
+      await r.expire(key, 60);
+    }
+    if (count > 30) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "Rate limit exceeded: maximum 30 mutations per minute",
+      });
+    }
+  } catch (err) {
+    if (err instanceof TRPCError) throw err;
+    checkInMemoryRateLimit(userId);
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Helper: batch-fetch fills for multiple orders in ONE query
@@ -53,12 +96,12 @@ function computePositionPnl(fills: Array<{ side: string; qty: number; price: num
   }
 
   const closedQty = Math.min(buyQty, sellQty);
-  const realizedPnl = closedQty > 0
-    ? (sellRevenue / sellQty - buyCost / buyQty) * closedQty
-    : 0;
+  const avgBuyPrice = buyQty > 0 ? buyCost / buyQty : 0;
+  const avgSellPrice = sellQty > 0 ? sellRevenue / sellQty : 0;
+  const realizedPnl = closedQty > 0 ? (avgSellPrice - avgBuyPrice) * closedQty : 0;
 
   const netQty = buyQty - sellQty;
-  const avgPrice = netQty > 0 ? buyCost / buyQty : netQty < 0 ? sellRevenue / sellQty : 0;
+  const avgPrice = netQty > 0 ? avgBuyPrice : netQty < 0 ? avgSellPrice : 0;
 
   return { totalQty: netQty, avgPrice, realizedPnl };
 }
@@ -172,7 +215,9 @@ export const portfolioRouter = createRouter({
         largestLoss,
         avgWin: winningTrades > 0 ? largestWin / winningTrades : 0,
         avgLoss: losingTrades > 0 ? largestLoss / losingTrades : 0,
-        profitFactor: losingTrades > 0 ? Math.abs(totalRealizedPnl / (largestLoss * losingTrades / Math.abs(largestLoss))) : totalRealizedPnl > 0 ? Infinity : 0,
+        profitFactor: losingTrades > 0 && largestLoss !== 0
+          ? Math.abs(totalRealizedPnl / (largestLoss * losingTrades / Math.abs(largestLoss)))
+          : totalRealizedPnl > 0 ? Infinity : 0,
         sharpeRatio: 0,
         maxDrawdown: 0,
         beta: 1,
@@ -286,6 +331,7 @@ export const portfolioRouter = createRouter({
       exchange: z.string().default("NSE"),
     }))
     .mutation(async ({ input, ctx }) => {
+      await checkMutationRateLimit(ctx.userId);
       const result = await db.insert(watchlist).values({
         userId: ctx.userId,
         symbol: input.symbol.toUpperCase(),
