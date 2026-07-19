@@ -2,6 +2,9 @@
 
 Last audited: 2026-07-04
 
+> [!NOTE]
+> This document tracks the remaining integration items, boundaries, and validation tasks for MAET.
+
 ## Completed And Verified
 
 - Frontend and backend production builds pass.
@@ -87,21 +90,11 @@ Last audited: 2026-07-04
 
 ## Known Product Boundaries
 
-- The Nifty 500 enrichment pass is complete. Yahoo availability still controls
-  which individual fields exist; missing source values remain unavailable.
-  Market-cap buckets use the documented Indian rank method and are recalculated
-  from verified stored market caps.
-- Saved screeners currently persist in browser local storage for unauthenticated
-  visitors. The existing `screener_runs` table and ownership-scoped tRPC CRUD
-  can be used after the frontend has a verified authenticated user session.
-- Portfolio day P&L uses available quote previous-close values. Sharpe, drawdown,
-  volatility, and beta now show unavailable instead of synthetic values until
-  verified daily portfolio and benchmark histories are stored.
-- Legacy random financial, shareholding, and option-chain generators were
-  removed. User-visible financial statements remain database-backed.
-- Paper-order placement has persistence paths, but a complete fill lifecycle,
-  idempotency middleware, and production integration tests remain necessary.
-- The NSE holiday calendar needs a maintained source or an operations process.
+> [!WARNING]
+> - **Enrichment Scope:** The Nifty 500 enrichment pass is complete. Yahoo availability still controls which individual fields exist; missing source values remain unavailable. Market-cap buckets use the documented Indian rank method and are recalculated from verified stored market caps.
+> - **Local Storage Fallback:** Saved screeners currently persist in browser local storage for unauthenticated visitors. The existing `screener_runs` table and ownership-scoped tRPC CRUD can be used after the frontend has a verified authenticated user session.
+> - **Portfolio day P&L:** Uses available quote previous-close values. Sharpe, drawdown, volatility, and beta now show unavailable instead of synthetic values until verified daily portfolio and benchmark histories are stored.
+> - **Ingestion & Calendar:** Paper-order placement has persistence paths, but a complete fill lifecycle, idempotency middleware, and production integration tests remain necessary. The NSE holiday calendar needs a maintained source or an operations process.
 
 ## Operational Boundaries
 

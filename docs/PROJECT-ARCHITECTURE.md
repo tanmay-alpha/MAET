@@ -2,6 +2,20 @@
 
 Last verified: 2026-07-04
 
+## Table of Contents
+- [1. Purpose](#1-purpose)
+- [2. System Overview](#2-system-overview)
+- [3. Data Sources and Responsibilities](#3-data-sources-and-responsibilities)
+- [4. When Data Is Pulled](#4-when-data-is-pulled)
+- [5. Database Schema and Roles](#5-database-schema-and-roles)
+- [6. Indicator Registry and Calculations](#6-indicator-registry-and-calculations)
+- [7. Ingestion Engine Architecture](#7-ingestion-engine-architecture)
+- [8. API Surface](#8-api-surface)
+- [9. Frontend Request Flow](#9-frontend-request-flow)
+- [10. Caching and Failure Behavior](#10-caching-and-failure-behavior)
+- [11. Deployment and Required Environment](#11-deployment-and-required-environment)
+- [12. Verification and Operations](#12-verification-and-operations)
+
 ## 1. Purpose
 
 MAET is a scanner-first Indian equity research terminal. Its primary product is
@@ -10,10 +24,8 @@ normalized financial statements, calculated ratios, company detail pages, and
 charts. It is a research and paper-trading application; it does not place real
 money orders.
 
-The central design rule is: **external providers populate or refresh trusted
-data, while the website reads normalized data from MAET APIs and PostgreSQL
-whenever possible**. Missing values remain unavailable; the system does not
-generate substitute financial numbers.
+> [!IMPORTANT]
+> **Central Design Rule:** External providers populate or refresh trusted data, while the website reads normalized data from MAET APIs and PostgreSQL whenever possible. Missing values remain unavailable; the system does not generate substitute financial numbers.
 
 ## 2. System Overview
 
@@ -262,8 +274,8 @@ gitignored `.env` file:
 - `ANGELONE_MASTER_KEY`, API key, client ID, PIN and TOTP secret.
 - `NSE_HOLIDAYS_JSON` and allowed `FRONTEND_ORIGIN` values.
 
-Never commit real values. `/api/health` must report REST, database and Redis as
-reachable before the database-backed production screener is considered healthy.
+> [!WARNING]
+> **Production Secrets Guard:** Never commit real values. `/api/health` must report REST, database and Redis as reachable before the database-backed production screener is considered healthy.
 
 ## 12. Verification and Operations
 
