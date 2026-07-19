@@ -1,6 +1,10 @@
 import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 
+// FIX 2: SSRF protection — strict symbol and range validation
+const VALID_SYMBOL = /^[A-Z][A-Z0-9\-\\.]{0,19}$/;
+const VALID_RANGES = ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"] as const;
+
 function isDerivative(symbol: string): boolean {
   const clean = symbol.toUpperCase();
   const isOption = clean.endsWith("CE") || clean.endsWith("PE") || /\d{5}[CP]E/i.test(clean);
@@ -30,6 +34,16 @@ export const marketRouter = createRouter({
       symbols: z.array(z.string()).max(50),
     }))
     .query(async ({ input }) => {
+      // FIX 2: Reject invalid symbols before making outbound requests
+      for (const s of input.symbols) {
+        if (!VALID_SYMBOL.test(s.toUpperCase())) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Invalid symbol: "${s}". Symbols must be uppercase alphanumeric with optional dots/dashes.`,
+          });
+        }
+      }
+
       const now = Date.now();
       const symbolsToFetch: string[] = [];
       const resultsMap = new Map<string, any>();
@@ -131,6 +145,14 @@ export const marketRouter = createRouter({
       range: z.string(),
     }))
     .query(async ({ input }) => {
+      // FIX 2: Validate range against whitelist
+      if (!VALID_RANGES.includes(input.range as typeof VALID_RANGES[number])) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Invalid range "${input.range}". Allowed: ${VALID_RANGES.join(", ")}`,
+        });
+      }
+
       try {
         // Map timeframe to Yahoo Finance interval
         const intervalMap: Record<string, string> = {

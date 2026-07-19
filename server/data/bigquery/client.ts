@@ -1,4 +1,5 @@
 import { BigQuery } from "@google-cloud/bigquery";
+import { TRPCError } from "@trpc/server";
 
 let bqInstance: BigQuery | null = null;
 
@@ -74,11 +75,42 @@ export async function streamToBigQuery(
 
 /**
  * Run a read-only SQL query against BigQuery and return the rows.
+ * Only SELECT statements are permitted. DDL/DML is rejected.
  */
+const FORBIDDEN_KEYWORDS = /\b(CREATE|DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|GRANT|REVOKE|EXECUTE|MERGE)\b/i;
+
 export async function queryBigQuery<T = Record<string, any>>(sql: string): Promise<T[]> {
+  const trimmed = sql.trim().replace(/^--.*$/gm, "").trim();
+  if (!trimmed.toUpperCase().startsWith("SELECT")) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Only SELECT queries are permitted via queryBigQuery",
+    });
+  }
+  if (FORBIDDEN_KEYWORDS.test(trimmed)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Query contains forbidden keywords (DDL/DML not allowed)",
+    });
+  }
+
+  console.log("[BigQuery][AUDIT] " + new Date().toISOString() + " - " + sql.slice(0, 500));
+
   const bq = getBigQuery();
-  const [rows] = await bq.query({ query: sql, useLegacySql: false });
-  return rows as T[];
+  const startTime = Date.now();
+  try {
+    const [rows] = await Promise.race([
+      bq.query({ query: sql, useLegacySql: false }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("BigQuery query timed out after 120s")), 120_000)
+      ),
+    ]);
+    console.log("[BigQuery] Query completed in " + (Date.now() - startTime) + "ms");
+    return rows as T[];
+  } catch (err) {
+    console.error("[BigQuery] Query failed:", err);
+    throw err;
+  }
 }
 
 /**

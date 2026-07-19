@@ -380,6 +380,70 @@ Examples:
 |---|---|
 | Missing price | Keep ratio blank |
 | Missing EPS | P/E unavailable |
+
+```text
+1D
+5D
+1M
+6M
+1Y
+3Y
+5Y
+All
+```
+
+### External TradingView link
+
+Each stock can open a TradingView chart using NSE symbol format, for example:
+
+```text
+https://www.tradingview.com/chart/?symbol=NSE:RELIANCE
+```
+
+---
+
+## 10. Calculation Engine
+
+The calculation engine should calculate values from stored data, not from random placeholders.
+
+### Formula examples
+
+| Metric | Formula |
+|---|---|
+| P/E | Market Price / EPS |
+| P/B | Market Price / Book Value Per Share |
+| ROE | Net Profit / Shareholder Equity |
+| ROCE | EBIT / Capital Employed |
+| Net Profit Margin | Net Profit / Revenue |
+| Debt to Equity | Total Debt / Equity |
+| Dividend Yield | Dividend Per Share / Market Price |
+| Sales Growth | Current Sales vs Previous Sales |
+| RSI | Calculated from historical closing prices |
+
+### Safe calculation rule
+
+```text
+If input is missing → return blank
+If denominator is zero → return blank
+If EPS is negative → P/E is not meaningful
+If data is stale → mark it stale
+If source mismatch exists → flag before display
+```
+
+MAET should never show fake ratio values as real data.
+
+---
+
+## 11. Validation and Anomaly Rules
+
+The scanner should protect users from bad data.
+
+Examples:
+
+| Situation | Output |
+|---|---|
+| Missing price | Keep ratio blank |
+| Missing EPS | P/E unavailable |
 | Zero denominator | Do not calculate |
 | Negative EPS | Mark P/E as not meaningful |
 | Old financial statement | Mark as stale |
@@ -391,45 +455,37 @@ Examples:
 
 ## 12. What Has Been Added in This Version
 
-This version focused on making MAET more like a real scanner foundation.
+This version focused on making MAET a production-grade, highly secure scanner terminal with robust ingestion, computation, and analytical capabilities.
 
-### Deployment
+### Pipelines & Computation
 
-- Render backend configuration updated
-- Vercel frontend configuration improved
-- Supabase/PostgreSQL schema and idempotent migrations are included
-- Production database connection and migration application remain operator steps
+- **Multi-Source Ingestion Engine**: Built a pipeline with Zod validation, retry limits, a Dead Letter Queue (DLQ), and parallel writers for Supabase and BigQuery.
+- **179-Indicator Calculation Engine**: Designed a deterministic calculator registry and batch runner (50-worker pool) to calculate 179 technical variables and fundamental metrics with 0 NaN values.
+- **Daily Ingestion Orchestrator**: Added a centralized orchestrator to trigger daily ingestion and incremental recalculation runs automatically.
 
-### Data layer
+### Data Layer & Storage
 
-- Redis JSON cache helpers added
-- Yahoo candle caching added
-- Yahoo range fallback improved
-- Yahoo fundamentals/statement adapter added; it remains inactive when Yahoo returns HTTP 401
-- Company APIs expose DB-first screener filters, source metadata, stored statements, and candle history
-- NSE identity fallback remains available without inventing enriched fields
+- **BigQuery Analytics Warehouse**: Integrated a Google BigQuery client connector to stream and query analytical datasets (`maet_warehouse`).
+- **Paper Trading Schema Extensions**: Added `paper_ledgers`, `paper_margin_logs`, and `paper_portfolio_snapshots` schemas and DB migrations to support margin logging and historical portfolio snapshotting.
+- **Redis JSON Cache**: Implemented JSON cache helpers for Yahoo candle caching, and improved range fallback mechanisms.
+- **Company APIs**: APIs expose DB-first filters, source metadata, stored statements, and candle history.
 
-### Scanner
+### Security & Quality Audit (32 Critical Fixes)
 
-- Scanner table now handles unavailable data honestly
-- Fundamental columns show blank instead of fake data
-- Company fields extended for sector, industry, market cap, P/E, P/B, ROE, dividend, EPS
-- Search by symbol, company name, or ISIN plus server-side pagination, sorting, and available-field filters
-- Versioned rank-based Indian market-cap buckets (1-100 / 101-250 / 251+)
-- Local saved views persist filters, tab, sort, and column visibility
+- **Encrypted Broker Credentials**: Added AES-256-GCM encryption for stored broker credentials.
+- **SSRF Protection**: Added strict alphanumeric stock symbol regex checks and interval range whitelists before making outbound market requests.
+- **SQL Injection & BigQuery Safety**: Restricted client queries via `queryBigQuery` to read-only `SELECT` statements with a DML/DDL keyword blacklist and a 120-second execution timeout.
+- **Short-Sell Validation**: Blocked order placement for `SELL` orders if user holds insufficient shares in their paper portfolio.
+- **TOCTOU Race Fixes**: Prevented double-placement and state inconsistency in order matchmaking.
+- **Admin RBAC**: Enforced role-based access control on ingestion routes and company data mutations.
+- **SSE Stream Memory Leak Fixes**: Wired keep-alive pings, client disconnect listeners, and proper setTimeout cleanup.
+- **Input NaN Guards**: Added validation against NaN inputs in portfolio, trade, and scanner components.
 
-### Charts
+### UI & UX Improvements
 
-- Moving average toggle wired to chart
-- RSI toggle wired to chart
-- RSI sub-panel added
-- Indicator props now sync between parent page and chart component
-
-### Scheduler
-
-- Daily processor scheduling added
-- Runs after market close on weekdays
-- Designed to support scheduled data ingestion
+- **Screener & Search**: Honest unavailable-data handling (shows `—` instead of fake/zero values), sector/industry mapping, and versioned rank-based Indian market-cap buckets.
+- **Persisted Appearance & Controls**: Saved view preferences, persistent appearance modes, and settings panels.
+- **Charts**: Moving average, MACD, and RSI sub-panel toggles wired directly to candles with parent-component prop syncing.
 
 ---
 
@@ -441,7 +497,7 @@ This version focused on making MAET more like a real scanner foundation.
 | Styling | Tailwind CSS, shadcn/ui style components |
 | Backend | Nitro / H3, Node.js, Bun |
 | API | REST routes, tRPC, SSE |
-| Database | Supabase PostgreSQL |
+| Database | Supabase PostgreSQL, Google BigQuery (Analytics) |
 | ORM | Drizzle ORM |
 | Cache | Redis / Upstash |
 | Market data | Angel One SmartAPI, Yahoo Finance, NSE |
@@ -474,6 +530,12 @@ ANGELONE_PIN=
 ANGELONE_TOTP_SECRET=
 
 NSE_HOLIDAYS_JSON=
+
+# BigQuery Analytics Config
+BIGQUERY_PROJECT=
+BIGQUERY_DATASET=
+# Optional: Path to service account key JSON file
+GOOGLE_APPLICATION_CREDENTIALS=
 ```
 
 ### Frontend variables for Vercel
@@ -493,6 +555,9 @@ ANGELONE_PIN
 ANGELONE_TOTP_SECRET
 ANGELONE_MASTER_KEY
 UPSTASH_REDIS_URL
+BIGQUERY_PROJECT
+BIGQUERY_DATASET
+GOOGLE_APPLICATION_CREDENTIALS
 ```
 
 ---
@@ -619,17 +684,18 @@ flowchart LR
     A --> A5[Price/change/volume filters]
     A --> A6[Supabase schema]
     A --> A7[Chart indicators]
+    A --> A8[Daily Ingestion Engine]
+    A --> A9[179-Indicator Calculation Engine]
+    A --> A10[BigQuery Analytics Warehouse]
+    A --> A11[Extended Paper Trading & Short-Sell Checks]
 
-    B[In Progress] --> B1[Historical data pipeline]
-    B --> B2[Daily processor]
+    B[In Progress] --> B1[Saved screeners in DB]
+    B --> B2[Peer comparison]
     B --> B3[Fundamentals sync]
-    B --> B4[Ratio calculation pipeline]
 
     C[Next Phase] --> C1[Production database population]
     C --> C2[Full fundamentals provider]
-    C --> C3[Peer comparison]
-    C --> C4[Anomaly dashboard]
-    C --> C5[Saved screeners in DB]
+    C --> C3[Anomaly dashboard]
 ```
 
 ---

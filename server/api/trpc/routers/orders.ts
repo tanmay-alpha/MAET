@@ -169,6 +169,26 @@ export const ordersRouter = createRouter({
         const orderId = crypto.randomUUID();
         const finalIdempotencyKey = idempotencyKey || `order:${userId}:${Date.now()}-${orderId.slice(0, 9)}`;
 
+        // FIX 2: Short-sell validation — reject SELL orders if user holds insufficient shares
+        if (input.side === "SELL" && (input.type === "MARKET" || input.type === "LIMIT")) {
+          const [position] = await tx.select()
+            .from(paperPositions)
+            .where(and(
+              eq(paperPositions.userId, userId),
+              eq(paperPositions.symbol, symbol),
+              eq(paperPositions.exchange, input.exchange.toUpperCase()),
+            ))
+            .limit(1);
+
+          const heldShares = position ? Number(position.totalShares) : 0;
+          if (heldShares < input.qty) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Insufficient holdings for sell order",
+            });
+          }
+        }
+
         return await tx.insert(orders).values({
           id: orderId,
           userId,
