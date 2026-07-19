@@ -13,9 +13,9 @@ The codebase is well-structured with solid fundamentals: parameterized queries v
 
 ## FINDING 1 — CRITICAL: Paper Trading Matcher Loses Position Side (Short Positions)
 
-**File:** `server/domain/market/matcher.ts` lines 449-470
-
-**Severity:** Critical — data corruption for short positions
+> [!CAUTION]
+> **Severity:** Critical — data corruption for short positions
+> **Target file:** `server/domain/market/matcher.ts` lines 449-470
 
 **Description:** When an existing position exists and the new fill reverses the position direction, the average price calculation uses `Math.abs()` for both old and new share counts:
 
@@ -39,9 +39,9 @@ The `abs()` on oldShares destroys the sign information. For a short-to-long reve
 
 ## FINDING 2 — HIGH: Broken Idempotency Keys Allow Duplicate Orders
 
-**File:** `server/api/trpc/routers/orders.ts` line 44
-
-**Severity:** High — duplicate order creation bypasses idempotency guarantees
+> [!WARNING]
+> **Severity:** High — duplicate order creation bypasses idempotency guarantees
+> **Target file:** `server/api/trpc/routers/orders.ts` line 44
 
 **Description:** The idempotency key is generated as:
 
@@ -61,9 +61,9 @@ Since `Date.now()` changes every millisecond and `uniqueId` is freshly generated
 
 ## FINDING 3 — HIGH: Paper Orders Placed Without Pre-Validation
 
-**File:** `server/api/paper/orders.post.ts` lines 33-88
-
-**Severity:** High — orders reach the matcher that should have been rejected earlier
+> [!WARNING]
+> **Severity:** High — orders reach the matcher that should have been rejected earlier
+> **Target file:** `server/api/paper/orders.post.ts` lines 33-88
 
 **Description:** The REST paper order endpoint performs minimal validation:
 
@@ -110,9 +110,9 @@ The frontend has no way to distinguish "user has no orders" from "database is do
 
 ## FINDING 5 — HIGH: SSE Stream Endpoint Lacks Authentication
 
-**File:** `server/api/market/stream.get.ts`
-
-**Severity:** High — unauthenticated access to real-time market data stream
+> [!WARNING]
+> **Severity:** High — unauthenticated access to real-time market data stream
+> **Target file:** `server/api/market/stream.get.ts`
 
 **Description:** The SSE quote stream endpoint has **no authentication check**. Any client that can reach the backend URL can:
 
@@ -131,9 +131,9 @@ The `activeConnections` cap of 100 provides only a blunt DoS defense. There is n
 
 ## FINDING 6 — HIGH: Rate Limiter Is Not Applied to Any Route
 
-**File:** `server/infra/rate-limit.ts`
-
-**Severity:** High — rate limiting infrastructure exists but is never used
+> [!WARNING]
+> **Severity:** High — rate limiting infrastructure exists but is never used
+> **Target file:** `server/infra/rate-limit.ts`
 
 **Description:** The rate-limit module is fully implemented with Redis-backed per-user rate limiting (120 requests/minute for REST, 50 SSE subscriptions per user). However, searching the entire `server/` directory shows **zero usages** of `rateLimit()`. No route imports or calls it.
 
@@ -149,9 +149,9 @@ The rate limiter also has a subtle bug: the rate-limit key uses `userId`, but fo
 
 ## FINDING 7 — HIGH: Hardcoded NSE Symbol List Fallback Hides Stocks
 
-**File:** `server/api/trpc/routers/screener.ts` lines 74-83
-
-**Severity:** High — incorrect search results for 1,998+ NSE stocks
+> [!WARNING]
+> **Severity:** High — incorrect search results for 1,998+ NSE stocks
+> **Target file:** `server/api/trpc/routers/screener.ts` lines 74-83
 
 **Description:** When a technical filter is applied via the tRPC screener, the code falls back to a hardcoded array of 60 NSE symbols:
 
@@ -197,9 +197,9 @@ This returns every candle in the entire database (~491 in current state, but pot
 
 ## FINDING 9 — MEDIUM: TOTP Secret Handling
 
-**File:** `server/data/sources/angelone/client.ts` lines 56-69, `server/config.ts` line 84
-
-**Severity:** Medium — TOTP secret is loaded into memory as a plain string
+> [!IMPORTANT]
+> **Severity:** Medium — TOTP secret is loaded into memory as a plain string
+> **Target file:** `server/data/sources/angelone/client.ts` lines 56-69, `server/config.ts` line 84
 
 **Description:** The Angel One TOTP secret (`ANGELONE_TOTP_SECRET`) is loaded from the environment into `getConfig()` as a plain string. It is then passed to `generateTotp()` which decodes it via `decodeBase32()` and uses it in HMAC-SHA1 computation. The decoded bytes exist in memory as a Buffer.
 
@@ -214,9 +214,9 @@ While this is standard practice, there are concerns:
 
 ## FINDING 10 — MEDIUM: CORS Allows Localhost Origins in Production
 
-**File:** `server/middleware/cors.ts` lines 9-19
-
-**Severity:** Medium — overly permissive CORS defaults
+> [!IMPORTANT]
+> **Severity:** Medium — overly permissive CORS defaults
+> **Target file:** `server/middleware/cors.ts` lines 9-19
 
 **Description:** The default CORS origins include localhost:
 
@@ -254,9 +254,9 @@ These endpoints have no rate limiting, no request size validation on the search 
 
 ## FINDING 12 — MEDIUM: Health Check Exposes Infrastructure Details
 
-**File:** `server/infra/health.ts`
-
-**Severity:** Medium — information disclosure
+> [!IMPORTANT]
+> **Severity:** Medium — information disclosure
+> **Target file:** `server/infra/health.ts`
 
 **Description:** The `/api/health` endpoint is unauthenticated and returns:
 
@@ -277,9 +277,9 @@ Consider restricting detailed health info to authenticated requests or a separat
 
 ## FINDING 13 — MEDIUM: Unbounded Portfolio Calculations
 
-**File:** `server/api/trpc/routers/portfolio.ts`
-
-**Severity:** Medium — unbounded memory and CPU usage
+> [!IMPORTANT]
+> **Severity:** Medium — unbounded memory and CPU usage
+> **Target file:** `server/api/trpc/routers/portfolio.ts`
 
 **Description:** Several endpoints have no pagination:
 
@@ -292,9 +292,9 @@ Consider restricting detailed health info to authenticated requests or a separat
 
 ## FINDING 14 — MEDIUM: Paper Order Quantity Not Validated Against Lot Size or Available Cash
 
-**File:** `server/api/paper/orders.post.ts`
-
-**Severity:** Medium — orders with invalid quantities accepted
+> [!IMPORTANT]
+> **Severity:** Medium — orders with invalid quantities accepted
+> **Target file:** `server/api/paper/orders.post.ts`
 
 **Description:**
 - `qty: z.number().int().positive().max` — allows quantities up to 100,000 shares with no lot-size validation.
@@ -305,9 +305,9 @@ Consider restricting detailed health info to authenticated requests or a separat
 
 ## FINDING 15 — MEDIUM: SSE Stream Connection Counter Is Not Thread-Safe
 
-**File:** `server/api/market/stream.get.ts` lines 6-7, 31-33, 65
-
-**Severity:** Medium — incorrect connection accounting under concurrent load
+> [!IMPORTANT]
+> **Severity:** Medium — incorrect connection accounting under concurrent load
+> **Target file:** `server/api/market/stream.get.ts` lines 6-7, 31-33, 65
 
 **Description:** The connection counter is a plain module-level variable:
 
@@ -330,9 +330,9 @@ There is also no per-IP tracking, so a single user can monopolize all 100 connec
 
 ## FINDING 16 — MEDIUM: No Input Length Validation on Company Name in tRPC Upsert
 
-**File:** `server/api/trpc/routers/companies.ts` line 148
-
-**Severity:** Medium — potential DoS via oversized payloads
+> [!IMPORTANT]
+> **Severity:** Medium — potential DoS via oversized payloads
+> **Target file:** `server/api/trpc/routers/companies.ts` line 148
 
 **Description:** The `upsertCompany` procedure accepts `name: z.string().min(1).max(200)` but the underlying `companies.name` column is `text` (unbounded in PostgreSQL). A malicious user could provide a 100MB company name string via the tRPC input. Zod's `.max(200)` provides some protection, but other routes like `syncFundamentals` store `data.symbol` as the name without length validation:
 
@@ -344,9 +344,9 @@ name: data.symbol,  // NSE page title, unbounded length
 
 ## FINDING 17 — MEDIUM: Angel One Hardcoded IP Addresses
 
-**File:** `server/data/sources/angelone/client.ts` lines 85-87
-
-**Severity:** Medium — API integrity risk
+> [!IMPORTANT]
+> **Severity:** Medium — API integrity risk
+> **Target file:** `server/data/sources/angelone/client.ts` lines 85-87
 
 **Description:** The Angel One API requests use hardcoded IP headers:
 
@@ -362,9 +362,9 @@ While this is a read-only market data endpoint (not order execution), Angel One 
 
 ## FINDING 18 — MEDIUM: Redis Silent Error Swallowing
 
-**File:** `server/data/redis/client.ts` lines 51-60, 65-71
-
-**Severity:** Medium — cache failures silently ignored
+> [!IMPORTANT]
+> **Severity:** Medium — cache failures silently ignored
+> **Target file:** `server/data/redis/client.ts` lines 51-60, 65-71
 
 **Description:** Both `getCachedJson` and `setCachedJson` catch all errors and return `undefined` / no-op:
 
@@ -391,9 +391,9 @@ The Yahoo candle and fundamentals caching relies on this. If Redis silently fail
 
 ## FINDING 19 — MEDIUM: Screener Database Query Loads All Companies Into Memory
 
-**File:** `server/domain/screener/company-query.ts` lines 241-328
-
-**Severity:** Medium — memory pressure at scale
+> [!IMPORTANT]
+> **Severity:** Medium — memory pressure at scale
+> **Target file:** `server/domain/screener/company-query.ts` lines 241-328
 
 **Description:** `queryDatabase` loads **all 2,058 companies** into memory:
 
@@ -412,9 +412,9 @@ The paginated `companies` tRPC endpoint (companies.ts) correctly uses cursor-bas
 
 ## FINDING 20 — MEDIUM: Yahoo Request Concurrency Limiter Can Deadlock
 
-**File:** `server/data/sources/yahoo.ts` lines 15-33
-
-**Severity:** Medium — potential deadlock under error conditions
+> [!IMPORTANT]
+> **Severity:** Medium — potential deadlock under error conditions
+> **Target file:** `server/data/sources/yahoo.ts` lines 15-33
 
 **Description:** The concurrency limiter uses a simple counter + waiters queue:
 
@@ -435,9 +435,9 @@ Problems:
 
 ## FINDING 21 — LOW: Status Enum Inconsistency Between tRPC and REST
 
-**File:** Multiple files
-
-**Severity:** Low — potential for incorrect status matching
+> [!NOTE]
+> **Severity:** Low — potential for incorrect status matching
+> **Target file:** Multiple files
 
 **Description:** The tRPC schema uses lowercase enum values:
 ```
@@ -455,9 +455,9 @@ The matcher code checks for uppercase values (`eq(paperOrders.status, "PENDING")
 
 ## FINDING 22 — LOW: Position P&L Calculation Always Returns 0
 
-**File:** `server/api/trpc/routers/portfolio.ts` lines 198, 242
-
-**Severity:** Low — incorrect but harmless data returned
+> [!NOTE]
+> **Severity:** Low — incorrect but harmless data returned
+> **Target file:** `server/api/trpc/routers/portfolio.ts` lines 198, 242
 
 **Description:** In both `getPositions` and `getTradeHistory`, P&L is hardcoded to 0:
 
@@ -498,9 +498,9 @@ These should be deleted and `.gitignore` should be updated. They are also taking
 
 ## FINDING 24 — LOW: insert_baselines.sql (103KB) in Project Root
 
-**File:** `insert_baselines.sql`
-
-**Severity:** Low — potential credential exposure
+> [!NOTE]
+> **Severity:** Low — potential credential exposure
+> **Target file:** `insert_baselines.sql`
 
 **Description:** A 103KB SQL file in the project root. If this contains INSERT statements with real data (user emails, company data, etc.), it should be verified to contain no credentials. If it was generated from a production database, it should not be in version control.
 

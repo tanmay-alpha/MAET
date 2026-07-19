@@ -1,5 +1,6 @@
 # MAET — Market Analytics & Execution Terminal
 
+> [!NOTE]
 > **MAET is a scanner-first Indian market intelligence terminal.**  
 > It is built to help users shortlist NSE stocks using company data, market data, filters, charts, indicators, and a database-backed screening pipeline.
 
@@ -21,6 +22,7 @@ It is a **demo-ready screener-first market terminal** for Indian stocks.
 
 The goal is simple:
 
+> [!TIP]
 > Pull market and company data automatically, store it in our own database, calculate useful ratios and indicators, validate bad or missing values, and show clean scanner results to users.
 
 ---
@@ -171,9 +173,8 @@ flowchart TB
 | Redis / Upstash | Cache and real-time support | Reduces repeated API calls and supports fast backend flow | Production health check reachable |
 | TradingView link | External chart open | Lets user open selected stock chart externally | Added |
 
-Important rule:
-
-> Angel One is useful for live market data, but it should not be treated as the main financial fundamentals source.
+> [!IMPORTANT]
+> **Important rule:** Angel One is useful for live market data, but it should not be treated as the main financial fundamentals source.
 
 For production fundamentals, MAET should use:
 
@@ -316,70 +317,6 @@ than applying a misleading filter.
 The chart page supports candlestick visualization and indicator toggles.
 
 Current chart ranges:
-
-```text
-1D
-5D
-1M
-6M
-1Y
-3Y
-5Y
-All
-```
-
-### External TradingView link
-
-Each stock can open a TradingView chart using NSE symbol format, for example:
-
-```text
-https://www.tradingview.com/chart/?symbol=NSE:RELIANCE
-```
-
----
-
-## 10. Calculation Engine
-
-The calculation engine should calculate values from stored data, not from random placeholders.
-
-### Formula examples
-
-| Metric | Formula |
-|---|---|
-| P/E | Market Price / EPS |
-| P/B | Market Price / Book Value Per Share |
-| ROE | Net Profit / Shareholder Equity |
-| ROCE | EBIT / Capital Employed |
-| Net Profit Margin | Net Profit / Revenue |
-| Debt to Equity | Total Debt / Equity |
-| Dividend Yield | Dividend Per Share / Market Price |
-| Sales Growth | Current Sales vs Previous Sales |
-| RSI | Calculated from historical closing prices |
-
-### Safe calculation rule
-
-```text
-If input is missing → return blank
-If denominator is zero → return blank
-If EPS is negative → P/E is not meaningful
-If data is stale → mark it stale
-If source mismatch exists → flag before display
-```
-
-MAET should never show fake ratio values as real data.
-
----
-
-## 11. Validation and Anomaly Rules
-
-The scanner should protect users from bad data.
-
-Examples:
-
-| Situation | Output |
-|---|---|
-| Missing price | Keep ratio blank |
-| Missing EPS | P/E unavailable |
 
 ```text
 1D
@@ -751,23 +688,22 @@ flowchart LR
 
 ## 20. Honest Limitations
 
-This project is currently a demo/MVP foundation.
-
-It should not be presented as:
-
-- a full production trading platform
-- a live order execution system
-- a complete fundamentals screener
-- a fully populated financial database
-- a replacement for licensed market data
-
-It should be presented as:
-
-- a scanner-first market terminal prototype
-- a working architecture demo
-- a foundation for database-backed stock screening
-- a base for 500+ company data ingestion
-- a clean starting point for fundamental and technical screening
+> [!WARNING]
+> This project is currently a demo/MVP foundation.
+>
+> **It should not be presented as:**
+> - a full production trading platform
+> - a live order execution system
+> - a complete fundamentals screener
+> - a fully populated financial database
+> - a replacement for licensed market data
+>
+> **It should be presented as:**
+> - a scanner-first market terminal prototype
+> - a working architecture demo
+> - a foundation for database-backed stock screening
+> - a base for 500+ company data ingestion
+> - a clean starting point for fundamental and technical screening
 
 ---
 
