@@ -54,8 +54,14 @@ export class MarketDataMultiplexer {
     this.connectAngelOne();
     this.connectTrueData();
 
-    // 2. Start high-frequency simulator for development fallback and testing
-    this.startSimulation();
+    // 2. Check simulation flag
+    const enableSimulator = process.env.ENABLE_MARKET_SIMULATOR === "true";
+    if (enableSimulator) {
+      console.log("⚠️ [MarketDataMultiplexer] Market simulator is ENABLED for local testing/demo.");
+      this.startSimulation();
+    } else {
+      console.log("🔒 [MarketDataMultiplexer] Market simulator is DISABLED. Only real market feeds will be processed.");
+    }
   }
 
   public stop(): void {
@@ -72,16 +78,6 @@ export class MarketDataMultiplexer {
     symbols.forEach((symbol) => {
       const sym = symbol.toUpperCase();
       this.activeSymbols.add(sym);
-      if (!this.cache.has(sym)) {
-        this.cache.set(sym, {
-          ltp: 1500.0, // Default baseline price
-          volume: 50000,
-          previousClose: 1495.0,
-          level2: this.generateMockLevel2(1500.0),
-          greeks: this.generateMockGreeks(sym),
-          lastUpdateTs: new Date().toISOString(),
-        });
-      }
     });
 
     this.syncSocketSubscriptions();
@@ -143,8 +139,16 @@ export class MarketDataMultiplexer {
       if (this.activeSymbols.size === 0) return;
 
       for (const symbol of this.activeSymbols) {
-        const cached = this.cache.get(symbol);
-        if (!cached) continue;
+        let cached = this.cache.get(symbol);
+        if (!cached) {
+          cached = {
+            ltp: 1000.0,
+            volume: 1000,
+            previousClose: 1000.0,
+            lastUpdateTs: new Date().toISOString(),
+          };
+          this.cache.set(symbol, cached);
+        }
 
         const walk = (Math.random() - 0.5) * 0.001;
         const oldLtp = cached.ltp || 1000;
@@ -167,12 +171,13 @@ export class MarketDataMultiplexer {
           price: newLtp,
           volume: newVol,
           ts: cached.lastUpdateTs,
-          source: "angelone",
+          source: "simulated",
+          quality: "synthetic",
           previousClose: cached.previousClose,
           change: cached.previousClose ? newLtp - cached.previousClose : undefined,
           changePct: cached.previousClose ? ((newLtp - cached.previousClose) / cached.previousClose) * 100 : undefined,
-          bid: cached.level2.bids[0]?.price,
-          ask: cached.level2.asks[0]?.price,
+          bid: cached.level2?.bids[0]?.price,
+          ask: cached.level2?.asks[0]?.price,
           level2: cached.level2,
           greeks: cached.greeks,
         };

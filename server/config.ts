@@ -16,6 +16,9 @@ const EnvSchema = z.object({
   NSE_HOLIDAYS_JSON: z.string().optional(),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   PORT: z.string().default("3000"),
+  ENABLE_MARKET_SIMULATOR: z.string().transform((v) => v === "true" || v === "1").default("false"),
+  PAPER_EXECUTION_MAX_QUOTE_AGE_MS: z.string().transform((v) => Number(v) || 5000).default("5000"),
+  PAPER_EXECUTION_ALLOW_DELAYED: z.string().transform((v) => v === "true" || v === "1").default("false"),
 });
 
 export type AppConfig = {
@@ -32,6 +35,9 @@ export type AppConfig = {
   nseHolidays: Date[];
   nodeEnv: "development" | "production" | "test";
   port: number;
+  enableMarketSimulator: boolean;
+  paperExecutionMaxQuoteAgeMs: number;
+  paperExecutionAllowDelayed: boolean;
 };
 
 let cached: AppConfig | undefined;
@@ -65,6 +71,9 @@ export function getConfig(): AppConfig {
       nseHolidays: [],
       nodeEnv: "test",
       port: Number(d.PORT ?? "3000"),
+      enableMarketSimulator: d.ENABLE_MARKET_SIMULATOR,
+      paperExecutionMaxQuoteAgeMs: d.PAPER_EXECUTION_MAX_QUOTE_AGE_MS,
+      paperExecutionAllowDelayed: d.PAPER_EXECUTION_ALLOW_DELAYED,
     };
     return cached;
   }
@@ -86,6 +95,9 @@ export function getConfig(): AppConfig {
     nseHolidays: holidays,
     nodeEnv: d.NODE_ENV,
     port: Number(d.PORT),
+    enableMarketSimulator: d.ENABLE_MARKET_SIMULATOR,
+    paperExecutionMaxQuoteAgeMs: d.PAPER_EXECUTION_MAX_QUOTE_AGE_MS,
+    paperExecutionAllowDelayed: d.PAPER_EXECUTION_ALLOW_DELAYED,
   };
   return cached;
 }
