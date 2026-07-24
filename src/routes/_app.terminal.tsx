@@ -292,11 +292,25 @@ function Terminal() {
                           <td className="px-3 py-2 text-right">
                             <button
                               onClick={() => {
+                                const currentQuote = quoteMap.get(pos.symbol);
+                                if (!currentQuote) {
+                                  alert("Position exit rejected: Live quote is unavailable.");
+                                  return;
+                                }
                                 placeOrder({
+                                  type: "MARKET",
                                   symbol: pos.symbol,
                                   side: isLong ? "SELL" : "BUY",
                                   qty: Math.abs(pos.qty),
-                                  type: "MARKET",
+                                  quote: {
+                                    exchange: (currentQuote as any).exchange ?? "NSE",
+                                    symbol: pos.symbol,
+                                    price: currentQuote.price,
+                                    volume: currentQuote.volume,
+                                    ts: currentQuote.timestamp ?? new Date().toISOString(),
+                                    source: (currentQuote as any).source ?? "angelone",
+                                    quality: (currentQuote as any).quality ?? "live",
+                                  },
                                 });
                               }}
                               className="rounded bg-bear hover:bg-bear/90 text-white px-2 py-0.5 text-[10px] font-semibold transition"

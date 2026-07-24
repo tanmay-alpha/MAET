@@ -36,8 +36,10 @@ export async function fetch(opts: YahooHistoryOptions): Promise<SourceFetchResul
   for (const symbol of opts.symbols) {
     for (const tf of timeframes) {
       try {
+        const to = new Date();
+        const from = new Date(Date.now() - (opts.backfillDays ?? 365) * 86_400_000);
         const candles = await withRetry(
-          () => getCandles(symbol, tf as any, opts.backfillDays ?? 365),
+          () => getCandles(symbol, from, to, tf as any),
           "yahoo-history",
           `getCandles:${symbol}:${tf}`
         );

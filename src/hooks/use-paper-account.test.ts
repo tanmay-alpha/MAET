@@ -12,9 +12,9 @@ describe("Phase 0: Paper Order Financial Integrity Tests", () => {
       side: "BUY",
       qty: 10,
       type: "MARKET",
-    });
+    } as any);
     expect(res.ok).toBe(false);
-    expect(res.message).toContain("Market order rejected");
+    expect(res.message).toContain("Trusted quote object is required for execution");
   });
 
   it("2. MARKET order never falls back to ₹1", () => {
@@ -24,7 +24,7 @@ describe("Phase 0: Paper Order Financial Integrity Tests", () => {
       qty: 5,
       type: "MARKET",
       marketPrice: undefined,
-    });
+    } as any);
     expect(res.ok).toBe(false);
     expect(res.message).not.toContain("filled at ₹1");
   });

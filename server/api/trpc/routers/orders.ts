@@ -160,8 +160,7 @@ export const ordersRouter = createRouter({
           if (existing) {
             throw new TRPCError({
               code: "CONFLICT",
-              message: "Duplicate order — this idempotency key was already used",
-              data: { existingOrderId: existing.id },
+              message: `Duplicate order — this idempotency key was already used (order: ${existing.id})`,
             });
           }
         }
@@ -194,11 +193,10 @@ export const ordersRouter = createRouter({
           userId,
           symbol,
           exchange: input.exchange.toUpperCase(),
-          side: input.side,
-          type: input.type,
+          side: input.side as any,
+          type: input.type as any,
           qty: input.qty,
           limitPrice: input.limitPrice ? String(input.limitPrice) : null,
-          triggerPrice: input.triggerPrice ? String(input.triggerPrice) : null,
           status: "pending",
           idempotencyKey: finalIdempotencyKey,
           rejectReason: null,
@@ -238,7 +236,7 @@ export const ordersRouter = createRouter({
 
       // FIX 7: Verify order status is cancellable
       const currentOrder = order[0];
-      if (currentOrder.status === "FILLED" || currentOrder.status === "CANCELLED" || currentOrder.status === "REJECTED") {
+      if (currentOrder.status === "filled" || currentOrder.status === "cancelled" || currentOrder.status === "rejected") {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Order is already settled and cannot be cancelled",

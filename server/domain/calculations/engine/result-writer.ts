@@ -3,7 +3,7 @@
  */
 
 import { getLogger } from "../../../infra/logger";
-import { coordinateIndicatorWrite } from "../../workers/ingestion-engine/writers/write-coordinator";
+import { coordinateIndicatorWrite } from "../../../workers/ingestion-engine/writers/write-coordinator";
 import type { CalculatorOutput } from "./calculator-registry";
 import type { BatchRunResult } from "./batch-runner";
 

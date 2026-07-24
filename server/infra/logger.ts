@@ -22,7 +22,7 @@ function buildLogger() {
 
 let cached: ReturnType<typeof buildLogger> | undefined;
 
-export function getLogger() {
+export function getLogger(_name?: string) {
   if (!cached) cached = buildLogger();
   return cached;
 }

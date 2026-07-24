@@ -23,6 +23,7 @@ export interface DailyPipelineOptions {
 
 export interface DailyPipelineResult {
   runId: string;
+  status: "success" | "partial" | "failed";
   symbolsAttempted: number;
   symbolsSucceeded: number;
   symbolsFailed: number;
@@ -39,6 +40,7 @@ export async function runDailyPipeline(opts: DailyPipelineOptions): Promise<Dail
 
   const result: DailyPipelineResult = {
     runId,
+    status: "success",
     symbolsAttempted: opts.symbols.length,
     symbolsSucceeded: 0,
     symbolsFailed: 0,
@@ -138,7 +140,7 @@ export async function runDailyPipeline(opts: DailyPipelineOptions): Promise<Dail
   }
 
   logger.info(
-    { runId, ...result },
+    result,
     `Daily pipeline complete: ${result.symbolsSucceeded}/${result.symbolsAttempted} symbols, ${result.recordsInserted} records inserted`
   );
 
