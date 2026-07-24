@@ -116,8 +116,8 @@ function PortfolioPage() {
     return account.positions
       .map(p => {
         const quote = quoteMap.get(p.symbol);
-        const currentPrice = quote?.price || p.avgPrice;
-        const value = currentPrice * p.qty;
+        const currentPrice = quote?.price || p.averagePrice;
+        const value = currentPrice * Math.abs(p.quantity);
         return {
           symbol: p.symbol,
           value,
@@ -133,9 +133,9 @@ function PortfolioPage() {
     return [...account.positions]
       .map(p => {
         const quote = quoteMap.get(p.symbol);
-        const ltp = quote?.price || p.avgPrice;
+        const ltp = quote?.price || p.averagePrice;
         const changePct = quote?.changePct || 0;
-        const pnl = (ltp - p.avgPrice) * p.qty;
+        const pnl = (ltp - p.averagePrice) * p.quantity;
         return { symbol: p.symbol, pnl, changePct, ltp };
       })
       .sort((a, b) => b.pnl - a.pnl);
@@ -282,10 +282,10 @@ function PortfolioPage() {
                 <div className="space-y-3">
                   {account.positions.map(position => {
                     const quote = quoteMap.get(position.symbol);
-                    const ltp = quote?.price || position.avgPrice;
+                    const ltp = quote?.price || position.averagePrice;
                     const changePct = quote?.changePct || 0;
-                    const totalValue = ltp * position.qty;
-                    const pnl = (ltp - position.avgPrice) * position.qty;
+                    const totalValue = ltp * Math.abs(position.quantity);
+                    const pnl = (ltp - position.averagePrice) * position.quantity;
 
                     return (
                       <div key={position.symbol} className="border border-border bg-panel rounded-lg p-4 hover:bg-accent/50 transition-colors">
@@ -298,11 +298,11 @@ function PortfolioPage() {
                         <div className="grid grid-cols-4 gap-2 text-xs">
                           <div>
                             <div className="text-muted-foreground">Qty</div>
-                            <div className="font-mono">{position.qty}</div>
+                            <div className="font-mono">{Math.abs(position.quantity)}</div>
                           </div>
                           <div>
                             <div className="text-muted-foreground">Avg</div>
-                            <div className="font-mono">₹{position.avgPrice.toFixed(2)}</div>
+                            <div className="font-mono">₹{position.averagePrice.toFixed(2)}</div>
                           </div>
                           <div>
                             <div className="text-muted-foreground">LTP</div>
@@ -321,7 +321,7 @@ function PortfolioPage() {
                         </div>
                         <div className="mt-3 pt-2 border-t border-border/50 flex justify-end gap-1.5">
                           <button
-                            onClick={() => setTradeModal({ isOpen: true, symbol: position.symbol, side: position.qty > 0 ? "BUY" : "SELL" })}
+                            onClick={() => setTradeModal({ isOpen: true, symbol: position.symbol, side: position.quantity > 0 ? "BUY" : "SELL" })}
                             className="rounded bg-accent hover:bg-accent-elevated border border-border text-foreground px-2.5 py-1 text-[10px] font-semibold transition"
                           >
                             Trade
@@ -334,19 +334,24 @@ function PortfolioPage() {
                                   alert("Position exit rejected: Market quote is unavailable.");
                                   return;
                                 }
+                                const rawQ = currentQuote as any;
+                                if (!rawQ.source || !rawQ.quality || !rawQ.ts) {
+                                  alert("Position exit rejected: Quote is missing provenance (source/quality/ts).");
+                                  return;
+                                }
                                 const result = placeOrder({
                                   type: "MARKET",
                                   symbol: position.symbol,
-                                  side: position.qty > 0 ? "SELL" : "BUY",
-                                  qty: Math.abs(position.qty),
+                                  side: position.quantity > 0 ? "SELL" : "BUY",
+                                  quantity: Math.abs(position.quantity),
                                   quote: {
-                                    exchange: (currentQuote as any).exchange ?? "NSE",
+                                    exchange: rawQ.exchange ?? "NSE",
                                     symbol: position.symbol,
                                     price: currentQuote.price,
                                     volume: currentQuote.volume,
-                                    ts: currentQuote.timestamp ?? new Date().toISOString(),
-                                    source: (currentQuote as any).source ?? "angelone",
-                                    quality: (currentQuote as any).quality ?? "live",
+                                    ts: rawQ.ts,
+                                    source: rawQ.source,
+                                    quality: rawQ.quality,
                                   },
                                 });
                                 if (!result.ok) {

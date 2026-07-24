@@ -73,8 +73,8 @@ function Terminal() {
     let unrealized = 0;
     account.positions.forEach((pos) => {
       const q = quoteMap.get(pos.symbol);
-      const ltp = q?.price ?? pos.avgPrice;
-      const pnl = pos.qty > 0 ? pos.qty * (ltp - pos.avgPrice) : Math.abs(pos.qty) * (pos.avgPrice - ltp);
+      const ltp = q?.price ?? pos.averagePrice;
+      const pnl = pos.quantity > 0 ? pos.quantity * (ltp - pos.averagePrice) : Math.abs(pos.quantity) * (pos.averagePrice - ltp);
       unrealized += pnl;
     });
 
@@ -210,7 +210,7 @@ function Terminal() {
           </div>
 
           {/* Locked/Liquidation Alert Banner */}
-          {account.isLocked && (
+          {(account.status === "LIQUIDATION_PENDING" || account.status === "LIQUIDATED") && (
             <div className="flex items-center gap-3 border-t border-b border-bear/20 bg-bear/10 px-4 py-2.5 text-xs text-bear">
               <ShieldAlert className="h-4 w-4 animate-bounce" />
               <div>
@@ -238,7 +238,7 @@ function Terminal() {
                 }`}
               >
                 <ClipboardList className="h-3.5 w-3.5" />
-                Pending Orders ({account.orders.filter(o => o.status === "pending" || o.status === "partial").length})
+                Pending Orders ({account.orders.filter(o => o.status === "PENDING" || o.status === "PARTIALLY_FILLED" || o.status === "TRIGGERED").length})
               </button>
               <button 
                 onClick={() => setActiveTab("history")}
@@ -269,10 +269,10 @@ function Terminal() {
                   <tbody>
                     {account.positions.map((pos) => {
                       const quote = quoteMap.get(pos.symbol);
-                      const ltp = quote?.price ?? pos.avgPrice;
-                      const isLong = pos.qty > 0;
-                      const pnl = isLong ? pos.qty * (ltp - pos.avgPrice) : Math.abs(pos.qty) * (pos.avgPrice - ltp);
-                      const pnlPct = (pnl / (Math.abs(pos.qty) * pos.avgPrice)) * 100 * 5; // Leveraged return (5x)
+                      const ltp = quote?.price ?? pos.averagePrice;
+                      const isLong = pos.quantity > 0;
+                      const pnl = isLong ? pos.quantity * (ltp - pos.averagePrice) : Math.abs(pos.quantity) * (pos.averagePrice - ltp);
+                      const pnlPct = (pnl / (Math.abs(pos.quantity) * pos.averagePrice)) * 100 * 5; // Leveraged return (5x)
 
                       return (
                         <tr key={pos.symbol} className="border-b border-border hover:bg-accent/40 transition-colors">
@@ -282,8 +282,8 @@ function Terminal() {
                               {isLong ? "LONG" : "SHORT"}
                             </span>
                           </td>
-                          <td className="px-3 py-2 text-right">{Math.abs(pos.qty)}</td>
-                          <td className="px-3 py-2 text-right">₹{pos.avgPrice.toFixed(2)}</td>
+                          <td className="px-3 py-2 text-right">{Math.abs(pos.quantity)}</td>
+                          <td className="px-3 py-2 text-right">₹{pos.averagePrice.toFixed(2)}</td>
                           <td className="px-3 py-2 text-right">₹{ltp.toFixed(2)}</td>
                           <td className={`px-3 py-2 text-right font-bold ${pnl >= 0 ? "text-bull" : "text-bear"}`}>
                             {pnl >= 0 ? "+" : ""}₹{pnl.toFixed(2)} ({pnlPct.toFixed(2)}%)
@@ -297,19 +297,24 @@ function Terminal() {
                                   alert("Position exit rejected: Live quote is unavailable.");
                                   return;
                                 }
+                                const rawQ = currentQuote as any;
+                                if (!rawQ.source || !rawQ.quality || !rawQ.ts) {
+                                  alert("Position exit rejected: Quote is missing provenance (source/quality/ts).");
+                                  return;
+                                }
                                 placeOrder({
                                   type: "MARKET",
                                   symbol: pos.symbol,
                                   side: isLong ? "SELL" : "BUY",
-                                  qty: Math.abs(pos.qty),
+                                  quantity: Math.abs(pos.quantity),
                                   quote: {
-                                    exchange: (currentQuote as any).exchange ?? "NSE",
+                                    exchange: rawQ.exchange ?? "NSE",
                                     symbol: pos.symbol,
                                     price: currentQuote.price,
                                     volume: currentQuote.volume,
-                                    ts: currentQuote.timestamp ?? new Date().toISOString(),
-                                    source: (currentQuote as any).source ?? "angelone",
-                                    quality: (currentQuote as any).quality ?? "live",
+                                    ts: rawQ.ts,
+                                    source: rawQ.source,
+                                    quality: rawQ.quality,
                                   },
                                 });
                               }}
@@ -348,11 +353,11 @@ function Terminal() {
                   </thead>
                   <tbody>
                     {account.orders
-                      .filter(o => o.status === "pending" || o.status === "partial")
+                      .filter(o => o.status === "PENDING" || o.status === "PARTIALLY_FILLED" || o.status === "TRIGGERED")
                       .map((o) => (
                         <tr key={o.id} className="border-b border-border hover:bg-accent/40 transition-colors">
                           <td className="px-3 py-2 text-muted-foreground">
-                            {new Date(o.placedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                            {new Date(o.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                           </td>
                           <td className="px-3 py-2 font-sans font-semibold text-foreground">{o.symbol}</td>
                           <td className="px-3 py-2 text-right">
@@ -366,7 +371,7 @@ function Terminal() {
                             }
                           </td>
                           <td className="px-3 py-2 text-right">
-                            {o.status === "partial" ? `${o.filledQty}/${o.qty}` : o.qty}
+                            {o.status === "PARTIALLY_FILLED" ? `${o.filledQuantity}/${o.quantity}` : o.quantity}
                           </td>
                           <td className="px-3 py-2 text-right">
                             <span className="text-yellow-500 font-semibold uppercase text-[9px] border border-yellow-500/20 bg-yellow-500/10 px-1.5 py-0.5 rounded-full">
@@ -383,7 +388,7 @@ function Terminal() {
                           </td>
                         </tr>
                       ))}
-                    {account.orders.filter(o => o.status === "pending" || o.status === "partial").length === 0 && (
+                    {account.orders.filter(o => o.status === "PENDING" || o.status === "PARTIALLY_FILLED" || o.status === "TRIGGERED").length === 0 && (
                       <tr>
                         <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground font-sans">
                           No pending limit or trigger orders.
@@ -410,35 +415,35 @@ function Terminal() {
                   </thead>
                   <tbody>
                     {account.orders
-                      .filter(o => o.status !== "pending" && o.status !== "partial")
+                      .filter(o => o.status !== "PENDING" && o.status !== "PARTIALLY_FILLED" && o.status !== "TRIGGERED")
                       .map((o) => (
                         <tr key={o.id} className="border-b border-border hover:bg-accent/40 transition-colors">
                           <td className="px-3 py-2 text-muted-foreground">
-                            {new Date(o.placedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                            {new Date(o.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
                           </td>
                           <td className="px-3 py-2 font-sans font-semibold text-foreground">{o.symbol}</td>
                           <td className="px-3 py-2 text-right">
                             <span className={`font-bold ${o.side === "BUY" ? "text-bull" : "text-bear"}`}>{o.side}</span>
                           </td>
-                          <td className="px-3 py-2 text-right">{o.filledQty || o.qty}</td>
+                          <td className="px-3 py-2 text-right">{o.filledQuantity || o.quantity}</td>
                           <td className="px-3 py-2 text-right">
                             {o.averageFillPrice ? `₹${o.averageFillPrice.toFixed(2)}` : "—"}
                           </td>
-                          <td className="px-3 py-2 text-right text-muted-foreground">₹{o.slippageApplied.toFixed(2)}</td>
-                          <td className="px-3 py-2 text-right text-muted-foreground">₹{o.transactionFee.toFixed(2)}</td>
+                          <td className="px-3 py-2 text-right text-muted-foreground">—</td>
+                          <td className="px-3 py-2 text-right text-muted-foreground">—</td>
                           <td className="px-3 py-2 text-right">
                             <span className={`inline-block font-semibold uppercase text-[9px] border px-1.5 py-0.5 rounded-full ${
-                              o.status === "filled" ? "border-green-500/20 bg-green-500/10 text-green-500" :
-                              o.status === "rejected" ? "border-red-500/20 bg-red-500/10 text-red-500" :
+                              o.status === "FILLED" ? "border-green-500/20 bg-green-500/10 text-green-500" :
+                              o.status === "REJECTED" ? "border-red-500/20 bg-red-500/10 text-red-500" :
                               "border-border bg-panel-elevated text-muted-foreground"
                             }`}>
                               {o.status}
-                              {o.rejectReason && ` (${o.rejectReason})`}
+                              {o.rejectionReason && ` (${o.rejectionReason})`}
                             </span>
                           </td>
                         </tr>
                       ))}
-                    {account.orders.filter(o => o.status !== "pending" && o.status !== "partial").length === 0 && (
+                    {account.orders.filter(o => o.status !== "PENDING" && o.status !== "PARTIALLY_FILLED" && o.status !== "TRIGGERED").length === 0 && (
                       <tr>
                         <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground font-sans">
                           No historical executions.

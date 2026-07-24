@@ -71,16 +71,16 @@ function Dashboard() {
   const { quoteMap, streamConnected, isError } = useMarketQuotes(symbols);
   const unrealizedPnl = account.positions.reduce((total, position) => {
     const ltp = quoteMap.get(position.symbol)?.price;
-    return total + (ltp === undefined ? 0 : (ltp - position.avgPrice) * position.qty);
+    return total + (ltp === undefined ? 0 : (ltp - position.averagePrice) * position.quantity);
   }, 0);
   const positionsValue = account.positions.reduce((total, position) => {
-    const mark = quoteMap.get(position.symbol)?.price ?? position.avgPrice;
-    return total + mark * position.qty;
+    const mark = quoteMap.get(position.symbol)?.price ?? position.averagePrice;
+    return total + mark * Math.abs(position.quantity);
   }, 0);
   const equity = account.cash + positionsValue;
   const totalPnl = equity - account.initialCash;
-  const filledOrders = account.orders.filter((order) => order.status === "filled").length;
-  const pendingOrders = account.orders.filter((order) => order.status === "pending").length;
+  const filledOrders = account.orders.filter((order) => order.status === "FILLED").length;
+  const pendingOrders = account.orders.filter((order) => order.status === "PENDING" || order.status === "TRIGGERED" || order.status === "PARTIALLY_FILLED").length;
 
   return (
     <div className="h-full overflow-y-auto p-4">
@@ -114,7 +114,7 @@ function Dashboard() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard icon={Wallet} label="Paper equity" value={money(equity)} sub={`${money(account.cash)} cash`} trend="flat" />
         <StatCard icon={Activity} label="Total P&L" value={money(totalPnl)} sub="Since account reset" trend={totalPnl > 0 ? "up" : totalPnl < 0 ? "down" : "flat"} />
-        <StatCard icon={TrendingUp} label="Unrealized" value={money(unrealizedPnl)} sub={`${money(account.realizedPnl)} realized`} trend={unrealizedPnl > 0 ? "up" : unrealizedPnl < 0 ? "down" : "flat"} />
+        <StatCard icon={TrendingUp} label="Unrealized" value={money(unrealizedPnl)} sub={`${money(account.realisedPnl)} realized`} trend={unrealizedPnl > 0 ? "up" : unrealizedPnl < 0 ? "down" : "flat"} />
         <StatCard icon={ReceiptText} label="Paper orders" value={String(account.orders.length)} sub={`${filledOrders} filled · ${pendingOrders} pending`} trend="flat" />
       </div>
 
@@ -138,14 +138,14 @@ function Dashboard() {
               </thead>
               <tbody>
                 {account.positions.map((position) => {
-                  const ltp = quoteMap.get(position.symbol)?.price ?? position.avgPrice;
-                  const isLong = position.qty > 0;
-                  const pnl = (ltp - position.avgPrice) * position.qty;
+                  const ltp = quoteMap.get(position.symbol)?.price ?? position.averagePrice;
+                  const isLong = position.quantity > 0;
+                  const pnl = (ltp - position.averagePrice) * position.quantity;
                   return (
                     <tr key={position.symbol} className="border-t border-border hover:bg-accent/40 transition-colors">
                       <td className="px-4 py-2.5 font-sans font-semibold text-foreground">{position.symbol}</td>
-                      <td className="text-right font-mono tabular-nums">{position.qty}</td>
-                      <td className="text-right font-mono tabular-nums">₹{position.avgPrice.toFixed(2)}</td>
+                      <td className="text-right font-mono tabular-nums">{Math.abs(position.quantity)}</td>
+                      <td className="text-right font-mono tabular-nums">₹{position.averagePrice.toFixed(2)}</td>
                       <td className="text-right font-mono tabular-nums">₹{ltp.toFixed(2)}</td>
                       <td className={`text-right font-mono tabular-nums font-semibold ${(pnl ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
                         {pnl === undefined ? "—" : `${pnl >= 0 ? "+" : ""}₹${pnl.toFixed(2)}`}
@@ -165,19 +165,24 @@ function Dashboard() {
                                   alert("Position exit rejected: Market quote is unavailable.");
                                   return;
                                 }
+                                const rawQ = currentQuote as any;
+                                if (!rawQ.source || !rawQ.quality || !rawQ.ts) {
+                                  alert("Position exit rejected: Quote is missing provenance (source/quality/ts).");
+                                  return;
+                                }
                                 const result = placeOrder({
                                   type: "MARKET",
                                   symbol: position.symbol,
                                   side: isLong ? "SELL" : "BUY",
-                                  qty: Math.abs(position.qty),
+                                  quantity: Math.abs(position.quantity),
                                   quote: {
-                                    exchange: (currentQuote as any).exchange ?? "NSE",
+                                    exchange: rawQ.exchange ?? "NSE",
                                     symbol: position.symbol,
                                     price: currentQuote.price,
                                     volume: currentQuote.volume,
-                                    ts: currentQuote.timestamp ?? new Date().toISOString(),
-                                    source: (currentQuote as any).source ?? "angelone",
-                                    quality: (currentQuote as any).quality ?? "live",
+                                    ts: rawQ.ts,
+                                    source: rawQ.source,
+                                    quality: rawQ.quality,
                                   },
                                 });
                                 if (!result.ok) {
@@ -235,12 +240,12 @@ function Dashboard() {
             <tbody>
               {account.orders.slice(0, 20).map((order) => (
                 <tr key={order.id} className="border-t border-border">
-                  <td className="px-4 py-2.5 font-mono tabular tabular-nums text-muted-foreground">{new Date(order.placedAt).toLocaleTimeString("en-IN")}</td>
+                  <td className="px-4 py-2.5 font-mono tabular tabular-nums text-muted-foreground">{new Date(order.createdAt).toLocaleTimeString("en-IN")}</td>
                   <td className="font-medium">{order.symbol}</td>
                   <td className="text-center"><span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${order.side === "BUY" ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"}`}>{order.side}</span></td>
-                  <td className="text-right font-mono tabular tabular-nums">{order.qty}</td>
-                  <td className="text-right font-mono tabular tabular-nums">{(order.fillPrice ?? order.triggerPrice)?.toFixed(2) ?? "—"}</td>
-                  <td className={`px-4 text-right ${order.status === "filled" ? "text-bull" : order.status === "rejected" ? "text-bear" : "text-muted-foreground"}`} title={order.rejectReason}>{order.status}</td>
+                  <td className="text-right font-mono tabular tabular-nums">{order.quantity}</td>
+                  <td className="text-right font-mono tabular tabular-nums">{(order.averageFillPrice ?? order.limitPrice ?? order.stopPrice)?.toFixed(2) ?? "—"}</td>
+                  <td className={`px-4 text-right ${order.status === "FILLED" ? "text-bull" : order.status === "REJECTED" ? "text-bear" : "text-muted-foreground"}`} title={order.rejectionReason}>{order.status}</td>
                 </tr>
               ))}
               {account.orders.length === 0 && (

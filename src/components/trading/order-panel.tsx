@@ -40,40 +40,39 @@ export function OrderPanel({
 
   const submit = () => {
     let orderInput: PlacePaperOrder;
-    const common = {
-      symbol,
-      side,
-      qty,
-      stopLossPrice: stopLoss ? Number(stopLoss) : undefined,
-      takeProfitPrice: takeProfit ? Number(takeProfit) : undefined,
-      trailingDistance: trailing ? Number(trailing) : undefined,
-      isTrailingPercent: trailing ? isTrailingPercent : undefined,
-    };
 
     if (type === "MKT") {
-      const execQuote: ExecutionQuote = quote ?? {
-        exchange: "NSE",
-        symbol,
-        price: price ?? 0,
-        ts: new Date().toISOString(),
-        source: "angelone",
-        quality: "live",
-      };
+      if (!quote) {
+        setMessage("Market order rejected: Live quote is unavailable.");
+        return;
+      }
       orderInput = {
-        ...common,
         type: "MARKET",
-        quote: execQuote,
+        symbol,
+        side,
+        quantity: qty,
+        quote,
+        stopLossPrice: stopLoss ? Number(stopLoss) : undefined,
+        takeProfitPrice: takeProfit ? Number(takeProfit) : undefined,
+        trailingDistance: trailing ? Number(trailing) : undefined,
+        trailingIsPercent: trailing ? isTrailingPercent : undefined,
       };
     } else if (type === "LMT") {
       orderInput = {
-        ...common,
         type: "LIMIT",
+        symbol,
+        side,
+        quantity: qty,
         limitPrice: Number(limit),
+        stopLossPrice: stopLoss ? Number(stopLoss) : undefined,
+        takeProfitPrice: takeProfit ? Number(takeProfit) : undefined,
       };
     } else {
       orderInput = {
-        ...common,
         type: "STOP_LOSS_LIMIT",
+        symbol,
+        side,
+        quantity: qty,
         stopPrice: Number(limit),
         limitPrice: Number(limit),
       };
