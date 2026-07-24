@@ -1,7 +1,7 @@
 import { bus } from "../infra/bus";
 import { onTick } from "../domain/market/matcher";
 import { riskEngine } from "../domain/portfolio/risk-engine";
-import type { Tick } from "@shared/types";
+import { evaluateExecutionQuote, type Tick } from "@shared/types";
 
 export class OrderMatcherWorker {
   private off: (() => void) | undefined;
@@ -13,6 +13,12 @@ export class OrderMatcherWorker {
     riskEngine.start(2000);
 
     this.off = bus.on("tick", (tick: Tick) => {
+      // 0. Validate tick execution policy
+      const policyResult = evaluateExecutionQuote(tick);
+      if (!policyResult.executable) {
+        return;
+      }
+
       // 1. Update risk engine cache with latest asset prices
       riskEngine.updatePrice(tick.symbol, tick.price);
 
