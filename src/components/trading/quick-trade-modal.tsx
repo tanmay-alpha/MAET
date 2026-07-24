@@ -81,20 +81,25 @@ export function QuickTradeModal({
         setMessage({ type: "error", text: "Market order rejected: Live quote is unavailable." });
         return;
       }
+      const rawQ = currentQuote as any;
+      if (!rawQ.source || !rawQ.quality || !rawQ.ts) {
+        setMessage({ type: "error", text: "Market order rejected: Quote is missing provenance (source/quality/ts)." });
+        return;
+      }
       const execQuote: ExecutionQuote = {
-        exchange: (currentQuote as any).exchange ?? "NSE",
+        exchange: rawQ.exchange ?? "NSE",
         symbol: symbol.toUpperCase(),
         price: currentQuote.price,
         volume: currentQuote.volume,
-        ts: currentQuote.timestamp ?? new Date().toISOString(),
-        source: (currentQuote as any).source ?? "angelone",
-        quality: (currentQuote as any).quality ?? "live",
+        ts: rawQ.ts,
+        source: rawQ.source,
+        quality: rawQ.quality,
       };
       res = placeOrder({
         type: "MARKET",
         symbol: symbol.toUpperCase(),
         side,
-        qty,
+        quantity: qty,
         quote: execQuote,
       });
     } else {
@@ -102,7 +107,7 @@ export function QuickTradeModal({
         type: "LIMIT",
         symbol: symbol.toUpperCase(),
         side,
-        qty,
+        quantity: qty,
         limitPrice: limitPriceNum!,
       });
     }

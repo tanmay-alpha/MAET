@@ -1,6 +1,6 @@
 import { createFileRoute, useLocation } from "@tanstack/react-router";
 import { ArrowLeft, Activity, Clock, CheckCircle, XCircle, AlertCircle, Filter, Download, Search, Calendar, TrendingUp, TrendingDown } from "lucide-react";
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { ContractPanel } from "@/components/common/contract-panel";
@@ -15,21 +15,22 @@ export const Route = createFileRoute("/_app/orders")({
 });
 
 function OrderStatusBadge({ status, rejectReason }: { status: string; rejectReason?: string }) {
-  const variants = {
-    pending: { icon: Clock, className: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20" },
-    placed: { icon: Clock, className: "bg-blue-500/10 text-blue-500 border-blue-500/20" },
-    filled: { icon: CheckCircle, className: "bg-green-500/10 text-green-500 border-green-500/20" },
-    rejected: { icon: XCircle, className: "bg-red-500/10 text-red-500 border-red-500/20" },
-    cancelled: { icon: AlertCircle, className: "bg-gray-500/10 text-gray-500 border-gray-500/20" },
+  const variants: Record<string, { icon: React.ElementType; className: string }> = {
+    PENDING: { icon: Clock, className: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20" },
+    TRIGGERED: { icon: Clock, className: "bg-blue-500/10 text-blue-500 border-blue-500/20" },
+    FILLED: { icon: CheckCircle, className: "bg-green-500/10 text-green-500 border-green-500/20" },
+    PARTIALLY_FILLED: { icon: CheckCircle, className: "bg-teal-500/10 text-teal-500 border-teal-500/20" },
+    REJECTED: { icon: XCircle, className: "bg-red-500/10 text-red-500 border-red-500/20" },
+    CANCELLED: { icon: AlertCircle, className: "bg-gray-500/10 text-gray-500 border-gray-500/20" },
   };
 
-  const variant = variants[status as keyof typeof variants] || variants.pending;
+  const variant = variants[status] || variants.PENDING;
   const Icon = variant.icon;
 
   return (
     <div className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${variant.className}`}>
       <Icon className="h-3 w-3" />
-      <span>{status.charAt(0).toUpperCase() + status.slice(1)}</span>
+      <span>{status}</span>
       {rejectReason && (
         <span className="ml-1 text-xs opacity-75">({rejectReason})</span>
       )}
@@ -43,16 +44,16 @@ function OrderRow({ order, quoteMap }: { order: PaperOrder; quoteMap: Map<string
   const changePct = quote?.changePct || 0;
 
   const isBuy = order.side === "BUY";
-  const pnl = order.fillPrice
+  const pnl = order.averageFillPrice
     ? order.side === "SELL"
-      ? (order.fillPrice - (order.triggerPrice || order.fillPrice)) * order.qty
+      ? (order.averageFillPrice - (order.stopPrice || order.averageFillPrice)) * order.filledQuantity
       : 0
     : 0;
 
   return (
     <tr className="border-t border-border hover:bg-accent/50 transition-colors">
       <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-        {new Date(order.placedAt).toLocaleString("en-IN", {
+        {new Date(order.createdAt).toLocaleString("en-IN", {
           day: "2-digit",
           month: "short",
           hour: "2-digit",
@@ -67,9 +68,14 @@ function OrderRow({ order, quoteMap }: { order: PaperOrder; quoteMap: Map<string
               <span className="text-xs text-muted-foreground font-mono">₹{ltp.toFixed(2)}</span>
             )}
           </div>
-          {order.type === "LIMIT" && order.triggerPrice && (
+          {order.type === "LIMIT" && order.limitPrice && (
             <div className="text-[10px] text-muted-foreground mt-0.5">
-              Trigger: ₹{order.triggerPrice.toFixed(2)}
+              Limit: ₹{order.limitPrice.toFixed(2)}
+            </div>
+          )}
+          {order.type === "STOP_LOSS_LIMIT" && order.stopPrice && (
+            <div className="text-[10px] text-muted-foreground mt-0.5">
+              Stop: ₹{order.stopPrice.toFixed(2)}
             </div>
           )}
         </div>
@@ -83,45 +89,39 @@ function OrderRow({ order, quoteMap }: { order: PaperOrder; quoteMap: Map<string
         </span>
       </td>
       <td className="px-4 py-3 text-right font-mono text-sm">
-        {order.qty.toLocaleString()}
+        {order.quantity.toLocaleString()}
       </td>
       <td className="px-4 py-3 text-right">
         <div className="flex flex-col items-end">
           <span className="font-mono text-sm">
-            {order.fillPrice
-              ? `₹${order.fillPrice.toFixed(2)}`
-              : order.triggerPrice
-                ? `@ ₹${order.triggerPrice.toFixed(2)}`
+            {order.averageFillPrice
+              ? `₹${order.averageFillPrice.toFixed(2)}`
+              : order.limitPrice
+                ? `@ ₹${order.limitPrice.toFixed(2)}`
+                : order.stopPrice
+                ? `Stop ₹${order.stopPrice.toFixed(2)}`
                 : "—"}
           </span>
-          {order.status === "filled" && order.fillPrice && (
-            <span className={`text-[10px] ${order.side === "BUY" ? "text-bear" : "text-bull"}`}>
-              {order.side === "SELL" && order.triggerPrice
-                ? `${((order.fillPrice - order.triggerPrice) * order.qty).toFixed(2)}`
-                : order.side === "BUY" && order.triggerPrice
-                  ? `${((order.triggerPrice - order.fillPrice) * order.qty).toFixed(2)}`
-                  : ""}
-            </span>
-          )}
         </div>
       </td>
       <td className="px-4 py-3 text-right">
-        <OrderStatusBadge status={order.status} rejectReason={order.rejectReason} />
+        <OrderStatusBadge status={order.status} rejectReason={order.rejectionReason} />
       </td>
     </tr>
   );
 }
 
 function OrderStatus({ status, rejectReason }: { status: string; rejectReason?: string }) {
-  const variants = {
-    pending: { icon: Clock, className: "text-yellow-500" },
-    placed: { icon: Clock, className: "text-blue-500" },
-    filled: { icon: CheckCircle, className: "text-green-500" },
-    rejected: { icon: XCircle, className: "text-red-500" },
-    cancelled: { icon: AlertCircle, className: "text-gray-500" },
+  const variants: Record<string, { icon: React.ElementType; className: string }> = {
+    PENDING: { icon: Clock, className: "text-yellow-500" },
+    TRIGGERED: { icon: Clock, className: "text-blue-500" },
+    FILLED: { icon: CheckCircle, className: "text-green-500" },
+    PARTIALLY_FILLED: { icon: CheckCircle, className: "text-teal-500" },
+    REJECTED: { icon: XCircle, className: "text-red-500" },
+    CANCELLED: { icon: AlertCircle, className: "text-gray-500" },
   };
 
-  const variant = variants[status as keyof typeof variants] || variants.pending;
+  const variant = variants[status] || variants.PENDING;
   const Icon = variant.icon;
 
   return (
@@ -135,9 +135,10 @@ function OrderStatus({ status, rejectReason }: { status: string; rejectReason?: 
 function FilterButtons({ activeFilter, onFilter }: { activeFilter: string; onFilter: (filter: string) => void }) {
   const filters = [
     { key: "all", label: "All" },
-    { key: "pending", label: "Pending" },
-    { key: "filled", label: "Filled" },
-    { key: "rejected", label: "Rejected" },
+    { key: "PENDING", label: "Pending" },
+    { key: "FILLED", label: "Filled" },
+    { key: "REJECTED", label: "Rejected" },
+    { key: "CANCELLED", label: "Cancelled" },
   ];
 
   return (
@@ -185,7 +186,8 @@ function OrdersPage() {
 
     // Apply status filter
     if (activeFilter !== "all") {
-      result = result.filter(order => order.status === activeFilter);
+      result = result.filter(order => order.status === activeFilter ||
+        (activeFilter === "PENDING" && (order.status === "TRIGGERED" || order.status === "PARTIALLY_FILLED")));
     }
 
     // Apply search filter
@@ -201,15 +203,15 @@ function OrdersPage() {
     return result;
   }, [account.orders, activeFilter, searchQuery]);
 
-  const pendingCount = account.orders.filter(order => order.status === "pending").length;
-  const filledCount = account.orders.filter(order => order.status === "filled").length;
-  const rejectedCount = account.orders.filter(order => order.status === "rejected").length;
-  const cancelledCount = 0;
+  const pendingCount = account.orders.filter(order => order.status === "PENDING" || order.status === "TRIGGERED" || order.status === "PARTIALLY_FILLED").length;
+  const filledCount = account.orders.filter(order => order.status === "FILLED").length;
+  const rejectedCount = account.orders.filter(order => order.status === "REJECTED").length;
+  const cancelledCount = account.orders.filter(order => order.status === "CANCELLED").length;
 
   const totalVolume = useMemo(() => {
     return account.orders
-      .filter(o => o.status === "filled")
-      .reduce((sum, o) => sum + o.qty, 0);
+      .filter(o => o.status === "FILLED")
+      .reduce((sum, o) => sum + o.filledQuantity, 0);
   }, [account.orders]);
 
   return (
@@ -249,14 +251,14 @@ function OrdersPage() {
                 onClick={() => {
                   const csv = account.orders.map(o =>
                     [
-                      new Date(o.placedAt).toISOString(),
+                      new Date(o.createdAt).toISOString(),
                       o.symbol,
                       o.side,
                       o.type,
-                      o.qty.toString(),
-                      o.fillPrice?.toString() || "",
+                      o.quantity.toString(),
+                      o.averageFillPrice?.toString() || "",
                       o.status,
-                      o.rejectReason || ""
+                      o.rejectionReason || ""
                     ].join(",")
                   ).join("\n");
                   const header = "Time,Symbol,Side,Type,Qty,FillPrice,Status,RejectReason\n";
