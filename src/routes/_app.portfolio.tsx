@@ -329,12 +329,24 @@ function PortfolioPage() {
                           <button
                             onClick={() => {
                               if (window.confirm(`Are you sure you want to close your position in ${position.symbol}?`)) {
-                                placeOrder({
+                                const currentQuote = quoteMap.get(position.symbol);
+                                const result = placeOrder({
                                   symbol: position.symbol,
                                   side: position.qty > 0 ? "SELL" : "BUY",
                                   qty: Math.abs(position.qty),
-                                  type: "MARKET"
+                                  type: "MARKET",
+                                  marketPrice: currentQuote?.price,
+                                  quote: currentQuote ? {
+                                    symbol: position.symbol,
+                                    price: currentQuote.price,
+                                    ts: currentQuote.timestamp,
+                                    source: (currentQuote as any).source ?? "angelone",
+                                    quality: (currentQuote as any).quality ?? "live",
+                                  } : undefined,
                                 });
+                                if (!result.ok) {
+                                  alert(result.message);
+                                }
                               }
                             }}
                             className="rounded bg-bear hover:bg-bear/90 text-white px-2.5 py-1 text-[10px] font-semibold transition"

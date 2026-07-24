@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { evaluateExecutionQuote, type Tick } from "@shared/types";
 import type { MarketQuote } from "@/lib/market-api";
 
 export type PaperOrderType = "MARKET" | "LIMIT" | "STOP_LOSS_LIMIT";
@@ -29,6 +30,8 @@ export type PaperOrder = {
   trailingHwm?: number;
   trailingLwm?: number;
   isTrailingPercent?: boolean;
+  quoteSource?: string;
+  quoteTimestamp?: string;
 };
 
 export type PaperPosition = {
@@ -63,6 +66,8 @@ export type PlacePaperOrder = {
   takeProfitPrice?: number;
   trailingDistance?: number;
   isTrailingPercent?: boolean;
+  marketPrice?: number;
+  quote?: Partial<Tick>;
 };
 
 const STORAGE_KEY = "maet.paper-account.v2";
@@ -252,9 +257,34 @@ export function placePaperOrder(input: PlacePaperOrder): { ok: boolean; message:
     return { ok: false, message: "Quantity must be a positive whole number" };
   }
 
-  const price = input.limitPrice || input.stopPrice || 0;
-  if (input.type !== "MARKET" && price <= 0) {
-    return { ok: false, message: "Enter a valid price" };
+  let executionPrice = 0;
+  let quoteSource = "unknown";
+  let quoteTimestamp = new Date().toISOString();
+
+  if (input.type === "MARKET") {
+    const rawPrice = input.marketPrice ?? input.quote?.price;
+    const tickObj: Partial<Tick> = input.quote ?? ({
+      symbol,
+      price: rawPrice,
+      ts: new Date().toISOString(),
+      source: "angelone",
+      quality: "live",
+    } as Partial<Tick>);
+
+    const quoteEval = evaluateExecutionQuote(tickObj);
+    if (!quoteEval.executable) {
+      return { ok: false, message: `Market order rejected: ${quoteEval.reason}` };
+    }
+
+    executionPrice = rawPrice!;
+    quoteSource = tickObj.source ?? "angelone";
+    quoteTimestamp = tickObj.ts ?? new Date().toISOString();
+  } else {
+    const orderPrice = input.limitPrice || input.stopPrice || 0;
+    if (orderPrice <= 0) {
+      return { ok: false, message: "Enter a valid order price" };
+    }
+    executionPrice = orderPrice;
   }
 
   const orderId = crypto.randomUUID();
@@ -276,10 +306,12 @@ export function placePaperOrder(input: PlacePaperOrder): { ok: boolean; message:
     takeProfitPrice: input.takeProfitPrice,
     trailingDistance: input.trailingDistance,
     isTrailingPercent: input.isTrailingPercent,
+    quoteSource,
+    quoteTimestamp,
   };
 
   // Pre-execution margin checks
-  const leveragePrice = input.limitPrice || input.stopPrice || price || 1;
+  const leveragePrice = executionPrice;
   const marginNeeded = (input.qty * leveragePrice) / LEVERAGE;
   
   // Calculate total positions value for free margin checks
@@ -297,7 +329,7 @@ export function placePaperOrder(input: PlacePaperOrder): { ok: boolean; message:
 
   if (input.type === "MARKET") {
     // Immediate execution
-    const currentPrice = price || 1;
+    const currentPrice = executionPrice;
     const slippage = calculateSlippage(currentPrice, input.qty);
     const fillPrice = input.side === "BUY" ? currentPrice + slippage : Math.max(0.05, currentPrice - slippage);
     
@@ -536,6 +568,15 @@ export function settlePaperOrders(quotes: Map<string, MarketQuote>): void {
 
     const quote = quotes.get(order.symbol);
     if (!quote) continue;
+
+    const evalQuote = evaluateExecutionQuote({
+      price: quote.price,
+      volume: quote.volume,
+      ts: quote.timestamp,
+      source: (quote as any).source ?? "angelone",
+      quality: (quote as any).quality ?? "live",
+    });
+    if (!evalQuote.executable) continue;
 
     const ltp = quote.price;
     const bid = quote.price; // fallback to LTP

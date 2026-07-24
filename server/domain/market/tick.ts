@@ -34,6 +34,7 @@ export function normalize(raw: unknown, exchange: "NSE" | "BSE", symbol: string)
     bid: toNum(r.best_bid_price),
     ask: toNum(r.best_ask_price),
     source: "angelone",
+    quality: "live",
   };
 }
 

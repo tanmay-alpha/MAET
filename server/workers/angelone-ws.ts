@@ -232,6 +232,7 @@ export function parseAngelOnePacket(buffer: Buffer): Tick {
     volume,
     ts: timestampIso(exchangeTimestamp),
     source: "angelone",
+    quality: "live",
     previousClose: previousClose && previousClose > 0 ? previousClose : undefined,
     change,
     changePct: change !== undefined && previousClose ? (change / previousClose) * 100 : undefined,
