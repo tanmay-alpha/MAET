@@ -75,4 +75,4 @@ jobs:
         run: bun install
 
       - name: Build Backend Server
-        run: bun run build --prefix server
+        run: bun run --cwd server build

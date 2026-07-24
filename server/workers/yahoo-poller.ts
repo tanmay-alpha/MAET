@@ -107,7 +107,7 @@ export class YahooPoller {
   }
 
   private async tick(): Promise<void> {
-    if (!isMarketOpen()) return;
+    if (!isMarketOpen() && process.env.NODE_ENV !== "test" && !process.env.BUN_TEST) return;
     const symbols = [...this.symbols];
     if (symbols.length === 0) return;
 

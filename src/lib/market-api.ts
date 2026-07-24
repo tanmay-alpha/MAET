@@ -4,7 +4,9 @@ export type MarketQuote = {
   price: number;
   volume: number;
   ts: string;
-  source: "angelone" | "yahoo" | "nse";
+  timestamp?: string;
+  source: "angelone" | "yahoo" | "nse" | "simulated";
+  quality?: "live" | "delayed" | "stale" | "synthetic";
   previousClose?: number;
   change?: number;
   changePct?: number;
