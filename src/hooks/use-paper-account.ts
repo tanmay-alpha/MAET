@@ -263,13 +263,13 @@ export function placePaperOrder(input: PlacePaperOrder): { ok: boolean; message:
 
   if (input.type === "MARKET") {
     const rawPrice = input.marketPrice ?? input.quote?.price;
-    const tickObj: Partial<Tick> = input.quote ?? {
+    const tickObj: Partial<Tick> = input.quote ?? ({
       symbol,
       price: rawPrice,
-      ts: input.quote?.ts ?? new Date().toISOString(),
-      source: input.quote?.source ?? "angelone",
-      quality: input.quote?.quality ?? "live",
-    };
+      ts: new Date().toISOString(),
+      source: "angelone",
+      quality: "live",
+    } as Partial<Tick>);
 
     const quoteEval = evaluateExecutionQuote(tickObj);
     if (!quoteEval.executable) {
