@@ -32,7 +32,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build Render backend
-        run: bun run build --prefix server
+        run: bun run --cwd server build
 
       - name: Verify production health endpoint
         shell: bash
