@@ -38,6 +38,7 @@ describe("Phase 0: Paper Order Financial Integrity Tests", () => {
       type: "MARKET",
       marketPrice: 1500,
       quote: {
+        exchange: "NSE",
         symbol: "INFY",
         price: 1500,
         ts: staleTime,
@@ -57,6 +58,7 @@ describe("Phase 0: Paper Order Financial Integrity Tests", () => {
       type: "MARKET",
       marketPrice: 800,
       quote: {
+        exchange: "NSE",
         symbol: "SBIN",
         price: 800,
         ts: new Date().toISOString(),
@@ -76,6 +78,7 @@ describe("Phase 0: Paper Order Financial Integrity Tests", () => {
       type: "MARKET",
       marketPrice: 950,
       quote: {
+        exchange: "NSE",
         symbol: "TATAMOTORS",
         price: 950,
         ts: new Date().toISOString(),
@@ -95,6 +98,7 @@ describe("Phase 0: Paper Order Financial Integrity Tests", () => {
       type: "MARKET",
       marketPrice: 2500,
       quote: {
+        exchange: "NSE",
         symbol: "RELIANCE",
         price: 2500,
         ts: new Date().toISOString(),
