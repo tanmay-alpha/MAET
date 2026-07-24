@@ -1,12 +1,10 @@
-export type MarketQuote = {
-  exchange: "NSE" | "BSE";
-  symbol: string;
-  price: number;
-  volume: number;
-  ts: string;
-  timestamp?: string;
-  source: "angelone" | "yahoo" | "nse" | "simulated";
-  quality?: "live" | "delayed" | "stale" | "synthetic";
+import { z } from "zod";
+import {
+  ExecutionQuoteSchema,
+  type ExecutionQuote,
+} from "@shared/types";
+
+export type MarketQuote = ExecutionQuote & {
   previousClose?: number;
   change?: number;
   changePct?: number;
@@ -14,13 +12,29 @@ export type MarketQuote = {
   currency?: string;
 };
 
-export type MarketQuotesResponse = {
-  asOf: string;
-  source: string;
-  delayed: boolean;
-  quotes: MarketQuote[];
-  errors: Array<{ symbol: string; message: string }>;
-};
+export const MarketQuoteSchema = ExecutionQuoteSchema.extend({
+  previousClose: z.number().finite().positive().optional(),
+  change: z.number().finite().optional(),
+  changePct: z.number().finite().optional(),
+  marketState: z.string().optional(),
+  currency: z.string().optional(),
+});
+
+export const MarketQuotesResponseSchema = z.object({
+  asOf: z.string().datetime(),
+  source: z.string(),
+  delayed: z.boolean(),
+  quotes: z.array(MarketQuoteSchema),
+  errors: z.array(
+    z.object({
+      symbol: z.string(),
+      message: z.string(),
+    })
+  ),
+});
+export type MarketQuotesResponse = z.infer<
+  typeof MarketQuotesResponseSchema
+>;
 
 export type MarketCompany = {
   symbol: string;
@@ -252,7 +266,8 @@ export async function fetchMarketQuotes(
   const params = new URLSearchParams({ symbols: symbols.join(",") });
   const response = await fetchMarketEndpoint(`/api/market/quotes?${params}`, signal);
   if (!response.ok) throw new Error(`Quote service returned ${response.status}`);
-  return response.json() as Promise<MarketQuotesResponse>;
+  const payload: unknown = await response.json();
+  return MarketQuotesResponseSchema.parse(payload);
 }
 
 export async function fetchMarketCompanies(

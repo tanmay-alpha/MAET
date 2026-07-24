@@ -22,15 +22,25 @@ export function normalize(raw: unknown, exchange: "NSE" | "BSE", symbol: string)
   const r = raw as AngelOneRaw;
   const price = toNum(r.last_traded_price);
   const volume = toNum(r.volume_traded_for_the_day);
-  if (price === undefined || price < 0) {
+  if (price === undefined || price <= 0) {
     throw new AppError("VALIDATION_FAILED", "tick: invalid price");
+  }
+  const timestamp = r.exchange_timestamp;
+  if (
+    typeof timestamp !== "string" ||
+    Number.isNaN(new Date(timestamp).getTime())
+  ) {
+    throw new AppError(
+      "VALIDATION_FAILED",
+      "tick: invalid exchange timestamp"
+    );
   }
   return {
     exchange,
     symbol,
     price,
     volume: volume ?? 0,
-    ts: r.exchange_timestamp ?? new Date().toISOString(),
+    ts: timestamp,
     bid: toNum(r.best_bid_price),
     ask: toNum(r.best_ask_price),
     source: "angelone",

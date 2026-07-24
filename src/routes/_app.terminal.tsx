@@ -297,25 +297,12 @@ function Terminal() {
                                   alert("Position exit rejected: Live quote is unavailable.");
                                   return;
                                 }
-                                const rawQ = currentQuote as any;
-                                if (!rawQ.source || !rawQ.quality || !rawQ.ts) {
-                                  alert("Position exit rejected: Quote is missing provenance (source/quality/ts).");
-                                  return;
-                                }
                                 placeOrder({
                                   type: "MARKET",
                                   symbol: pos.symbol,
                                   side: isLong ? "SELL" : "BUY",
                                   quantity: Math.abs(pos.quantity),
-                                  quote: {
-                                    exchange: rawQ.exchange ?? "NSE",
-                                    symbol: pos.symbol,
-                                    price: currentQuote.price,
-                                    volume: currentQuote.volume,
-                                    ts: rawQ.ts,
-                                    source: rawQ.source,
-                                    quality: rawQ.quality,
-                                  },
+                                  quote: currentQuote,
                                 });
                               }}
                               className="rounded bg-bear hover:bg-bear/90 text-white px-2 py-0.5 text-[10px] font-semibold transition"
@@ -462,6 +449,7 @@ function Terminal() {
           <OrderPanel
             symbol={active}
             price={currentPrice}
+            quote={liveQuote}
             availableCash={account.cash}
             onPlace={placeOrder}
           />

@@ -3,11 +3,13 @@
  * Run via: bun run typecheck:frontend
  */
 import type {
-  PlacePaperMarketOrder,
+  PaperAccount,
+  PaperOrder,
   PlacePaperLimitOrder,
+  PlacePaperMarketOrder,
   PlacePaperStopLimitOrder,
 } from "@shared/domain/paper-trading/types";
-
+import type { PaperExecutionRequest } from "@shared/domain/paper-trading/execution";
 import type { ExecutionQuote } from "@shared/types";
 
 const quote: ExecutionQuote = {
@@ -19,8 +21,6 @@ const quote: ExecutionQuote = {
   source: "angelone",
   quality: "live",
 };
-
-// ─── POSITIVE CHECKS ─────────────────────────────────────────────────────────
 
 export const validMarket: PlacePaperMarketOrder = {
   type: "MARKET",
@@ -47,28 +47,39 @@ export const validStopLimit: PlacePaperStopLimitOrder = {
   limitPrice: 1395,
 };
 
-// ─── NEGATIVE CHECKS ─────────────────────────────────────────────────────────
-// Use function-return form so @ts-expect-error suppresses the error on the
-// immediately following `return` statement.
+// @ts-expect-error marketPrice is not part of MARKET contract
+const invalidMarketPrice: PlacePaperMarketOrder = { type: "MARKET", symbol: "RELIANCE", side: "BUY", quantity: 10, quote, marketPrice: 2500 };
 
-// LIMIT order missing required limitPrice
-function requiresLimitPrice(): PlacePaperLimitOrder {
-  // @ts-expect-error limitPrice is missing
-  return { type: "LIMIT", symbol: "RELIANCE", side: "BUY", quantity: 10 };
-}
+const partialQuote = {
+  symbol: "RELIANCE",
+  price: 2500,
+};
 
-// STOP_LOSS_LIMIT order missing required stopPrice and limitPrice
-function requiresStopAndLimitPrice(): PlacePaperStopLimitOrder {
-  // @ts-expect-error stopPrice and limitPrice are missing
-  return { type: "STOP_LOSS_LIMIT", symbol: "RELIANCE", side: "SELL", quantity: 10 };
-}
+// @ts-expect-error complete ExecutionQuote required
+const invalidPartialQuote: PlacePaperMarketOrder = { type: "MARKET", symbol: "RELIANCE", side: "BUY", quantity: 10, quote: partialQuote };
 
-// MARKET order missing required quote
-function requiresQuote(): PlacePaperMarketOrder {
-  // @ts-expect-error quote is missing
-  return { type: "MARKET", symbol: "RELIANCE", side: "BUY", quantity: 10 };
-}
+// @ts-expect-error quote is required for MARKET
+const invalidMissingQuote: PlacePaperMarketOrder = { type: "MARKET", symbol: "RELIANCE", side: "BUY", quantity: 10 };
 
-void requiresLimitPrice;
-void requiresStopAndLimitPrice;
-void requiresQuote;
+// @ts-expect-error limitPrice is required for LIMIT
+const invalidMissingLimitPrice: PlacePaperLimitOrder = { type: "LIMIT", symbol: "RELIANCE", side: "BUY", quantity: 10 };
+
+// @ts-expect-error stopPrice is required for STOP_LOSS_LIMIT
+const invalidMissingStopPrice: PlacePaperStopLimitOrder = { type: "STOP_LOSS_LIMIT", symbol: "RELIANCE", side: "SELL", quantity: 10, limitPrice: 990 };
+
+// @ts-expect-error limitPrice is required for STOP_LOSS_LIMIT
+const invalidMissingStopLimitPrice: PlacePaperStopLimitOrder = { type: "STOP_LOSS_LIMIT", symbol: "RELIANCE", side: "SELL", quantity: 10, stopPrice: 1000 };
+
+declare const account: PaperAccount;
+declare const order: PaperOrder;
+
+// @ts-expect-error callers cannot supply authoritative fillPrice
+const invalidExecutionAuthority: PaperExecutionRequest = { account, order, fillQuantity: 10, quote, reason: "USER_ORDER", fillPrice: 2500 };
+
+void invalidMarketPrice;
+void invalidPartialQuote;
+void invalidMissingQuote;
+void invalidMissingLimitPrice;
+void invalidMissingStopPrice;
+void invalidMissingStopLimitPrice;
+void invalidExecutionAuthority;

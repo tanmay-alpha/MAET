@@ -27,8 +27,8 @@ export const TickSchema = z.object({
   ts: z.string().datetime(),
   bid: z.number().positive().optional(),
   ask: z.number().positive().optional(),
-  source: MarketDataSourceSchema.default("yahoo"),
-  quality: MarketDataQualitySchema.default("delayed"),
+  source: MarketDataSourceSchema,
+  quality: MarketDataQualitySchema,
   exchangeTimestamp: z.string().optional(),
   receivedAt: z.string().optional(),
   previousClose: z.number().positive().optional(),
@@ -40,15 +40,63 @@ export const TickSchema = z.object({
 export type Tick = z.infer<typeof TickSchema>;
 
 export const ExecutionQuoteSchema = z.object({
-  exchange: z.enum(["NSE", "BSE"]),
+  exchange: ExchangeSchema,
   symbol: z.string().min(1),
   price: z.number().finite().positive(),
   volume: z.number().finite().nonnegative().optional(),
-  ts: z.string().min(1),
-  source: z.enum(["angelone", "yahoo", "nse", "simulated"]),
-  quality: z.enum(["live", "delayed", "stale", "synthetic"]),
+  ts: z.string().datetime(),
+  source: MarketDataSourceSchema,
+  quality: MarketDataQualitySchema,
 });
 export type ExecutionQuote = z.infer<typeof ExecutionQuoteSchema>;
+
+export type ExecutionQuoteParseResult =
+  | {
+      ok: true;
+      quote: ExecutionQuote;
+    }
+  | {
+      ok: false;
+      reason: string;
+    };
+
+function formatExecutionQuoteIssue(error: z.ZodError): string {
+  const issue = error.issues[0];
+  const field = issue?.path.join(".") || "quote";
+  const message =
+    issue?.code === "invalid_type" && issue.path.includes("ts")
+      ? "missing timestamp"
+      : issue?.message ?? "invalid quote";
+  return `Quote validation failed for ${field}: ${message}`;
+}
+
+export function parseExecutionQuote(
+  raw: unknown,
+  expectedSymbol?: string
+): ExecutionQuoteParseResult {
+  const parsed = ExecutionQuoteSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      reason: formatExecutionQuoteIssue(parsed.error),
+    };
+  }
+
+  if (
+    expectedSymbol &&
+    parsed.data.symbol.trim().toUpperCase() !== expectedSymbol.trim().toUpperCase()
+  ) {
+    return {
+      ok: false,
+      reason: `Quote symbol mismatch: expected ${expectedSymbol.trim().toUpperCase()} but received ${parsed.data.symbol.trim().toUpperCase()}`,
+    };
+  }
+
+  return {
+    ok: true,
+    quote: parsed.data,
+  };
+}
 
 export interface ExecutionQuotePolicyConfig {
   maxAgeMs?: number;
@@ -92,36 +140,15 @@ export function evaluateExecutionQuote(
   const allowDelayed = config.allowDelayed ?? false;
   const allowSynthetic = config.allowSynthetic ?? false;
 
-  if (!quote || typeof quote !== "object") {
-    return { executable: false, reason: "No market quote available" };
+  const parsed = parseExecutionQuote(quote, expectedSymbol);
+  if (!parsed.ok) {
+    return {
+      executable: false,
+      reason: parsed.reason,
+    };
   }
 
-  const raw = quote as Record<string, any>;
-  const quoteToParse = {
-    ...raw,
-    ts: raw.ts ?? raw.timestamp,
-  };
-
-  const parsed = ExecutionQuoteSchema.safeParse(quoteToParse);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const field = issue?.path.join(".") || "quote";
-    const msg = issue?.code === "invalid_type" && issue?.path.includes("ts")
-      ? "missing timestamp"
-      : issue?.message;
-    return { executable: false, reason: `Quote validation failed for ${field}: ${msg}` };
-  }
-
-  const q = parsed.data;
-
-  if (expectedSymbol && expectedSymbol.trim() !== "") {
-    if (q.symbol.trim().toUpperCase() !== expectedSymbol.trim().toUpperCase()) {
-      return {
-        executable: false,
-        reason: `Quote symbol mismatch: expected ${expectedSymbol.toUpperCase()} but received ${q.symbol.toUpperCase()}`,
-      };
-    }
-  }
+  const q = parsed.quote;
 
   if (q.quality === "stale") {
     return { executable: false, reason: "Quote quality is marked stale" };

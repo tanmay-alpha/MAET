@@ -17,13 +17,22 @@ afterEach(() => {
 describe("yahoo source", () => {
   it("getQuote parses a 200 response into a Tick", async () => {
     globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 100, regularMarketVolume: 5, symbol: "RELIANCE.NS" } }] } }), {
+      new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 100, regularMarketVolume: 5, regularMarketTime: 1_700_000_000, symbol: "RELIANCE.NS" } }] } }), {
         status: 200,
       })) as unknown as typeof fetch;
     const t = await getQuote("RELIANCE.NS");
     expect(t.price).toBe(100);
     expect(t.symbol).toBe("RELIANCE");
     expect(t.exchange).toBe("NSE");
+  });
+
+  it("rejects a quote without Yahoo's provider timestamp", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 100, regularMarketVolume: 5, symbol: "RELIANCE.NS" } }] } }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+
+    await expect(getQuote("RELIANCE.NS")).rejects.toBeInstanceOf(UpstreamPermanentError);
   });
 
   it("uses Yahoo's market timestamp and previous close metadata", async () => {
@@ -87,7 +96,7 @@ describe("yahoo source", () => {
     globalThis.fetch = (async () => {
       n++;
       if (n === 1) return new Response("", { status: 429, headers: { "Retry-After": "0" } });
-      return new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 50, regularMarketVolume: 1, symbol: "X.NS" } }] } }), { status: 200 });
+      return new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 50, regularMarketVolume: 1, regularMarketTime: 1_700_000_000, symbol: "X.NS" } }] } }), { status: 200 });
     }) as unknown as typeof fetch;
     const t = await getQuote("X");
     expect(t.price).toBe(50);
@@ -118,7 +127,7 @@ describe("yahoo source", () => {
 
     globalThis.fetch = (async () => {
       n++;
-      return new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 75, regularMarketVolume: 1, symbol: "X.NS" } }] } }), { status: 200 });
+      return new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 75, regularMarketVolume: 1, regularMarketTime: 1_700_000_000, symbol: "X.NS" } }] } }), { status: 200 });
     }) as unknown as typeof fetch;
 
     await expect(getQuote("X")).resolves.toMatchObject({ price: 75 });

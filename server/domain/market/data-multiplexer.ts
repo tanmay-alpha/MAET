@@ -163,10 +163,10 @@ export class MarketDataMultiplexer {
         cached.lastUpdateTs = new Date().toISOString();
 
         const catalog = lookupSymbol("NSE", symbol);
-        const exchange = catalog?.exchange || "NSE";
+        if (!catalog) continue;
 
         const tick: TerminalTick = {
-          exchange,
+          exchange: catalog.exchange,
           symbol,
           price: newLtp,
           volume: newVol,

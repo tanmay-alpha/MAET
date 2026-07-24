@@ -1,10 +1,42 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { z } from "zod";
 import type { Quote } from "../lib/api-client";
-import { API_BASE_URL } from "../lib/market-api";
-import { useTerminalStore } from "../store/useTerminalStore";
+import {
+  API_BASE_URL,
+  MarketQuoteSchema,
+} from "../lib/market-api";
+import {
+  useTerminalStore,
+  type Level2Entry,
+  type OptionGreeks,
+} from "../store/useTerminalStore";
 
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 5;
+const eventSourceCleanup = new WeakMap<
+  EventSource,
+  () => void
+>();
+
+const Level2EntrySchema: z.ZodType<Level2Entry> = z.object({
+  price: z.number().finite(),
+  qty: z.number().finite().nonnegative(),
+});
+const StreamQuoteSchema = MarketQuoteSchema.extend({
+  level2: z
+    .object({
+      bids: z.array(Level2EntrySchema),
+      asks: z.array(Level2EntrySchema),
+    })
+    .optional(),
+  greeks: z
+    .object({
+      delta: z.number().finite(),
+      theta: z.number().finite(),
+      vega: z.number().finite(),
+      gamma: z.number().finite().optional(),
+    }) satisfies z.ZodType<OptionGreeks>,
+}).partial({ greeks: true });
 
 interface UseMarketStreamOptions {
   symbols: string[];
@@ -57,9 +89,7 @@ export function useMarketStream({
     // Close existing connection and remove its event listeners
     if (eventSourceRef.current) {
       const oldEs = eventSourceRef.current;
-      if ((oldEs as any)._cleanup) {
-        (oldEs as any)._cleanup();
-      }
+      eventSourceCleanup.get(oldEs)?.();
       oldEs.close();
     }
 
@@ -82,12 +112,28 @@ export function useMarketStream({
       const handleQuotes = (event: MessageEvent<string>) => {
         if (!mountedRef.current) return;
         try {
-          const data = JSON.parse(event.data);
-          const newQuotes: Quote[] = Array.isArray(data)
-            ? data
-            : Array.isArray(data.quotes)
-              ? data.quotes
-              : [data];
+          const data: unknown = JSON.parse(event.data);
+          let candidates: unknown[] = [data];
+          if (Array.isArray(data)) {
+            candidates = data;
+          } else if (
+            data !== null &&
+            typeof data === "object"
+          ) {
+            const batch = (data as Record<string, unknown>).quotes;
+            if (Array.isArray(batch)) candidates = batch;
+          }
+          const parsedQuotes = candidates.flatMap(
+            (candidate) => {
+              const parsed =
+                StreamQuoteSchema.safeParse(candidate);
+              return parsed.success ? [parsed.data] : [];
+            }
+          );
+          const newQuotes: Quote[] = parsedQuotes.map(
+            ({ level2: _level2, greeks: _greeks, ...quote }) =>
+              quote
+          );
 
           setQuotes((prev) => {
             const updated = new Map(prev);
@@ -101,13 +147,17 @@ export function useMarketStream({
 
           // Stream L2 Depth and Options Greeks to Zustand store if present
           const activeSymbol = useTerminalStore.getState().activeSymbol;
-          newQuotes.forEach((q: any) => {
-            if (q.symbol === activeSymbol) {
-              if (q.level2) {
-                useTerminalStore.getState().setLevel2Depth(q.level2);
+          parsedQuotes.forEach((quote) => {
+            if (quote.symbol === activeSymbol) {
+              if (quote.level2) {
+                useTerminalStore
+                  .getState()
+                  .setLevel2Depth(quote.level2);
               }
-              if (q.greeks) {
-                useTerminalStore.getState().setActiveGreeks(q.greeks);
+              if (quote.greeks) {
+                useTerminalStore
+                  .getState()
+                  .setActiveGreeks(quote.greeks);
               }
             }
           });
@@ -150,11 +200,18 @@ export function useMarketStream({
       };
 
       // Save listener cleanup so we can clean up before closing EventSource
-      (eventSource as any)._cleanup = cleanupListeners;
+      eventSourceCleanup.set(
+        eventSource,
+        cleanupListeners
+      );
 
-    } catch (err) {
-      setError(err as Error);
-      onErrorRef.current?.(err as Error);
+    } catch (error: unknown) {
+      const streamError =
+        error instanceof Error
+          ? error
+          : new Error("Unable to create market stream");
+      setError(streamError);
+      onErrorRef.current?.(streamError);
     }
   }, [symbolKey]);
 
@@ -170,9 +227,7 @@ export function useMarketStream({
       }
       if (eventSourceRef.current) {
         const es = eventSourceRef.current;
-        if ((es as any)._cleanup) {
-          (es as any)._cleanup();
-        }
+        eventSourceCleanup.get(es)?.();
         es.close();
         eventSourceRef.current = null;
       }

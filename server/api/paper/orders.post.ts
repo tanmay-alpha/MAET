@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { requireAuth } from "../trpc/auth";
 import { onTick } from "../../domain/market/matcher";
 import { loadQuotes } from "../../domain/market/quote-service";
+import { evaluateExecutionQuote } from "@shared/types";
 
 export default defineEventHandler(async (event) => {
   try {
@@ -52,6 +53,17 @@ export default defineEventHandler(async (event) => {
         statusMessage: "Market price currently unavailable for this symbol",
       });
     }
+    if (type === "MARKET") {
+      const policy = evaluateExecutionQuote(quote, symbol);
+      if (!policy.executable) {
+        throw createError({
+          statusCode: 409,
+          statusMessage:
+            policy.reason ??
+            "Quote cannot be used for execution",
+        });
+      }
+    }
 
     const status = type === "MARKET" ? "PENDING" : type === "STOP_LOSS_LIMIT" ? "TRIGGER_PENDING" : "PENDING";
 
@@ -81,8 +93,7 @@ export default defineEventHandler(async (event) => {
 
     // If MARKET order, run immediate matching tick execution
     if (type === "MARKET") {
-      const price = quote.price;
-      await onTick(symbol, price, price, price, 1000);
+      await onTick(quote);
     }
 
     return { success: true, order };

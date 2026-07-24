@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import { evaluateExecutionQuote, type ExecutionQuote } from "@shared/types";
+import { placePaperOrderInAccount } from "@shared/domain/paper-trading/execution";
 import {
+  EMPTY_ACCOUNT,
   placePaperOrder,
   settlePaperOrders,
   getPaperAccount,
@@ -17,12 +19,12 @@ describe("Phase 0.1: Financial Integrity Remediation Suite", () => {
   const getNowIso = () => new Date().toISOString();
 
   it("1. MARKET order without quote is rejected", () => {
-    const res = placePaperOrder({
+    const res = placePaperOrderInAccount(EMPTY_ACCOUNT, {
       type: "MARKET",
       symbol: "RELIANCE",
       side: "BUY",
       quantity: 10,
-    } as any);
+    });
     expect(res.ok).toBe(false);
     expect(res.message).toMatch(/rejected/i);
   });

@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
-import type { ExecutionQuote } from "@shared/types";
 import { WATCHLIST } from "@/lib/market-catalog";
 import { X, TrendingUp, TrendingDown, DollarSign } from "lucide-react";
 
@@ -81,26 +80,12 @@ export function QuickTradeModal({
         setMessage({ type: "error", text: "Market order rejected: Live quote is unavailable." });
         return;
       }
-      const rawQ = currentQuote as any;
-      if (!rawQ.source || !rawQ.quality || !rawQ.ts) {
-        setMessage({ type: "error", text: "Market order rejected: Quote is missing provenance (source/quality/ts)." });
-        return;
-      }
-      const execQuote: ExecutionQuote = {
-        exchange: rawQ.exchange ?? "NSE",
-        symbol: symbol.toUpperCase(),
-        price: currentQuote.price,
-        volume: currentQuote.volume,
-        ts: rawQ.ts,
-        source: rawQ.source,
-        quality: rawQ.quality,
-      };
       res = placeOrder({
         type: "MARKET",
         symbol: symbol.toUpperCase(),
         side,
         quantity: qty,
-        quote: execQuote,
+        quote: currentQuote,
       });
     } else {
       res = placeOrder({

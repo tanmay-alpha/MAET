@@ -9,13 +9,25 @@ import {
   paperAccounts,
   paperOrders,
   paperPositions,
-  companies,
-  fundamentals,
 } from "../../db/schema";
-import { calculateSlippage } from "./slippage";
 import { quoteStore } from "./quote-store";
-import { reconcilePosition, type ReconciliationResult } from "../portfolio/position-reconcile";
-import { AppError, UpstreamDegradedError } from "@shared/types/errors";
+import {
+  evaluateExecutionQuote,
+  parseExecutionQuote,
+  type ExecutionQuote,
+  type Tick,
+} from "@shared/types";
+import {
+  executePaperFill,
+  getErrorMessage,
+  type PaperExecutionRequest,
+} from "@shared/domain/paper-trading/execution";
+import type {
+  PaperAccount,
+  PaperOrder,
+  PaperOrderStatus,
+  PaperPosition,
+} from "@shared/domain/paper-trading/types";
 
 // ---------------------------------------------------------------------------
 // Concurrency control
@@ -40,51 +52,6 @@ async function runLocked<T>(symbol: string, fn: () => Promise<T>): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Metadata cache
-// ---------------------------------------------------------------------------
-
-interface CompanyMetadata {
-  marketCapBucket?: string;
-  avgVolume?: number;
-  lastChecked?: number;
-}
-
-const metadataCache = new Map<string, CompanyMetadata>();
-const METADATA_CACHE_TTL_MS = 5 * 60_000;
-
-async function getCompanyMetadata(symbol: string): Promise<CompanyMetadata> {
-  const cached = metadataCache.get(symbol);
-  if (cached && cached.lastChecked && (Date.now() - cached.lastChecked) < METADATA_CACHE_TTL_MS) {
-    return cached;
-  }
-
-  try {
-    const results = await db
-      .select({
-        marketCapBucket: companies.marketCapBucket,
-        avgVolume: fundamentals.average20DayVolume,
-      })
-      .from(companies)
-      .leftJoin(fundamentals, eq(companies.id, fundamentals.companyId))
-      .where(eq(companies.symbol, symbol))
-      .limit(1);
-
-    const meta: CompanyMetadata = results.length > 0
-      ? {
-          marketCapBucket: results[0].marketCapBucket ?? undefined,
-          avgVolume: results[0].avgVolume ?? undefined,
-          lastChecked: Date.now(),
-        }
-      : { lastChecked: Date.now() };
-
-    metadataCache.set(symbol, meta);
-    return meta;
-  } catch {
-    return {};
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Matching
 // ---------------------------------------------------------------------------
 
@@ -97,25 +64,149 @@ export interface MatchingReceipt {
   slippageApplied: number;
   transactionFee: number;
   executionTimestamp: string;
-  status: "FILLED" | "REJECTED";
+  status: "FILLED" | "PARTIALLY_FILLED" | "REJECTED";
   rejectReason?: string;
   updatedMarginLocked: number;
   cashBalance: number;
 }
 
+type DatabasePaperAccount = typeof paperAccounts.$inferSelect;
+type DatabasePaperOrder = typeof paperOrders.$inferSelect;
+type DatabasePaperPosition = typeof paperPositions.$inferSelect;
+
+function optionalNumber(
+  value: string | null | undefined
+): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function databaseDateToIso(
+  value: Date | undefined
+): string {
+  return value instanceof Date
+    ? value.toISOString()
+    : new Date().toISOString();
+}
+
+function mapDatabaseOrderStatus(
+  order: DatabasePaperOrder
+): PaperOrderStatus {
+  if (order.status === "FILLED") return "FILLED";
+  if (order.status === "PARTIALLY_FILLED") {
+    return "PARTIALLY_FILLED";
+  }
+  if (order.status === "CANCELLED") return "CANCELLED";
+  if (order.status === "REJECTED") return "REJECTED";
+  if (
+    order.type === "STOP_LOSS_LIMIT" &&
+    order.status === "PENDING"
+  ) {
+    return "TRIGGERED";
+  }
+  return "PENDING";
+}
+
+function toDomainOrder(
+  order: DatabasePaperOrder
+): PaperOrder {
+  const status = mapDatabaseOrderStatus(order);
+  return {
+    id: order.id,
+    symbol: order.symbol,
+    side: order.side,
+    quantity: order.qty,
+    type: order.type,
+    status,
+    limitPrice: optionalNumber(order.limitPrice),
+    stopPrice: optionalNumber(order.stopPrice),
+    triggeredAt:
+      order.type === "STOP_LOSS_LIMIT" &&
+      (status === "TRIGGERED" ||
+        status === "PARTIALLY_FILLED")
+        ? databaseDateToIso(order.updatedAt)
+        : undefined,
+    filledQuantity: order.filledQty ?? 0,
+    averageFillPrice: optionalNumber(
+      order.averageFillPrice
+    ),
+    stopLossPrice: optionalNumber(order.stopLossPrice),
+    takeProfitPrice: optionalNumber(
+      order.takeProfitPrice
+    ),
+    trailingDistance: optionalNumber(
+      order.trailingDistance
+    ),
+    trailingHighWatermark: optionalNumber(
+      order.trailingHwm
+    ),
+    trailingLowWatermark: optionalNumber(
+      order.trailingLwm
+    ),
+    trailingIsPercent:
+      order.isTrailingPercent ?? undefined,
+    createdAt: databaseDateToIso(order.placedAt),
+    updatedAt: databaseDateToIso(order.updatedAt),
+    rejectionReason: order.rejectReason ?? undefined,
+    parentOrderId: order.parentOrderId ?? undefined,
+  };
+}
+
+function toDomainPosition(
+  position: DatabasePaperPosition
+): PaperPosition {
+  return {
+    symbol: position.symbol,
+    quantity: position.totalShares,
+    averagePrice: Number(position.averageEntryPrice),
+    marginLocked: Number(position.marginLocked),
+    realisedPnl: Number(position.realizedPnl),
+    unrealisedPnl: Number(position.unrealizedPnl),
+    updatedAt: databaseDateToIso(position.updatedAt),
+  };
+}
+
+function toDomainAccount(
+  account: DatabasePaperAccount,
+  positions: DatabasePaperPosition[],
+  order?: PaperOrder
+): PaperAccount {
+  const cash = Number(account.cashBalance);
+  return {
+    version: 3,
+    initialCash: cash > 0 ? cash : 1,
+    cash,
+    allocatedMargin: Number(account.allocatedMargin),
+    maintenanceMargin: Number(account.maintenanceMargin),
+    realisedPnl: 0,
+    status: account.isLocked ? "LIQUIDATED" : "ACTIVE",
+    positions: positions.map(toDomainPosition),
+    orders: order ? [order] : [],
+    fills: [],
+  };
+}
+
 export async function onTick(
-  symbol: string,
-  ltp: number,
-  bid: number,
-  ask: number,
-  volume: number
+  rawTick: Tick
 ): Promise<MatchingReceipt[]> {
+  const parsed = parseExecutionQuote(rawTick);
+  if (!parsed.ok) return [];
+  const quote = parsed.quote;
+  const policy = evaluateExecutionQuote(
+    quote,
+    quote.symbol
+  );
+  if (!policy.executable) return [];
+
+  const symbol = quote.symbol;
+  const ltp = quote.price;
+  const volume = quote.volume;
   return runLocked(symbol, async () => {
-    const meta = await getCompanyMetadata(symbol);
     const receipts: MatchingReceipt[] = [];
 
-    const executionBid = bid > 0 ? bid : ltp;
-    const executionAsk = ask > 0 ? ask : ltp;
+    const executionBid = ltp;
+    const executionAsk = ltp;
 
     // 1. Margin call / liquidation checks for all positions in this symbol
     const activePositions = await db
@@ -155,7 +246,7 @@ export async function onTick(
 
           const equity = Number(account.cashBalance) + totalUnrealizedPnl;
           if (equity < Number(account.maintenanceMargin)) {
-            await liquidateAccount(tx, pos.userId, symbol, ltp);
+            await liquidateAccount(tx, pos.userId, quote);
             return;
           }
 
@@ -206,8 +297,6 @@ export async function onTick(
     for (const order of uniqueOrders) {
       let isTriggered = false;
       let isMatched = false;
-      let fillPrice = 0;
-      let slippage = 0;
 
       // --- Trailing stop logic ---
       if (order.trailingDistance && Number(order.trailingDistance) > 0) {
@@ -243,7 +332,7 @@ export async function onTick(
         }
       }
 
-      if (isTriggered) {
+      if (isTriggered && order.type === "MARKET") {
         await db
           .update(paperOrders)
           .set({ status: "PENDING", type: "MARKET", updatedAt: new Date() })
@@ -262,48 +351,41 @@ export async function onTick(
           }
         }
         if (isTriggered) {
-          const stopPriceNum = Number(order.stopPrice || 0);
-          const isGap = order.side === "BUY" ? ltp > stopPriceNum : ltp < stopPriceNum;
-          const targetType = isGap ? "MARKET" : "LIMIT";
-
           await db
             .update(paperOrders)
             .set({
               status: "PENDING",
-              type: targetType,
-              rejectReason: isGap ? "Stop loss gap-down fallback applied" : null,
+              type: "STOP_LOSS_LIMIT",
+              rejectReason: null,
               updatedAt: new Date(),
             })
             .where(eq(paperOrders.id, order.id));
           order.status = "PENDING";
-          order.type = targetType;
+          order.type = "STOP_LOSS_LIMIT";
         }
       }
 
       // --- Match pending orders ---
       if (order.status === "PENDING" || order.status === "PARTIALLY_FILLED") {
         if (order.type === "MARKET") {
-          isMatched = true;
-          slippage = calculateSlippage(ltp, order.qty, meta.avgVolume, meta.marketCapBucket);
-          fillPrice = order.side === "BUY" ? executionAsk + slippage : Math.max(0.05, executionBid - slippage);
+          isMatched =
+            !order.trailingDistance || isTriggered;
         } else if (order.type === "LIMIT") {
           const limitPriceNum = Number(order.limitPrice);
           if (order.side === "BUY" && executionAsk <= limitPriceNum) {
             isMatched = true;
-            fillPrice = limitPriceNum;
           } else if (order.side === "SELL" && executionBid >= limitPriceNum) {
             isMatched = true;
-            fillPrice = limitPriceNum;
           }
-        } else if (order.type === "STOP_LOSS_LIMIT" && isTriggered) {
+        } else if (
+          order.type === "STOP_LOSS_LIMIT" &&
+          (isTriggered || order.status === "PENDING")
+        ) {
           const limitPriceNum = Number(order.limitPrice);
-          slippage = calculateSlippage(ltp, order.qty, meta.avgVolume, meta.marketCapBucket);
           if (order.side === "BUY" && executionAsk <= limitPriceNum) {
             isMatched = true;
-            fillPrice = limitPriceNum + slippage;
           } else if (order.side === "SELL" && executionBid >= limitPriceNum) {
             isMatched = true;
-            fillPrice = Math.max(0.05, limitPriceNum - slippage);
           }
         }
       }
@@ -313,16 +395,23 @@ export async function onTick(
       const remainingQty = order.qty - (order.filledQty || 0);
       if (remainingQty <= 0) continue;
 
-      const availableVolume = volume > 0 ? volume : 1000;
-      const fillQty = (order.type === "LIMIT" || order.type === "STOP_LOSS_LIMIT")
-        ? Math.min(remainingQty, availableVolume)
-        : remainingQty;
+      let fillQty = remainingQty;
+      if (
+        order.type === "LIMIT" ||
+        order.type === "STOP_LOSS_LIMIT"
+      ) {
+        if (volume === undefined || volume <= 0) continue;
+        const availableVolume = Math.floor(volume * 0.1);
+        if (availableVolume <= 0) continue;
+        fillQty = Math.min(remainingQty, availableVolume);
+      }
 
       if (fillQty <= 0) continue;
 
       // 3. Execute in transaction
       try {
-        const receipt = await db.transaction(async (tx) => {
+        const receipt = await db.transaction(
+          async (tx): Promise<MatchingReceipt> => {
           const [account] = await tx
             .select()
             .from(paperAccounts)
@@ -356,48 +445,57 @@ export async function onTick(
             .from(paperPositions)
             .where(eq(paperPositions.userId, order.userId));
 
-          const oldShares = position ? position.totalShares : 0;
-          const oldAvgPrice = position ? Number(position.averageEntryPrice) : 0;
-          const oldMarginLocked = position ? Number(position.marginLocked) : 0;
+          const domainOrder = toDomainOrder(order);
+          const domainAccount = toDomainAccount(
+            account,
+            allPositions,
+            domainOrder
+          );
+          const executionReason =
+            order.type === "STOP_LOSS_LIMIT"
+              ? "STOP_TRIGGER"
+              : order.trailingDistance
+                ? "TRAILING_STOP"
+                : "USER_ORDER";
+          const executionRequest: PaperExecutionRequest = {
+            account: domainAccount,
+            order: domainOrder,
+            fillQuantity: fillQty,
+            quote,
+            reason: executionReason,
+          };
 
-          const transactionFee = fillPrice * fillQty * 0.0000345;
-
-          // ---- FIXED: Use proper position reconciliation ----
-          const reconciliation: ReconciliationResult = reconcilePosition({
-            oldQty: oldShares,
-            oldAvgPrice,
-            newFillQty: fillQty,
-            newFillSide: order.side as "BUY" | "SELL",
-            newFillPrice: fillPrice,
-          });
-
-          const newShares = reconciliation.newQty;
-          const newAvgPrice = reconciliation.newAvgPrice;
-          const realizedPnl = reconciliation.realizedPnl;
-
-          // Margin check
-          let otherUnrealizedPnl = 0;
-          for (const p of allPositions) {
-            if (p.symbol !== symbol) {
-              otherUnrealizedPnl += Number(p.unrealizedPnl);
-            }
+          let executionResult;
+          try {
+            executionResult =
+              executePaperFill(executionRequest);
+          } catch (error: unknown) {
+            return await rejection(
+              tx,
+              order,
+              symbol,
+              fillQty,
+              getErrorMessage(error)
+            );
           }
 
-          const cashBalance = Number(account.cashBalance);
-          const currentAllocatedMargin = Number(account.allocatedMargin);
-          const totalUnrealizedPnl = otherUnrealizedPnl + reconciliation.closedQty * 0; // closed portion has no UPL
-          const equity = cashBalance + totalUnrealizedPnl;
-          const freeMargin = equity - currentAllocatedMargin;
-
-          // For BUY orders, margin increases; for SELL (closing long / opening short), margin decreases
-          const newMarginLocked = newShares === 0
-            ? 0
-            : (Math.abs(newShares) * newAvgPrice) / account.leverageFactor;
-          const marginIncrement = newMarginLocked - oldMarginLocked;
-
-          if (marginIncrement > 0 && freeMargin < marginIncrement) {
-            return await rejection(tx, order, symbol, fillQty, "Insufficient margin");
-          }
+          const fill = executionResult.fill;
+          const executedOrder =
+            executionResult.account.orders.find(
+              (candidate) => candidate.id === order.id
+            );
+          const executedPosition =
+            executionResult.account.positions.find(
+              (candidate) => candidate.symbol === symbol
+            );
+          const newShares =
+            executedPosition?.quantity ?? 0;
+          const newCashBalance =
+            executionResult.account.cash;
+          const updatedAllocatedMargin =
+            executionResult.account.allocatedMargin;
+          const updatedMaintenanceMargin =
+            executionResult.account.maintenanceMargin;
 
           // Update or delete position
           if (newShares === 0) {
@@ -418,37 +516,33 @@ export async function onTick(
                 userId: order.userId,
                 symbol,
                 exchange: order.exchange,
-                averageEntryPrice: newAvgPrice.toString(),
+                averageEntryPrice:
+                  executedPosition!.averagePrice.toString(),
                 totalShares: newShares,
-                realizedPnl: ((position ? Number(position.realizedPnl) : 0) + realizedPnl).toString(),
-                unrealizedPnl: newShares === 0 ? "0" : (
-                  newShares > 0
-                    ? (newShares * (ltp - newAvgPrice)).toString()
-                    : (Math.abs(newShares) * (newAvgPrice - ltp)).toString()
-                ),
-                marginLocked: newMarginLocked.toString(),
+                realizedPnl:
+                  executedPosition!.realisedPnl.toString(),
+                unrealizedPnl:
+                  executedPosition!.unrealisedPnl.toString(),
+                marginLocked:
+                  executedPosition!.marginLocked.toString(),
                 updatedAt: new Date(),
               })
               .onConflictDoUpdate({
                 target: [paperPositions.userId, paperPositions.symbol, paperPositions.exchange],
                 set: {
-                  averageEntryPrice: newAvgPrice.toString(),
+                  averageEntryPrice:
+                    executedPosition!.averagePrice.toString(),
                   totalShares: newShares,
-                  realizedPnl: ((position ? Number(position.realizedPnl) : 0) + realizedPnl).toString(),
-                  unrealizedPnl: newShares === 0 ? "0" : (
-                    newShares > 0
-                      ? (newShares * (ltp - newAvgPrice)).toString()
-                      : (Math.abs(newShares) * (newAvgPrice - ltp)).toString()
-                  ),
-                  marginLocked: newMarginLocked.toString(),
+                  realizedPnl:
+                    executedPosition!.realisedPnl.toString(),
+                  unrealizedPnl:
+                    executedPosition!.unrealisedPnl.toString(),
+                  marginLocked:
+                    executedPosition!.marginLocked.toString(),
                   updatedAt: new Date(),
                 },
               });
           }
-
-          const updatedAllocatedMargin = currentAllocatedMargin + marginIncrement;
-          const updatedMaintenanceMargin = updatedAllocatedMargin * 0.8;
-          const newCashBalance = cashBalance + realizedPnl - transactionFee;
 
           await tx
             .update(paperAccounts)
@@ -461,12 +555,20 @@ export async function onTick(
             .where(eq(paperAccounts.userId, order.userId));
 
           // Order status update
-          const totalFilledQty = (order.filledQty || 0) + fillQty;
-          const isFullyFilled = totalFilledQty === order.qty;
-          const newStatus = isFullyFilled ? "FILLED" : "PARTIALLY_FILLED";
-          const existingFillVal = (order.filledQty || 0) * Number(order.averageFillPrice || 0);
-          const newAvgFillPrice = (existingFillVal + fillQty * fillPrice) / totalFilledQty;
-          const accumulatedFee = Number(order.transactionFee || 0) + transactionFee;
+          const totalFilledQty =
+            executedOrder?.filledQuantity ??
+            order.filledQty + fillQty;
+          const isFullyFilled =
+            totalFilledQty === order.qty;
+          const newStatus = isFullyFilled
+            ? "FILLED"
+            : "PARTIALLY_FILLED";
+          const newAvgFillPrice =
+            executedOrder?.averageFillPrice ??
+            fill.fillPrice;
+          const accumulatedFee =
+            Number(order.transactionFee || 0) +
+            fill.fees;
 
           await tx
             .update(paperOrders)
@@ -474,7 +576,7 @@ export async function onTick(
               status: newStatus,
               filledQty: totalFilledQty,
               averageFillPrice: newAvgFillPrice.toString(),
-              slippageApplied: slippage.toString(),
+              slippageApplied: fill.slippage.toString(),
               transactionFee: accumulatedFee.toString(),
               filledAt: isFullyFilled ? new Date() : null,
               updatedAt: new Date(),
@@ -555,26 +657,22 @@ export async function onTick(
             }
           }
 
-          // 6. Post-fill margin check
-          const freshEquity = newCashBalance + otherUnrealizedPnl;
-          if (freshEquity < updatedMaintenanceMargin) {
-            await liquidateAccount(tx, order.userId, symbol, ltp);
-          }
-
           return {
             orderId: order.id,
             symbol,
             side: order.side as "BUY" | "SELL",
             qty: fillQty,
-            price: fillPrice,
-            slippageApplied: slippage,
-            transactionFee,
+            price: fill.fillPrice,
+            slippageApplied: fill.slippage,
+            transactionFee: fill.fees,
             executionTimestamp: new Date().toISOString(),
-            status: newStatus as "FILLED" | "REJECTED",
-            updatedMarginLocked: newShares === 0 ? 0 : updatedAllocatedMargin,
+            status: newStatus,
+            updatedMarginLocked:
+              executedPosition?.marginLocked ?? 0,
             cashBalance: newCashBalance,
           };
-        });
+          }
+        );
 
         if (receipt) receipts.push(receipt);
       } catch (err) {
@@ -624,8 +722,7 @@ async function rejection(
 export async function liquidateAccount(
   tx: any,
   userId: string,
-  triggeredBySymbol?: string,
-  ltp?: number
+  triggeringQuote?: ExecutionQuote
 ): Promise<void> {
   console.warn(`[matcher] [MARGIN CALL] Auto-liquidating account for user ${userId}`);
 
@@ -649,8 +746,17 @@ export async function liquidateAccount(
     .where(eq(paperPositions.userId, userId))
     .for("update");
 
-  let totalRealizedPnl = 0;
-  let totalFees = 0;
+  const [databaseAccount] = await tx
+    .select()
+    .from(paperAccounts)
+    .where(eq(paperAccounts.userId, userId))
+    .for("update");
+  if (!databaseAccount) return;
+
+  let domainAccount = toDomainAccount(
+    databaseAccount,
+    openPositions
+  );
 
   for (const pos of openPositions) {
     const qty = pos.totalShares;
@@ -658,26 +764,69 @@ export async function liquidateAccount(
 
     const side = qty > 0 ? "SELL" : "BUY";
     const absQty = Math.abs(qty);
-    const avgPrice = Number(pos.averageEntryPrice);
+    const rawQuote =
+      triggeringQuote &&
+      triggeringQuote.symbol === pos.symbol
+        ? triggeringQuote
+        : quoteStore.get(pos.symbol);
+    const parsed = parseExecutionQuote(
+      rawQuote,
+      pos.symbol
+    );
+    if (!parsed.ok) continue;
+    const policy = evaluateExecutionQuote(
+      parsed.quote,
+      pos.symbol
+    );
+    if (!policy.executable) continue;
 
-    const tick = quoteStore.get(pos.symbol);
-    const price = tick
-      ? tick.price
-      : triggeredBySymbol && pos.symbol === triggeredBySymbol && ltp
-        ? ltp
-        : Number(pos.averageEntryPrice);
+    const now = new Date().toISOString();
+    const liquidationOrder: PaperOrder = {
+      id: crypto.randomUUID(),
+      symbol: pos.symbol,
+      side,
+      quantity: absQty,
+      type: "MARKET",
+      status: "PENDING",
+      filledQuantity: 0,
+      createdAt: now,
+      updatedAt: now,
+      quoteSource: parsed.quote.source,
+      quoteQuality: parsed.quote.quality,
+      quoteTimestamp: parsed.quote.ts,
+      referencePrice: parsed.quote.price,
+    };
+    const executionAccount: PaperAccount = {
+      ...domainAccount,
+      status: "LIQUIDATION_PENDING",
+      orders: [liquidationOrder],
+      fills: [],
+    };
 
-    const meta = await getCompanyMetadata(pos.symbol);
-    const slippage = calculateSlippage(price, absQty, meta.avgVolume, meta.marketCapBucket);
-    const fillPrice = side === "BUY" ? price + slippage : Math.max(0.05, price - slippage);
-    const fee = fillPrice * absQty * 0.0000345;
-    const realizedPnl = qty > 0 ? absQty * (fillPrice - avgPrice) : absQty * (avgPrice - fillPrice);
-
-    totalRealizedPnl += realizedPnl;
-    totalFees += fee;
+    let executionResult;
+    try {
+      executionResult = executePaperFill({
+        account: executionAccount,
+        order: liquidationOrder,
+        fillQuantity: absQty,
+        quote: parsed.quote,
+        reason: "MARGIN_LIQUIDATION",
+      });
+    } catch (error: unknown) {
+      console.error(
+        "[matcher] Liquidation fill rejected",
+        {
+          symbol: pos.symbol,
+          reason: getErrorMessage(error),
+        }
+      );
+      continue;
+    }
+    domainAccount = executionResult.account;
+    const fill = executionResult.fill;
 
     await tx.insert(paperOrders).values({
-      id: crypto.randomUUID(),
+      id: liquidationOrder.id,
       userId,
       symbol: pos.symbol,
       exchange: pos.exchange,
@@ -687,9 +836,9 @@ export async function liquidateAccount(
       executionType: "GOOD_TILL_CANCELLED",
       qty: absQty,
       filledQty: absQty,
-      averageFillPrice: fillPrice.toString(),
-      slippageApplied: slippage.toString(),
-      transactionFee: fee.toString(),
+      averageFillPrice: fill.fillPrice.toString(),
+      slippageApplied: fill.slippage.toString(),
+      transactionFee: fill.fees.toString(),
       placedAt: new Date(),
       filledAt: new Date(),
       updatedAt: new Date(),
@@ -698,25 +847,16 @@ export async function liquidateAccount(
     await tx.delete(paperPositions).where(eq(paperPositions.id, pos.id));
   }
 
-  const [acc] = await tx
-    .select()
-    .from(paperAccounts)
-    .where(eq(paperAccounts.userId, userId))
-    .for("update");
-
-  if (acc) {
-    let newCash = Number(acc.cashBalance) + totalRealizedPnl - totalFees;
-    if (newCash < 0) newCash = 0;
-
-    await tx
-      .update(paperAccounts)
-      .set({
-        cashBalance: newCash.toString(),
-        allocatedMargin: "0.0000",
-        maintenanceMargin: "0.0000",
-        isLocked: true,
-        updatedAt: new Date(),
-      })
-      .where(eq(paperAccounts.userId, userId));
-  }
+  await tx
+    .update(paperAccounts)
+    .set({
+      cashBalance: domainAccount.cash.toString(),
+      allocatedMargin:
+        domainAccount.allocatedMargin.toString(),
+      maintenanceMargin:
+        domainAccount.maintenanceMargin.toString(),
+      isLocked: true,
+      updatedAt: new Date(),
+    })
+    .where(eq(paperAccounts.userId, userId));
 }

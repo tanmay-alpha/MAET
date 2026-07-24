@@ -103,6 +103,16 @@ export async function getQuote(
     const data = (await res.json()) as YahooChartResp;
     const r = data.chart.result?.[0];
     if (!r) throw new UpstreamPermanentError("yahoo: empty result");
+    const providerTimestamp = r.meta.regularMarketTime;
+    if (
+      typeof providerTimestamp !== "number" ||
+      !Number.isFinite(providerTimestamp) ||
+      providerTimestamp <= 0
+    ) {
+      throw new UpstreamPermanentError(
+        "yahoo: missing provider quote timestamp"
+      );
+    }
     const exchange = exchangeOverride ?? (ticker.endsWith(".BO") ? "BSE" : "NSE");
     const previousClose = r.meta.chartPreviousClose ?? r.meta.previousClose;
     const change = previousClose ? r.meta.regularMarketPrice - previousClose : undefined;
@@ -111,9 +121,9 @@ export async function getQuote(
       symbol: symbol.replace(/\.(NS|BO)$/, ""),
       price: r.meta.regularMarketPrice,
       volume: r.meta.regularMarketVolume,
-      ts: r.meta.regularMarketTime
-        ? new Date(r.meta.regularMarketTime * 1000).toISOString()
-        : new Date().toISOString(),
+      ts: new Date(
+        providerTimestamp * 1000
+      ).toISOString(),
       source: "yahoo",
       quality: "delayed",
       previousClose,

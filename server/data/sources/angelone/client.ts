@@ -22,6 +22,7 @@ export type AngelOneMarketQuote = {
   symbol: string;
   price: number;
   volume: number;
+  ts: string;
   previousClose?: number;
   change?: number;
   changePct?: number;
@@ -35,6 +36,71 @@ const MARKET_QUOTE_URL =
 let activeMarketSession: AngelOneSession | undefined;
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const MONTH_INDEX: Record<string, number> = {
+  Jan: 0,
+  Feb: 1,
+  Mar: 2,
+  Apr: 3,
+  May: 4,
+  Jun: 5,
+  Jul: 6,
+  Aug: 7,
+  Sep: 8,
+  Oct: 9,
+  Nov: 10,
+  Dec: 11,
+};
+
+export function parseAngelOneExchangeTime(
+  value: unknown
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const match =
+    /^(\d{2})-([A-Z][a-z]{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/u.exec(
+      value
+    );
+  if (!match) return undefined;
+
+  const month = MONTH_INDEX[match[2]];
+  const day = Number(match[1]);
+  const year = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (
+    month === undefined ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59
+  ) {
+    return undefined;
+  }
+
+  const localComponentsAsUtc = Date.UTC(
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second
+  );
+  const validationDate = new Date(localComponentsAsUtc);
+  if (
+    validationDate.getUTCFullYear() !== year ||
+    validationDate.getUTCMonth() !== month ||
+    validationDate.getUTCDate() !== day ||
+    validationDate.getUTCHours() !== hour ||
+    validationDate.getUTCMinutes() !== minute ||
+    validationDate.getUTCSeconds() !== second
+  ) {
+    return undefined;
+  }
+
+  return new Date(
+    localComponentsAsUtc - IST_OFFSET_MS
+  ).toISOString();
+}
 
 function decodeBase32(value: string): Buffer {
   const normalized = value.toUpperCase().replace(/=+$/u, "").replace(/\s+/gu, "");
@@ -139,20 +205,23 @@ export async function getAngelOneMarketQuotes(requests: AngelOneQuoteRequest[]):
     data?: { fetched?: Array<{
       symbolToken?: string;
       ltp?: number;
-      tradeVolume?: number;
-      close?: number;
-      netChange?: number;
+       tradeVolume?: number;
+       close?: number;
+       exchFeedTime?: string;
+       netChange?: number;
       percentChange?: number;
     }> };
   };
   if (!payload.status) throw new Error("angelone market quote returned an unsuccessful response");
   return (payload.data?.fetched ?? []).flatMap((quote) => {
     const symbol = quote.symbolToken ? tokenToSymbol.get(quote.symbolToken) : undefined;
-    if (!symbol || !Number.isFinite(quote.ltp) || (quote.ltp ?? 0) <= 0) return [];
+    const ts = parseAngelOneExchangeTime(quote.exchFeedTime);
+    if (!symbol || !ts || !Number.isFinite(quote.ltp) || (quote.ltp ?? 0) <= 0) return [];
     return [{
       symbol,
       price: quote.ltp!,
       volume: Math.max(0, quote.tradeVolume ?? 0),
+      ts,
       previousClose: quote.close && quote.close > 0 ? quote.close : undefined,
       change: Number.isFinite(quote.netChange) ? quote.netChange : undefined,
       changePct: Number.isFinite(quote.percentChange) ? quote.percentChange : undefined,
