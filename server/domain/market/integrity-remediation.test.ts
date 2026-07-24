@@ -23,7 +23,7 @@ describe("Phase 0.1: Financial Integrity Remediation Suite", () => {
       qty: 10,
       type: "MARKET",
       marketPrice: 2500,
-    });
+    } as any);
     expect(res.ok).toBe(false);
     expect(res.message).toContain("Trusted quote object is required for execution");
   });
@@ -295,3 +295,234 @@ describe("Phase 0.1: Financial Integrity Remediation Suite", () => {
     expect(renderYaml).toContain("bun install --frozen-lockfile");
   });
 });
+
+describe("Phase 0.2: Final Financial Integrity Closure Suite", () => {
+  beforeEach(() => {
+    resetPaperAccount();
+  });
+
+  const getNowIso = () => new Date().toISOString();
+
+  it("1. LIQUIDATION_PENDING rejects new order placement but allows quotes to liquidate positions", () => {
+    const validQuote: ExecutionQuote = {
+      exchange: "NSE",
+      symbol: "RELIANCE",
+      price: 2500,
+      volume: 500,
+      ts: getNowIso(),
+      source: "angelone",
+      quality: "live",
+    };
+
+    // Open positions in RELIANCE and INFY
+    placePaperOrder({
+      type: "MARKET",
+      symbol: "RELIANCE",
+      side: "BUY",
+      qty: 1000,
+      quote: validQuote,
+    });
+    placePaperOrder({
+      type: "MARKET",
+      symbol: "INFY",
+      side: "BUY",
+      qty: 900,
+      quote: { ...validQuote, symbol: "INFY" },
+    });
+
+    // Drop INFY price with quote for INFY only (no quote for RELIANCE)
+    const partialQuotes = new Map();
+    partialQuotes.set("INFY", {
+      exchange: "NSE",
+      symbol: "INFY",
+      price: 10,
+      volume: 500,
+      ts: getNowIso(),
+      source: "angelone",
+      quality: "live",
+    });
+
+    // Triggers LIQUIDATION_PENDING state; INFY liquidates but RELIANCE remains open
+    settlePaperOrders(partialQuotes);
+
+    let acc = getPaperAccount();
+    expect(acc.status).toBe("LIQUIDATION_PENDING");
+    expect(acc.isLocked).toBe(true);
+    expect(acc.lockReason).toBe("Margin call breach");
+    expect(acc.lockedAt).toBeDefined();
+
+    // Rejects new order placement
+    const newOrderRes = placePaperOrder({
+      type: "MARKET",
+      symbol: "TCS",
+      side: "BUY",
+      qty: 1,
+      quote: { ...validQuote, symbol: "TCS" },
+    });
+    expect(newOrderRes.ok).toBe(false);
+    expect(newOrderRes.message).toContain("Account is pending margin liquidation");
+
+    // Subsequent valid quote for RELIANCE completes liquidation and transitions to LIQUIDATED
+    const recoveryQuotes = new Map();
+    recoveryQuotes.set("RELIANCE", {
+      exchange: "NSE",
+      symbol: "RELIANCE",
+      price: 2500,
+      volume: 500,
+      ts: getNowIso(),
+      source: "angelone",
+      quality: "live",
+    });
+
+    settlePaperOrders(recoveryQuotes);
+    acc = getPaperAccount();
+    expect(acc.status).toBe("LIQUIDATED");
+    expect(acc.positions.length).toBe(0);
+    expect(acc.lockReason).toBe("Margin call liquidation completed");
+  });
+
+  it("2. Pure position reduction and position close require 0 additional margin", () => {
+    const quote: ExecutionQuote = {
+      exchange: "NSE",
+      symbol: "RELIANCE",
+      price: 1000,
+      ts: getNowIso(),
+      source: "angelone",
+      quality: "live",
+    };
+
+    // Open initial position: Buy 10 @ 1000 => margin = (10 * 1000)/5 = 2000
+    placePaperOrder({
+      type: "MARKET",
+      symbol: "RELIANCE",
+      side: "BUY",
+      qty: 10,
+      quote,
+    });
+
+    // Reduce position by 5 => Selling 5 requires 0 additional margin
+    const reduceRes = placePaperOrder({
+      type: "MARKET",
+      symbol: "RELIANCE",
+      side: "SELL",
+      qty: 5,
+      quote,
+    });
+    expect(reduceRes.ok).toBe(true);
+
+    const acc = getPaperAccount();
+    const pos = acc.positions.find((p) => p.symbol === "RELIANCE");
+    expect(pos?.qty).toBe(5);
+  });
+
+  it("3. Same-direction position increase requires margin only for the added size", () => {
+    const quote: ExecutionQuote = {
+      exchange: "NSE",
+      symbol: "RELIANCE",
+      price: 1000,
+      ts: getNowIso(),
+      source: "angelone",
+      quality: "live",
+    };
+
+    placePaperOrder({
+      type: "MARKET",
+      symbol: "RELIANCE",
+      side: "BUY",
+      qty: 10,
+      quote,
+    });
+
+    // Add 5 more @ 1000 => Incremental margin required is for 5 shares = (5 * 1000)/5 = 1000
+    const addRes = placePaperOrder({
+      type: "MARKET",
+      symbol: "RELIANCE",
+      side: "BUY",
+      qty: 5,
+      quote,
+    });
+    expect(addRes.ok).toBe(true);
+
+    const acc = getPaperAccount();
+    const pos = acc.positions.find((p) => p.symbol === "RELIANCE");
+    expect(pos?.qty).toBe(15);
+  });
+
+  it("4. Position reversal requires margin only for the new opposite-side remainder", () => {
+    const quote: ExecutionQuote = {
+      exchange: "NSE",
+      symbol: "RELIANCE",
+      price: 1000,
+      ts: getNowIso(),
+      source: "angelone",
+      quality: "live",
+    };
+
+    // Long 10 @ 1000
+    placePaperOrder({
+      type: "MARKET",
+      symbol: "RELIANCE",
+      side: "BUY",
+      qty: 10,
+      quote,
+    });
+
+    // Reverse to Short 5 => Sell 15 @ 1000.
+    // 10 shares close existing position (0 margin required).
+    // 5 remaining shares open new Short (margin required = (5 * 1000)/5 = 1000).
+    const reverseRes = placePaperOrder({
+      type: "MARKET",
+      symbol: "RELIANCE",
+      side: "SELL",
+      qty: 15,
+      quote,
+    });
+    expect(reverseRes.ok).toBe(true);
+
+    const acc = getPaperAccount();
+    const pos = acc.positions.find((p) => p.symbol === "RELIANCE");
+    expect(pos?.qty).toBe(-5);
+  });
+
+  it("5. Provenance fields (source, quality, timestamp, referencePrice, slippage, fee) are recorded on fills", () => {
+    const ts = getNowIso();
+    const quote: ExecutionQuote = {
+      exchange: "NSE",
+      symbol: "RELIANCE",
+      price: 2500,
+      ts,
+      source: "angelone",
+      quality: "live",
+    };
+
+    placePaperOrder({
+      type: "MARKET",
+      symbol: "RELIANCE",
+      side: "BUY",
+      qty: 10,
+      quote,
+    });
+
+    const acc = getPaperAccount();
+    const filledOrder = acc.orders[0];
+
+    expect(filledOrder.quoteSource).toBe("angelone");
+    expect(filledOrder.quoteQuality).toBe("live");
+    expect(filledOrder.quoteTimestamp).toBe(ts);
+    expect(filledOrder.referencePrice).toBe(2500);
+    expect(filledOrder.slippageApplied).toBeGreaterThanOrEqual(0);
+    expect(filledOrder.transactionFee).toBeGreaterThan(0);
+  });
+
+  it("6. Typecheck scripts exist in package.json and run in CI", () => {
+    const pkgJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8"));
+    expect(pkgJson.scripts["typecheck:frontend"]).toBeDefined();
+    expect(pkgJson.scripts["typecheck:server"]).toBeDefined();
+    expect(pkgJson.scripts["typecheck"]).toContain("typecheck:frontend");
+    expect(pkgJson.scripts["typecheck"]).toContain("typecheck:server");
+
+    const ciYaml = readFileSync(join(process.cwd(), ".github/workflows/ci.yml"), "utf-8");
+    expect(ciYaml).toContain("bun run typecheck");
+  });
+});
+

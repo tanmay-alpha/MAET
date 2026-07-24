@@ -1,5 +1,6 @@
 import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 
 // FIX 2: SSRF protection — strict symbol and range validation
 const VALID_SYMBOL = /^[A-Z][A-Z0-9\-\\.]{0,19}$/;

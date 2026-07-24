@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import type { ExecutionQuote } from "@shared/types";
 import { WATCHLIST } from "@/lib/market-catalog";
 import { X, TrendingUp, TrendingDown, DollarSign } from "lucide-react";
 
@@ -74,22 +75,37 @@ export function QuickTradeModal({
       return;
     }
 
-    const res = placeOrder({
-      symbol: symbol.toUpperCase(),
-      side,
-      qty,
-      type,
-      limitPrice: limitPriceNum,
-      stopPrice: type === "LIMIT" ? limitPriceNum : undefined,
-      marketPrice: currentQuote?.price,
-      quote: currentQuote ? {
+    let res: { ok: boolean; message: string };
+    if (type === "MARKET") {
+      if (!currentQuote) {
+        setMessage({ type: "error", text: "Market order rejected: Live quote is unavailable." });
+        return;
+      }
+      const execQuote: ExecutionQuote = {
+        exchange: (currentQuote as any).exchange ?? "NSE",
         symbol: symbol.toUpperCase(),
         price: currentQuote.price,
-        ts: currentQuote.timestamp,
+        volume: currentQuote.volume,
+        ts: currentQuote.timestamp ?? new Date().toISOString(),
         source: (currentQuote as any).source ?? "angelone",
         quality: (currentQuote as any).quality ?? "live",
-      } : undefined,
-    });
+      };
+      res = placeOrder({
+        type: "MARKET",
+        symbol: symbol.toUpperCase(),
+        side,
+        qty,
+        quote: execQuote,
+      });
+    } else {
+      res = placeOrder({
+        type: "LIMIT",
+        symbol: symbol.toUpperCase(),
+        side,
+        qty,
+        limitPrice: limitPriceNum!,
+      });
+    }
 
     if (res.ok) {
       setMessage({ type: "success", text: res.message });

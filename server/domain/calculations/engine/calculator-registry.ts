@@ -10,7 +10,7 @@ export type CalculatorCategory =
   | "scanner-breakout" | "scanner-value" | "scanner-momentum" | "scanner-quality" | "scanner-technical"
   | "portfolio-risk" | "portfolio-attribution" | "portfolio-performance";
 
-export type CalculatorFrequency = "realtime" | "daily" | "weekly" | "quarterly" | "on-demand";
+export type CalculatorFrequency = "realtime" | "daily" | "weekly" | "quarterly" | "annual" | "on-demand";
 
 export interface CalculatorMeta {
   name: string;

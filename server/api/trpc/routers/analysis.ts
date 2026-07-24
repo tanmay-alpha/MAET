@@ -52,7 +52,7 @@ async function fetchYahooCandles(symbol: string): Promise<Candle[]> {
 
       fetchedCandles.push({
         symbol: symbol.toUpperCase(),
-        timeframe: "1d",
+        tf: "1d",
         ts: new Date(timestamps[i] * 1000).toISOString(),
         open: openVal,
         high: highVal,
@@ -69,14 +69,14 @@ async function fetchYahooCandles(symbol: string): Promise<Candle[]> {
         .values(
           fetchedCandles.map((c) => ({
             symbol: c.symbol,
-            timeframe: c.timeframe,
+            timeframe: c.tf,
             ts: new Date(c.ts),
             open: c.open.toString(),
             high: c.high.toString(),
             low: c.low.toString(),
             close: c.close.toString(),
             volume: Number(c.volume),
-            source: c.source,
+            source: c.source ?? "yahoo",
           }))
         )
         .onConflictDoNothing()
@@ -114,7 +114,7 @@ export const analysisRouter = createRouter({
 
       let formattedCandles: Candle[] = dbCandles.map((c) => ({
         symbol: c.symbol,
-        timeframe: c.timeframe,
+        tf: c.timeframe as any,
         ts: c.ts.toISOString(),
         open: Number(c.open),
         high: Number(c.high),

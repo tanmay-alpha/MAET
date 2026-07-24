@@ -22,7 +22,7 @@ function generateMockCandles(count: number): Candle[] {
 
     candles.push({
       symbol: "TEST",
-      timeframe: "1d",
+      tf: "1d",
       ts: new Date(now - (count - i) * 24 * 60 * 60 * 1000).toISOString(),
       open,
       high,
