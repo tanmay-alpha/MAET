@@ -1,11 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useMemo } from "react";
-import { Newspaper, ExternalLink, Clock, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, Minus, Bookmark, Share2 } from "lucide-react";
-import { DataBadge } from "@/components/common/data-badge";
+import { Newspaper, ExternalLink, Clock, TrendingUp, TrendingDown, Minus, Bookmark, Share2, AlertTriangle } from "lucide-react";
 import { ContractPanel } from "@/components/common/contract-panel";
 
 export const Route = createFileRoute("/_app/news")({
-  head: () => ({ meta: [{ title: "News — MAET" }] }),
+  head: () => ({ meta: [{ title: "News (UI Demo) — MAET" }] }),
   component: News,
 });
 
@@ -28,11 +27,11 @@ interface NewsItem {
 const MOCK_NEWS: NewsItem[] = [
   {
     id: "1",
-    source: "Economic Times",
-    title: "RBI holds repo rate steady at 6.5%; markets react positively",
-    summary: "The Reserve Bank of India maintained the repo rate at 6.5% in its latest monetary policy meeting, citing controlled inflation and stable growth outlook.",
-    time: "2h ago",
-    timestamp: Date.now() - 2 * 60 * 60 * 1000,
+    source: "Economic Times (Sample Fixture)",
+    title: "[DEMO FIXTURE] RBI holds repo rate steady at 6.5%; markets react positively",
+    summary: "The Reserve Bank of India maintained the repo rate at 6.5% in its monetary policy meeting, citing controlled inflation and stable growth outlook.",
+    time: "Historical Demo (2026-03-15)",
+    timestamp: 1773532800000,
     sentiment: "positive",
     category: "economy",
     symbols: ["NIFTY", "BANKNIFTY"],
@@ -40,11 +39,11 @@ const MOCK_NEWS: NewsItem[] = [
   },
   {
     id: "2",
-    source: "Bloomberg Quint",
-    title: "Reliance Industries reports Q1 profit jump of 12% YoY",
+    source: "Bloomberg Quint (Sample Fixture)",
+    title: "[DEMO FIXTURE] Reliance Industries reports Q1 profit jump of 12% YoY",
     summary: "Reliance Industries' consolidated net profit rose to ₹19,641 crore in Q1 FY2026-27, beating street estimates of ₹18,500 crore. Revenue grew 8% YoY.",
-    time: "4h ago",
-    timestamp: Date.now() - 4 * 60 * 60 * 1000,
+    time: "Historical Demo (2026-03-14)",
+    timestamp: 1773446400000,
     sentiment: "positive",
     category: "companies",
     symbols: ["RELIANCE"],
@@ -52,11 +51,11 @@ const MOCK_NEWS: NewsItem[] = [
   },
   {
     id: "3",
-    source: "Moneycontrol",
-    title: "IT sector faces headwinds as global tech spending slows",
+    source: "Moneycontrol (Sample Fixture)",
+    title: "[DEMO FIXTURE] IT sector faces headwinds as global tech spending slows",
     summary: "Major IT services companies see order book declines as clients in North America cut discretionary spending. Sector down 3% this week.",
-    time: "6h ago",
-    timestamp: Date.now() - 6 * 60 * 60 * 1000,
+    time: "Historical Demo (2026-03-13)",
+    timestamp: 1773360000000,
     sentiment: "negative",
     category: "markets",
     symbols: ["TCS", "INFY", "WIPRO"],
@@ -64,11 +63,11 @@ const MOCK_NEWS: NewsItem[] = [
   },
   {
     id: "4",
-    source: "Business Standard",
-    title: "Nifty Bank index outperforms broader market; private lenders rally",
+    source: "Business Standard (Sample Fixture)",
+    title: "[DEMO FIXTURE] Nifty Bank index outperforms broader market; private lenders rally",
     summary: "Banking stocks led the gains today with HDFC Bank and ICICI Bank up 2%+ each on strong credit growth numbers and improving asset quality.",
-    time: "8h ago",
-    timestamp: Date.now() - 8 * 60 * 60 * 1000,
+    time: "Historical Demo (2026-03-12)",
+    timestamp: 1773273600000,
     sentiment: "positive",
     category: "markets",
     symbols: ["BANKNIFTY", "HDFCBANK", "ICICIBANK"],
@@ -76,11 +75,11 @@ const MOCK_NEWS: NewsItem[] = [
   },
   {
     id: "5",
-    source: "LiveMint",
-    title: "FIIs turn net buyers in June; domestic institutions continue selling",
+    source: "LiveMint (Sample Fixture)",
+    title: "[DEMO FIXTURE] FIIs turn net buyers in June; domestic institutions continue selling",
     summary: "Foreign institutional investors bought ₹4,200 crore worth of Indian equities in the first three weeks of June, reversing three months of outflows.",
-    time: "12h ago",
-    timestamp: Date.now() - 12 * 60 * 60 * 1000,
+    time: "Historical Demo (2026-03-11)",
+    timestamp: 1773187200000,
     sentiment: "neutral",
     category: "markets",
     symbols: ["NIFTY"],
@@ -88,39 +87,15 @@ const MOCK_NEWS: NewsItem[] = [
   },
   {
     id: "6",
-    source: "Financial Express",
-    title: "Nifty 50 breaks above 24,000 resistance; technical analysts bullish",
+    source: "Financial Express (Sample Fixture)",
+    title: "[DEMO FIXTURE] Nifty 50 breaks above 24,000 resistance; technical analysts bullish",
     summary: "The Nifty 50 index broke above the key psychological level of 24,000 with strong volumes, signaling potential for further upside. MACD shows bullish crossover.",
-    time: "1d ago",
-    timestamp: Date.now() - 24 * 60 * 60 * 1000,
+    time: "Historical Demo (2026-03-10)",
+    timestamp: 1773100800000,
     sentiment: "positive",
     category: "markets",
     symbols: ["NIFTY", "NIFTY50"],
     readTime: 5,
-  },
-  {
-    id: "7",
-    source: "CNBC-TV18",
-    title: "Crude oil prices drop 2% on demand concerns",
-    summary: "Brent crude fell to $78.50 per barrel on concerns about slowing global demand, providing relief to import-dependent India.",
-    time: "1d ago",
-    timestamp: Date.now() - 28 * 60 * 60 * 1000,
-    sentiment: "neutral",
-    category: "economy",
-    symbols: ["NIFTY", "BANKNIFTY"],
-    readTime: 3,
-  },
-  {
-    id: "8",
-    source: "The Economic Times",
-    title: "TCS announces ₹18,000 crore share buyback at ₹4,500/share",
-    summary: "Tata Consultancy Services board approved a share buyback of up to 4 crore shares at a maximum price of ₹4,500 per share, representing 1.1% of equity.",
-    time: "2d ago",
-    timestamp: Date.now() - 48 * 60 * 60 * 1000,
-    sentiment: "positive",
-    category: "companies",
-    symbols: ["TCS"],
-    readTime: 4,
   },
 ];
 
@@ -194,21 +169,21 @@ function NewsCard({ item }: { item: NewsItem }) {
           <button
             type="button"
             className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Bookmark"
+            title="Bookmark (Demo)"
           >
             <Bookmark className="h-4 w-4" />
           </button>
           <button
             type="button"
             className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Share"
+            title="Share (Demo)"
           >
             <Share2 className="h-4 w-4" />
           </button>
           <button
             type="button"
             className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Open link"
+            title="Open link (Demo)"
           >
             <ExternalLink className="h-4 w-4" />
           </button>
@@ -244,6 +219,14 @@ function News() {
 
   return (
     <div className="flex h-full flex-col">
+      {/* DEMO Disclaimer Banner */}
+      <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-2.5 text-xs text-amber-500 font-medium flex items-center gap-2">
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        <span>
+          <strong>DEMO / FICTIONAL CONTENT</strong> — Live news feed provider is not connected. The articles below are sample UI fixtures for layout demonstration and do not represent current real-time financial market news.
+        </span>
+      </div>
+
       {/* Header */}
       <div className="sticky top-0 z-50 border-b border-border/60 bg-background/70 backdrop-blur-xl">
         <div className="mx-auto max-w-7xl px-6 py-4">
@@ -251,9 +234,9 @@ function News() {
             <div className="flex items-center gap-3">
               <Newspaper className="h-5 w-5 text-primary" />
               <div>
-                <h1 className="text-xl font-semibold">News Feed</h1>
+                <h1 className="text-xl font-semibold">News Feed (UI Demo)</h1>
                 <p className="text-xs text-muted-foreground">
-                  {MOCK_NEWS.length} articles
+                  {MOCK_NEWS.length} static demo fixtures
                 </p>
               </div>
             </div>
@@ -328,7 +311,7 @@ function News() {
 
       {/* Bottom panel */}
       <div className="border-t border-border bg-panel/50 p-3 text-center text-xs text-muted-foreground">
-        <ContractPanel message="News feed provider pending — showing sample market headlines for UI demonstration" />
+        <ContractPanel message="Verified news provider pending — showing sample market headlines for UI demonstration" />
       </div>
     </div>
   );
