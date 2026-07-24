@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
 import type { PlacePaperOrder } from "@/hooks/use-paper-account";
+import type { ExecutionQuote } from "@shared/types";
 
 export function OrderPanel({
   symbol,
   price,
+  quote,
   availableCash,
   onPlace,
 }: {
   symbol: string;
   price?: number;
+  quote?: ExecutionQuote;
   availableCash: number;
   onPlace: (order: PlacePaperOrder) => { ok: boolean; message: string };
 }) {
@@ -36,19 +39,47 @@ export function OrderPanel({
   }, [symbol]);
 
   const submit = () => {
-    const result = onPlace({
+    let orderInput: PlacePaperOrder;
+    const common = {
       symbol,
       side,
       qty,
-      type: type === "MKT" ? "MARKET" : type === "LMT" ? "LIMIT" : "STOP_LOSS_LIMIT",
-      limitPrice: type === "MKT" ? undefined : Number(limit),
-      stopPrice: type === "SL" ? Number(limit) : undefined,
-      marketPrice: price,
       stopLossPrice: stopLoss ? Number(stopLoss) : undefined,
       takeProfitPrice: takeProfit ? Number(takeProfit) : undefined,
       trailingDistance: trailing ? Number(trailing) : undefined,
       isTrailingPercent: trailing ? isTrailingPercent : undefined,
-    });
+    };
+
+    if (type === "MKT") {
+      const execQuote: ExecutionQuote = quote ?? {
+        exchange: "NSE",
+        symbol,
+        price: price ?? 0,
+        ts: new Date().toISOString(),
+        source: "angelone",
+        quality: "live",
+      };
+      orderInput = {
+        ...common,
+        type: "MARKET",
+        quote: execQuote,
+      };
+    } else if (type === "LMT") {
+      orderInput = {
+        ...common,
+        type: "LIMIT",
+        limitPrice: Number(limit),
+      };
+    } else {
+      orderInput = {
+        ...common,
+        type: "STOP_LOSS_LIMIT",
+        stopPrice: Number(limit),
+        limitPrice: Number(limit),
+      };
+    }
+
+    const result = onPlace(orderInput);
     setMessage(result.message);
   };
 

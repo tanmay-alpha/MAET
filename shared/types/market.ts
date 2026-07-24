@@ -163,11 +163,12 @@ export function evaluateExecutionQuote(
 export const CandleSchema = z.object({
   symbol: z.string(),
   tf: z.enum(["1m", "5m", "15m", "1h", "1d", "1wk"]),
-  ts: z.string().datetime(),
+  ts: z.string(),
   open: z.number().nonnegative(),
   high: z.number().nonnegative(),
   low: z.number().nonnegative(),
   close: z.number().nonnegative(),
   volume: z.number().nonnegative(),
+  source: z.string().optional(),
 });
 export type Candle = z.infer<typeof CandleSchema>;

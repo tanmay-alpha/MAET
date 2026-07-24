@@ -63,7 +63,7 @@ export function validateOHLCVBatch(rows: unknown[]): ValidationResult<OHLCVRow> 
 }
 
 export function validateCompanyBatch(rows: unknown[]): ValidationResult<CompanyRow> {
-  return validateBatch(rows, CompanyRowSchema);
+  return validateBatch(rows, CompanyRowSchema as any);
 }
 
 export function validateFinancialsBatch(rows: unknown[]): ValidationResult<FinancialStatementRow> {

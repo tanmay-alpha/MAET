@@ -99,12 +99,12 @@ export async function queryBigQuery<T = Record<string, any>>(sql: string): Promi
   const bq = getBigQuery();
   const startTime = Date.now();
   try {
-    const [rows] = await Promise.race([
+    const [rows] = (await Promise.race([
       bq.query({ query: sql, useLegacySql: false }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("BigQuery query timed out after 120s")), 120_000)
       ),
-    ]);
+    ])) as [T[]];
     console.log("[BigQuery] Query completed in " + (Date.now() - startTime) + "ms");
     return rows as T[];
   } catch (err) {
