@@ -81,6 +81,14 @@ export function QuickTradeModal({
       type,
       limitPrice: limitPriceNum,
       stopPrice: type === "LIMIT" ? limitPriceNum : undefined,
+      marketPrice: currentQuote?.price,
+      quote: currentQuote ? {
+        symbol: symbol.toUpperCase(),
+        price: currentQuote.price,
+        ts: currentQuote.timestamp,
+        source: (currentQuote as any).source ?? "angelone",
+        quality: (currentQuote as any).quality ?? "live",
+      } : undefined,
     });
 
     if (res.ok) {
