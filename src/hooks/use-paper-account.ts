@@ -262,23 +262,18 @@ export function placePaperOrder(input: PlacePaperOrder): { ok: boolean; message:
   let quoteTimestamp = new Date().toISOString();
 
   if (input.type === "MARKET") {
-    const rawPrice = input.marketPrice ?? input.quote?.price;
-    const tickObj: Partial<Tick> = input.quote ?? ({
-      symbol,
-      price: rawPrice,
-      ts: new Date().toISOString(),
-      source: "angelone",
-      quality: "live",
-    } as Partial<Tick>);
+    if (!input.quote) {
+      return { ok: false, message: "Market order rejected: Trusted quote object is required for execution" };
+    }
 
-    const quoteEval = evaluateExecutionQuote(tickObj);
+    const quoteEval = evaluateExecutionQuote(input.quote, symbol);
     if (!quoteEval.executable) {
       return { ok: false, message: `Market order rejected: ${quoteEval.reason}` };
     }
 
-    executionPrice = rawPrice!;
-    quoteSource = tickObj.source ?? "angelone";
-    quoteTimestamp = tickObj.ts ?? new Date().toISOString();
+    executionPrice = input.quote.price!;
+    quoteSource = input.quote.source!;
+    quoteTimestamp = input.quote.ts!;
   } else {
     const orderPrice = input.limitPrice || input.stopPrice || 0;
     if (orderPrice <= 0) {
@@ -544,7 +539,8 @@ export function settlePaperOrders(quotes: Map<string, MarketQuote>): void {
   let totalUnrealized = 0;
   next.positions = next.positions.map((pos) => {
     const quote = quotes.get(pos.symbol);
-    if (!quote) {
+    const evalResult = quote ? evaluateExecutionQuote(quote, pos.symbol) : { executable: false };
+    if (!evalResult.executable || !quote) {
       totalUnrealized += pos.unrealizedPnl;
       return pos;
     }
@@ -556,8 +552,43 @@ export function settlePaperOrders(quotes: Map<string, MarketQuote>): void {
   });
 
   const equity = next.cash + totalUnrealized;
-  if (equity < next.maintenanceMargin) {
-    liquidateAll("Margin call breach");
+  if (equity < next.maintenanceMargin && next.positions.length > 0) {
+    let liquidationPossible = true;
+    let liquidatedAcc = { ...next };
+
+    for (const pos of next.positions) {
+      const posQuote = quotes.get(pos.symbol);
+      const evalPosQ = posQuote ? evaluateExecutionQuote(posQuote, pos.symbol) : { executable: false };
+      if (!evalPosQ.executable || !posQuote) {
+        liquidationPossible = false;
+        break;
+      }
+      const fillPrice = posQuote.price;
+      const slippage = calculateSlippage(fillPrice, Math.abs(pos.qty));
+      const effectiveFill = pos.qty > 0 ? Math.max(0.05, fillPrice - slippage) : fillPrice + slippage;
+      const dummyOrder: PaperOrder = {
+        id: crypto.randomUUID(),
+        symbol: pos.symbol,
+        side: pos.qty > 0 ? "SELL" : "BUY",
+        qty: Math.abs(pos.qty),
+        type: "MARKET",
+        filledQty: 0,
+        slippageApplied: 0,
+        transactionFee: 0,
+        status: "pending",
+        placedAt: new Date().toISOString(),
+      };
+      liquidatedAcc = simulateFill(liquidatedAcc, dummyOrder, effectiveFill, slippage, Math.abs(pos.qty));
+    }
+
+    if (liquidationPossible) {
+      liquidatedAcc.isLocked = true;
+      commit(liquidatedAcc);
+    } else {
+      // Lock account and defer liquidation until a valid quote is received
+      next.isLocked = true;
+      commit(next);
+    }
     return;
   }
 
@@ -569,19 +600,13 @@ export function settlePaperOrders(quotes: Map<string, MarketQuote>): void {
     const quote = quotes.get(order.symbol);
     if (!quote) continue;
 
-    const evalQuote = evaluateExecutionQuote({
-      price: quote.price,
-      volume: quote.volume,
-      ts: quote.timestamp,
-      source: (quote as any).source ?? "angelone",
-      quality: (quote as any).quality ?? "live",
-    });
+    const evalQuote = evaluateExecutionQuote(quote, order.symbol);
     if (!evalQuote.executable) continue;
 
     const ltp = quote.price;
-    const bid = quote.price; // fallback to LTP
-    const ask = quote.price; // fallback to LTP
-    const volume = quote.volume || 1000;
+    const bid = quote.price;
+    const ask = quote.price;
+    const volume = quote.volume;
 
     let isTriggered = false;
     let isMatched = false;
@@ -669,6 +694,11 @@ export function settlePaperOrders(quotes: Map<string, MarketQuote>): void {
   if (updated) {
     commit(next);
   }
+}
+
+export function getPaperAccount(): PaperAccount {
+  loadAccount();
+  return { ...account };
 }
 
 export function resetPaperAccount(): void {

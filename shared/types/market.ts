@@ -39,8 +39,20 @@ export const TickSchema = z.object({
 });
 export type Tick = z.infer<typeof TickSchema>;
 
+export const ExecutionQuoteSchema = z.object({
+  exchange: z.enum(["NSE", "BSE"]),
+  symbol: z.string().min(1),
+  price: z.number().finite().positive(),
+  volume: z.number().finite().nonnegative().optional(),
+  ts: z.string().min(1),
+  source: z.enum(["angelone", "yahoo", "nse", "simulated"]),
+  quality: z.enum(["live", "delayed", "stale", "synthetic"]),
+});
+export type ExecutionQuote = z.infer<typeof ExecutionQuoteSchema>;
+
 export interface ExecutionQuotePolicyConfig {
   maxAgeMs?: number;
+  maxFutureMs?: number;
   allowDelayed?: boolean;
   allowSynthetic?: boolean;
 }
@@ -52,49 +64,100 @@ export interface QuoteExecutionResult {
 }
 
 export function evaluateExecutionQuote(
-  tick: Partial<Tick> | null | undefined,
-  now: number = Date.now(),
-  config: ExecutionQuotePolicyConfig = {}
+  quote: unknown,
+  expectedSymbolOrNow?: string | number,
+  nowOrConfig?: number | ExecutionQuotePolicyConfig,
+  configArg: ExecutionQuotePolicyConfig = {}
 ): QuoteExecutionResult {
+  let expectedSymbol: string | undefined = undefined;
+  let now: number = Date.now();
+  let config: ExecutionQuotePolicyConfig = configArg;
+
+  if (typeof expectedSymbolOrNow === "string") {
+    expectedSymbol = expectedSymbolOrNow;
+    if (typeof nowOrConfig === "number") {
+      now = nowOrConfig;
+    } else if (nowOrConfig && typeof nowOrConfig === "object") {
+      config = nowOrConfig;
+    }
+  } else if (typeof expectedSymbolOrNow === "number") {
+    now = expectedSymbolOrNow;
+    if (nowOrConfig && typeof nowOrConfig === "object") {
+      config = nowOrConfig as ExecutionQuotePolicyConfig;
+    }
+  }
+
   const maxAgeMs = config.maxAgeMs ?? 5000;
+  const maxFutureMs = config.maxFutureMs ?? 10000;
   const allowDelayed = config.allowDelayed ?? false;
   const allowSynthetic = config.allowSynthetic ?? false;
 
-  if (!tick) {
+  if (!quote || typeof quote !== "object") {
     return { executable: false, reason: "No market quote available" };
   }
 
-  if (typeof tick.price !== "number" || !Number.isFinite(tick.price) || tick.price <= 0) {
-    return { executable: false, reason: "Non-positive or non-finite quote price" };
+  const raw = quote as Record<string, any>;
+  const quoteToParse = {
+    ...raw,
+    ts: raw.ts ?? raw.timestamp,
+  };
+
+  const parsed = ExecutionQuoteSchema.safeParse(quoteToParse);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = issue?.path.join(".") || "quote";
+    const msg = issue?.code === "invalid_type" && issue?.path.includes("ts")
+      ? "missing timestamp"
+      : issue?.message;
+    return { executable: false, reason: `Quote validation failed for ${field}: ${msg}` };
   }
 
-  if (tick.quality === "synthetic" || tick.source === "simulated") {
+  const q = parsed.data;
+
+  if (expectedSymbol && expectedSymbol.trim() !== "") {
+    if (q.symbol.trim().toUpperCase() !== expectedSymbol.trim().toUpperCase()) {
+      return {
+        executable: false,
+        reason: `Quote symbol mismatch: expected ${expectedSymbol.toUpperCase()} but received ${q.symbol.toUpperCase()}`,
+      };
+    }
+  }
+
+  if (q.quality === "stale") {
+    return { executable: false, reason: "Quote quality is marked stale" };
+  }
+
+  if (q.quality === "synthetic" || q.source === "simulated") {
     if (!allowSynthetic) {
       return { executable: false, reason: "Synthetic quotes are rejected for execution" };
     }
   }
 
-  if (tick.quality === "delayed" || tick.source === "yahoo") {
+  if (q.quality === "delayed" || q.source === "yahoo") {
     if (!allowDelayed) {
       return { executable: false, reason: "Delayed quotes are rejected for execution" };
     }
   }
 
-  if (!tick.ts) {
-    return { executable: false, reason: "Quote is missing timestamp" };
-  }
-
-  const quoteTime = new Date(tick.ts).getTime();
+  const quoteTime = new Date(q.ts).getTime();
   if (Number.isNaN(quoteTime)) {
     return { executable: false, reason: "Quote timestamp is invalid" };
   }
 
-  const ageMs = Math.max(0, now - quoteTime);
-  if (ageMs > maxAgeMs) {
-    return { executable: false, reason: `Quote is stale (${Math.round(ageMs / 1000)}s old > ${Math.round(maxAgeMs / 1000)}s limit)`, ageMs };
+  if (quoteTime > now + maxFutureMs) {
+    return { executable: false, reason: `Quote timestamp is in the future by ${Math.round((quoteTime - now) / 1000)}s` };
   }
 
-  return { executable: true, ageMs };
+  const ageMs = now - quoteTime;
+  if (ageMs > maxAgeMs) {
+    return {
+      executable: false,
+      reason: `Quote is stale (${Math.round(ageMs / 1000)}s old > ${Math.round(maxAgeMs / 1000)}s limit)`,
+      ageMs,
+    };
+  }
+
+  return { executable: true, ageMs: Math.max(0, ageMs) };
 }
 
 export const CandleSchema = z.object({
