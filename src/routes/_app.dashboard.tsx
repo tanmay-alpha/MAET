@@ -165,25 +165,12 @@ function Dashboard() {
                                   alert("Position exit rejected: Market quote is unavailable.");
                                   return;
                                 }
-                                const rawQ = currentQuote as any;
-                                if (!rawQ.source || !rawQ.quality || !rawQ.ts) {
-                                  alert("Position exit rejected: Quote is missing provenance (source/quality/ts).");
-                                  return;
-                                }
                                 const result = placeOrder({
                                   type: "MARKET",
                                   symbol: position.symbol,
                                   side: isLong ? "SELL" : "BUY",
                                   quantity: Math.abs(position.quantity),
-                                  quote: {
-                                    exchange: rawQ.exchange ?? "NSE",
-                                    symbol: position.symbol,
-                                    price: currentQuote.price,
-                                    volume: currentQuote.volume,
-                                    ts: rawQ.ts,
-                                    source: rawQ.source,
-                                    quality: rawQ.quality,
-                                  },
+                                  quote: currentQuote,
                                 });
                                 if (!result.ok) {
                                   alert(result.message);

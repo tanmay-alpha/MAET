@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { generateTotp, getAngelOneMarketQuotes, login, setAngelOneMarketSession } from "./client";
+import { generateTotp, getAngelOneMarketQuotes, login, parseAngelOneExchangeTime, setAngelOneMarketSession } from "./client";
 
 const origFetch = globalThis.fetch;
 
@@ -44,16 +44,28 @@ describe("angelone login", () => {
       expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer JWT");
       return Response.json({
         status: true,
-        data: { fetched: [{ symbolToken: "2885", ltp: 1_410.5, tradeVolume: 12_345, close: 1_400, netChange: 10.5, percentChange: 0.75 }] },
+        data: { fetched: [{ symbolToken: "2885", ltp: 1_410.5, tradeVolume: 12_345, close: 1_400, exchFeedTime: "21-Jun-2023 10:46:10", netChange: 10.5, percentChange: 0.75 }] },
       });
     }) as unknown as typeof fetch;
     expect(await getAngelOneMarketQuotes([{ symbol: "RELIANCE", token: "2885" }])).toEqual([{
       symbol: "RELIANCE",
       price: 1_410.5,
       volume: 12_345,
+      ts: "2023-06-21T05:16:10.000Z",
       previousClose: 1_400,
       change: 10.5,
       changePct: 0.75,
     }]);
+  });
+
+  it("rejects snapshots without a valid exchange feed time", async () => {
+    setAngelOneMarketSession({ jwt: "JWT", feedToken: "FEED", refreshToken: "REFRESH", clientCode: "C", apiKey: "K", obtainedAt: new Date().toISOString() });
+    globalThis.fetch = (async () => Response.json({
+      status: true,
+      data: { fetched: [{ symbolToken: "2885", ltp: 1_410.5, tradeVolume: 12_345 }] },
+    })) as unknown as typeof fetch;
+
+    expect(await getAngelOneMarketQuotes([{ symbol: "RELIANCE", token: "2885" }])).toEqual([]);
+    expect(parseAngelOneExchangeTime("31-Feb-2026 10:00:00")).toBeUndefined();
   });
 });

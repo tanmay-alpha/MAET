@@ -1,367 +1,634 @@
-import { evaluateExecutionQuote, ExecutionQuoteSchema, type ExecutionQuote } from "../../types/market";
-import { calculateAccountMargins, calculateIncrementalMarginFromReconciliation } from "./margin";
-import { reconcilePosition } from "./reconcile-position";
-import type {
-  PaperAccount,
-  PaperExecutionReason,
-  PaperFill,
-  PaperOrder,
-  PaperPosition,
-  PlacePaperOrder,
+import {
+  evaluateExecutionQuote,
+  parseExecutionQuote,
+  type ExecutionQuote,
+} from "../../types/market";
+import {
+  calculateProjectedMarginAfterFill,
+} from "./margin";
+import {
+  reconcilePosition,
+  type PositionReconciliationResult,
+} from "./reconcile-position";
+import {
+  formatValidationError,
+  PlacePaperOrderSchema,
+  type PaperAccount,
+  type PaperExecutionReason,
+  type PaperFill,
+  type PaperOrder,
+  type PaperPosition,
 } from "./types";
 
-export function calculateSlippage(price: number, qty: number): number {
-  if (price <= 0 || qty <= 0) return 0;
-  const orderVal = price * qty;
+const PAPER_LEVERAGE = 5;
+export const PAPER_TRANSACTION_FEE_RATE = 0.0000345;
 
-  let basePct = 0.0005; // 0.05%
-  if (orderVal > 1_000_000) basePct = 0.003; // 0.3%
-  else if (orderVal > 200_000) basePct = 0.0015; // 0.15%
+export function calculateSlippage(price: number, quantity: number): number {
+  if (price <= 0 || quantity <= 0) return 0;
+  const orderValue = price * quantity;
 
-  const dollarSlippage = price * basePct;
-  return Math.round(dollarSlippage * 100) / 100;
+  let basePercentage = 0.0005;
+  if (orderValue > 1_000_000) basePercentage = 0.003;
+  else if (orderValue > 200_000) basePercentage = 0.0015;
+
+  return Math.round(price * basePercentage * 100) / 100;
 }
 
-export interface ExecuteFillInput {
+export type PaperExecutionRequest = {
   account: PaperAccount;
   order: PaperOrder;
   fillQuantity: number;
   quote: ExecutionQuote;
+  reason: PaperExecutionReason;
+};
+
+export type PaperExecutionPlan = {
+  referencePrice: number;
   fillPrice: number;
   slippage: number;
   fees: number;
-  reason: PaperExecutionReason;
-}
+  fillQuantity: number;
+};
 
 export interface ExecuteFillResult {
   account: PaperAccount;
   fill: PaperFill;
 }
 
-export function executePaperFill(input: ExecuteFillInput): ExecuteFillResult {
-  const parseResult = ExecutionQuoteSchema.safeParse(input.quote);
-  if (!parseResult.success) {
-    const issue = parseResult.error.issues[0];
-    throw new Error(`Execution fill rejected: invalid quote provenance (${issue?.message || "parse error"})`);
-  }
-  const quote = parseResult.data;
+export type PaperExecutionErrorCode =
+  | "INVALID_QUOTE"
+  | "NON_EXECUTABLE_QUOTE"
+  | "INVALID_ORDER"
+  | "ORDER_NOT_MARKETABLE"
+  | "INSUFFICIENT_MARGIN";
 
-  if (quote.symbol.trim().toUpperCase() !== input.order.symbol.trim().toUpperCase()) {
-    throw new Error(`Execution fill rejected: quote symbol ${quote.symbol} does not match order symbol ${input.order.symbol}`);
+export class PaperExecutionError extends Error {
+  readonly code: PaperExecutionErrorCode;
+
+  constructor(code: PaperExecutionErrorCode, message: string) {
+    super(message);
+    this.name = "PaperExecutionError";
+    this.code = code;
+  }
+}
+
+export function getErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Unknown paper execution error";
+}
+
+function sameSymbol(left: string, right: string): boolean {
+  return left.trim().toUpperCase() === right.trim().toUpperCase();
+}
+
+function assertExecutableQuote(
+  rawQuote: unknown,
+  expectedSymbol: string
+): ExecutionQuote {
+  const parsed = parseExecutionQuote(rawQuote, expectedSymbol);
+  if (!parsed.ok) {
+    throw new PaperExecutionError("INVALID_QUOTE", parsed.reason);
   }
 
-  // Limit price protection invariants
-  let protectedFillPrice = input.fillPrice;
-  if (input.order.type === "LIMIT" || input.order.type === "STOP_LOSS_LIMIT") {
-    const limitPrice = input.order.limitPrice;
-    if (limitPrice !== undefined && limitPrice > 0) {
-      if (input.order.side === "BUY") {
-        protectedFillPrice = Math.min(limitPrice, input.fillPrice);
-        if (protectedFillPrice > limitPrice) {
-          throw new Error(`Limit price protection violated: BUY fill price ${protectedFillPrice} > limitPrice ${limitPrice}`);
-        }
-      } else {
-        protectedFillPrice = Math.max(limitPrice, input.fillPrice);
-        if (protectedFillPrice < limitPrice) {
-          throw new Error(`Limit price protection violated: SELL fill price ${protectedFillPrice} < limitPrice ${limitPrice}`);
-        }
+  const policy = evaluateExecutionQuote(
+    parsed.quote,
+    expectedSymbol
+  );
+  if (!policy.executable) {
+    throw new PaperExecutionError(
+      "NON_EXECUTABLE_QUOTE",
+      policy.reason ?? "Quote cannot be used for execution"
+    );
+  }
+
+  return parsed.quote;
+}
+
+function createExecutionPlanFromValidatedQuote(
+  request: PaperExecutionRequest,
+  quote: ExecutionQuote
+): PaperExecutionPlan {
+  if (
+    !Number.isInteger(request.fillQuantity) ||
+    request.fillQuantity <= 0
+  ) {
+    throw new PaperExecutionError(
+      "INVALID_ORDER",
+      "Fill quantity must be a positive whole number"
+    );
+  }
+
+  const remainingQuantity =
+    request.order.quantity - request.order.filledQuantity;
+  if (request.fillQuantity > remainingQuantity) {
+    throw new PaperExecutionError(
+      "INVALID_ORDER",
+      "Fill quantity exceeds the remaining order quantity"
+    );
+  }
+
+  const referencePrice = quote.price;
+  const calculatedSlippage = calculateSlippage(
+    referencePrice,
+    request.fillQuantity
+  );
+  let fillPrice: number;
+
+  if (request.order.type === "MARKET") {
+    fillPrice =
+      request.order.side === "BUY"
+        ? referencePrice + calculatedSlippage
+        : Math.max(0.05, referencePrice - calculatedSlippage);
+  } else {
+    const limitPrice = request.order.limitPrice;
+    if (
+      limitPrice === undefined ||
+      !Number.isFinite(limitPrice) ||
+      limitPrice <= 0
+    ) {
+      throw new PaperExecutionError(
+        "INVALID_ORDER",
+        "A positive limit price is required"
+      );
+    }
+
+    if (request.order.type === "STOP_LOSS_LIMIT") {
+      const wasTriggered =
+        request.order.status === "TRIGGERED" ||
+        (request.order.status === "PARTIALLY_FILLED" &&
+          request.order.triggeredAt !== undefined);
+      if (!wasTriggered) {
+        throw new PaperExecutionError(
+          "INVALID_ORDER",
+          "Stop-limit order must be triggered before execution"
+        );
+      }
+    }
+
+    if (request.order.side === "BUY") {
+      if (referencePrice > limitPrice) {
+        throw new PaperExecutionError(
+          "ORDER_NOT_MARKETABLE",
+          "Buy limit order is not marketable"
+        );
+      }
+      fillPrice = Math.min(
+        limitPrice,
+        referencePrice + calculatedSlippage
+      );
+      if (fillPrice > limitPrice) {
+        throw new PaperExecutionError(
+          "INVALID_ORDER",
+          "Buy limit price protection was violated"
+        );
+      }
+    } else {
+      if (referencePrice < limitPrice) {
+        throw new PaperExecutionError(
+          "ORDER_NOT_MARKETABLE",
+          "Sell limit order is not marketable"
+        );
+      }
+      fillPrice = Math.max(
+        limitPrice,
+        Math.max(0.05, referencePrice - calculatedSlippage)
+      );
+      if (fillPrice < limitPrice) {
+        throw new PaperExecutionError(
+          "INVALID_ORDER",
+          "Sell limit price protection was violated"
+        );
       }
     }
   }
 
-  const existingPosition = input.account.positions.find(
-    (p) => p.symbol.trim().toUpperCase() === input.order.symbol.trim().toUpperCase()
+  const actualSlippage =
+    request.order.side === "BUY"
+      ? Math.max(0, fillPrice - referencePrice)
+      : Math.max(0, referencePrice - fillPrice);
+  const fees =
+    fillPrice *
+    request.fillQuantity *
+    PAPER_TRANSACTION_FEE_RATE;
+
+  return {
+    referencePrice,
+    fillPrice,
+    slippage: actualSlippage,
+    fees,
+    fillQuantity: request.fillQuantity,
+  };
+}
+
+export function createExecutionPlan(
+  request: PaperExecutionRequest
+): PaperExecutionPlan {
+  const quote = assertExecutableQuote(
+    request.quote,
+    request.order.symbol
   );
+  return createExecutionPlanFromValidatedQuote(request, quote);
+}
 
-  const reconcileRes = reconcilePosition({
-    existingQuantity: existingPosition ? existingPosition.quantity : 0,
-    existingAveragePrice: existingPosition ? existingPosition.averagePrice : 0,
-    side: input.order.side,
-    fillQuantity: input.fillQuantity,
-    fillPrice: protectedFillPrice,
-  });
-
-  const incMarginRequired = calculateIncrementalMarginFromReconciliation(reconcileRes, protectedFillPrice, 5);
-
-  let totalUnrealised = 0;
-  input.account.positions.forEach((p) => {
-    if (p.symbol !== input.order.symbol) totalUnrealised += p.unrealisedPnl;
-  });
-  const currentEquity = input.account.cash + totalUnrealised;
-  const freeMargin = currentEquity - input.account.allocatedMargin;
-
-  if (incMarginRequired > 0 && freeMargin < incMarginRequired) {
-    throw new Error(`Execution fill rejected: insufficient free margin for position increase`);
+function projectPositionsAfterFill(input: {
+  positions: PaperPosition[];
+  existingPosition: PaperPosition | undefined;
+  order: PaperOrder;
+  reconciliation: PositionReconciliationResult;
+  quote: ExecutionQuote;
+  fillTime: string;
+}): PaperPosition[] {
+  if (input.reconciliation.resultingQuantity === 0) {
+    return input.positions.filter(
+      (position) =>
+        !sameSymbol(position.symbol, input.order.symbol)
+    );
   }
 
-  const fillId = crypto.randomUUID();
+  const resultingUnrealisedPnl =
+    input.reconciliation.resultingQuantity > 0
+      ? input.reconciliation.resultingQuantity *
+        (input.quote.price -
+          input.reconciliation.resultingAveragePrice)
+      : Math.abs(input.reconciliation.resultingQuantity) *
+        (input.reconciliation.resultingAveragePrice -
+          input.quote.price);
+
+  const projectedPosition: PaperPosition = {
+    symbol: input.order.symbol,
+    quantity: input.reconciliation.resultingQuantity,
+    averagePrice:
+      input.reconciliation.resultingAveragePrice,
+    marginLocked:
+      (Math.abs(input.reconciliation.resultingQuantity) *
+        input.reconciliation.resultingAveragePrice) /
+      PAPER_LEVERAGE,
+    realisedPnl:
+      (input.existingPosition?.realisedPnl ?? 0) +
+      input.reconciliation.realisedPnl,
+    unrealisedPnl: resultingUnrealisedPnl,
+    updatedAt: input.fillTime,
+  };
+
+  if (!input.existingPosition) {
+    return [...input.positions, projectedPosition];
+  }
+
+  return input.positions.map((position) =>
+    sameSymbol(position.symbol, input.order.symbol)
+      ? projectedPosition
+      : position
+  );
+}
+
+export function executePaperFill(
+  request: PaperExecutionRequest
+): ExecuteFillResult {
+  const parsed = parseExecutionQuote(
+    request.quote,
+    request.order.symbol
+  );
+  if (!parsed.ok) {
+    throw new PaperExecutionError(
+      "INVALID_QUOTE",
+      parsed.reason
+    );
+  }
+
+  const quote = parsed.quote;
+  const policy = evaluateExecutionQuote(
+    quote,
+    request.order.symbol
+  );
+  if (!policy.executable) {
+    throw new PaperExecutionError(
+      "NON_EXECUTABLE_QUOTE",
+      policy.reason ?? "Quote cannot be used for execution"
+    );
+  }
+
+  const plan = createExecutionPlanFromValidatedQuote(
+    request,
+    quote
+  );
+  const existingPosition = request.account.positions.find(
+    (position) =>
+      sameSymbol(position.symbol, request.order.symbol)
+  );
+  const reconciliation = reconcilePosition({
+    existingQuantity: existingPosition?.quantity ?? 0,
+    existingAveragePrice:
+      existingPosition?.averagePrice ?? 0,
+    side: request.order.side,
+    fillQuantity: plan.fillQuantity,
+    fillPrice: plan.fillPrice,
+  });
   const fillTime = new Date().toISOString();
+  const projectedPositions = projectPositionsAfterFill({
+    positions: request.account.positions,
+    existingPosition,
+    order: request.order,
+    reconciliation,
+    quote,
+    fillTime,
+  });
+  const projectedMargin = calculateProjectedMarginAfterFill({
+    account: request.account,
+    symbol: request.order.symbol,
+    quote,
+    reconciliation,
+    fillPrice: plan.fillPrice,
+    fees: plan.fees,
+    projectedPositions,
+    leverage: PAPER_LEVERAGE,
+  });
+  const forcedLiquidationReduction =
+    request.reason === "MARGIN_LIQUIDATION" &&
+    reconciliation.openedQuantity === 0 &&
+    projectedMargin.allocatedMarginAfter <
+      projectedMargin.allocatedMarginBefore;
+
+  if (!projectedMargin.sufficient && !forcedLiquidationReduction) {
+    throw new PaperExecutionError(
+      "INSUFFICIENT_MARGIN",
+      "Execution fill rejected: projected free margin is below zero"
+    );
+  }
 
   const fill: PaperFill = {
-    id: fillId,
-    orderId: input.order.id,
-    symbol: input.order.symbol,
-    side: input.order.side,
-    quantity: input.fillQuantity,
-    referencePrice: quote.price,
-    fillPrice: protectedFillPrice,
-    slippage: input.slippage,
-    fees: input.fees,
-    realisedPnl: reconcileRes.realisedPnl,
+    id: crypto.randomUUID(),
+    orderId: request.order.id,
+    symbol: request.order.symbol,
+    side: request.order.side,
+    quantity: plan.fillQuantity,
+    referencePrice: plan.referencePrice,
+    fillPrice: plan.fillPrice,
+    slippage: plan.slippage,
+    fees: plan.fees,
+    realisedPnl: reconciliation.realisedPnl,
     quoteSource: quote.source,
     quoteQuality: quote.quality,
     quoteTimestamp: quote.ts,
     exchange: quote.exchange,
-    reason: input.reason,
+    reason: request.reason,
     executedAt: fillTime,
   };
 
-  // Update positions
-  let updatedPositions = [...input.account.positions];
-  if (reconcileRes.resultingQuantity === 0) {
-    updatedPositions = updatedPositions.filter(
-      (p) => p.symbol.trim().toUpperCase() !== input.order.symbol.trim().toUpperCase()
+  const totalFilled =
+    request.order.filledQuantity + plan.fillQuantity;
+  const isFullyFilled =
+    totalFilled >= request.order.quantity;
+  const nextOrderStatus = isFullyFilled
+    ? "FILLED"
+    : "PARTIALLY_FILLED";
+  const existingValue =
+    request.order.filledQuantity *
+    (request.order.averageFillPrice ?? 0);
+  const averageFillPrice =
+    (existingValue + plan.fillQuantity * plan.fillPrice) /
+    totalFilled;
+
+  let updatedOrders: PaperOrder[] =
+    request.account.orders.map((order): PaperOrder =>
+      order.id === request.order.id
+        ? {
+            ...order,
+            status: nextOrderStatus,
+            filledQuantity: totalFilled,
+            averageFillPrice,
+            updatedAt: fillTime,
+            quoteSource: quote.source,
+            quoteQuality: quote.quality,
+            quoteTimestamp: quote.ts,
+            referencePrice: quote.price,
+          }
+        : order
     );
-  } else {
-    const marginLocked = (Math.abs(reconcileRes.resultingQuantity) * reconcileRes.resultingAveragePrice) / 5;
-    const newPosObj: PaperPosition = {
-      symbol: input.order.symbol,
-      quantity: reconcileRes.resultingQuantity,
-      averagePrice: reconcileRes.resultingAveragePrice,
-      marginLocked,
-      unrealisedPnl: 0,
-      realisedPnl: (existingPosition?.realisedPnl ?? 0) + reconcileRes.realisedPnl,
-      updatedAt: fillTime,
-    };
 
-    if (existingPosition) {
-      updatedPositions = updatedPositions.map((p) =>
-        p.symbol.trim().toUpperCase() === input.order.symbol.trim().toUpperCase() ? newPosObj : p
-      );
-    } else {
-      updatedPositions.push(newPosObj);
-    }
-  }
-
-  // Update order status and aggregate
-  const totalFilled = input.order.filledQuantity + input.fillQuantity;
-  const isFullyFilled = totalFilled >= input.order.quantity;
-  const nextOrderStatus = isFullyFilled ? ("FILLED" as const) : ("PARTIALLY_FILLED" as const);
-
-  const existingVal = input.order.filledQuantity * (input.order.averageFillPrice ?? 0);
-  const newAvgFillPrice = (existingVal + input.fillQuantity * protectedFillPrice) / totalFilled;
-
-  let updatedOrders = input.account.orders.map((o) =>
-    o.id === input.order.id
-      ? ({
-          ...o,
-          status: nextOrderStatus,
-          filledQuantity: totalFilled,
-          averageFillPrice: newAvgFillPrice,
-          updatedAt: fillTime,
-          quoteSource: quote.source,
-          quoteQuality: quote.quality,
-          quoteTimestamp: quote.ts,
-          referencePrice: quote.price,
-        } as PaperOrder)
-      : o
-  );
-
-  // If child take-profit or stop-loss exists and order just fully filled
-  if (isFullyFilled && (input.order.takeProfitPrice || input.order.stopLossPrice)) {
-    const childSide = input.order.side === "BUY" ? "SELL" : "BUY";
-    if (input.order.takeProfitPrice) {
+  if (
+    isFullyFilled &&
+    (request.order.takeProfitPrice ||
+      request.order.stopLossPrice)
+  ) {
+    const childSide =
+      request.order.side === "BUY" ? "SELL" : "BUY";
+    if (request.order.takeProfitPrice) {
       updatedOrders.unshift({
         id: crypto.randomUUID(),
-        symbol: input.order.symbol,
+        symbol: request.order.symbol,
         side: childSide,
-        quantity: input.order.quantity,
+        quantity: request.order.quantity,
         type: "LIMIT",
-        limitPrice: input.order.takeProfitPrice,
+        limitPrice: request.order.takeProfitPrice,
         status: "PENDING",
         filledQuantity: 0,
-        parentOrderId: input.order.id,
+        parentOrderId: request.order.id,
         createdAt: fillTime,
         updatedAt: fillTime,
       });
     }
-    if (input.order.stopLossPrice) {
+    if (request.order.stopLossPrice) {
       updatedOrders.unshift({
         id: crypto.randomUUID(),
-        symbol: input.order.symbol,
+        symbol: request.order.symbol,
         side: childSide,
-        quantity: input.order.quantity,
+        quantity: request.order.quantity,
         type: "STOP_LOSS_LIMIT",
-        stopPrice: input.order.stopLossPrice,
-        limitPrice: input.order.stopLossPrice,
+        stopPrice: request.order.stopLossPrice,
+        limitPrice: request.order.stopLossPrice,
         status: "PENDING",
         filledQuantity: 0,
-        parentOrderId: input.order.id,
+        parentOrderId: request.order.id,
         createdAt: fillTime,
         updatedAt: fillTime,
       });
     }
   }
 
-  // OCO bracket cancellation if parent filled
-  if (isFullyFilled && input.order.parentOrderId) {
-    updatedOrders = updatedOrders.map((o) =>
-      o.parentOrderId === input.order.parentOrderId &&
-      o.id !== input.order.id &&
-      (o.status === "PENDING" || o.status === "TRIGGERED" || o.status === "PARTIALLY_FILLED")
-        ? ({ ...o, status: "CANCELLED" as const, rejectionReason: "OCO bracket filled", updatedAt: fillTime } as PaperOrder)
-        : o
+  if (isFullyFilled && request.order.parentOrderId) {
+    updatedOrders = updatedOrders.map(
+      (order): PaperOrder =>
+        order.parentOrderId ===
+          request.order.parentOrderId &&
+        order.id !== request.order.id &&
+        (order.status === "PENDING" ||
+          order.status === "TRIGGERED" ||
+          order.status === "PARTIALLY_FILLED")
+          ? {
+              ...order,
+              status: "CANCELLED",
+              rejectionReason: "OCO bracket filled",
+              updatedAt: fillTime,
+            }
+          : order
     );
   }
-
-  const nextCash = input.account.cash + reconcileRes.realisedPnl - input.fees;
-  const nextRealisedPnl = input.account.realisedPnl + reconcileRes.realisedPnl;
-  const { allocatedMargin, maintenanceMargin } = calculateAccountMargins(updatedPositions, 5);
 
   const updatedAccount: PaperAccount = {
-    ...input.account,
+    ...request.account,
     version: 3,
-    cash: nextCash,
-    realisedPnl: nextRealisedPnl,
-    allocatedMargin,
-    maintenanceMargin,
-    positions: updatedPositions,
+    cash:
+      request.account.cash +
+      reconciliation.realisedPnl -
+      plan.fees,
+    realisedPnl:
+      request.account.realisedPnl +
+      reconciliation.realisedPnl,
+    allocatedMargin:
+      projectedMargin.allocatedMarginAfter,
+    maintenanceMargin:
+      projectedMargin.maintenanceMarginAfter,
+    positions: projectedPositions,
     orders: updatedOrders,
-    fills: [fill, ...input.account.fills].slice(0, 500),
+    fills: [fill, ...request.account.fills].slice(0, 500),
   };
 
-  return { account: updatedAccount, fill };
+  return {
+    account: updatedAccount,
+    fill,
+  };
 }
 
 export function placePaperOrderInAccount(
   account: PaperAccount,
-  input: PlacePaperOrder
+  rawInput: unknown
 ): { ok: boolean; message: string; account: PaperAccount } {
-  const symbol = input.symbol.trim().toUpperCase();
-  if (!symbol) return { ok: false, message: "Select a symbol", account };
+  const parsed = PlacePaperOrderSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      message: `Order rejected: ${formatValidationError(parsed.error)}`,
+      account,
+    };
+  }
 
+  const input = parsed.data;
   if (account.status !== "ACTIVE") {
     const reason =
       account.status === "LIQUIDATION_PENDING"
         ? "Account is pending margin liquidation"
         : "Account is liquidated and locked";
-    return { ok: false, message: reason, account };
-  }
-
-  if (!Number.isInteger(input.quantity) || input.quantity <= 0) {
-    return { ok: false, message: "Quantity must be a positive whole number", account };
-  }
-
-  let executionPrice = 0;
-  let quoteSource: any = undefined;
-  let quoteQuality: any = undefined;
-  let quoteTimestamp: any = undefined;
-  let referencePrice: any = undefined;
-
-  if (input.type === "MARKET") {
-    const evalQuote = evaluateExecutionQuote(input.quote, symbol);
-    if (!evalQuote.executable) {
-      return { ok: false, message: `Market order rejected: ${evalQuote.reason}`, account };
-    }
-
-    executionPrice = input.quote.price;
-    referencePrice = input.quote.price;
-    quoteSource = input.quote.source;
-    quoteQuality = input.quote.quality;
-    quoteTimestamp = input.quote.ts;
-  } else if (input.type === "LIMIT") {
-    if (input.limitPrice <= 0) {
-      return { ok: false, message: "Enter a valid limit price", account };
-    }
-    executionPrice = input.limitPrice;
-    referencePrice = input.limitPrice;
-  } else if (input.type === "STOP_LOSS_LIMIT") {
-    if (input.stopPrice <= 0 || input.limitPrice <= 0) {
-      return { ok: false, message: "Enter valid stop and limit prices", account };
-    }
-    executionPrice = input.limitPrice;
-    referencePrice = input.limitPrice;
-  }
-
-  // Margin validation for initial placement
-  const existingPosition = account.positions.find((p) => p.symbol.trim().toUpperCase() === symbol);
-  const reconPre = reconcilePosition({
-    existingQuantity: existingPosition ? existingPosition.quantity : 0,
-    existingAveragePrice: existingPosition ? existingPosition.averagePrice : 0,
-    side: input.side,
-    fillQuantity: input.quantity,
-    fillPrice: executionPrice,
-  });
-
-  const incMargin = calculateIncrementalMarginFromReconciliation(reconPre, executionPrice, 5);
-
-  let totalUnrealised = 0;
-  account.positions.forEach((p) => (totalUnrealised += p.unrealisedPnl));
-  const equity = account.cash + totalUnrealised;
-  const freeMargin = equity - account.allocatedMargin;
-
-  if (incMargin > 0 && freeMargin < incMargin) {
-    return { ok: false, message: "Insufficient free margin for 5x leverage", account };
+    return {
+      ok: false,
+      message: reason,
+      account,
+    };
   }
 
   const orderId = crypto.randomUUID();
   const now = new Date().toISOString();
-
   const newOrder: PaperOrder = {
     id: orderId,
-    symbol,
+    symbol: input.symbol,
     side: input.side,
     quantity: input.quantity,
     type: input.type,
-    limitPrice: input.type === "MARKET" ? undefined : input.limitPrice,
-    stopPrice: input.type === "STOP_LOSS_LIMIT" ? input.stopPrice : undefined,
+    limitPrice:
+      input.type === "MARKET"
+        ? undefined
+        : input.limitPrice,
+    stopPrice:
+      input.type === "STOP_LOSS_LIMIT"
+        ? input.stopPrice
+        : undefined,
     status: "PENDING",
     filledQuantity: 0,
-    stopLossPrice: input.type !== "STOP_LOSS_LIMIT" ? (input as { stopLossPrice?: number }).stopLossPrice : undefined,
-    takeProfitPrice: input.type !== "STOP_LOSS_LIMIT" ? (input as { takeProfitPrice?: number }).takeProfitPrice : undefined,
-    trailingDistance: input.type === "MARKET" ? input.trailingDistance : undefined,
-    trailingIsPercent: input.type === "MARKET" ? input.trailingIsPercent : undefined,
+    stopLossPrice:
+      input.type !== "STOP_LOSS_LIMIT"
+        ? input.stopLossPrice
+        : undefined,
+    takeProfitPrice:
+      input.type !== "STOP_LOSS_LIMIT"
+        ? input.takeProfitPrice
+        : undefined,
+    trailingDistance:
+      input.type === "MARKET"
+        ? input.trailingDistance
+        : undefined,
+    trailingIsPercent:
+      input.type === "MARKET"
+        ? input.trailingIsPercent
+        : undefined,
     createdAt: now,
     updatedAt: now,
-    quoteSource,
-    quoteQuality,
-    quoteTimestamp,
-    referencePrice,
+    quoteSource:
+      input.type === "MARKET"
+        ? input.quote.source
+        : undefined,
+    quoteQuality:
+      input.type === "MARKET"
+        ? input.quote.quality
+        : undefined,
+    quoteTimestamp:
+      input.type === "MARKET"
+        ? input.quote.ts
+        : undefined,
+    referencePrice:
+      input.type === "MARKET"
+        ? input.quote.price
+        : undefined,
   };
 
-  const updatedOrders = [newOrder, ...account.orders].slice(0, 200);
-  let nextAccount: PaperAccount = { ...account, orders: updatedOrders };
+  const nextAccount: PaperAccount = {
+    ...account,
+    orders: [newOrder, ...account.orders].slice(0, 200),
+  };
 
-  if (input.type === "MARKET") {
-    const slippage = calculateSlippage(executionPrice, input.quantity);
-    const fillPrice = input.side === "BUY" ? executionPrice + slippage : Math.max(0.05, executionPrice - slippage);
-    const fees = fillPrice * input.quantity * 0.0000345;
-
-    try {
-      const fillRes = executePaperFill({
-        account: nextAccount,
-        order: newOrder,
-        fillQuantity: input.quantity,
-        quote: input.quote,
-        fillPrice,
-        slippage,
-        fees,
-        reason: "USER_ORDER",
-      });
-      return { ok: true, message: `${input.side} filled at ₹${fillPrice.toFixed(2)}`, account: fillRes.account };
-    } catch (err: any) {
-      const rejectedOrder: PaperOrder = {
-        ...newOrder,
-        status: "REJECTED",
-        rejectionReason: err?.message || "Order rejected",
-        updatedAt: now,
-      };
-      const rejectedOrders = nextAccount.orders.map((o) => (o.id === newOrder.id ? rejectedOrder : o));
-      return { ok: false, message: err?.message || "Order rejected", account: { ...nextAccount, orders: rejectedOrders } };
-    }
+  if (input.type !== "MARKET") {
+    return {
+      ok: true,
+      message: `${input.type} paper order queued`,
+      account: nextAccount,
+    };
   }
 
-  return { ok: true, message: `${input.type} paper order queued`, account: nextAccount };
+  try {
+    const fillResult = executePaperFill({
+      account: nextAccount,
+      order: newOrder,
+      fillQuantity: input.quantity,
+      quote: input.quote,
+      reason: "USER_ORDER",
+    });
+    return {
+      ok: true,
+      message: `${input.side} filled at ₹${fillResult.fill.fillPrice.toFixed(2)}`,
+      account: fillResult.account,
+    };
+  } catch (error: unknown) {
+    const rejectionReason = getErrorMessage(error);
+    const rejectedOrder: PaperOrder = {
+      ...newOrder,
+      status: "REJECTED",
+      rejectionReason,
+      updatedAt: now,
+    };
+    return {
+      ok: false,
+      message: rejectionReason,
+      account: {
+        ...nextAccount,
+        orders: nextAccount.orders.map((order) =>
+          order.id === newOrder.id
+            ? rejectedOrder
+            : order
+        ),
+      },
+    };
+  }
+}
+
+function updateOrder(
+  account: PaperAccount,
+  updatedOrder: PaperOrder
+): PaperAccount {
+  return {
+    ...account,
+    orders: account.orders.map((order) =>
+      order.id === updatedOrder.id ? updatedOrder : order
+    ),
+  };
 }
 
 export function settlePaperAccount(
@@ -370,237 +637,291 @@ export function settlePaperAccount(
 ): PaperAccount {
   if (account.status === "LIQUIDATED") return account;
 
-  let next = { ...account };
+  let next: PaperAccount = {
+    ...account,
+    positions: [...account.positions],
+    orders: [...account.orders],
+    fills: [...account.fills],
+  };
   let updated = false;
-
-  // 1. Update Unrealised PnL on positions using validated quotes
   let totalUnrealised = 0;
-  next.positions = next.positions.map((pos) => {
-    const quote = quotes.get(pos.symbol);
-    const evalResult = quote ? evaluateExecutionQuote(quote, pos.symbol) : { executable: false };
 
-    if (!evalResult.executable || !quote) {
-      totalUnrealised += pos.unrealisedPnl;
-      return pos;
+  next.positions = next.positions.map(
+    (position): PaperPosition => {
+      const quote = quotes.get(position.symbol);
+      const evaluation = quote
+        ? evaluateExecutionQuote(quote, position.symbol)
+        : { executable: false };
+
+      if (!evaluation.executable || !quote) {
+        totalUnrealised += position.unrealisedPnl;
+        return position;
+      }
+
+      const unrealisedPnl =
+        position.quantity > 0
+          ? position.quantity *
+            (quote.price - position.averagePrice)
+          : Math.abs(position.quantity) *
+            (position.averagePrice - quote.price);
+      totalUnrealised += unrealisedPnl;
+      if (unrealisedPnl !== position.unrealisedPnl) {
+        updated = true;
+      }
+      return {
+        ...position,
+        unrealisedPnl,
+      };
     }
-
-    const ltp = quote.price;
-    const unrealised =
-      pos.quantity > 0
-        ? pos.quantity * (ltp - pos.averagePrice)
-        : Math.abs(pos.quantity) * (pos.averagePrice - ltp);
-
-    totalUnrealised += unrealised;
-    if (unrealised !== pos.unrealisedPnl) updated = true;
-    return { ...pos, unrealisedPnl: unrealised };
-  });
+  );
 
   const equity = next.cash + totalUnrealised;
-
-  // 2. Liquidation State Machine Check
-  if (next.status === "ACTIVE") {
-    if (equity < next.maintenanceMargin && next.positions.length > 0) {
-      next.status = "LIQUIDATION_PENDING";
-      next.lockReason = "Margin call breach";
-      next.lockedAt = new Date().toISOString();
-      updated = true;
-    }
+  if (
+    next.status === "ACTIVE" &&
+    equity < next.maintenanceMargin &&
+    next.positions.length > 0
+  ) {
+    next.status = "LIQUIDATION_PENDING";
+    next.lockReason = "Margin call breach";
+    next.lockedAt = new Date().toISOString();
+    updated = true;
   }
 
   if (next.status === "LIQUIDATION_PENDING") {
-    for (const pos of next.positions) {
-      const posQuote = quotes.get(pos.symbol);
-      const evalPosQ = posQuote ? evaluateExecutionQuote(posQuote, pos.symbol) : { executable: false };
+    for (const positionSnapshot of [...next.positions]) {
+      const position = next.positions.find((candidate) =>
+        sameSymbol(candidate.symbol, positionSnapshot.symbol)
+      );
+      if (!position) continue;
 
-      if (evalPosQ.executable && posQuote) {
-        const fillPrice = posQuote.price;
-        const qty = Math.abs(pos.quantity);
-        const slippage = calculateSlippage(fillPrice, qty);
-        const effectiveFill = pos.quantity > 0 ? Math.max(0.05, fillPrice - slippage) : fillPrice + slippage;
-        const fees = effectiveFill * qty * 0.0000345;
-        const now = new Date().toISOString();
+      const quote = quotes.get(position.symbol);
+      const evaluation = quote
+        ? evaluateExecutionQuote(quote, position.symbol)
+        : { executable: false };
+      if (!evaluation.executable || !quote) continue;
 
-        const liquidationOrder: PaperOrder = {
-          id: crypto.randomUUID(),
-          symbol: pos.symbol,
-          side: pos.quantity > 0 ? "SELL" : "BUY",
-          quantity: qty,
-          type: "MARKET",
-          status: "PENDING",
-          filledQuantity: 0,
-          createdAt: now,
-          updatedAt: now,
-          quoteSource: posQuote.source,
-          quoteQuality: posQuote.quality,
-          quoteTimestamp: posQuote.ts,
-          referencePrice: posQuote.price,
-        };
+      const now = new Date().toISOString();
+      const liquidationOrder: PaperOrder = {
+        id: crypto.randomUUID(),
+        symbol: position.symbol,
+        side: position.quantity > 0 ? "SELL" : "BUY",
+        quantity: Math.abs(position.quantity),
+        type: "MARKET",
+        status: "PENDING",
+        filledQuantity: 0,
+        createdAt: now,
+        updatedAt: now,
+        quoteSource: quote.source,
+        quoteQuality: quote.quality,
+        quoteTimestamp: quote.ts,
+        referencePrice: quote.price,
+      };
+      next.orders = [
+        liquidationOrder,
+        ...next.orders,
+      ].slice(0, 200);
 
-        next.orders = [liquidationOrder, ...next.orders].slice(0, 200);
-
-        try {
-          const fillRes = executePaperFill({
-            account: next,
-            order: liquidationOrder,
-            fillQuantity: qty,
-            quote: posQuote,
-            fillPrice: effectiveFill,
-            slippage,
-            fees,
-            reason: "MARGIN_LIQUIDATION",
-          });
-          next = fillRes.account;
-          updated = true;
-        } catch (err) {
-          console.error(`[settlePaperAccount] Liquidation fill failed for ${pos.symbol}:`, err);
-        }
+      try {
+        next = executePaperFill({
+          account: next,
+          order: liquidationOrder,
+          fillQuantity: liquidationOrder.quantity,
+          quote,
+          reason: "MARGIN_LIQUIDATION",
+        }).account;
+        updated = true;
+      } catch (error: unknown) {
+        console.error(
+          "[settlePaperAccount] Liquidation fill rejected",
+          {
+            symbol: position.symbol,
+            reason: getErrorMessage(error),
+          }
+        );
       }
     }
 
     if (next.positions.length === 0) {
       next.status = "LIQUIDATED";
       next.lockReason = "Margin call liquidation completed";
-      next.liquidationCompletedAt = new Date().toISOString();
+      next.liquidationCompletedAt =
+        new Date().toISOString();
       updated = true;
     }
 
-    return next;
+    return updated ? next : account;
   }
 
-  // 3. Match pending/triggered orders (ACTIVE accounts only)
-  if (next.status !== "ACTIVE") return updated ? next : account;
+  if (next.status !== "ACTIVE") {
+    return updated ? next : account;
+  }
 
-  for (let i = 0; i < next.orders.length; i++) {
-    const order = next.orders[i];
-    if (order.status !== "PENDING" && order.status !== "TRIGGERED" && order.status !== "PARTIALLY_FILLED") continue;
+  for (const orderSnapshot of [...next.orders]) {
+    let order =
+      next.orders.find(
+        (candidate) => candidate.id === orderSnapshot.id
+      ) ?? orderSnapshot;
+    if (
+      order.status !== "PENDING" &&
+      order.status !== "TRIGGERED" &&
+      order.status !== "PARTIALLY_FILLED"
+    ) {
+      continue;
+    }
 
     const quote = quotes.get(order.symbol);
     if (!quote) continue;
+    const evaluation = evaluateExecutionQuote(
+      quote,
+      order.symbol
+    );
+    if (!evaluation.executable) continue;
 
-    const evalQuote = evaluateExecutionQuote(quote, order.symbol);
-    if (!evalQuote.executable) continue;
+    let isTriggered =
+      order.status === "TRIGGERED" ||
+      (order.status === "PARTIALLY_FILLED" &&
+        order.triggeredAt !== undefined);
+    let reason: PaperExecutionReason = "USER_ORDER";
 
-    const ltp = quote.price;
-    const ask = quote.price;
-    const bid = quote.price;
-    const volume = quote.volume;
-
-    let isTriggered = order.status === "TRIGGERED";
-    let isMatched = false;
-    let fillPrice = 0;
-    let slippage = 0;
-
-    // Trailing stop high/low watermark updates
-    if (order.trailingDistance && order.trailingDistance > 0 && order.type === "MARKET") {
-      const dist = order.trailingDistance;
-      const isPercent = !!order.trailingIsPercent;
-
+    if (
+      order.trailingDistance &&
+      order.trailingDistance > 0 &&
+      order.type === "MARKET"
+    ) {
+      const distance = order.trailingDistance;
+      const isPercentage = order.trailingIsPercent === true;
       if (order.side === "SELL") {
-        let hwm = order.trailingHighWatermark ?? null;
-        if (hwm === null || hwm === 0 || ltp > hwm) {
-          hwm = ltp;
-          const stopPrice = isPercent ? hwm * (1 - dist / 100) : hwm - dist;
-          order.trailingHighWatermark = hwm;
-          order.stopPrice = stopPrice;
+        const highWatermark =
+          order.trailingHighWatermark === undefined ||
+          quote.price > order.trailingHighWatermark
+            ? quote.price
+            : order.trailingHighWatermark;
+        const stopPrice = isPercentage
+          ? highWatermark * (1 - distance / 100)
+          : highWatermark - distance;
+        if (
+          highWatermark !== order.trailingHighWatermark ||
+          stopPrice !== order.stopPrice
+        ) {
+          order = {
+            ...order,
+            trailingHighWatermark: highWatermark,
+            stopPrice,
+            updatedAt: new Date().toISOString(),
+          };
+          next = updateOrder(next, order);
           updated = true;
         }
-        if (ltp <= (order.stopPrice ?? 0)) isTriggered = true;
+        if (quote.price <= stopPrice) isTriggered = true;
       } else {
-        let lwm = order.trailingLowWatermark ?? null;
-        if (lwm === null || lwm === 0 || ltp < lwm) {
-          lwm = ltp;
-          const stopPrice = isPercent ? lwm * (1 + dist / 100) : lwm + dist;
-          order.trailingLowWatermark = lwm;
-          order.stopPrice = stopPrice;
+        const lowWatermark =
+          order.trailingLowWatermark === undefined ||
+          quote.price < order.trailingLowWatermark
+            ? quote.price
+            : order.trailingLowWatermark;
+        const stopPrice = isPercentage
+          ? lowWatermark * (1 + distance / 100)
+          : lowWatermark + distance;
+        if (
+          lowWatermark !== order.trailingLowWatermark ||
+          stopPrice !== order.stopPrice
+        ) {
+          order = {
+            ...order,
+            trailingLowWatermark: lowWatermark,
+            stopPrice,
+            updatedAt: new Date().toISOString(),
+          };
+          next = updateOrder(next, order);
           updated = true;
         }
-        if (ltp >= (order.stopPrice ?? 0)) isTriggered = true;
+        if (quote.price >= stopPrice) isTriggered = true;
       }
+      if (isTriggered) reason = "TRAILING_STOP";
     }
 
-    // STOP_LOSS_LIMIT trigger evaluation (Never converts to MARKET!)
-    if (order.type === "STOP_LOSS_LIMIT" && order.status === "PENDING") {
-      if (order.stopPrice && order.stopPrice > 0) {
-        if (order.side === "BUY" && ltp >= order.stopPrice) {
-          isTriggered = true;
-        } else if (order.side === "SELL" && ltp <= order.stopPrice) {
-          isTriggered = true;
-        }
-      }
-
-      if (isTriggered) {
-        order.status = "TRIGGERED";
-        order.triggeredAt = quote.ts;
+    if (
+      order.type === "STOP_LOSS_LIMIT" &&
+      order.status === "PENDING"
+    ) {
+      const stopPrice = order.stopPrice;
+      if (
+        stopPrice !== undefined &&
+        ((order.side === "BUY" &&
+          quote.price >= stopPrice) ||
+          (order.side === "SELL" &&
+            quote.price <= stopPrice))
+      ) {
+        isTriggered = true;
+        order = {
+          ...order,
+          status: "TRIGGERED",
+          triggeredAt: quote.ts,
+          updatedAt: new Date().toISOString(),
+        };
+        next = updateOrder(next, order);
         updated = true;
       }
     }
 
-    // Order matching evaluation
-    if (order.type === "LIMIT" || (order.type === "STOP_LOSS_LIMIT" && order.status === "TRIGGERED")) {
-      const limit = order.limitPrice ?? 0;
-      if (limit > 0) {
-        if (order.side === "BUY" && ask <= limit) {
-          isMatched = true;
-          slippage = calculateSlippage(ask, order.quantity);
-          const rawPrice = ask + slippage;
-          fillPrice = Math.min(limit, rawPrice); // Limit protection invariant: fillPrice <= limitPrice
-        } else if (order.side === "SELL" && bid >= limit) {
-          isMatched = true;
-          slippage = calculateSlippage(bid, order.quantity);
-          const rawPrice = Math.max(0.05, bid - slippage);
-          fillPrice = Math.max(limit, rawPrice); // Limit protection invariant: fillPrice >= limitPrice
-        }
+    const isMarketable =
+      order.type === "MARKET"
+        ? !order.trailingDistance || isTriggered
+        : order.type === "LIMIT"
+          ? order.limitPrice !== undefined &&
+            (order.side === "BUY"
+              ? quote.price <= order.limitPrice
+              : quote.price >= order.limitPrice)
+          : isTriggered &&
+            order.limitPrice !== undefined &&
+            (order.side === "BUY"
+              ? quote.price <= order.limitPrice
+              : quote.price >= order.limitPrice);
+
+    if (!isMarketable) continue;
+
+    let fillQuantity =
+      order.quantity - order.filledQuantity;
+    if (
+      order.type === "LIMIT" ||
+      order.type === "STOP_LOSS_LIMIT"
+    ) {
+      if (quote.volume === undefined || quote.volume <= 0) {
+        continue;
       }
+      const maximumLiquidityFill = Math.floor(
+        quote.volume * 0.1
+      );
+      if (maximumLiquidityFill <= 0) continue;
+      fillQuantity = Math.min(
+        fillQuantity,
+        maximumLiquidityFill
+      );
     }
 
-    // Conservative Liquidity Handling for LIMIT & STOP_LOSS_LIMIT
-    if (isMatched && (order.type === "LIMIT" || order.type === "STOP_LOSS_LIMIT")) {
-      if (!volume || volume <= 0) {
-        // Missing or non-positive volume: DEFER fill per conservative liquidity policy
-        isMatched = false;
-      } else {
-        const availableQty = Math.floor(volume * 0.10); // 10% max liquidity fill
-        if (availableQty <= 0) {
-          isMatched = false;
-        }
-      }
+    if (fillQuantity <= 0) continue;
+    if (order.type === "STOP_LOSS_LIMIT") {
+      reason = "STOP_TRIGGER";
     }
 
-    if (isMatched) {
-      let fillQty = order.quantity - order.filledQuantity;
-      if (volume && volume > 0 && (order.type === "LIMIT" || order.type === "STOP_LOSS_LIMIT")) {
-        const maxLiquidityFill = Math.floor(volume * 0.10);
-        if (maxLiquidityFill > 0 && fillQty > maxLiquidityFill) {
-          fillQty = maxLiquidityFill;
+    try {
+      next = executePaperFill({
+        account: next,
+        order,
+        fillQuantity,
+        quote,
+        reason,
+      }).account;
+      updated = true;
+    } catch (error: unknown) {
+      console.error(
+        "[settlePaperAccount] Order fill rejected",
+        {
+          orderId: order.id,
+          symbol: order.symbol,
+          reason: getErrorMessage(error),
         }
-      }
-
-      if (fillQty > 0) {
-        const fees = fillPrice * fillQty * 0.0000345;
-        const reason: PaperExecutionReason =
-          order.type === "STOP_LOSS_LIMIT"
-            ? "STOP_TRIGGER"
-            : order.trailingDistance
-            ? "TRAILING_STOP"
-            : "USER_ORDER";
-
-        try {
-          const fillRes = executePaperFill({
-            account: next,
-            order,
-            fillQuantity: fillQty,
-            quote,
-            fillPrice,
-            slippage,
-            fees,
-            reason,
-          });
-          next = fillRes.account;
-          updated = true;
-        } catch (err) {
-          console.error(`[settlePaperAccount] Order fill failed for ${order.id}:`, err);
-        }
-      }
+      );
     }
   }
 

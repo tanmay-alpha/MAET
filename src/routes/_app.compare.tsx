@@ -146,7 +146,7 @@ function Compare() {
                     {quote?.changePct === undefined ? "—" : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}%`}
                   </td>
                   <td className="px-4 py-2 text-right font-mono">{quote?.previousClose?.toLocaleString("en-IN", { maximumFractionDigits: 2 }) ?? "—"}</td>
-                  <td className="px-4 py-2 text-right font-mono">{quote?.volume.toLocaleString("en-IN") ?? "—"}</td>
+                  <td className="px-4 py-2 text-right font-mono">{quote?.volume?.toLocaleString("en-IN") ?? "—"}</td>
                   <td className="px-4 py-2 text-right font-mono text-muted-foreground">
                     {quote?.ts ? new Date(quote.ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—"}
                   </td>

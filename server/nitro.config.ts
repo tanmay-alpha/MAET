@@ -20,6 +20,8 @@ const config = {
   serverDir: ".",
   compatibilityDate: "2026-07-03" as const,
   alias: {
+    "@shared/domain/paper-trading/execution":
+      "../shared/domain/paper-trading/execution.ts",
     "@shared/types/errors": "../shared/types/errors.ts",
     "@shared/types": "../shared/types/index.ts",
   },

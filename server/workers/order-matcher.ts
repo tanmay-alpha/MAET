@@ -23,7 +23,7 @@ export class OrderMatcherWorker {
       riskEngine.updatePrice(tick.symbol, tick.price);
 
       // 2. Coordinates order matching for this symbol
-      onTick(tick.symbol, tick.price, tick.price, tick.price, tick.volume)
+      onTick(tick)
         .catch((err) => {
           console.error(`[OrderMatcherWorker] Error processing tick for ${tick.symbol}:`, err);
         });

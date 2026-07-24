@@ -24,7 +24,7 @@ export function LiveTape({ rows = 12 }: { rows?: number }) {
               {quote.changePct === undefined ? "—" : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}%`}
             </span>
             <span className="w-20 text-right">{quote.price.toFixed(2)}</span>
-            <span className="w-20 text-right text-muted-foreground">{quote.volume.toLocaleString("en-IN")}</span>
+            <span className="w-20 text-right text-muted-foreground">{quote.volume?.toLocaleString("en-IN") ?? "—"}</span>
           </div>
         ))}
         {quotes.length === 0 && <div className="px-3 py-8 text-center text-xs text-muted-foreground">Waiting for real quotes…</div>}

@@ -236,6 +236,23 @@ mock.module("../../data/drizzle/client", () => {
 import { describe, it, expect, beforeEach } from "bun:test";
 import { calculateSlippage, getLiquidityTier } from "./slippage";
 import { onTick } from "./matcher";
+import type { Tick } from "@shared/types";
+
+function liveTick(
+  symbol: string,
+  price: number,
+  volume: number
+): Tick {
+  return {
+    exchange: "NSE",
+    symbol,
+    price,
+    volume,
+    ts: new Date().toISOString(),
+    source: "angelone",
+    quality: "live",
+  };
+}
 
 describe("Slippage Engine (Almgren-Chriss)", () => {
   it("classifies liquidity tiers correctly based on volume and cap", () => {
@@ -277,6 +294,30 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     testAvgVolume = 3000000;
   });
 
+  it("rejects a delayed quote at the database matcher boundary", async () => {
+    const pendingOrder = {
+      id: "delayed-boundary",
+      userId: testUserId,
+      symbol: TEST_SYMBOL,
+      exchange: "NSE",
+      side: "BUY",
+      type: "MARKET",
+      status: "PENDING",
+      qty: 10,
+    };
+    mockOrders.push(pendingOrder);
+    const delayedTick: Tick = {
+      ...liveTick(TEST_SYMBOL, 1000, 1000),
+      source: "yahoo",
+      quality: "delayed",
+    };
+
+    const receipts = await onTick(delayedTick);
+    expect(receipts).toHaveLength(0);
+    expect(pendingOrder.status).toBe("PENDING");
+    expect(mockPositions).toHaveLength(0);
+  });
+
   it("executes a MARKET BUY order and creates a position with slippage and fee", async () => {
     const orderId = "order-1";
     
@@ -292,7 +333,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
       qty: 100,
     });
 
-    const receipts = await onTick(TEST_SYMBOL, 1000, 999, 1001, 5000);
+    const receipts = await onTick(liveTick(TEST_SYMBOL, 1000, 5000));
     expect(receipts.length).toBe(1);
     expect(receipts[0].status).toBe("FILLED");
     expect(receipts[0].orderId).toBe(orderId);
@@ -302,7 +343,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
 
     const slippage = Number(mockOrders[0].slippageApplied);
     const fillPrice = Number(mockOrders[0].averageFillPrice);
-    expect(fillPrice).toBeCloseTo(1001 + slippage, 4);
+    expect(fillPrice).toBeCloseTo(1000 + slippage, 4);
 
     expect(mockPositions.length).toBe(1);
     expect(mockPositions[0].totalShares).toBe(100);
@@ -337,17 +378,17 @@ describe("Order Matching Engine (Mocked Integration)", () => {
       limitPrice: "1002.0000",
     });
 
-    let receipts = await onTick(TEST_SYMBOL, 1000, 999, 1001, 1000);
+    let receipts = await onTick(liveTick(TEST_SYMBOL, 1000, 1000));
     expect(receipts.length).toBe(0);
 
-    receipts = await onTick(TEST_SYMBOL, 997, 997, 998, 1000);
+    receipts = await onTick(liveTick(TEST_SYMBOL, 997, 1000));
     expect(receipts.length).toBe(1);
     expect(receipts[0].orderId).toBe(buyOrderId);
-    expect(receipts[0].price).toBe(998.0000);
+    expect(receipts[0].price).toBe(997.5);
 
     mockOrders = mockOrders.filter(o => o.id !== buyOrderId);
 
-    receipts = await onTick(TEST_SYMBOL, 1002, 1002, 1003, 1000);
+    receipts = await onTick(liveTick(TEST_SYMBOL, 1002, 1000));
     expect(receipts.length).toBe(1);
     expect(receipts[0].orderId).toBe(sellOrderId);
     expect(receipts[0].price).toBe(1002.0000);
@@ -368,10 +409,12 @@ describe("Order Matching Engine (Mocked Integration)", () => {
       qty: 500,
     });
 
-    const receipts = await onTick(TEST_SYMBOL, 1000, 999, 1001, 5000);
+    const receipts = await onTick(liveTick(TEST_SYMBOL, 1000, 5000));
     expect(receipts.length).toBe(1);
     expect(receipts[0].status).toBe("REJECTED");
-    expect(receipts[0].rejectReason).toBe("Insufficient margin");
+    expect(receipts[0].rejectReason).toContain(
+      "projected free margin"
+    );
     expect(mockOrders[0].status).toBe("REJECTED");
   });
 
@@ -392,7 +435,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
       takeProfitPrice: "1010.0000",
     });
 
-    let receipts = await onTick(TEST_SYMBOL, 999, 999, 1000, 1000);
+    let receipts = await onTick(liveTick(TEST_SYMBOL, 999, 1000));
     expect(receipts.length).toBe(1);
     expect(receipts[0].orderId).toBe(parentId);
 
@@ -405,7 +448,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     expect(slOrder.status).toBe("TRIGGER_PENDING");
 
     // Tick the price to exactly 990 to trigger AND match the Sell Stop Loss Limit order
-    receipts = await onTick(TEST_SYMBOL, 990, 990, 991, 1000);
+    receipts = await onTick(liveTick(TEST_SYMBOL, 990, 1000));
     
     expect(receipts.length).toBe(1);
     expect(receipts[0].orderId).toBe(slOrder.id);
@@ -434,7 +477,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     mockAccounts[0].maintenanceMargin = "16000.0000";
 
     // Tick price drops to 800 - triggers auto-liquidation instantly inside onTick
-    await onTick(TEST_SYMBOL, 800, 799, 801, 5000);
+    await onTick(liveTick(TEST_SYMBOL, 800, 5000));
 
     // Verify position was liquidated
     expect(mockPositions.length).toBe(0);
@@ -463,8 +506,8 @@ describe("Order Matching Engine (Mocked Integration)", () => {
       symbol: TEST_SYMBOL,
       exchange: "NSE",
       side: "SELL",
-      type: "STOP_LOSS_LIMIT",
-      status: "TRIGGER_PENDING",
+      type: "MARKET",
+      status: "PENDING",
       qty: 10,
       trailingDistance: "10.0000",
       isTrailingPercent: false,
@@ -475,26 +518,26 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     mockOrders.push(trailingOrder);
 
     // First tick: initialize HWM and stopPrice
-    let receipts = await onTick(TEST_SYMBOL, 1000, 1000, 1000, 1000);
+    let receipts = await onTick(liveTick(TEST_SYMBOL, 1000, 1000));
     expect(receipts.length).toBe(0);
     expect(trailingOrder.trailingHwm).toBe("1000");
     expect(trailingOrder.stopPrice).toBe("990");
-    expect(trailingOrder.status).toBe("TRIGGER_PENDING");
+    expect(trailingOrder.status).toBe("PENDING");
 
     // Second tick: price goes up to 1010, HWM should update, stopPrice updates to 1000
-    receipts = await onTick(TEST_SYMBOL, 1010, 1010, 1010, 1000);
+    receipts = await onTick(liveTick(TEST_SYMBOL, 1010, 1000));
     expect(receipts.length).toBe(0);
     expect(trailingOrder.trailingHwm).toBe("1010");
     expect(trailingOrder.stopPrice).toBe("1000");
 
     // Third tick: price falls to 1005 (above stopPrice), nothing triggers
-    receipts = await onTick(TEST_SYMBOL, 1005, 1005, 1005, 1000);
+    receipts = await onTick(liveTick(TEST_SYMBOL, 1005, 1000));
     expect(receipts.length).toBe(0);
     expect(trailingOrder.trailingHwm).toBe("1010");
     expect(trailingOrder.stopPrice).toBe("1000");
 
     // Fourth tick: price falls to 999 (below stopPrice), triggers market sell order
-    receipts = await onTick(TEST_SYMBOL, 999, 999, 999, 1000);
+    receipts = await onTick(liveTick(TEST_SYMBOL, 999, 1000));
     expect(receipts.length).toBe(1);
     expect(receipts[0].status).toBe("FILLED");
     expect(trailingOrder.status).toBe("FILLED");
@@ -518,7 +561,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     };
     mockOrders.push(normalOrder);
 
-    const receipts = await onTick(TEST_SYMBOL, 990, 990, 990, 1000);
+    const receipts = await onTick(liveTick(TEST_SYMBOL, 990, 1000));
     expect(receipts.length).toBe(1);
     expect(receipts[0].status).toBe("REJECTED");
     expect(receipts[0].rejectReason).toBe("Account locked due to margin call");
@@ -545,17 +588,17 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     };
     mockOrders.push(largeLimitOrder);
 
-    // Tick volume is 30, so fill qty should be capped at 30
-    let receipts = await onTick(TEST_SYMBOL, 990, 990, 990, 30);
+    // Conservative liquidity allows 10% of tick volume.
+    let receipts = await onTick(liveTick(TEST_SYMBOL, 990, 30));
     expect(receipts.length).toBe(1);
     expect(receipts[0].status).toBe("PARTIALLY_FILLED");
     expect(largeLimitOrder.status).toBe("PARTIALLY_FILLED");
-    expect(largeLimitOrder.filledQty).toBe(30);
+    expect(largeLimitOrder.filledQty).toBe(3);
     expect(mockPositions.length).toBe(1);
-    expect(mockPositions[0].totalShares).toBe(30);
+    expect(mockPositions[0].totalShares).toBe(3);
 
-    // Next tick volume is 80, remaining is 70, so it should fully fill
-    receipts = await onTick(TEST_SYMBOL, 990, 990, 990, 80);
+    // The next liquid tick fills the remaining quantity.
+    receipts = await onTick(liveTick(TEST_SYMBOL, 990, 1000));
     expect(receipts.length).toBe(1);
     expect(receipts[0].status).toBe("FILLED");
     expect(largeLimitOrder.status).toBe("FILLED");
@@ -563,7 +606,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     expect(mockPositions[0].totalShares).toBe(100);
   });
 
-  it("triggers stop-loss limit order during a gap-down (market conversion)", async () => {
+  it("keeps a stop-loss limit pending at its limit during a gap-down", async () => {
     mockOrders = [];
     mockPositions = [];
     mockAccounts[0].isLocked = false;
@@ -585,13 +628,12 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     mockOrders.push(slLimitOrder);
 
     // Price gaps down from 1010 to 980 (below stopPrice of 1000 AND limitPrice of 995)
-    // Gap protection should convert it to a MARKET order and match it at 980
-    const receipts = await onTick(TEST_SYMBOL, 980, 980, 980, 1000);
-    expect(receipts.length).toBe(1);
-    expect(receipts[0].status).toBe("FILLED");
-    expect(slLimitOrder.type).toBe("MARKET");
-    expect(slLimitOrder.status).toBe("FILLED");
-    expect(Number(slLimitOrder.averageFillPrice)).toBeLessThan(995); // filled at gap price
+    // A gap through the limit triggers the order but must not convert it to market.
+    const receipts = await onTick(liveTick(TEST_SYMBOL, 980, 1000));
+    expect(receipts).toHaveLength(0);
+    expect(slLimitOrder.type).toBe("STOP_LOSS_LIMIT");
+    expect(slLimitOrder.status).toBe("PENDING");
+    expect(slLimitOrder.averageFillPrice).toBeUndefined();
   });
 
   it("cancels OCO sibling order completely or adjusts size on partial fill", async () => {
@@ -630,7 +672,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     mockOrders.push(tpOrder, slOrder);
 
     // 1. Partial fill TP order by 3 shares. Sibling SL order should have quantity reduced by 3
-    let receipts = await onTick(TEST_SYMBOL, 1010, 1010, 1010, 3);
+    let receipts = await onTick(liveTick(TEST_SYMBOL, 1010, 30));
     expect(receipts.length).toBe(1);
     expect(receipts[0].orderId).toBe("tp-oco");
     expect(receipts[0].status).toBe("PARTIALLY_FILLED");
@@ -638,7 +680,7 @@ describe("Order Matching Engine (Mocked Integration)", () => {
     expect(slOrder.qty).toBe(7); // reduced qty to match remaining position size
 
     // 2. Full fill TP order on next tick. Sibling SL order should be completely cancelled
-    receipts = await onTick(TEST_SYMBOL, 1010, 1010, 1010, 1000);
+    receipts = await onTick(liveTick(TEST_SYMBOL, 1010, 1000));
     expect(receipts.length).toBe(1);
     expect(receipts[0].status).toBe("FILLED");
     expect(slOrder.status).toBe("CANCELLED");

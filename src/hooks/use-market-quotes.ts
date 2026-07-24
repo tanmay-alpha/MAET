@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   API_BASE_URL,
   fetchMarketQuotes,
+  MarketQuoteSchema,
   type MarketQuote,
   type MarketQuotesResponse,
 } from "@/lib/market-api";
@@ -15,13 +16,38 @@ function mergeQuote(response: MarketQuotesResponse | undefined, tick: MarketQuot
   return {
     asOf: new Date().toISOString(),
     source: tick.source,
-    delayed: tick.source !== "angelone",
+    delayed: tick.quality !== "live",
     errors: response?.errors ?? [],
     quotes,
   };
 }
 
-type StreamCallback = (type: "tick" | "snapshot", data: any) => void;
+type StreamCallback = (
+  type: "tick" | "snapshot",
+  data: MarketQuote
+) => void;
+
+function parseStreamQuotes(
+  raw: unknown,
+  type: "tick" | "snapshot"
+): MarketQuote[] {
+  let candidates: unknown[] = [raw];
+  if (
+    type === "snapshot" &&
+    raw !== null &&
+    typeof raw === "object"
+  ) {
+    const rawQuotes = (raw as Record<string, unknown>).quotes;
+    if (Array.isArray(rawQuotes)) {
+      candidates = rawQuotes;
+    }
+  }
+
+  return candidates.flatMap((candidate) => {
+    const parsed = MarketQuoteSchema.safeParse(candidate);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
 
 class MarketStreamManager {
   private static instance: MarketStreamManager | null = null;
@@ -114,26 +140,22 @@ class MarketStreamManager {
 
       const handleMessage = (type: "tick" | "snapshot") => (event: MessageEvent<string>) => {
         try {
-          const data = JSON.parse(event.data);
-
-          if (type === "snapshot") {
-            const quotes = data.quotes || [];
-            quotes.forEach((quote: any) => {
-              const symbol = quote.symbol;
-              const symbolListeners = this.listeners.get(symbol);
-              if (symbolListeners) {
-                symbolListeners.forEach(cb => cb("snapshot", { quotes: [quote], errors: [] }));
-              }
-            });
-          } else {
-            const symbol = data.symbol;
+          const data: unknown = JSON.parse(event.data);
+          const quotes = parseStreamQuotes(data, type);
+          quotes.forEach((quote) => {
+            const symbol = quote.symbol;
             const symbolListeners = this.listeners.get(symbol);
             if (symbolListeners) {
-              symbolListeners.forEach(cb => cb("tick", data));
+              symbolListeners.forEach((callback) =>
+                callback(type, quote)
+              );
             }
-          }
-        } catch (e) {
-          console.error("Failed to parse market stream message:", e);
+          });
+        } catch (error: unknown) {
+          console.error(
+            "Failed to parse market stream message:",
+            error
+          );
         }
       };
 
@@ -191,14 +213,11 @@ export function useMarketQuotes(symbols: string[]) {
     const manager = MarketStreamManager.getInstance();
     const unsubscribe = manager.subscribe(
       normalized,
-      (type, data) => {
-        if (type === "tick") {
-          queryClient.setQueryData<MarketQuotesResponse>(queryKey, (current) => mergeQuote(current, data));
-        } else if (type === "snapshot") {
-          data.quotes.forEach((quote: any) => {
-            queryClient.setQueryData<MarketQuotesResponse>(queryKey, (current) => mergeQuote(current, quote));
-          });
-        }
+      (_type, quote) => {
+        queryClient.setQueryData<MarketQuotesResponse>(
+          queryKey,
+          (current) => mergeQuote(current, quote)
+        );
       },
       (connected) => {
         setStreamConnected(connected);

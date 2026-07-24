@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getQuery } from "h3";
 import { bus } from "../../infra/bus";
 import { loadQuotes } from "../../domain/market/quote-service";
 import { subscribeMarketSymbols } from "../../orchestrator";
+import type { Tick } from "@shared/types";
 
 let activeConnections = 0;
 const MAX_CONNECTIONS = 100;
@@ -42,7 +43,7 @@ export default defineEventHandler(async (event) => {
   const initial = await loadQuotes(symbols);
   send("snapshot", initial);
 
-  const pendingTicks = new Map<string, any>();
+  const pendingTicks = new Map<string, Tick>();
   const offTick = bus.on("tick", (tick) => {
     if (symbolSet.has(tick.symbol)) {
       pendingTicks.set(tick.symbol, tick);
