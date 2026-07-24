@@ -8,10 +8,10 @@
     "shared"
   ],
   "scripts": {
-    "build": "npm run build --prefix src",
+    "build": "bun run --cwd src build",
     "dev": "bun run server/orchestrator.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -p src/tsconfig.json --noEmit",
     "check:db": "bun --env-file=.env run server/scripts/check-db-connection.ts",
     "smoke:screener-v4": "bun run server/scripts/screener-v4-smoke-test.ts",
     "enrich:nifty500": "bun run server/scripts/enrich-nifty500.ts"

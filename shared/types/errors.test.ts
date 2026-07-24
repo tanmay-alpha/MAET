@@ -22,8 +22,9 @@ describe("shared types", () => {
       volume: 1000,
       ts: new Date().toISOString(),
       source: "yahoo",
+      quality: "delayed",
     };
-    expect(TickSchema.parse(tick)).toEqual(tick);
+    expect(TickSchema.parse(tick)).toEqual(tick as any);
   });
 
   it("round-trips a Candle", () => {

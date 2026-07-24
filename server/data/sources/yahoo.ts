@@ -115,6 +115,7 @@ export async function getQuote(
         ? new Date(r.meta.regularMarketTime * 1000).toISOString()
         : new Date().toISOString(),
       source: "yahoo",
+      quality: "delayed",
       previousClose,
       change,
       changePct: previousClose && change !== undefined ? (change / previousClose) * 100 : undefined,

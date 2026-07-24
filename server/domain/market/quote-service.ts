@@ -77,6 +77,7 @@ export async function loadQuotes(symbols: string[], force = false): Promise<Quot
           volume: snapshot.volume,
           ts: new Date().toISOString(),
           source: "angelone",
+          quality: "live",
           previousClose: snapshot.previousClose,
           change: snapshot.change,
           changePct: snapshot.changePct,

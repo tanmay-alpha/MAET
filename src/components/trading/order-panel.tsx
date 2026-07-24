@@ -43,6 +43,7 @@ export function OrderPanel({
       type: type === "MKT" ? "MARKET" : type === "LMT" ? "LIMIT" : "STOP_LOSS_LIMIT",
       limitPrice: type === "MKT" ? undefined : Number(limit),
       stopPrice: type === "SL" ? Number(limit) : undefined,
+      marketPrice: price,
       stopLossPrice: stopLoss ? Number(stopLoss) : undefined,
       takeProfitPrice: takeProfit ? Number(takeProfit) : undefined,
       trailingDistance: trailing ? Number(trailing) : undefined,

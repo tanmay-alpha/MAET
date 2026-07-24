@@ -18,6 +18,7 @@ describe("YahooPoller", () => {
       volume: 100,
       ts: new Date().toISOString(),
       source: "yahoo",
+      quality: "delayed",
     };
 
     const p = new YahooPoller({
@@ -58,6 +59,7 @@ describe("YahooPoller", () => {
           volume: 0,
           ts: new Date().toISOString(),
           source: "yahoo" as const,
+          quality: "delayed" as const,
         }));
       },
     });
@@ -84,6 +86,7 @@ describe("YahooPoller", () => {
           volume: 0,
           ts: new Date().toISOString(),
           source: "yahoo" as const,
+          quality: "delayed" as const,
         }));
       },
     });
@@ -118,6 +121,7 @@ describe("YahooPoller", () => {
           volume: 0,
           ts: new Date().toISOString(),
           source: "yahoo" as const,
+          quality: "delayed" as const,
         }));
       },
     });
