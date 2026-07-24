@@ -8,7 +8,7 @@
     "shared"
   ],
   "scripts": {
-    "build": "npm run build --prefix src",
+    "build": "bun run --cwd src build",
     "dev": "bun run server/orchestrator.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",

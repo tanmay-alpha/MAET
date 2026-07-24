@@ -235,7 +235,7 @@ export const portfolioRouter = createRouter({
       // Fetch current prices in batch
       const symbols = userPositions.map(p => p.symbol);
       const { quotes } = symbols.length > 0 ? await loadQuotes(symbols) : { quotes: [] };
-      const priceBySymbol = new Map(quotes.quotes.map(q => [q.symbol, q.price]));
+      const priceBySymbol = new Map(quotes.map(q => [q.symbol, q.price]));
 
       // Get company data in batch
       const companyData = symbols.length > 0

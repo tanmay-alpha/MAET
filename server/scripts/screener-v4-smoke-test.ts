@@ -139,7 +139,7 @@ async function fetchQuoteSnapshot(symbol: string): Promise<SmokeQuote | null> {
       volume: tick.volume,
       changePct: tick.changePct,
       asOf: new Date(tick.ts),
-      source: tick.source,
+      source: tick.source as any,
     };
   } catch (err) {
     console.warn(`  ⚠ Quote fetch failed for ${symbol}: ${err}`);
