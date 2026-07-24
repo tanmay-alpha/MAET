@@ -1,0 +1,78 @@
+name: CI Validation Workflow
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Code Quality & Unit Tests
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      BUN_TEST: "1"
+      ENABLE_MARKET_SIMULATOR: "false"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun Environment
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: TypeScript Type Check
+        run: bun run typecheck
+
+      - name: Run Test Suite
+        run: bun test
+
+  build-frontend:
+    name: Frontend Production Build
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun Environment
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Build Frontend Bundle
+        run: bun run build
+
+  build-backend:
+    name: Backend Server Build
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun Environment
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Build Backend Server
+        run: bun run build --prefix server
