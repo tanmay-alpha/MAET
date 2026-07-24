@@ -159,26 +159,31 @@ function Dashboard() {
                         </button>
                         <button
                           onClick={() => {
-                            if (window.confirm(`Are you sure you want to close your position in ${position.symbol}?`)) {
-                              const currentQuote = quoteMap.get(position.symbol);
-                              const result = placeOrder({
-                                symbol: position.symbol,
-                                side: isLong ? "SELL" : "BUY",
-                                qty: Math.abs(position.qty),
-                                type: "MARKET",
-                                marketPrice: currentQuote?.price,
-                                quote: currentQuote ? {
+                              if (window.confirm(`Are you sure you want to close your position in ${position.symbol}?`)) {
+                                const currentQuote = quoteMap.get(position.symbol);
+                                if (!currentQuote) {
+                                  alert("Position exit rejected: Market quote is unavailable.");
+                                  return;
+                                }
+                                const result = placeOrder({
+                                  type: "MARKET",
                                   symbol: position.symbol,
-                                  price: currentQuote.price,
-                                  ts: currentQuote.timestamp,
-                                  source: (currentQuote as any).source ?? "angelone",
-                                  quality: (currentQuote as any).quality ?? "live",
-                                } : undefined,
-                              });
-                              if (!result.ok) {
-                                alert(result.message);
+                                  side: isLong ? "SELL" : "BUY",
+                                  qty: Math.abs(position.qty),
+                                  quote: {
+                                    exchange: (currentQuote as any).exchange ?? "NSE",
+                                    symbol: position.symbol,
+                                    price: currentQuote.price,
+                                    volume: currentQuote.volume,
+                                    ts: currentQuote.timestamp ?? new Date().toISOString(),
+                                    source: (currentQuote as any).source ?? "angelone",
+                                    quality: (currentQuote as any).quality ?? "live",
+                                  },
+                                });
+                                if (!result.ok) {
+                                  alert(result.message);
+                                }
                               }
-                            }
                           }}
                           className="rounded bg-bear hover:bg-bear/90 text-white px-2 py-0.5 text-[10px] font-semibold transition"
                         >
