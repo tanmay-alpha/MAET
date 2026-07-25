@@ -16,13 +16,14 @@ let sqlClientInstance: postgres.Sql | null = null;
  */
 export function getDb() {
   if (!dbInstance) {
-    const connectionString = process.env.SUPABASE_DB_URL ||
+    const connectionString = process.env.TEST_DATABASE_URL ||
+                            process.env.SUPABASE_DB_URL ||
                             process.env.DATABASE_URL ||
                             process.env.POSTGRES_URL;
 
     if (!connectionString) {
       throw new Error(
-        "Database connection string not found. Set SUPABASE_DB_URL or DATABASE_URL env var."
+        "Database connection string not found. Set TEST_DATABASE_URL, SUPABASE_DB_URL or DATABASE_URL env var."
       );
     }
 
