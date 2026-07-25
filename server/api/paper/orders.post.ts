@@ -1,104 +1,52 @@
 import { defineEventHandler, readBody, createError } from "h3";
-import { db } from "../../data/drizzle/client";
-import { paperOrders, paperAccounts } from "../../db/schema";
-import { eq } from "drizzle-orm";
 import { requireAuth } from "../trpc/auth";
-import { onTick } from "../../domain/market/matcher";
-import { loadQuotes } from "../../domain/market/quote-service";
-import { evaluateExecutionQuote } from "@shared/types";
+import { createPaperTradingService } from "../../modules/paper-trading/service";
+import { PaperTradingError } from "../../modules/paper-trading/errors";
+
+const service = createPaperTradingService();
 
 export default defineEventHandler(async (event) => {
+  const auth = await requireAuth(event);
+  const body = await readBody(event);
+
   try {
-    const auth = await requireAuth(event);
-    const body = await readBody(event);
+    const qty = Number(body.quantity || body.qty);
+    const command = {
+      symbol: String(body.symbol || ""),
+      exchange: body.exchange ? String(body.exchange) : "NSE",
+      side: body.side as "BUY" | "SELL",
+      type: body.type as "MARKET" | "LIMIT" | "STOP_LOSS_LIMIT",
+      qty,
+      limitPrice: body.limitPrice ? Number(body.limitPrice) : undefined,
+      stopPrice: body.stopPrice ? Number(body.stopPrice) : undefined,
+      stopLossPrice: body.stopLossPrice ? Number(body.stopLossPrice) : undefined,
+      takeProfitPrice: body.takeProfitPrice ? Number(body.takeProfitPrice) : undefined,
+      clientOrderId: body.clientOrderId ? String(body.clientOrderId) : undefined,
+      idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey) : undefined,
+    };
 
-    const symbol = String(body.symbol).toUpperCase();
-    const side = String(body.side) as "BUY" | "SELL";
-    const type = String(body.type) as "MARKET" | "LIMIT" | "STOP_LOSS_LIMIT";
-    const qty = Number(body.qty);
-    const limitPrice = body.limitPrice ? String(body.limitPrice) : null;
-    const stopPrice = body.stopPrice ? String(body.stopPrice) : null;
-    const stopLossPrice = body.stopLossPrice ? String(body.stopLossPrice) : null;
-    const takeProfitPrice = body.takeProfitPrice ? String(body.takeProfitPrice) : null;
-    const trailingDistance = body.trailingDistance ? String(body.trailingDistance) : null;
-    const isTrailingPercent = body.isTrailingPercent === true;
+    const result = await service.placeOrder({
+      userId: auth.userId,
+      command,
+    });
 
-    if (!symbol || !side || !type || qty <= 0) {
+    return {
+      success: true,
+      order: result.order,
+      fill: result.fill,
+      account: result.account,
+      position: result.position,
+      idempotentReplay: result.idempotentReplay,
+      asOf: result.asOf.toISOString(),
+    };
+  } catch (error: unknown) {
+    if (error instanceof PaperTradingError) {
       throw createError({
         statusCode: 400,
-        statusMessage: "Invalid order parameters",
+        statusMessage: error.message,
+        data: { code: error.code, details: error.details },
       });
     }
-
-    // Locked Account Check
-    const [account] = await db
-      .select()
-      .from(paperAccounts)
-      .where(eq(paperAccounts.userId, auth.userId))
-      .limit(1);
-
-    if (account && (account.isLocked || Number(account.cashBalance) <= 0)) {
-      throw createError({
-        statusCode: 403,
-        statusMessage: "Your paper account is locked due to margin call liquidation or negative balance.",
-      });
-    }
-
-    // Load price
-    const quoteRes = await loadQuotes([symbol]);
-    const quote = quoteRes.quotes[0];
-    if (!quote) {
-      throw createError({
-        statusCode: 502,
-        statusMessage: "Market price currently unavailable for this symbol",
-      });
-    }
-    if (type === "MARKET") {
-      const policy = evaluateExecutionQuote(quote, symbol);
-      if (!policy.executable) {
-        throw createError({
-          statusCode: 409,
-          statusMessage:
-            policy.reason ??
-            "Quote cannot be used for execution",
-        });
-      }
-    }
-
-    const status = type === "MARKET" ? "PENDING" : type === "STOP_LOSS_LIMIT" ? "TRIGGER_PENDING" : "PENDING";
-
-    const inserted = await db
-      .insert(paperOrders)
-      .values({
-        id: crypto.randomUUID(),
-        userId: auth.userId,
-        symbol,
-        exchange: "NSE",
-        side,
-        type,
-        status,
-        qty,
-        limitPrice,
-        stopPrice,
-        stopLossPrice,
-        takeProfitPrice,
-        trailingDistance,
-        isTrailingPercent,
-        placedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .returning();
-
-    const order = inserted[0];
-
-    // If MARKET order, run immediate matching tick execution
-    if (type === "MARKET") {
-      await onTick(quote);
-    }
-
-    return { success: true, order };
-  } catch (error: any) {
-    console.error("[api/paper/orders.post] Error:", error);
     throw error;
   }
 });

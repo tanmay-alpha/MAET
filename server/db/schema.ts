@@ -20,7 +20,7 @@ export const orderType = pgEnum("order_type", ["MARKET", "LIMIT", "SL", "SL-M"])
 export const orderStatus = pgEnum("order_status", ["pending", "partial", "filled", "cancelled", "rejected"]);
 
 export const paperOrderType = pgEnum("paper_order_type", ["LIMIT", "MARKET", "STOP_LOSS_LIMIT"]);
-export const paperOrderStatus = pgEnum("paper_order_status", ["TRIGGER_PENDING", "PENDING", "PARTIALLY_FILLED", "FILLED", "REJECTED", "CANCELLED"]);
+export const paperOrderStatus = pgEnum("paper_order_status", ["TRIGGER_PENDING", "PENDING", "TRIGGERED", "PARTIALLY_FILLED", "FILLED", "REJECTED", "CANCELLED"]);
 export const paperExecutionType = pgEnum("paper_execution_type", ["IMMEDIATE_OR_CANCEL", "GOOD_TILL_CANCELLED"]);
 
 export const users = pgTable("users", {
@@ -377,6 +377,8 @@ export const anomalyFlags = pgTable("anomaly_flags", {
 // Paper Trading Tables
 // =============================================================================
 
+export const paperAccountStatus = pgEnum("paper_account_status", ["ACTIVE", "LIQUIDATION_PENDING", "LIQUIDATED"]);
+
 export const paperAccounts = pgTable("paper_accounts", {
   userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   cashBalance: numeric("cash_balance", { precision: 18, scale: 4 }).notNull().default("10000000.0000"),
@@ -387,6 +389,19 @@ export const paperAccounts = pgTable("paper_accounts", {
   isLocked: boolean("is_locked").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  // Phase 1 additions
+  initialCash: numeric("initial_cash", { precision: 18, scale: 4 }).notNull().default("1000000.0000"),
+  realisedPnl: numeric("realized_pnl", { precision: 18, scale: 4 }).notNull().default("0.0000"),
+  status: paperAccountStatus("status").notNull().default("ACTIVE"),
+  lockReason: text("lock_reason"),
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
+  liquidationCompletedAt: timestamp("liquidation_completed_at", { withTimezone: true }),
+  generation: integer("generation").notNull().default(1),
+  version: bigint("version", { mode: "number" }).notNull().default(1),
+  currency: text("currency").notNull().default("INR"),
+  lastEquity: numeric("last_equity", { precision: 18, scale: 4 }),
+  lastValuedAt: timestamp("last_valued_at", { withTimezone: true }),
+  resetAt: timestamp("reset_at", { withTimezone: true }),
 });
 
 export const paperOrders = pgTable("paper_orders", {
@@ -416,11 +431,26 @@ export const paperOrders = pgTable("paper_orders", {
   placedAt: timestamp("placed_at", { withTimezone: true }).notNull().defaultNow(),
   filledAt: timestamp("filled_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  // Phase 1 additions
+  clientOrderId: text("client_order_id"),
+  idempotencyKey: text("idempotency_key"),
+  generation: integer("generation").notNull().default(1),
+  triggeredAt: timestamp("triggered_at", { withTimezone: true }),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+  lastFillAt: timestamp("last_fill_at", { withTimezone: true }),
+  quoteSource: text("quote_source"),
+  quoteQuality: text("quote_quality"),
+  quoteTimestamp: timestamp("quote_timestamp", { withTimezone: true }),
+  referencePrice: numeric("reference_price", { precision: 18, scale: 4 }),
+  lastQuoteFingerprint: text("last_quote_fingerprint"),
+  version: bigint("version", { mode: "number" }).notNull().default(1),
 }, (table) => [
   index("paper_orders_user_idx").on(table.userId),
   index("paper_orders_symbol_idx").on(table.symbol),
   index("paper_orders_parent_idx").on(table.parentOrderId),
   index("paper_orders_status_idx").on(table.status),
+  // Partial unique index for idempotency (Phase 1)
+  uniqueIndex("paper_orders_user_idempotency_key_unique").on(table.userId, table.idempotencyKey).where(sql`${table.idempotencyKey} IS NOT NULL`),
 ]);
 
 export const paperPositions = pgTable("paper_positions", {
@@ -435,10 +465,95 @@ export const paperPositions = pgTable("paper_positions", {
   marginLocked: numeric("margin_locked", { precision: 18, scale: 4 }).notNull().default("0.0000"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  // Phase 1 additions
+  generation: integer("generation").notNull().default(1),
+  lastQuotePrice: numeric("last_quote_price", { precision: 18, scale: 4 }),
+  lastQuoteSource: text("last_quote_source"),
+  lastQuoteQuality: text("last_quote_quality"),
+  lastQuoteTimestamp: timestamp("last_quote_timestamp", { withTimezone: true }),
+  version: bigint("version", { mode: "number" }).notNull().default(1),
 }, (table) => [
-  uniqueIndex("paper_positions_user_symbol_exchange_unique").on(table.userId, table.symbol, table.exchange),
+  uniqueIndex("paper_positions_user_generation_symbol_exchange_unique").on(table.userId, table.generation, table.symbol, table.exchange),
   index("paper_positions_user_idx").on(table.userId),
   index("paper_positions_symbol_idx").on(table.symbol),
+]);
+
+export const paperFills = pgTable("paper_fills", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  orderId: uuid("order_id").notNull().references(() => paperOrders.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+
+  symbol: text("symbol").notNull(),
+  exchange: text("exchange").notNull().default("NSE"),
+  side: orderSide("side").notNull(),
+  quantity: integer("quantity").notNull(),
+
+  referencePrice: numeric("reference_price", { precision: 18, scale: 4 }).notNull(),
+  fillPrice: numeric("fill_price", { precision: 18, scale: 4 }).notNull(),
+  slippage: numeric("slippage", { precision: 18, scale: 4 }).notNull().default("0.0000"),
+  fees: numeric("fees", { precision: 18, scale: 4 }).notNull().default("0.0000"),
+  realizedPnl: numeric("realized_pnl", { precision: 18, scale: 4 }).notNull().default("0.0000"),
+
+  quoteSource: text("quote_source").notNull(),
+  quoteQuality: text("quote_quality").notNull(),
+  quoteTimestamp: timestamp("quote_timestamp", { withTimezone: true }).notNull(),
+  quoteFingerprint: text("quote_fingerprint").notNull(),
+
+  executionReason: text("execution_reason").notNull(),
+  executionSequence: integer("execution_sequence").notNull(),
+
+  executedAt: timestamp("executed_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("paper_fills_order_sequence_unique").on(table.orderId, table.executionSequence),
+  uniqueIndex("paper_fills_order_fingerprint_unique").on(table.orderId, table.quoteFingerprint),
+  index("paper_fills_user_generation_executed_idx").on(table.userId, table.generation, table.executedAt),
+  index("paper_fills_order_executed_idx").on(table.orderId, table.executedAt),
+  index("paper_fills_user_generation_symbol_idx").on(table.userId, table.generation, table.symbol),
+]);
+
+export const paperLedgerEntries = pgTable("paper_ledger_entries", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+
+  fillId: uuid("fill_id").references(() => paperFills.id, { onDelete: "set null" }),
+
+  entryType: text("entry_type").notNull(),
+  amount: numeric("amount", { precision: 18, scale: 4 }).notNull(),
+  balanceAfter: numeric("balance_after", { precision: 18, scale: 4 }).notNull(),
+  currency: text("currency").notNull().default("INR"),
+
+  sourceType: text("source_type").notNull(),
+  sourceId: text("source_id").notNull(),
+  metadata: jsonb("metadata").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("paper_ledger_unique").on(table.userId, table.generation, table.sourceType, table.sourceId, table.entryType),
+  index("paper_ledger_user_generation_created_idx").on(table.userId, table.generation, table.createdAt),
+  index("paper_ledger_fill_id_idx").on(table.fillId),
+]);
+
+export const paperOutboxEvents = pgTable("paper_outbox_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+
+  eventType: text("event_type").notNull(),
+  aggregateType: text("aggregate_type").notNull(),
+  aggregateId: text("aggregate_id").notNull(),
+  payload: jsonb("payload").notNull(),
+
+  status: text("status").notNull().default("PENDING"),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  lastError: text("last_error"),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+}, (table) => [
+  index("paper_outbox_status_nextattempt_created_idx").on(table.status, table.nextAttemptAt, table.createdAt),
+  index("paper_outbox_user_created_idx").on(table.userId, table.createdAt),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -552,7 +667,7 @@ export const paperPortfolioSnapshots = pgTable("paper_portfolio_snapshots", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   cashBalance: numeric("cash_balance", { precision: 18, scale: 4 }).notNull(),
-  equity: numeric("equity", { precision: 18, scale: 4 }).notNull(), // cash_balance + unrealized_pnl
+  equity: numeric("equity", { precision: 18, scale: 4 }).notNull(),
   marginUsed: numeric("margin_used", { precision: 18, scale: 4 }).notNull(),
   unrealizedPnl: numeric("unrealized_pnl", { precision: 18, scale: 4 }).notNull(),
   realizedPnl: numeric("realized_pnl", { precision: 18, scale: 4 }).notNull(),
@@ -561,4 +676,6 @@ export const paperPortfolioSnapshots = pgTable("paper_portfolio_snapshots", {
   index("paper_portfolio_snapshots_user_idx").on(table.userId),
   index("paper_portfolio_snapshots_time_idx").on(table.snapshotTime),
 ]);
+
+
 

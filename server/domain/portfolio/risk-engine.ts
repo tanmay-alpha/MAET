@@ -1,7 +1,6 @@
 import { db } from "../../data/drizzle/client";
 import { sql, eq } from "drizzle-orm";
 import { paperAccounts } from "../../db/schema";
-import { liquidateAccount } from "../market/matcher";
 
 export class RiskEngine {
   private static instance: RiskEngine | null = null;
@@ -18,16 +17,10 @@ export class RiskEngine {
     return RiskEngine.instance;
   }
 
-  /**
-   * Update the price cache with live tick data
-   */
   public updatePrice(symbol: string, price: number): void {
     this.prices.set(symbol.toUpperCase(), price);
   }
 
-  /**
-   * Start the periodic risk engine monitor loop (defaults to checking every 2 seconds)
-   */
   public start(intervalMs = 2000): void {
     if (this.isMonitoring) return;
     this.isMonitoring = true;
@@ -41,9 +34,6 @@ export class RiskEngine {
     console.log(`[RiskEngine] Started background risk monitoring at ${intervalMs}ms interval`);
   }
 
-  /**
-   * Stop the risk monitoring loop
-   */
   public stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
@@ -53,16 +43,12 @@ export class RiskEngine {
     console.log("[RiskEngine] Stopped background risk monitoring");
   }
 
-  /**
-   * Query PL/pgSQL function to locate accounts breaching margin requirements and trigger liquidations
-   */
   public async monitorRisk(): Promise<void> {
     if (this.prices.size === 0) return;
 
     const livePricesObj = Object.fromEntries(this.prices.entries());
     const livePricesJson = JSON.stringify(livePricesObj);
 
-    // Call Supabase DB custom PL/pgSQL calculate_live_margin function
     const query = sql`SELECT * FROM calculate_live_margin(${livePricesJson}::jsonb)`;
     const breachedAccounts = await db.execute<{
       user_id: string;
@@ -83,7 +69,6 @@ export class RiskEngine {
       const userId = breached.user_id;
       try {
         await db.transaction(async (tx) => {
-          // Lock the account to prevent order placement races
           const [account] = await tx
             .select()
             .from(paperAccounts)
@@ -91,12 +76,19 @@ export class RiskEngine {
             .for("update");
 
           if (!account || account.isLocked) {
-            return; // Already locked or liquidated
+            return;
           }
 
-          // Trigger portfolio-wide liquidation
-          // Symbol/ltp fallbacks are resolved dynamically using quoteStore inside liquidateAccount
-          await liquidateAccount(tx, userId);
+          await tx
+            .update(paperAccounts)
+            .set({
+              status: "LIQUIDATED",
+              isLocked: true,
+              lockReason: "MARGIN_CALL_LIQUIDATION",
+              lockedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(paperAccounts.userId, userId));
         });
       } catch (err) {
         console.error(`[RiskEngine] Failed to liquidate breached account for user ${userId}:`, err);
