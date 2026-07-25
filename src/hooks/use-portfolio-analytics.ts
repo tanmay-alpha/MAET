@@ -1,14 +1,8 @@
-/**
- * Portfolio Analytics Hook
- * Real-time performance metrics, P&L calculations, and risk analytics
- * Updated for v3 domain: uses fills, quantity, averagePrice, realisedPnl
- */
-
 import { useMemo } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import type { PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
 
-// Types
 export interface PerformanceMetrics {
   totalValue: number;
   totalCost: number;
@@ -58,51 +52,43 @@ export interface PortfolioAnalytics {
 }
 
 export function usePortfolioAnalytics() {
-  const { account } = usePaperAccount();
+  const { account, positions, orders, fills } = usePaperAccount();
 
-  // Get unique symbols from positions
   const positionSymbols = useMemo(
-    () => [...new Set(account.positions.map((p) => p.symbol))],
-    [account.positions]
+    () => [...new Set(positions.map((p: PaperPositionRow) => p.symbol))],
+    [positions]
   );
 
   const { quoteMap } = useMarketQuotes(positionSymbols);
 
   const analytics = useMemo<PortfolioAnalytics>(() => {
-    // Use fills for trade statistics instead of orders
-    const fills = account.fills ?? [];
-
-    // Calculate positions metrics
     let unrealizedPnl = 0;
     let positionsValue = 0;
     let positionsCost = 0;
     let dayPnl = 0;
 
-    account.positions.forEach((position) => {
+    const cash = account ? Number(account.cashBalance) : 1000000;
+    const initialCash = account ? Number(account.initialCash) : 1000000;
+    const realisedPnl = account ? Number(account.realisedPnl) : 0;
+
+    positions.forEach((position: PaperPositionRow) => {
       const quote = quoteMap.get(position.symbol);
-      if (quote && (!Number.isFinite(quote.price) || quote.price <= 0)) {
-        return; // Skip positions with invalid quote data
-      }
-      const currentPrice = quote?.price || position.averagePrice;
+      const avgPrice = Number(position.averageEntryPrice);
+      const currentPrice = quote?.price || avgPrice;
       const prevPrice = quote?.previousClose;
 
-      if (!Number.isFinite(currentPrice) || !Number.isFinite(position.averagePrice)) {
-        return; // Skip if price data is not finite
-      }
+      const qty = position.totalShares;
+      positionsValue += currentPrice * qty;
+      positionsCost += avgPrice * qty;
+      unrealizedPnl += (currentPrice - avgPrice) * qty;
 
-      const absQty = Math.abs(position.quantity);
-      positionsValue += currentPrice * absQty;
-      positionsCost += position.averagePrice * absQty;
-      unrealizedPnl += (currentPrice - position.averagePrice) * position.quantity;
-
-      if (prevPrice && prevPrice > 0 && Number.isFinite(prevPrice)) {
-        dayPnl += (currentPrice - prevPrice) * position.quantity;
+      if (prevPrice && prevPrice > 0) {
+        dayPnl += (currentPrice - prevPrice) * qty;
       }
     });
 
-    const totalValue = account.cash + positionsValue;
-    const totalCost = account.initialCash - account.cash + positionsCost;
-    const realisedPnl = account.realisedPnl;
+    const totalValue = cash + positionsValue;
+    const totalCost = initialCash - cash + positionsCost;
     const totalPnl = unrealizedPnl + realisedPnl;
     const totalReturnPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
     const dayPnlPct = positionsValue > 0 ? (dayPnl / positionsValue) * 100 : 0;
@@ -116,15 +102,11 @@ export function usePortfolioAnalytics() {
       totalReturnPct,
       dayPnl,
       dayPnlPct,
-      cash: account.cash,
+      cash,
       positionsValue,
     };
 
-    // Calculate trade statistics from fills
-    const tradePnlList: number[] = fills.map((f) => f.realisedPnl);
-    const tradeDates: string[] = fills.map((f) => f.executedAt);
-    void tradeDates; // used for potential future holding-period computation
-
+    const tradePnlList: number[] = fills.map((f: PaperFillRow) => Number(f.realizedPnl));
     const winningTrades = tradePnlList.filter((p) => p > 0);
     const losingTrades = tradePnlList.filter((p) => p < 0);
     const totalTrades = tradePnlList.length;
@@ -142,8 +124,6 @@ export function usePortfolioAnalytics() {
     const totalLosses = Math.abs(losingTrades.reduce((a, b) => a + b, 0));
     const profitFactor = totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0;
 
-    const avgHoldingDays = 0; // Would need entry/exit tracking across fills
-
     const trades: TradeStats = {
       totalTrades,
       winningTrades: winningTrades.length,
@@ -154,11 +134,9 @@ export function usePortfolioAnalytics() {
       largestWin,
       largestLoss,
       profitFactor,
-      avgHoldingDays,
+      avgHoldingDays: 0,
     };
 
-    // Risk metrics require a verified daily portfolio return series.
-    // Paper fills alone are not sufficient — leave as null.
     const risk: RiskMetrics = {
       sharpeRatio: null,
       maxDrawdown: null,
@@ -167,19 +145,18 @@ export function usePortfolioAnalytics() {
       beta: null,
     };
 
-    // Simple equity curve from fills
     const history: PerformanceDataPoint[] = fills.length > 0
       ? [{
-          date: fills[fills.length - 1].executedAt.split("T")[0],
-          value: account.cash + positionsValue,
+          date: new Date(fills[0].executedAt).toISOString().split("T")[0],
+          value: cash + positionsValue,
           pnl: totalPnl,
         }]
-      : [{ date: new Date().toISOString().split("T")[0], value: account.cash, pnl: 0 }];
+      : [{ date: new Date().toISOString().split("T")[0], value: cash, pnl: 0 }];
 
-    const hasData = account.orders.length > 0 || account.positions.length > 0;
+    const hasData = orders.length > 0 || positions.length > 0 || fills.length > 0;
 
     return { metrics, risk, trades, history, hasData };
-  }, [account, quoteMap]);
+  }, [account, positions, orders, fills, quoteMap]);
 
   return analytics;
 }

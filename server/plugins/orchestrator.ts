@@ -1,15 +1,12 @@
 import type { NitroAppPlugin } from "nitropack";
 import { startOrchestrator, stopOrchestrator } from "../orchestrator";
-import { refreshDependencyChecks, registerCheck } from "../infra/health";
+import { updateHealthStatus } from "../infra/health";
 
 const orchestratorPlugin: NitroAppPlugin = (nitroApp) => {
   startOrchestrator();
-  registerCheck("orchestrator", true, "running");
-  void refreshDependencyChecks(true);
-  const healthTimer = setInterval(() => void refreshDependencyChecks(true), 60_000);
+  updateHealthStatus("orchestrator", true);
   nitroApp.hooks.hook("close", async () => {
-    clearInterval(healthTimer);
-    registerCheck("orchestrator", false, "stopped");
+    updateHealthStatus("orchestrator", false);
     await stopOrchestrator();
   });
 };

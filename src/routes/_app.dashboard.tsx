@@ -1,9 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Activity, ArrowDownRight, ArrowUpRight, ReceiptText, TrendingUp, Wallet } from "lucide-react";
-import { useMemo } from "react";
+import { Activity, ArrowDownRight, ArrowUpRight, ReceiptText, TrendingUp, Wallet, PlusCircle } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { INDICES } from "@/lib/market-catalog";
+import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
+import type { PaperPositionRow, PaperOrderRow } from "../../server/modules/paper-trading/contracts";
 
 export const Route = createFileRoute("/_app/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — MAET" }] }),
@@ -52,12 +54,8 @@ function StatCard({
   );
 }
 
-import { useState } from "react";
-import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
-import { PlusCircle } from "lucide-react";
-
 function Dashboard() {
-  const { account, reset, placeOrder } = usePaperAccount();
+  const { account, positions, orders, fills, resetAccount } = usePaperAccount();
   const [tradeModal, setTradeModal] = useState<{ isOpen: boolean; symbol: string; side: "BUY" | "SELL" }>({
     isOpen: false,
     symbol: "",
@@ -65,22 +63,30 @@ function Dashboard() {
   });
 
   const symbols = useMemo(
-    () => [...new Set([...account.positions.map((position) => position.symbol), ...Object.values(INDEX_KEYS)])],
-    [account.positions]
+    () => [...new Set([...positions.map((position) => position.symbol), ...Object.values(INDEX_KEYS)])],
+    [positions]
   );
   const { quoteMap, streamConnected, isError } = useMarketQuotes(symbols);
-  const unrealizedPnl = account.positions.reduce((total, position) => {
+
+  const cash = account ? Number(account.cashBalance) : 1000000;
+  const initialCash = account ? Number(account.initialCash) : 1000000;
+
+  const unrealizedPnl = positions.reduce((total, position: PaperPositionRow) => {
+    const avgPrice = Number(position.averageEntryPrice);
     const ltp = quoteMap.get(position.symbol)?.price;
-    return total + (ltp === undefined ? 0 : (ltp - position.averagePrice) * position.quantity);
+    return total + (ltp === undefined ? 0 : (ltp - avgPrice) * position.totalShares);
   }, 0);
-  const positionsValue = account.positions.reduce((total, position) => {
-    const mark = quoteMap.get(position.symbol)?.price ?? position.averagePrice;
-    return total + mark * Math.abs(position.quantity);
+
+  const positionsValue = positions.reduce((total, position: PaperPositionRow) => {
+    const avgPrice = Number(position.averageEntryPrice);
+    const mark = quoteMap.get(position.symbol)?.price ?? avgPrice;
+    return total + mark * position.totalShares;
   }, 0);
-  const equity = account.cash + positionsValue;
-  const totalPnl = equity - account.initialCash;
-  const filledOrders = account.orders.filter((order) => order.status === "FILLED").length;
-  const pendingOrders = account.orders.filter((order) => order.status === "PENDING" || order.status === "TRIGGERED" || order.status === "PARTIALLY_FILLED").length;
+
+  const equity = cash + positionsValue;
+  const totalPnl = equity - initialCash;
+  const filledOrders = orders.filter((o: PaperOrderRow) => o.status === "FILLED").length;
+  const pendingOrders = orders.filter((o: PaperOrderRow) => o.status === "PENDING" || o.status === "TRIGGER_PENDING").length;
 
   return (
     <div className="h-full overflow-y-auto p-4">
@@ -89,7 +95,7 @@ function Dashboard() {
           <h1 className="text-xl font-semibold">Paper trading dashboard</h1>
           <p className="text-xs text-muted-foreground">
             {isError ? "Market quote service unavailable" : streamConnected ? "● Angel One Live Feed (NSE Stream Connected)" : "Connecting to market quotes"}
-            {" · "}paper account is stored in this browser
+            {" · "}Backend authoritative state
           </p>
         </div>
         <div className="flex gap-2">
@@ -103,149 +109,106 @@ function Dashboard() {
           </button>
           <button
             type="button"
-            onClick={() => window.confirm("Reset all paper positions and orders?") && reset()}
-            className="rounded-md border border-border bg-panel px-3 py-1.5 text-xs hover:bg-accent transition-all"
+            onClick={() => window.confirm("Reset paper account to initial cash?") && resetAccount()}
+            className="rounded border border-border bg-panel px-3 py-1.5 text-xs hover:bg-accent font-medium transition-all"
           >
-            Reset paper account
+            Reset
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard icon={Wallet} label="Paper equity" value={money(equity)} sub={`${money(account.cash)} cash`} trend="flat" />
-        <StatCard icon={Activity} label="Total P&L" value={money(totalPnl)} sub="Since account reset" trend={totalPnl > 0 ? "up" : totalPnl < 0 ? "down" : "flat"} />
-        <StatCard icon={TrendingUp} label="Unrealized" value={money(unrealizedPnl)} sub={`${money(account.realisedPnl)} realized`} trend={unrealizedPnl > 0 ? "up" : unrealizedPnl < 0 ? "down" : "flat"} />
-        <StatCard icon={ReceiptText} label="Paper orders" value={String(account.orders.length)} sub={`${filledOrders} filled · ${pendingOrders} pending`} trend="flat" />
+      {/* Index ticker row */}
+      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {INDICES.map((item) => {
+          const key = INDEX_KEYS[item.symbol] ?? item.symbol;
+          const q = quoteMap.get(key);
+          const price = q?.price ?? 0;
+          const changePct = q?.changePct ?? 0;
+          const isUp = changePct >= 0;
+          return (
+            <div key={item.symbol} className="rounded border border-border bg-panel p-2.5">
+              <div className="text-[10px] text-muted-foreground">{item.symbol}</div>
+              <div className="font-mono text-sm font-semibold tabular tabular-nums">
+                ₹{price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <div className={`font-mono text-[10px] font-medium ${isUp ? "text-bull" : "text-bear"}`}>
+                {isUp ? "+" : ""}{changePct.toFixed(2)}%
+              </div>
+            </div>
+          );
+        })}
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <div className="rounded-lg border border-border bg-panel lg:col-span-2">
-          <div className="border-b border-border px-4 py-3">
-            <div className="text-sm font-medium">Open paper positions</div>
-            <div className="text-xs text-muted-foreground">Marked against the current Yahoo quote when available</div>
-          </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <StatCard
+          icon={Wallet}
+          label="Portfolio equity"
+          value={money(equity)}
+          sub={`Cash: ${money(cash)}`}
+          trend={totalPnl >= 0 ? "up" : "down"}
+        />
+        <StatCard
+          icon={TrendingUp}
+          label="Unrealized P&L"
+          value={money(unrealizedPnl)}
+          sub={`${unrealizedPnl >= 0 ? "+" : ""}${((unrealizedPnl / initialCash) * 100).toFixed(2)}% return`}
+          trend={unrealizedPnl >= 0 ? "up" : "down"}
+        />
+        <StatCard
+          icon={ReceiptText}
+          label="Open positions"
+          value={String(positions.length)}
+          sub={`Position value ${money(positionsValue)}`}
+          trend="flat"
+        />
+        <StatCard
+          icon={Activity}
+          label="Orders status"
+          value={String(orders.length)}
+          sub={`${filledOrders} filled · ${pendingOrders} pending`}
+          trend="flat"
+        />
+      </div>
+
+      <div className="mt-6 rounded-lg border border-border bg-panel p-4">
+        <h2 className="mb-3 font-semibold text-sm">Positions overview</h2>
+        {positions.length > 0 ? (
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border bg-accent/20">
-                <tr>
-                  <th className="px-4 py-2 text-left">Symbol</th>
-                  <th className="text-right">Qty</th>
-                  <th className="text-right">Avg</th>
-                  <th className="text-right">LTP</th>
-                  <th className="text-right">P&amp;L</th>
-                  <th className="px-4 py-2 text-right">Actions</th>
+            <table className="w-full text-xs font-mono tabular-nums text-left">
+              <thead>
+                <tr className="border-b border-border text-[10px] text-muted-foreground uppercase">
+                  <th className="py-2">Symbol</th>
+                  <th className="py-2 text-right">Shares</th>
+                  <th className="py-2 text-right">Avg Entry</th>
+                  <th className="py-2 text-right">LTP</th>
+                  <th className="py-2 text-right">Unrealized P&L</th>
                 </tr>
               </thead>
               <tbody>
-                {account.positions.map((position) => {
-                  const ltp = quoteMap.get(position.symbol)?.price ?? position.averagePrice;
-                  const isLong = position.quantity > 0;
-                  const pnl = (ltp - position.averagePrice) * position.quantity;
+                {positions.map((pos: PaperPositionRow) => {
+                  const avgPrice = Number(pos.averageEntryPrice);
+                  const ltp = quoteMap.get(pos.symbol)?.price ?? avgPrice;
+                  const pnl = (ltp - avgPrice) * pos.totalShares;
                   return (
-                    <tr key={position.symbol} className="border-t border-border hover:bg-accent/40 transition-colors">
-                      <td className="px-4 py-2.5 font-sans font-semibold text-foreground">{position.symbol}</td>
-                      <td className="text-right font-mono tabular-nums">{Math.abs(position.quantity)}</td>
-                      <td className="text-right font-mono tabular-nums">₹{position.averagePrice.toFixed(2)}</td>
-                      <td className="text-right font-mono tabular-nums">₹{ltp.toFixed(2)}</td>
-                      <td className={`text-right font-mono tabular-nums font-semibold ${(pnl ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
-                        {pnl === undefined ? "—" : `${pnl >= 0 ? "+" : ""}₹${pnl.toFixed(2)}`}
-                      </td>
-                      <td className="px-4 py-2.5 text-right flex items-center justify-end gap-1.5">
-                        <button
-                          onClick={() => setTradeModal({ isOpen: true, symbol: position.symbol, side: isLong ? "BUY" : "SELL" })}
-                          className="rounded bg-accent hover:bg-accent-elevated border border-border text-foreground px-2 py-0.5 text-[10px] font-semibold transition"
-                        >
-                          Trade
-                        </button>
-                        <button
-                          onClick={() => {
-                              if (window.confirm(`Are you sure you want to close your position in ${position.symbol}?`)) {
-                                const currentQuote = quoteMap.get(position.symbol);
-                                if (!currentQuote) {
-                                  alert("Position exit rejected: Market quote is unavailable.");
-                                  return;
-                                }
-                                const result = placeOrder({
-                                  type: "MARKET",
-                                  symbol: position.symbol,
-                                  side: isLong ? "SELL" : "BUY",
-                                  quantity: Math.abs(position.quantity),
-                                  quote: currentQuote,
-                                });
-                                if (!result.ok) {
-                                  alert(result.message);
-                                }
-                              }
-                          }}
-                          className="rounded bg-bear hover:bg-bear/90 text-white px-2 py-0.5 text-[10px] font-semibold transition"
-                        >
-                          Exit
-                        </button>
+                    <tr key={pos.id} className="border-b border-border/50">
+                      <td className="py-2 font-sans font-medium">{pos.symbol}</td>
+                      <td className="py-2 text-right">{pos.totalShares}</td>
+                      <td className="py-2 text-right">₹{avgPrice.toFixed(2)}</td>
+                      <td className="py-2 text-right">₹{ltp.toFixed(2)}</td>
+                      <td className={`py-2 text-right font-bold ${pnl >= 0 ? "text-bull" : "text-bear"}`}>
+                        {pnl >= 0 ? "+" : ""}₹{pnl.toFixed(2)}
                       </td>
                     </tr>
                   );
                 })}
-                {account.positions.length === 0 && (
-                  <tr className="border-t border-border"><td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">No paper positions yet. Use the terminal to place one.</td></tr>
-                )}
               </tbody>
             </table>
           </div>
-        </div>
-
-        <div className="rounded-lg border border-border bg-panel">
-          <div className="border-b border-border px-4 py-3 text-sm font-medium">Live indices</div>
-          <div className="divide-y divide-border">
-            {INDICES.map((index) => {
-              const quote = quoteMap.get(INDEX_KEYS[index.symbol]);
-              return (
-                <div key={index.symbol} className="flex items-center justify-between px-4 py-2.5 text-xs">
-                  <div className="font-medium">{index.symbol}</div>
-                  <div className="text-right">
-                    <div className="font-mono tabular tabular-nums">{quote?.price.toLocaleString("en-IN") ?? "—"}</div>
-                    <div className={`font-mono text-[10px] tabular tabular-nums ${(quote?.changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
-                      {quote?.changePct === undefined ? "Waiting for quote" : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}%`}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+        ) : (
+          <div className="py-8 text-center text-xs text-muted-foreground">
+            No active positions.
           </div>
-        </div>
-      </div>
-
-      <div className="mt-4 rounded-lg border border-border bg-panel">
-        <div className="border-b border-border px-4 py-3">
-          <div className="text-sm font-medium">Recent paper orders</div>
-          <div className="text-xs text-muted-foreground">These are simulated executions; no broker request is made.</div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              <tr><th className="px-4 py-2 text-left">Time</th><th className="text-left">Symbol</th><th>Side</th><th className="text-right">Qty</th><th className="text-right">Fill/trigger</th><th className="px-4 text-right">Status</th></tr>
-            </thead>
-            <tbody>
-              {account.orders.slice(0, 20).map((order) => (
-                <tr key={order.id} className="border-t border-border">
-                  <td className="px-4 py-2.5 font-mono tabular tabular-nums text-muted-foreground">{new Date(order.createdAt).toLocaleTimeString("en-IN")}</td>
-                  <td className="font-medium">{order.symbol}</td>
-                  <td className="text-center"><span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${order.side === "BUY" ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"}`}>{order.side}</span></td>
-                  <td className="text-right font-mono tabular tabular-nums">{order.quantity}</td>
-                  <td className="text-right font-mono tabular tabular-nums">{(order.averageFillPrice ?? order.limitPrice ?? order.stopPrice)?.toFixed(2) ?? "—"}</td>
-                  <td className={`px-4 text-right ${order.status === "FILLED" ? "text-bull" : order.status === "REJECTED" ? "text-bear" : "text-muted-foreground"}`} title={order.rejectionReason}>{order.status}</td>
-                </tr>
-              ))}
-              {account.orders.length === 0 && (
-                <tr className="border-t border-border"><td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">No paper orders recorded.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="mt-4 rounded-lg border border-border bg-panel px-4 py-8 text-center">
-        <div className="text-sm font-medium">No saved strategy runs</div>
-        <div className="mt-1 text-xs text-muted-foreground">The previous performance table contained demo numbers and has been removed.</div>
+        )}
       </div>
 
       <QuickTradeModal

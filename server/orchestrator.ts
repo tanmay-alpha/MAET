@@ -10,12 +10,10 @@ import { login, setAngelOneMarketSession } from "./data/sources/angelone/client"
 import { getConfig } from "./config";
 import { lookupSymbol } from "./domain/market/symbol";
 import { bus } from "./infra/bus";
-import { registerCheck } from "./infra/health";
+import { updateHealthStatus } from "./infra/health";
 import { hydrateAngelOneCompanyTokens } from "./data/sources/nse-company-master";
 import { marketDataMultiplexer } from "./domain/market/data-multiplexer";
 
-// Yahoo quotes are delayed and do not benefit from tick-grade polling. A
-// one-minute cadence avoids unnecessary upstream throttling on the free service.
 const yahooPoller = new YahooPoller({ intervalMs: 60_000 });
 const angelOne = new AngelOneWorker();
 const candleWriter = new CandleWriter();
@@ -30,30 +28,27 @@ let angelFailedOff: (() => void) | undefined;
 const ANGEL_FEED_USER = "render-market-feed";
 
 function activeAngelTokens(): string[] {
-  return [...subscriptionRefs.keys()].flatMap((symbol) => {
-    const record = lookupSymbol("NSE", symbol);
-    return record ? [record.token] : [];
-  });
+  const tokens = new Set<string>();
+  for (const symbol of subscriptionRefs.keys()) {
+    const info = lookupSymbol("NSE", symbol) ?? lookupSymbol("BSE", symbol);
+    if (info?.token) tokens.add(String(info.token));
+  }
+  return Array.from(tokens);
 }
 
-function scheduleAngelLogin(delayMs = 60_000): void {
-  if (!started || angelRetryTimer) return;
+function scheduleAngelLogin(delayMs = 15_000): void {
+  if (angelRetryTimer) clearTimeout(angelRetryTimer);
   angelRetryTimer = setTimeout(() => {
     angelRetryTimer = undefined;
-    void connectAngelOne();
+    if (started) void connectAngelOne();
   }, delayMs);
 }
-
-// ---------------------------------------------------------------------------
-// Daily processor cron — runs at 18:30 IST (13:00 UTC) on weekdays
-// ---------------------------------------------------------------------------
 
 let dailyProcessorTimer: ReturnType<typeof setInterval> | undefined;
 
 function shouldRunDailyProcessor(now: Date): boolean {
-  const day = now.getDay(); // 0 = Sun, 6 = Sat
+  const day = now.getDay();
   if (day === 0 || day === 6) return false;
-  // 18:30 IST = 13:00 UTC (IST is UTC+5:30)
   const hour = now.getUTCHours();
   const min = now.getUTCMinutes();
   return hour === 13 && min === 0;
@@ -77,7 +72,7 @@ function scheduleDailyProcessor(): void {
         console.error("[cron] daily processor failed:", e);
       }
     }
-  }, 60_000); // check every minute
+  }, 60_000);
 }
 
 async function connectAngelOne(): Promise<void> {
@@ -96,9 +91,9 @@ async function connectAngelOne(): Promise<void> {
     if (!started) return;
     setAngelOneMarketSession(session);
     angelOne.manageUser(ANGEL_FEED_USER, session, activeAngelTokens());
-    registerCheck("angelone", true, "authenticated; stream connecting");
+    updateHealthStatus("marketData", true);
   } catch (error) {
-    registerCheck("angelone", false, `login failed: ${(error as Error).message}`);
+    updateHealthStatus("marketData", false);
     scheduleAngelLogin();
   }
 }
@@ -118,77 +113,72 @@ export function startOrchestrator(): void {
   orderMatcher.start();
   marketDataMultiplexer.start();
   angelReadyOff = bus.on("user:angelone:ready", ({ userId }) => {
-    if (userId === ANGEL_FEED_USER) registerCheck("angelone", true, "live stream connected");
+    if (userId === ANGEL_FEED_USER) updateHealthStatus("marketData", true);
   });
-  angelFailedOff = bus.on("user:angelone:auth_failed", ({ userId, reason }) => {
+  angelFailedOff = bus.on("user:angelone:auth_failed", ({ userId }) => {
     if (userId !== ANGEL_FEED_USER) return;
-    registerCheck("angelone", false, reason);
+    updateHealthStatus("marketData", false);
     scheduleAngelLogin(5_000);
   });
   angelOne.start();
   void connectAngelOne();
   scheduleDailyProcessor();
-  void hydrateAngelOneCompanyTokens()
-    .then((count) => {
-      registerCheck("instrumentMaster", count >= 1_000, `${count} NSE equity tokens loaded`);
+
+  void (async () => {
+    try {
+      await hydrateAngelOneCompanyTokens();
       syncAngelSubscriptions();
-    })
-    .catch((error) => registerCheck("instrumentMaster", false, (error as Error).message));
+    } catch (e) {
+      console.error("[Orchestrator] NSE company master token hydration failed:", e);
+    }
+  })();
 }
 
 export async function stopOrchestrator(): Promise<void> {
   if (!started) return;
   started = false;
-  yahooPoller.stop();
   if (angelRetryTimer) clearTimeout(angelRetryTimer);
-  angelRetryTimer = undefined;
   if (dailyProcessorTimer) clearInterval(dailyProcessorTimer);
-  dailyProcessorTimer = undefined;
   angelReadyOff?.();
-  angelReadyOff = undefined;
   angelFailedOff?.();
-  angelFailedOff = undefined;
-  await angelOne.stop();
-  setAngelOneMarketSession(undefined);
-  screenerRunner.stop();
+  angelOne.stop();
   orderMatcher.stop();
+  yahooPoller.stop();
+  screenerRunner.stop();
   marketClock.stop();
   candleWriter.stop();
   quoteStore.stop();
   marketDataMultiplexer.stop();
-  subscriptionRefs.clear();
   await closeRedis();
 }
 
-export function subscribeMarketSymbols(symbols: string[]): () => void {
-  const normalized = [...new Set(symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean))];
-  const newlySubscribed: string[] = [];
-
-  for (const symbol of normalized) {
-    const next = (subscriptionRefs.get(symbol) ?? 0) + 1;
-    subscriptionRefs.set(symbol, next);
-    if (next === 1) newlySubscribed.push(symbol);
-  }
-  if (newlySubscribed.length > 0) yahooPoller.subscribe(newlySubscribed);
-  syncAngelSubscriptions();
-  marketDataMultiplexer.subscribe(normalized);
-  void yahooPoller.refresh();
-
-  return () => {
-    const unused: string[] = [];
-    for (const symbol of normalized) {
-      const next = Math.max(0, (subscriptionRefs.get(symbol) ?? 1) - 1);
-      if (next === 0) {
-        subscriptionRefs.delete(symbol);
-        unused.push(symbol);
-      } else {
-        subscriptionRefs.set(symbol, next);
-      }
-    }
-    if (unused.length > 0) {
-      yahooPoller.unsubscribe(unused);
-      marketDataMultiplexer.unsubscribe(unused);
-    }
+export function subscribeSymbol(symbol: string): void {
+  const s = symbol.toUpperCase();
+  const count = subscriptionRefs.get(s) ?? 0;
+  subscriptionRefs.set(s, count + 1);
+  if (count === 0) {
     syncAngelSubscriptions();
+  }
+}
+
+export function unsubscribeSymbol(symbol: string): void {
+  const s = symbol.toUpperCase();
+  const count = subscriptionRefs.get(s) ?? 0;
+  if (count <= 1) {
+    subscriptionRefs.delete(s);
+    syncAngelSubscriptions();
+  } else {
+    subscriptionRefs.set(s, count - 1);
+  }
+}
+
+export function subscribeMarketSymbols(symbols: string[]): () => void {
+  for (const s of symbols) {
+    subscribeSymbol(s);
+  }
+  return () => {
+    for (const s of symbols) {
+      unsubscribeSymbol(s);
+    }
   };
 }

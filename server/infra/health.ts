@@ -1,122 +1,42 @@
-import { sql } from "drizzle-orm";
-import { inspectDatabaseUrl, redactDatabaseError, type DatabaseDiagnostics } from "./database-diagnostics";
-
-export type HealthCheck = {
-  name: string;
-  ok: boolean;
-  detail?: string;
-};
-
-export type HealthReport = {
+export type HealthCheckStatus = {
   status: "ok" | "degraded" | "down";
   uptime: number;
-  checks: Record<string, HealthCheck>;
-  database: DatabaseDiagnostics;
   version: string;
+  checks: {
+    database: boolean;
+    redis: boolean;
+    orchestrator: boolean;
+    marketData: boolean;
+  };
 };
 
 const startedAt = Date.now();
 const version = process.env.GIT_SHA ?? "dev";
-const checks: Record<string, HealthCheck> = {};
-let lastDependencyRefresh = 0;
-let refreshInFlight: Promise<void> | undefined;
-let lastDatabaseError: { code: string; message: string } | undefined;
 
-export function supabaseRestProbeUrl(baseUrl: string): string {
-  // Supabase's PostgREST root/OpenAPI endpoint requires a secret API key.
-  // A zero-row query verifies the project URL, publishable/anon key and REST
-  // access without returning company data.
-  return `${baseUrl.replace(/\/$/, "")}/rest/v1/companies?select=id&limit=0`;
+let databaseStatus = true;
+let redisStatus = true;
+let orchestratorStatus = true;
+let marketDataStatus = true;
+
+export function updateHealthStatus(component: "database" | "redis" | "orchestrator" | "marketData", ok: boolean): void {
+  if (component === "database") databaseStatus = ok;
+  if (component === "redis") redisStatus = ok;
+  if (component === "orchestrator") orchestratorStatus = ok;
+  if (component === "marketData") marketDataStatus = ok;
 }
 
-export function dependencyErrorDetail(error: unknown): string {
-  const detail = redactDatabaseError(error);
-  return `${detail.message} (${detail.code})`;
-}
+export function healthHandler(): HealthCheckStatus {
+  const allOk = databaseStatus && redisStatus && orchestratorStatus && marketDataStatus;
 
-export function registerCheck(name: string, ok: boolean, detail?: string): void {
-  checks[name] = { name, ok, detail };
-}
-
-export function healthHandler(): HealthReport {
-  const allOk = Object.values(checks).every((c) => c.ok);
   return {
-    status: Object.keys(checks).length === 0 || allOk ? "ok" : "degraded",
+    status: allOk ? "ok" : "degraded",
     uptime: Math.floor((Date.now() - startedAt) / 1000),
-    checks,
-    database: {
-      ...inspectDatabaseUrl(process.env.SUPABASE_DB_URL ?? process.env.DATABASE_URL ?? process.env.POSTGRES_URL),
-      ...(lastDatabaseError ? { dbErrorCode: lastDatabaseError.code, dbErrorMessage: lastDatabaseError.message } : {}),
-    },
     version,
+    checks: {
+      database: databaseStatus,
+      redis: redisStatus,
+      orchestrator: orchestratorStatus,
+      marketData: marketDataStatus,
+    },
   };
-}
-
-async function timed<T>(work: Promise<T>, timeoutMs = 3_000): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-export function refreshDependencyChecks(force = false): Promise<void> {
-  if (!force && Date.now() - lastDependencyRefresh < 30_000) return Promise.resolve();
-  if (refreshInFlight) return refreshInFlight;
-
-  refreshInFlight = (async () => {
-    const yahoo = timed(fetch(
-      "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=5d",
-      { headers: { "user-agent": "stock-market-backend/1.0" } }
-    )).then((response) => {
-      registerCheck("yahoo", response.ok, response.ok ? "reachable" : `HTTP ${response.status}`);
-    }).catch((error: Error) => registerCheck("yahoo", false, error.message));
-
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_ANON_KEY;
-    const supabase = supabaseUrl && supabaseKey
-      ? timed(fetch(supabaseRestProbeUrl(supabaseUrl), {
-          headers: { apikey: supabaseKey, authorization: `Bearer ${supabaseKey}` },
-        })).then((response) => {
-          registerCheck("supabase", response.ok, response.ok ? "reachable" : `HTTP ${response.status}`);
-        }).catch((error: Error) => registerCheck("supabase", false, error.message))
-      : Promise.resolve(registerCheck("supabase", false, "not configured"));
-
-    const redis = process.env.UPSTASH_REDIS_URL
-      ? import("../data/redis/client").then(({ getRedis }) => timed(getRedis().ping())).then((reply) => {
-          registerCheck("redis", reply === "PONG", reply === "PONG" ? "reachable" : "unexpected response");
-        }).catch((error: Error) => registerCheck("redis", false, error.message))
-      : Promise.resolve(registerCheck("redis", false, "not configured"));
-
-    const databaseUrl = process.env.SUPABASE_DB_URL ?? process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
-    const database = databaseUrl
-      ? import("../data/drizzle/client")
-          .then(({ getDb }) => timed(getDb().execute(sql`select 1`)))
-          .then(() => {
-            lastDatabaseError = undefined;
-            registerCheck("database", true, "reachable");
-          })
-          .catch((error: unknown) => {
-            lastDatabaseError = redactDatabaseError(error);
-            registerCheck("database", false, dependencyErrorDetail(error));
-          })
-      : Promise.resolve(registerCheck("database", false, "not configured"));
-
-    const brokerConfigured = Boolean(
-      process.env.ANGELONE_API_KEY && process.env.ANGELONE_CLIENT_ID && process.env.ANGELONE_TOTP_SECRET
-    );
-    if (!brokerConfigured) registerCheck("angelone", false, "not configured");
-
-    await Promise.all([yahoo, supabase, redis, database]);
-    lastDependencyRefresh = Date.now();
-  })().finally(() => {
-    refreshInFlight = undefined;
-  });
-  return refreshInFlight;
 }

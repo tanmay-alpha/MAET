@@ -7,6 +7,7 @@ import { portfolioRouter } from "./routers/portfolio";
 import { companiesRouter } from "./routers/companies";
 import { analysisRouter } from "./routers/analysis";
 import { ingestionRouter } from "./routers/ingestion";
+import { paperTradingRouter } from "./routers/paper-trading";
 
 /**
  * tRPC initialization for MAET backend.
@@ -24,6 +25,7 @@ export const appRouter = createRouter({
   companies: companiesRouter,
   analysis: analysisRouter,
   ingestion: ingestionRouter,
+  paperTrading: paperTradingRouter,
 });
 
 export const router = appRouter;
