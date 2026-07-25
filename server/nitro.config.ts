@@ -1,29 +1,16 @@
 // Nitro configuration for the MAET backend server (Render deployment).
-//
-// This file lives in server/ and shadows the root-level nitro.config.ts so
-// that `nitro build` run from inside server/ uses only this file — not the
-// root config that has `srcDir: "server"` (which would be wrong when the
-// working directory is already server/).
-//
-// Key differences from the root nitro.config.ts:
-//   - serverDir points at this directory so api/, routes/, middleware/, and
-//     plugins/ are included in the production bundle.
-//   - Uses "node-server" preset for Render (Node.js web service)
-//   - Excludes test files from route scanning
-
 import { defineNitroConfig } from "nitropack/config";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
 
 const config = {
-  // Build output goes to server/.output/
-  // render.yaml startCommand: node .output/server/index.mjs
   preset: "node-server",
   serverDir: ".",
   compatibilityDate: "2026-07-03" as const,
   alias: {
-    "@shared/domain/paper-trading/execution":
-      "../shared/domain/paper-trading/execution.ts",
-    "@shared/types/errors": "../shared/types/errors.ts",
-    "@shared/types": "../shared/types/index.ts",
+    "@shared": resolve(currentDir, "../shared"),
   },
 
   // Exclude test files and spec files so colocated *.test.ts files
