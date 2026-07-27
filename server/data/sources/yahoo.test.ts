@@ -7,7 +7,15 @@ import {
   _resetCircuitForTest,
 } from "./yahoo";
 
+import { spyOn } from "bun:test";
+import * as redisClient from "../../data/redis/client";
+
 const origFetch = globalThis.fetch;
+
+beforeEach(() => {
+  spyOn(redisClient, "getCachedJson").mockImplementation(async () => undefined);
+  spyOn(redisClient, "setCachedJson").mockImplementation(async () => {});
+});
 
 afterEach(() => {
   globalThis.fetch = origFetch;
