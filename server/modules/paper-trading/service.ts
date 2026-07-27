@@ -1,5 +1,6 @@
 import { loadQuote } from "../../domain/market/quote-service";
 import { withSerializablePaperTransaction } from "./transaction-retry";
+import { getConfig } from "../../config";
 import {
   PaperValidationError,
   PaperAccountLockedError,
@@ -108,7 +109,11 @@ export class PaperTradingService {
       }
       const quote = parsedQuoteResult.quote;
 
-      const policy = evaluateExecutionQuote(quote, symbol);
+      const appConfig = getConfig();
+      const policy = evaluateExecutionQuote(quote, symbol, {
+        allowDelayed: appConfig.paperExecutionAllowDelayed,
+        maxAgeMs: appConfig.paperExecutionMaxQuoteAgeMs,
+      });
       if (!policy.executable) {
         throw new PaperValidationError(`Quote for ${symbol} cannot be executed: ${policy.reason}`);
       }
