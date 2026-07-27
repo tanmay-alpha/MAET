@@ -8,6 +8,7 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const config = {
   preset: "node-server",
   serverDir: ".",
+  modules: [],
   compatibilityDate: "2026-07-03" as const,
   alias: {
     "@shared": resolve(currentDir, "../shared"),
