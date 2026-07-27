@@ -38,29 +38,6 @@ export async function applyMigrations(): Promise<void> {
     END $$;
   `;
 
-  // Pre-create optional market table stubs if needed by RLS migrations on fresh DBs
-  const optionalTables = [
-    "price_daily",
-    "price_intraday",
-    "sectors",
-    "peers",
-    "option_chain",
-    "corporate_actions",
-    "shareholding_patterns",
-    "institutional_deals",
-    "index_valuations",
-    "market_baseline_metrics",
-    "live_intraday_snapshots",
-    "anomaly_flags",
-    "source_audit",
-    "ingestion_runs",
-    "dead_letter_queue",
-    "calculation_results",
-  ];
-  for (const tbl of optionalTables) {
-    await sql.unsafe(`CREATE TABLE IF NOT EXISTS public.${tbl} (id uuid PRIMARY KEY DEFAULT gen_random_uuid());`);
-  }
-
 
   const migrationsDir = join(process.cwd(), "server/db/migrations");
   const files = readdirSync(migrationsDir)
