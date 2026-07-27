@@ -6,9 +6,6 @@ import { createPaperTradingService } from "./service";
 import { applyMigrations } from "../../scripts/apply-migrations";
 
 describe("Paper Trading Concurrency Test Suite", () => {
-  const testDbUrl = process.env.TEST_DATABASE_URL || "postgresql://postgres:tanmay@127.0.0.1:5432/maet_test";
-  process.env.TEST_DATABASE_URL = testDbUrl;
-
   beforeAll(async () => {
     if (!process.env.TEST_DATABASE_URL) {
       throw new Error("TEST_DATABASE_URL is required for concurrency integration tests.");

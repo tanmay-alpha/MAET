@@ -44,6 +44,12 @@ class QueryBuilder {
   }
 
   leftJoin(...args: any[]) { return this; }
+  innerJoin(...args: any[]) { return this; }
+  orderBy(...args: any[]) { return this; }
+  groupBy(...args: any[]) { return this; }
+  offset(...args: any[]) { return this; }
+  onConflictDoNothing(...args: any[]) { return this; }
+  onConflictDoUpdate(...args: any[]) { return this; }
 
   private extractConditions(clause: any) {
     if (!clause) return;
@@ -244,15 +250,18 @@ const mockDbClient = {
   },
 };
 
-mock.module("../../data/drizzle/client", () => {
-  return {
-    db: mockDbClient,
-    getDb: () => mockDbClient,
-    closeDb: () => {},
-  };
+import * as drizzleClient from "../../data/drizzle/client";
+import { describe, it, expect, beforeEach, beforeAll, afterAll, spyOn } from "bun:test";
+
+let getDbSpy: any;
+
+beforeAll(() => {
+  getDbSpy = spyOn(drizzleClient, "getDb").mockReturnValue(mockDbClient as any);
 });
 
-import { describe, it, expect, beforeEach } from "bun:test";
+afterAll(() => {
+  getDbSpy?.mockRestore();
+});
 import { calculateSlippage, getLiquidityTier } from "./slippage";
 import { onTick } from "./matcher";
 import type { Tick } from "@shared/types";

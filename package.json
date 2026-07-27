@@ -11,7 +11,7 @@
     "build": "bun run --cwd src build",
     "dev": "bun run server/orchestrator.ts",
     "test": "bun run test:phase1",
-    "test:unit": "bun test server/domain server/hooks server/infra shared src",
+    "test:unit": "bun test server/data server/domain server/hooks server/infra shared src",
     "test:integration": "bun test server/modules/paper-trading/repository.integration.test.ts server/modules/paper-trading/service.integration.test.ts",
     "test:concurrency": "bun test server/modules/paper-trading/concurrency.integration.test.ts",
     "test:phase1": "bun run test:unit && bun run test:integration && bun run test:concurrency",

@@ -15,6 +15,9 @@ const origFetch = globalThis.fetch;
 beforeEach(() => {
   spyOn(redisClient, "getCachedJson").mockImplementation(async () => undefined);
   spyOn(redisClient, "setCachedJson").mockImplementation(async () => {});
+  globalThis.fetch = (async (url: unknown) => {
+    throw new Error(`UNMOCKED_FETCH_IN_TEST: ${String(url)}`);
+  }) as unknown as typeof fetch;
 });
 
 afterEach(() => {
