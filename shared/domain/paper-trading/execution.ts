@@ -40,6 +40,11 @@ export type PaperExecutionRequest = {
   fillQuantity: number;
   quote: ExecutionQuote;
   reason: PaperExecutionReason;
+  policy?: {
+    allowDelayed?: boolean;
+    maxAgeMs?: number;
+    allowSynthetic?: boolean;
+  };
 };
 
 export type PaperExecutionPlan = {
