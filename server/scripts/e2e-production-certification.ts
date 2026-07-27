@@ -59,12 +59,12 @@ async function runE2ECertification() {
     "content-type": "application/json",
   };
 
-  // --- SECTION 5: AUTHENTICATED ACCOUNT TEST ---
   console.log("--- SECTION 5: AUTHENTICATED ACCOUNT TEST ---");
   let accRes = await fetch(`${RENDER_BASE_URL}/api/paper/account`, { headers: headersA });
   console.log(`GET /api/paper/account status: ${accRes.status}`);
   let accData = (await accRes.json()) as any;
-  console.log(`Account status: ${accData.account?.status}, Currency: ${accData.account?.currency}`);
+  const cashBal = accData.cashBalance ?? accData.account?.cashBalance;
+  console.log(`Account Cash Balance: ₹${cashBal}`);
 
   // Reset account
   console.log("Resetting isolated account for User A...");
@@ -75,9 +75,8 @@ async function runE2ECertification() {
   });
   const resetData = (await resetRes.json()) as any;
   console.log(`Reset status: ${resetRes.status}`);
-  console.log(`Cash Balance after reset: ${resetData.account?.cashBalance}`);
-  console.log(`Generation after reset: ${resetData.account?.generation}`);
-  console.log(`Version after reset: ${resetData.account?.version}\n`);
+  const resetCash = resetData.cashBalance ?? resetData.account?.cashBalance;
+  console.log(`Cash Balance after reset: ₹${resetCash}`);
 
   // --- SECTION 6: AUTHENTICATED MARKET ORDER ---
   console.log("--- SECTION 6: AUTHENTICATED MARKET ORDER ---");
