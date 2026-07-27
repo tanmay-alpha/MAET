@@ -61,8 +61,6 @@ export async function applyMigrations(): Promise<void> {
     await sql.unsafe(`CREATE TABLE IF NOT EXISTS public.${tbl} (id uuid PRIMARY KEY DEFAULT gen_random_uuid());`);
   }
 
-  // Ensure reject_reason column exists on paper_orders
-  await sql`ALTER TABLE public.paper_orders ADD COLUMN IF NOT EXISTS reject_reason text;`;
 
   const migrationsDir = join(process.cwd(), "server/db/migrations");
   const files = readdirSync(migrationsDir)
