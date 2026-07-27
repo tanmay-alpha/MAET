@@ -6,6 +6,7 @@ import {
   paperFills,
   paperLedgerEntries,
   paperOutboxEvents,
+  users,
 } from "../../db/schema";
 import { PaperPersistenceError } from "./errors";
 import type {
@@ -47,6 +48,14 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
     initialCash?: number | string;
   }): Promise<PaperAccountRow> {
     const cashStr = params.initialCash ? String(params.initialCash) : "1000000.0000";
+
+    await this.tx
+      .insert(users)
+      .values({
+        id: params.userId,
+        email: `${params.userId}@maet.internal`,
+      })
+      .onConflictDoNothing();
 
     await this.tx
       .insert(paperAccounts)

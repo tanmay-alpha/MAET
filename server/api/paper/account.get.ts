@@ -1,12 +1,21 @@
 import { defineEventHandler } from "h3";
 import { db } from "../../data/drizzle/client";
-import { paperAccounts } from "../../db/schema";
+import { paperAccounts, users } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../trpc/auth";
 
 export default defineEventHandler(async (event) => {
   try {
     const auth = await requireAuth(event);
+
+    await db
+      .insert(users)
+      .values({
+        id: auth.userId,
+        email: auth.email ?? `${auth.userId}@maet.internal`,
+      })
+      .onConflictDoNothing();
+
     let [account] = await db
       .select()
       .from(paperAccounts)
