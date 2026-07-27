@@ -14,9 +14,9 @@ const config = {
     "@shared": resolve(currentDir, "../shared"),
   },
 
-  // Exclude test files and spec files so colocated *.test.ts files
-  // under api/ (which import bun:test) don't get compiled as routes.
-  ignore: ["**/*.test.ts", "**/*.spec.ts"],
+  // Exclude test files, spec files, and domain modules directory
+  // so server/modules (DDD domain code) is not auto-scanned as Nitro framework modules.
+  ignore: ["**/*.test.ts", "**/*.spec.ts", "modules/**"],
 
   // Path aliases for TypeScript resolution at build time.
   typescript: {
