@@ -62,6 +62,7 @@ WHERE initial_cash = 1000000.0000
 ALTER TABLE public.paper_orders
   ADD COLUMN IF NOT EXISTS idempotency_key text,
   ADD COLUMN IF NOT EXISTS client_order_id text,
+  ADD COLUMN IF NOT EXISTS reject_reason text,
   ADD COLUMN IF NOT EXISTS generation integer NOT NULL DEFAULT 1,
   ADD COLUMN IF NOT EXISTS triggered_at timestamptz,
   ADD COLUMN IF NOT EXISTS cancelled_at timestamptz,
@@ -247,6 +248,8 @@ CREATE POLICY paper_outbox_service_role
 DROP POLICY IF EXISTS paper_accounts_own_insert ON public.paper_accounts;
 DROP POLICY IF EXISTS paper_accounts_own_update ON public.paper_accounts;
 DROP POLICY IF EXISTS paper_accounts_own_delete ON public.paper_accounts;
+DROP POLICY IF EXISTS paper_accounts_own_select ON public.paper_accounts;
+DROP POLICY IF EXISTS paper_accounts_service_role ON public.paper_accounts;
 CREATE POLICY paper_accounts_own_select
   ON public.paper_accounts FOR SELECT TO authenticated
   USING (auth.uid() = user_id);
@@ -260,6 +263,8 @@ REVOKE ALL ON public.paper_accounts FROM anon;
 DROP POLICY IF EXISTS paper_orders_own_insert ON public.paper_orders;
 DROP POLICY IF EXISTS paper_orders_own_update ON public.paper_orders;
 DROP POLICY IF EXISTS paper_orders_own_delete ON public.paper_orders;
+DROP POLICY IF EXISTS paper_orders_own_select ON public.paper_orders;
+DROP POLICY IF EXISTS paper_orders_service_role ON public.paper_orders;
 CREATE POLICY paper_orders_own_select
   ON public.paper_orders FOR SELECT TO authenticated
   USING (auth.uid() = user_id);
@@ -273,6 +278,8 @@ REVOKE ALL ON public.paper_orders FROM anon;
 DROP POLICY IF EXISTS paper_positions_own_insert ON public.paper_positions;
 DROP POLICY IF EXISTS paper_positions_own_update ON public.paper_positions;
 DROP POLICY IF EXISTS paper_positions_own_delete ON public.paper_positions;
+DROP POLICY IF EXISTS paper_positions_own_select ON public.paper_positions;
+DROP POLICY IF EXISTS paper_positions_service_role ON public.paper_positions;
 CREATE POLICY paper_positions_own_select
   ON public.paper_positions FOR SELECT TO authenticated
   USING (auth.uid() = user_id);

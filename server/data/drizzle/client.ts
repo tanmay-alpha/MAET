@@ -17,6 +17,7 @@ let sqlClientInstance: postgres.Sql | null = null;
 export function getDb() {
   if (!dbInstance) {
     const connectionString = process.env.TEST_DATABASE_URL ||
+                            (process.env.NODE_ENV === "test" || process.env.BUN_TEST ? "postgresql://postgres:tanmay@127.0.0.1:5432/maet_test" : undefined) ||
                             process.env.SUPABASE_DB_URL ||
                             process.env.DATABASE_URL ||
                             process.env.POSTGRES_URL;

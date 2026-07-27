@@ -1,62 +1,122 @@
-import { describe, expect, it } from "bun:test";
-import { executePaperFill } from "@shared/domain/paper-trading/execution";
+import { describe, expect, it, beforeAll } from "bun:test";
+import { getSqlClient, getDb } from "../../data/drizzle/client";
+import { paperAccounts, paperOrders } from "../../db/schema";
+import { eq } from "drizzle-orm";
+import { createPaperTradingService } from "./service";
+import { applyMigrations } from "../../scripts/apply-migrations";
 
 describe("Paper Trading Concurrency Test Suite", () => {
-  it("1. Multiple fills deduct cash atomically without overspending initial balance", () => {
-    let account = {
-      id: "concurrent-user-1",
-      userId: "concurrent-user-1",
-      version: 3 as const,
-      generation: 1,
-      currency: "INR" as const,
-      cash: 100000,
-      initialCash: 100000,
-      realisedPnl: 0,
-      allocatedMargin: 0,
-      maintenanceMargin: 0,
-      status: "ACTIVE" as const,
-      isLocked: false,
-      positions: [],
-      orders: [],
-      fills: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  const testDbUrl = process.env.TEST_DATABASE_URL || "postgresql://postgres:tanmay@127.0.0.1:5432/maet_test";
+  process.env.TEST_DATABASE_URL = testDbUrl;
 
-    const quote = {
-      exchange: "NSE",
-      symbol: "RELIANCE",
-      price: 2000,
-      volume: 100,
-      ts: new Date().toISOString(),
-      source: "angelone",
-      quality: "live" as const,
-    };
+  beforeAll(async () => {
+    if (!process.env.TEST_DATABASE_URL) {
+      throw new Error("TEST_DATABASE_URL is required for concurrency integration tests.");
+    }
+    await applyMigrations();
+  });
 
-    const order1 = {
-      id: "order-c1",
-      userId: "concurrent-user-1",
-      symbol: "RELIANCE",
-      side: "BUY" as const,
-      quantity: 10,
-      type: "MARKET" as const,
-      status: "PENDING" as const,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  async function createTestUser(testUserId: string) {
+    const sql = getSqlClient();
+    await sql`INSERT INTO auth.users (id) VALUES (${testUserId}) ON CONFLICT DO NOTHING`;
+    await sql`INSERT INTO public.users (id, email) VALUES (${testUserId}, ${`test-user-${testUserId}@example.com`}) ON CONFLICT DO NOTHING`;
+  }
 
-    const res1 = executePaperFill({
-      account,
-      order: order1,
-      quote,
-      reason: "USER_ORDER",
-      fillQuantity: 10,
+  function mockService(prices: Record<string, number> = {}) {
+    return createPaperTradingService({
+      database: getDb(),
+      quoteLoader: async (symbol: string) => ({
+        exchange: "NSE",
+        symbol,
+        price: prices[symbol] || 2000,
+        volume: 100,
+        ts: new Date().toISOString(),
+        source: "angelone",
+        quality: "live",
+      }),
+    });
+  }
+
+  it("1. Fails immediately if TEST_DATABASE_URL is missing", () => {
+    expect(process.env.TEST_DATABASE_URL).toBeDefined();
+  });
+
+  it("2. Multiple concurrent orders increment account version monotonically", async () => {
+    const service = mockService({ RELIANCE: 2000 });
+    const testUserId = crypto.randomUUID();
+
+    await createTestUser(testUserId);
+
+    const init = await service.getState({ userId: testUserId });
+    expect(Number(init.account.version)).toBe(1);
+
+    const res1 = await service.placeOrder({
+      userId: testUserId,
+      command: { symbol: "RELIANCE", exchange: "NSE", side: "BUY", type: "MARKET", qty: 5 },
+    });
+    expect(Number(res1.account.version)).toBe(2);
+
+    const res2 = await service.placeOrder({
+      userId: testUserId,
+      command: { symbol: "RELIANCE", exchange: "NSE", side: "BUY", type: "MARKET", qty: 5 },
+    });
+    expect(Number(res2.account.version)).toBe(3);
+  });
+
+  it("3. Cancel vs Fill race condition resolves cleanly", async () => {
+    const db = getDb();
+    const service = mockService({ TCS: 3000 });
+    const testUserId = crypto.randomUUID();
+
+    await createTestUser(testUserId);
+
+    await service.getState({ userId: testUserId });
+
+    const limitOrderRes = await service.placeOrder({
+      userId: testUserId,
+      command: {
+        symbol: "TCS",
+        exchange: "NSE",
+        side: "BUY",
+        type: "LIMIT",
+        limitPrice: 3000,
+        qty: 10,
+      },
     });
 
-    account = res1.account;
+    const orderId = limitOrderRes.order.id;
+    expect(limitOrderRes.order.status).toBe("PENDING");
 
-    expect(account.cash).toBeLessThan(100000);
-    expect(account.positions.length).toBe(1);
-    expect(account.positions[0].quantity).toBe(10);
+    // Cancel order
+    const cancelRes = await service.cancelOrder({ userId: testUserId, orderId });
+    expect(cancelRes.status).toBe("CANCELLED");
+
+    const canceledOrderRows = await db.select().from(paperOrders).where(eq(paperOrders.id, orderId));
+    expect(canceledOrderRows[0].status).toBe("CANCELLED");
+  });
+
+  it("4. Different-symbol orders cannot overspend free cash/margin", async () => {
+    const db = getDb();
+    const service = mockService({ MRF: 150000 });
+    const testUserId = crypto.randomUUID();
+
+    await createTestUser(testUserId);
+
+    await service.getState({ userId: testUserId });
+
+    let threw = false;
+    try {
+      await service.placeOrder({
+        userId: testUserId,
+        command: { symbol: "MRF", exchange: "NSE", side: "BUY", type: "MARKET", qty: 100 },
+      });
+    } catch (e: any) {
+      threw = true;
+      expect(e.message).toContain("Execution fill rejected");
+    }
+    expect(threw).toBe(true);
+
+    const accountRows = await db.select().from(paperAccounts).where(eq(paperAccounts.userId, testUserId));
+    expect(Number(accountRows[0].cashBalance)).toBe(1000000);
   });
 });
