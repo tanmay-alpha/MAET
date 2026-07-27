@@ -11,7 +11,7 @@ export type HealthCheckStatus = {
 };
 
 const startedAt = Date.now();
-const version = process.env.GIT_SHA ?? "dev";
+const version = process.env.GIT_SHA ?? process.env.RENDER_GIT_COMMIT ?? process.env.VERCEL_GIT_COMMIT_SHA ?? "dev";
 
 let databaseStatus = true;
 let redisStatus = true;
