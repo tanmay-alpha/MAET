@@ -299,7 +299,8 @@ export function executePaperFill(
   const quote = parsed.quote;
   const policy = evaluateExecutionQuote(
     quote,
-    request.order.symbol
+    request.order.symbol,
+    request.policy
   );
   if (!policy.executable) {
     throw new PaperExecutionError(

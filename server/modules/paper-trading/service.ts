@@ -229,6 +229,10 @@ export class PaperTradingService {
             fillQuantity: command.qty,
             quote,
             reason,
+            policy: {
+              allowDelayed: appConfig.paperExecutionAllowDelayed,
+              maxAgeMs: appConfig.paperExecutionMaxQuoteAgeMs,
+            },
           });
         } catch (err: unknown) {
           throw new PaperValidationError(`Order execution failed: ${err instanceof Error ? err.message : String(err)}`, undefined, err);
