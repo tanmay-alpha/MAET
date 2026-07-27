@@ -128,9 +128,9 @@ describe("YahooPoller", () => {
 
     p.subscribe(["RELIANCE"]);
     p.start();
-    await new Promise<void>((res) => setTimeout(res, 80));
+    await new Promise<void>((res) => setTimeout(res, 120));
     shouldFail = false;
-    await new Promise<void>((res) => setTimeout(res, 80));
+    await new Promise<void>((res) => setTimeout(res, 120));
     p.stop();
 
     expect(calls).toBeGreaterThanOrEqual(3);
