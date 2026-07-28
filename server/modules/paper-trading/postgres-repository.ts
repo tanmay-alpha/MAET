@@ -300,6 +300,14 @@ export class PostgresPaperReadRepository implements PaperTradingReadRepository {
   constructor(readonly db: PaperDatabase) {}
 
   async getState(params: { userId: string }): Promise<PaperTradingState> {
+    await this.db
+      .insert(users)
+      .values({
+        id: params.userId,
+        email: `${params.userId}@maet.internal`,
+      })
+      .onConflictDoNothing();
+
     let [account] = await this.db
       .select()
       .from(paperAccounts)
