@@ -368,7 +368,7 @@ async function runE2ECertification() {
 
   assertDefined(limitData.order?.id, "LIMIT order ID");
   assert.equal(limitData.order.status, "PENDING", "LIMIT order status PENDING");
-  assert.equal(limitData.fill, undefined, "No fill returned for pending LIMIT order");
+  assert.equal(limitData.fill ?? null, null, "No fill returned for pending LIMIT order");
 
   console.log(`Cancelling LIMIT order ${limitData.order.id}...`);
   const cancelRes = await fetch(`${RENDER_BASE_URL}/api/paper/orders/${limitData.order.id}`, {
