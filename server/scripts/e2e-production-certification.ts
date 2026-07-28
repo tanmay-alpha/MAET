@@ -223,7 +223,7 @@ async function runE2ECertification() {
   const resetData = await readJsonOrThrow<AccountApiResponse>(resetRes, "Account RESET");
 
   assertDefined(resetData.account, "Account RESET account object");
-  assert.equal(resetData.account.cashBalance, 1000000, "Cash balance after reset must be exactly 1000000");
+  assert.equal(Number(resetData.account.cashBalance), 1000000, "Cash balance after reset must be exactly 1000000");
   assert.equal(resetData.account.status, "ACTIVE", "Status after reset must be ACTIVE");
   assert.equal(resetData.account.generation > preResetGen, true, "Generation must increase after reset");
   assert.equal(resetData.account.version > preResetVer, true, "Version must increase after reset");
