@@ -1,19 +1,15 @@
-import { defineEventHandler, getQuery, createError } from "h3";
-import { requireAuth } from "../trpc/auth";
-import { createPaperTradingService } from "../../modules/paper-trading/service";
-import { toPaperHttpError } from "./orders.post";
+import { defineEventHandler, getRouterParam } from "h3";
+import { requireAuth } from "../../trpc/auth";
+import { createPaperTradingService } from "../../../modules/paper-trading/service";
+import { toPaperHttpError } from "../orders.post";
 
 export default defineEventHandler(async (event) => {
   try {
     const auth = await requireAuth(event);
-    const query = getQuery(event);
-    const orderId = query.id ? String(query.id) : null;
+    const orderId = getRouterParam(event, "id");
 
     if (!orderId) {
-      throw createError({
-        statusCode: 400,
-        statusMessage: "Missing order ID parameter",
-      });
+      throw new Error("Missing order ID parameter");
     }
 
     const service = createPaperTradingService();
