@@ -86,7 +86,7 @@ export function usePaperAccount(): UsePaperAccountResult {
       const fullCommand = {
         exchange: "NSE",
         ...rest,
-        quantity: command.quantity ?? qty ?? 1,
+        quantity: (command as any).quantity ?? qty ?? 1,
         clientOrderId: crypto.randomUUID(),
         idempotencyKey: crypto.randomUUID(),
       };
