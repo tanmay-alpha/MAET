@@ -416,8 +416,14 @@ async function runE2ECertification() {
   }
 
   // 2. Cash balance reconciliation
+  // The service emits entryType: "INITIAL_CASH", sourceType: "RESET" on account reset.
   const hasInitialDepositInLedger = genLedger.some(
-    (l: any) => l.entryType === "INITIAL_DEPOSIT" || l.sourceType === "INITIAL_DEPOSIT" || l.sourceType === "ACCOUNT_RESET"
+    (l: any) =>
+      l.entryType === "INITIAL_CASH" ||
+      l.entryType === "INITIAL_DEPOSIT" ||
+      l.sourceType === "RESET" ||
+      l.sourceType === "INITIAL_DEPOSIT" ||
+      l.sourceType === "ACCOUNT_RESET"
   );
   const baseCashCents = hasInitialDepositInLedger ? 0 : Math.round(1000000 * 100);
   const ledgerCashSumCents = genLedger.reduce((sum, l: any) => sum + Math.round(Number(l.amount) * 100), 0);
