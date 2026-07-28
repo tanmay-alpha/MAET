@@ -15,15 +15,38 @@ export default defineEventHandler(async (event) => {
 
     return {
       success: true,
-      account: state.account,
-      cashBalance: state.account.cashBalance,
+      account: {
+        ...state.account,
+        cashBalance: Number(state.account.cashBalance),
+        allocatedMargin: Number(state.account.allocatedMargin),
+        initialCash: Number(state.account.initialCash),
+        realisedPnl: Number(state.account.realisedPnl),
+      },
+      cashBalance: Number(state.account.cashBalance),
       generation: state.account.generation,
       version: state.account.version,
       status: state.account.status,
-      positions: state.positions,
-      orders: state.orders,
-      fills: state.fills,
-      ledger: ledgerResult.entries,
+      positions: state.positions.map((p) => ({
+        ...p,
+        quantity: Number(p.quantity),
+        averagePrice: Number(p.averagePrice),
+      })),
+      orders: state.orders.map((o) => ({
+        ...o,
+        qty: Number(o.qty),
+        quantity: Number(o.qty),
+        limitPrice: o.limitPrice ? Number(o.limitPrice) : undefined,
+        stopPrice: o.stopPrice ? Number(o.stopPrice) : undefined,
+      })),
+      fills: state.fills.map((f) => ({
+        ...f,
+        qty: Number(f.qty),
+        fillPrice: Number(f.fillPrice),
+      })),
+      ledger: ledgerResult.entries.map((l) => ({
+        ...l,
+        amount: Number(l.amount),
+      })),
       asOf: state.asOf.toISOString(),
     };
   } catch (error: unknown) {
