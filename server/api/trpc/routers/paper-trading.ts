@@ -6,51 +6,10 @@ import {
   PaperTradingService,
 } from "../../../modules/paper-trading/service";
 import { PaperTradingError } from "../../../modules/paper-trading/errors";
-
-const PLACE_MARKET_ORDER = z.object({
-  type: z.literal("MARKET"),
-  clientOrderId: z.string().optional(),
-  idempotencyKey: z.string().min(1).max(128).optional(),
-  symbol: z.string().min(1).max(32),
-  exchange: z.enum(["NSE", "BSE"]).default("NSE"),
-  side: z.enum(["BUY", "SELL"]),
-  quantity: z.number().positive().int(),
-  stopLossPrice: z.number().positive().optional(),
-  takeProfitPrice: z.number().positive().optional(),
-  trailingDistance: z.number().positive().optional(),
-  trailingIsPercent: z.boolean().optional(),
-});
-
-const PLACE_LIMIT_ORDER = z.object({
-  type: z.literal("LIMIT"),
-  clientOrderId: z.string().optional(),
-  idempotencyKey: z.string().min(1).max(128).optional(),
-  symbol: z.string().min(1).max(32),
-  exchange: z.enum(["NSE", "BSE"]).default("NSE"),
-  side: z.enum(["BUY", "SELL"]),
-  quantity: z.number().positive().int(),
-  limitPrice: z.number().positive(),
-  stopLossPrice: z.number().positive().optional(),
-  takeProfitPrice: z.number().positive().optional(),
-});
-
-const PLACE_STOP_LOSS_LIMIT_ORDER = z.object({
-  type: z.literal("STOP_LOSS_LIMIT"),
-  clientOrderId: z.string().optional(),
-  idempotencyKey: z.string().min(1).max(128).optional(),
-  symbol: z.string().min(1).max(32),
-  exchange: z.enum(["NSE", "BSE"]).default("NSE"),
-  side: z.enum(["BUY", "SELL"]),
-  quantity: z.number().positive().int(),
-  stopPrice: z.number().positive(),
-  limitPrice: z.number().positive(),
-});
-
-const PLACE_ORDER_COMMAND = z.discriminatedUnion("type", [
-  PLACE_MARKET_ORDER,
-  PLACE_LIMIT_ORDER,
-  PLACE_STOP_LOSS_LIMIT_ORDER,
-]);
+import {
+  PaperOrderCommandSchema,
+  PaperOrderCommand,
+} from "../../../modules/paper-trading/contracts";
 
 const defaultService = createPaperTradingService();
 
@@ -65,16 +24,27 @@ export function createPaperTradingRouter(service: PaperTradingService = defaultS
     }),
 
     placeOrder: protectedProcedure
-      .input(PLACE_ORDER_COMMAND)
+      .input(PaperOrderCommandSchema)
       .mutation(async ({ ctx, input }) => {
         const userId = ctx.userId;
         if (!userId) {
           throw new TRPCError({ code: "UNAUTHORIZED" });
         }
         try {
-          const command = {
-            ...input,
+          const command: PaperOrderCommand = {
+            type: input.type,
+            symbol: input.symbol,
+            exchange: input.exchange,
+            side: input.side,
             qty: input.quantity,
+            limitPrice: "limitPrice" in input ? input.limitPrice : undefined,
+            stopPrice: "stopPrice" in input ? input.stopPrice : undefined,
+            stopLossPrice: "stopLossPrice" in input ? input.stopLossPrice : undefined,
+            takeProfitPrice: "takeProfitPrice" in input ? input.takeProfitPrice : undefined,
+            trailingDistance: "trailingDistance" in input ? input.trailingDistance : undefined,
+            trailingIsPercent: "trailingIsPercent" in input ? input.trailingIsPercent : undefined,
+            clientOrderId: input.clientOrderId,
+            idempotencyKey: input.idempotencyKey,
           };
           return await service.placeOrder({ userId, command });
         } catch (error) {

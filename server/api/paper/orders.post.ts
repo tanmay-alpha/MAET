@@ -1,28 +1,103 @@
-import { defineEventHandler, readBody, createError } from "h3";
+import { defineEventHandler, readBody, createError, H3Error } from "h3";
 import { requireAuth } from "../trpc/auth";
 import { createPaperTradingService } from "../../modules/paper-trading/service";
-import { PaperTradingError } from "../../modules/paper-trading/errors";
+import {
+  PaperValidationError,
+  PaperQuoteRejectedError,
+  PaperInsufficientMarginError,
+  PaperAccountLockedError,
+  PaperOrderNotFoundError,
+  PaperIdempotencyConflictError,
+  PaperAuthenticationError,
+  PaperOrderConflictError,
+} from "../../modules/paper-trading/errors";
+import {
+  PaperOrderCommandSchema,
+  PaperOrderCommand,
+} from "../../modules/paper-trading/contracts";
 
 const service = createPaperTradingService();
 
-export default defineEventHandler(async (event) => {
-  const auth = await requireAuth(event);
-  const body = await readBody(event);
+export function toPaperHttpError(error: unknown): H3Error {
+  if (error instanceof PaperValidationError) {
+    return createError({
+      statusCode: 400,
+      statusMessage: error.message,
+      data: { code: error.code },
+      cause: error,
+    });
+  }
+  if (error instanceof PaperAuthenticationError) {
+    return createError({
+      statusCode: 401,
+      statusMessage: error.message,
+      data: { code: error.code },
+      cause: error,
+    });
+  }
+  if (error instanceof PaperOrderNotFoundError) {
+    return createError({
+      statusCode: 404,
+      statusMessage: error.message,
+      data: { code: error.code },
+      cause: error,
+    });
+  }
+  if (
+    error instanceof PaperQuoteRejectedError ||
+    error instanceof PaperInsufficientMarginError ||
+    error instanceof PaperIdempotencyConflictError ||
+    error instanceof PaperOrderConflictError
+  ) {
+    return createError({
+      statusCode: 409,
+      statusMessage: error.message,
+      data: { code: error.code },
+      cause: error,
+    });
+  }
+  if (error instanceof PaperAccountLockedError) {
+    return createError({
+      statusCode: 423,
+      statusMessage: error.message,
+      data: { code: error.code },
+      cause: error,
+    });
+  }
+  return createError({
+    statusCode: 500,
+    statusMessage: "Paper trading request failed",
+    data: { code: "INTERNAL_ERROR" },
+    cause: error,
+  });
+}
 
+export default defineEventHandler(async (event) => {
   try {
-    const qty = Number(body.quantity || body.qty);
-    const command = {
-      symbol: String(body.symbol || ""),
-      exchange: body.exchange ? String(body.exchange) : "NSE",
-      side: body.side as "BUY" | "SELL",
-      type: body.type as "MARKET" | "LIMIT" | "STOP_LOSS_LIMIT",
-      qty,
-      limitPrice: body.limitPrice ? Number(body.limitPrice) : undefined,
-      stopPrice: body.stopPrice ? Number(body.stopPrice) : undefined,
-      stopLossPrice: body.stopLossPrice ? Number(body.stopLossPrice) : undefined,
-      takeProfitPrice: body.takeProfitPrice ? Number(body.takeProfitPrice) : undefined,
-      clientOrderId: body.clientOrderId ? String(body.clientOrderId) : undefined,
-      idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey) : undefined,
+    const auth = await requireAuth(event);
+    const body = await readBody(event);
+
+    const parseResult = PaperOrderCommandSchema.safeParse(body);
+    if (!parseResult.success) {
+      const issueMsg = parseResult.error.issues.map((i) => i.message).join("; ");
+      throw new PaperValidationError(`Invalid order command: ${issueMsg}`, parseResult.error.flatten());
+    }
+    const input = parseResult.data;
+
+    const command: PaperOrderCommand = {
+      type: input.type,
+      symbol: input.symbol,
+      exchange: input.exchange,
+      side: input.side,
+      qty: input.quantity,
+      limitPrice: "limitPrice" in input ? input.limitPrice : undefined,
+      stopPrice: "stopPrice" in input ? input.stopPrice : undefined,
+      stopLossPrice: "stopLossPrice" in input ? input.stopLossPrice : undefined,
+      takeProfitPrice: "takeProfitPrice" in input ? input.takeProfitPrice : undefined,
+      trailingDistance: "trailingDistance" in input ? input.trailingDistance : undefined,
+      trailingIsPercent: "trailingIsPercent" in input ? input.trailingIsPercent : undefined,
+      clientOrderId: input.clientOrderId,
+      idempotencyKey: input.idempotencyKey,
     };
 
     const result = await service.placeOrder({
@@ -40,13 +115,6 @@ export default defineEventHandler(async (event) => {
       asOf: result.asOf.toISOString(),
     };
   } catch (error: unknown) {
-    if (error instanceof Error) {
-      throw createError({
-        statusCode: 400,
-        statusMessage: error.message,
-        data: { code: (error as any).code || "PAPER_ERROR" },
-      });
-    }
-    throw error;
+    throw toPaperHttpError(error);
   }
 });

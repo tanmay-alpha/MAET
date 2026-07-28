@@ -1,52 +1,32 @@
 import { defineEventHandler } from "h3";
-import { db } from "../../data/drizzle/client";
-import { paperAccounts, users } from "../../db/schema";
-import { eq } from "drizzle-orm";
 import { requireAuth } from "../trpc/auth";
+import { createPaperTradingService } from "../../modules/paper-trading/service";
 
 export default defineEventHandler(async (event) => {
   try {
     const auth = await requireAuth(event);
-
-    await db
-      .insert(users)
-      .values({
-        id: auth.userId,
-        email: auth.email ?? `${auth.userId}@maet.internal`,
-      })
-      .onConflictDoNothing();
-
-    let [account] = await db
-      .select()
-      .from(paperAccounts)
-      .where(eq(paperAccounts.userId, auth.userId))
-      .limit(1);
-
-    if (!account) {
-      // Auto-create account with ₹1,000,000 cash
-      const inserted = await db
-        .insert(paperAccounts)
-        .values({
-          userId: auth.userId,
-          cashBalance: "1000000.0000",
-          allocatedMargin: "0.0000",
-          maintenanceMargin: "0.0000",
-          leverageFactor: 5,
-        })
-        .returning();
-      account = inserted[0];
-    }
+    const service = createPaperTradingService();
+    const state = await service.getState({ userId: auth.userId });
+    const ledgerResult = await service.listLedger({
+      userId: auth.userId,
+      generation: state.account.generation,
+      limit: 100,
+    });
 
     return {
-      cashBalance: Number(account.cashBalance),
-      allocatedMargin: Number(account.allocatedMargin),
-      maintenanceMargin: Number(account.maintenanceMargin),
-      leverageFactor: account.leverageFactor,
-      isLocked: account.isLocked,
-      createdAt: account.createdAt,
-      updatedAt: account.updatedAt,
+      success: true,
+      account: state.account,
+      cashBalance: state.account.cashBalance,
+      generation: state.account.generation,
+      version: state.account.version,
+      status: state.account.status,
+      positions: state.positions,
+      orders: state.orders,
+      fills: state.fills,
+      ledger: ledgerResult.entries,
+      asOf: state.asOf.toISOString(),
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[api/paper/account.get] Error:", error);
     throw error;
   }

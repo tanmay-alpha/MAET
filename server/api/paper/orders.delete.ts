@@ -1,48 +1,31 @@
 import { defineEventHandler, getQuery, createError } from "h3";
-import { db } from "../../data/drizzle/client";
-import { paperOrders } from "../../db/schema";
-import { eq, and, or } from "drizzle-orm";
 import { requireAuth } from "../trpc/auth";
+import { createPaperTradingService } from "../../modules/paper-trading/service";
+import { toPaperHttpError } from "./orders.post";
 
 export default defineEventHandler(async (event) => {
   try {
     const auth = await requireAuth(event);
     const query = getQuery(event);
-    const orderId = query.id ? String(query.id) : null;
+    const pathParts = event.path ? event.path.split("?")[0].split("/").filter(Boolean) : [];
+    const lastPathPart = pathParts.pop();
+
+    const orderId =
+      query.id ? String(query.id) :
+      lastPathPart && lastPathPart !== "orders" ? lastPathPart : null;
 
     if (!orderId) {
       throw createError({
         statusCode: 400,
-        statusMessage: "Missing order ID parameter 'id'",
+        statusMessage: "Missing order ID",
       });
     }
 
-    const updated = await db
-      .update(paperOrders)
-      .set({ status: "CANCELLED", updatedAt: new Date() })
-      .where(
-        and(
-          eq(paperOrders.id, orderId),
-          eq(paperOrders.userId, auth.userId),
-          or(
-            eq(paperOrders.status, "PENDING"),
-            eq(paperOrders.status, "TRIGGER_PENDING"),
-            eq(paperOrders.status, "PARTIALLY_FILLED")
-          )
-        )
-      )
-      .returning();
+    const service = createPaperTradingService();
+    const cancelledOrder = await service.cancelOrder({ userId: auth.userId, orderId });
 
-    if (updated.length === 0) {
-      throw createError({
-        statusCode: 404,
-        statusMessage: "Order not found or cannot be cancelled",
-      });
-    }
-
-    return { success: true, order: updated[0] };
-  } catch (error: any) {
-    console.error("[api/paper/orders.delete] Error:", error);
-    throw error;
+    return { success: true, order: cancelledOrder };
+  } catch (error: unknown) {
+    throw toPaperHttpError(error);
   }
 });
