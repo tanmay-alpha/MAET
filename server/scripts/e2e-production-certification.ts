@@ -416,10 +416,13 @@ async function runE2ECertification() {
   }
 
   // 2. Cash balance reconciliation
-  const initialCashCents = Math.round(1000000 * 100);
-  const ledgerCashSumCents = genLedger.reduce((sum, l) => sum + Math.round(l.amount * 100), 0);
-  const expectedCashCents = initialCashCents + ledgerCashSumCents;
-  const actualCashCents = Math.round(finalState.account.cashBalance * 100);
+  const hasInitialDepositInLedger = genLedger.some(
+    (l: any) => l.entryType === "INITIAL_DEPOSIT" || l.sourceType === "INITIAL_DEPOSIT" || l.sourceType === "ACCOUNT_RESET"
+  );
+  const baseCashCents = hasInitialDepositInLedger ? 0 : Math.round(1000000 * 100);
+  const ledgerCashSumCents = genLedger.reduce((sum, l: any) => sum + Math.round(Number(l.amount) * 100), 0);
+  const expectedCashCents = baseCashCents + ledgerCashSumCents;
+  const actualCashCents = Math.round(Number(finalState.account.cashBalance) * 100);
   assert.equal(actualCashCents, expectedCashCents, `Account cash balance matches initial cash + sum of ledger entries`);
 
   // 3. Position quantity reconciliation
