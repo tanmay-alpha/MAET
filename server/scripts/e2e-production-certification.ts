@@ -451,8 +451,8 @@ async function runE2ECertification() {
     }
   }
 
-  // 4. Fill fees correspond to fee ledger entries
-  const feeLedgerCount = genLedger.filter((l) => l.type === "FEE").length;
+  // 4. Fill fees correspond to fee ledger entries (entryType: "EXECUTION_FEE")
+  const feeLedgerCount = genLedger.filter((l: any) => l.entryType === "EXECUTION_FEE").length;
   assert.equal(feeLedgerCount >= genFills.length, true, "Fee ledger entries correspond to fills");
 
   // Redacted summary printed ONLY after all assertions pass
