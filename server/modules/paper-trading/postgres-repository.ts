@@ -1,4 +1,5 @@
 import { eq, and, inArray, desc, lte } from "drizzle-orm";
+import { getDb } from "../../data/drizzle/client";
 import {
   paperAccounts,
   paperOrders,
@@ -510,7 +511,7 @@ export function createPostgresPaperRepositories(
 }
 
 export function createPostgresPaperReadRepository(
-  db: PaperDatabase
+  db?: PaperDatabase
 ): PaperTradingReadRepository {
-  return new PostgresPaperReadRepository(db);
+  return new PostgresPaperReadRepository(db ?? (getDb() as any));
 }
