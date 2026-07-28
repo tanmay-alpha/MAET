@@ -1,6 +1,7 @@
 import { defineEventHandler } from "h3";
 import { requireAuth } from "../trpc/auth";
 import { createPaperTradingService } from "../../modules/paper-trading/service";
+import { toPaperHttpError } from "./orders.post";
 
 export default defineEventHandler(async (event) => {
   try {
@@ -51,7 +52,6 @@ export default defineEventHandler(async (event) => {
       asOf: state.asOf.toISOString(),
     };
   } catch (error: unknown) {
-    console.error("[api/paper/account.get] Error:", error);
-    throw error;
+    throw toPaperHttpError(error);
   }
 });
