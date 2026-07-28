@@ -107,10 +107,32 @@ export default defineEventHandler(async (event) => {
 
     return {
       success: true,
-      order: result.order,
-      fill: result.fill,
-      account: result.account,
-      position: result.position,
+      order: {
+        ...result.order,
+        qty: Number(result.order.qty),
+        quantity: Number(result.order.qty),
+        limitPrice: result.order.limitPrice ? Number(result.order.limitPrice) : undefined,
+        stopPrice: result.order.stopPrice ? Number(result.order.stopPrice) : undefined,
+      },
+      fill: result.fill
+        ? {
+            ...result.fill,
+            qty: Number(result.fill.qty),
+            fillPrice: Number(result.fill.fillPrice),
+          }
+        : null,
+      account: {
+        ...result.account,
+        cashBalance: Number(result.account.cashBalance),
+        allocatedMargin: Number(result.account.allocatedMargin),
+      },
+      position: result.position
+        ? {
+            ...result.position,
+            quantity: Number(result.position.quantity),
+            averagePrice: Number(result.position.averagePrice),
+          }
+        : null,
       idempotentReplay: result.idempotentReplay,
       asOf: result.asOf.toISOString(),
     };
