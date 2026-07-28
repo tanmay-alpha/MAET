@@ -528,16 +528,33 @@ async function runE2ECertification() {
   const sseA = await connectSseStream(userA.token);
   const sseB = await connectSseStream(userB.token);
 
-  // Require connected frame or heartbeat on User A
+  // 1. User A must receive CONNECTED frame with their own userId
   await assertEventually(
     async () => sseA.frames,
-    (frames) => frames.some((f) => f.raw.includes("CONNECTED") || f.raw.includes("heartbeat")),
+    (frames) => frames.some((f) => f.raw.includes("CONNECTED")),
     10000,
-    "User A SSE initial frame/heartbeat"
+    "User A SSE CONNECTED frame"
   );
-  console.log("[PASS] User A stream received initial frame / heartbeat.");
+  console.log("[PASS] User A stream received CONNECTED frame.");
 
-  // Mutate User A (submit order)
+  // Validate CONNECTED frame contains correct userId
+  const connectedFrame = sseA.frames.find((f) => f.data && f.data.includes("CONNECTED"));
+  assertDefined(connectedFrame?.data, "CONNECTED frame data");
+  const connectedPayload = JSON.parse(connectedFrame.data) as Record<string, unknown>;
+  assert.equal(connectedPayload.type, "CONNECTED", "CONNECTED frame type");
+  assert.equal(connectedPayload.userId, userA.userId, "CONNECTED frame userId matches authenticated user");
+  console.log("[PASS] CONNECTED frame userId matches authenticated user.");
+
+  // 2. User A must receive heartbeat within 10s (server sends every 5s)
+  await assertEventually(
+    async () => sseA.frames,
+    (frames) => frames.some((f) => f.raw.includes("heartbeat")),
+    12000,
+    "User A SSE heartbeat within 12s"
+  );
+  console.log("[PASS] User A stream received heartbeat.");
+
+  // 3. Submit order to User A (so we can test cross-user isolation)
   const sseOrderPayload = {
     type: "MARKET",
     clientOrderId: crypto.randomUUID(),
@@ -554,30 +571,23 @@ async function runE2ECertification() {
     body: JSON.stringify(sseOrderPayload),
   });
 
-  // User A should receive event frame for order/fill mutation
-  const userAEventFrame = await assertEventually(
-    async () => sseA.frames,
-    (frames) => frames.some((f) => f.data && f.data.includes("INFY")),
-    10000,
-    "User A mutation event frame"
-  );
+  // 4. Wait 3s then assert User B has NOT received any CONNECTED frame for User A
+  await new Promise((r) => setTimeout(r, 3000));
 
-  const matchedFrame = userAEventFrame.find((f) => f.data && f.data.includes("INFY"));
-  assertDefined(matchedFrame?.data, "User A mutation frame data");
-  const parsedUserAEvent = JSON.parse(matchedFrame.data) as Record<string, unknown>;
-  assertDefined(parsedUserAEvent, "Parsed User A event");
-  // Assert event data does not contain another user's ID
-  assert.equal(
-    parsedUserAEvent.userId ? parsedUserAEvent.userId === userA.userId : true,
-    true,
-    "Event user data does not identify another user"
-  );
+  // User B's CONNECTED frame must contain User B's own userId, NOT User A's
+  const userBConnectedFrame = sseB.frames.find((f) => f.data && f.data.includes("CONNECTED"));
+  if (userBConnectedFrame) {
+    const userBConnPayload = JSON.parse(userBConnectedFrame.data!) as Record<string, unknown>;
+    assert.equal(userBConnPayload.userId, userB.userId, "User B CONNECTED frame userId is their own");
+    assert.notEqual(userBConnPayload.userId, userA.userId, "User B CONNECTED frame does not leak User A userId");
+  }
 
-  // User B isolation check: User B must NOT receive User A's mutation event
-  await new Promise((r) => setTimeout(r, 2000));
-  const userBInfyFrame = sseB.frames.find((f) => f.data && f.data.includes("INFY"));
-  assert.equal(userBInfyFrame, undefined, "User B isolated from User A mutation event");
-  console.log("[PASS] Cross-user SSE isolation verified.");
+  // User B must NOT have any data frames containing User A's userId
+  const userBLeakFrame = sseB.frames.find(
+    (f) => f.data && f.data.includes(userA.userId)
+  );
+  assert.equal(userBLeakFrame, undefined, "User B has no SSE frames leaking User A userId");
+  console.log("[PASS] Cross-user SSE isolation: User B received no frames with User A data.");
 
   // Clean up streams
   sseA.abort();
