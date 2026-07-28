@@ -28,8 +28,8 @@ export default defineEventHandler(async (event) => {
       status: state.account.status,
       positions: state.positions.map((p) => ({
         ...p,
-        quantity: Number(p.quantity),
-        averagePrice: Number(p.averagePrice),
+        quantity: Number(p.totalShares),
+        averagePrice: Number(p.averageEntryPrice),
       })),
       orders: state.orders.map((o) => ({
         ...o,
@@ -40,7 +40,8 @@ export default defineEventHandler(async (event) => {
       })),
       fills: state.fills.map((f) => ({
         ...f,
-        qty: Number(f.qty),
+        qty: Number(f.quantity),
+        quantity: Number(f.quantity),
         fillPrice: Number(f.fillPrice),
       })),
       ledger: ledgerResult.entries.map((l) => ({

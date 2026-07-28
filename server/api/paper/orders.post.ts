@@ -117,7 +117,8 @@ export default defineEventHandler(async (event) => {
       fill: result.fill
         ? {
             ...result.fill,
-            qty: Number(result.fill.qty),
+            qty: Number(result.fill.quantity),
+            quantity: Number(result.fill.quantity),
             fillPrice: Number(result.fill.fillPrice),
           }
         : null,
@@ -129,8 +130,8 @@ export default defineEventHandler(async (event) => {
       position: result.position
         ? {
             ...result.position,
-            quantity: Number(result.position.quantity),
-            averagePrice: Number(result.position.averagePrice),
+            quantity: Number(result.position.totalShares),
+            averagePrice: Number(result.position.averageEntryPrice),
           }
         : null,
       idempotentReplay: result.idempotentReplay,
