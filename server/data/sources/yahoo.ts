@@ -95,7 +95,12 @@ export async function getQuote(
   return withRetry(async () => {
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`;
     const res = await withRequestSlot(() =>
-      fetch(url, { headers: { "User-Agent": "stock-market-backend/1.0" } })
+      fetch(url, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        },
+      })
     );
     if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo ${res.status}`);
     if (res.status === 404) throw new UpstreamPermanentError(`symbol not found: ${ticker}`);
