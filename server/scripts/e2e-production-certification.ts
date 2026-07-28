@@ -286,7 +286,9 @@ async function runE2ECertification() {
   assertDefined(positionMatch, "Position for RELIANCE");
   assert.equal(positionMatch.quantity, 10, "Position quantity matches order");
 
-  const ledgerForOrder = (state1.ledger || []).filter((l) => l.orderId === orderData1.order!.id);
+  const ledgerForOrder = (state1.ledger || []).filter(
+    (l: any) => l.fillId === orderData1.fill!.id || l.sourceId === orderData1.order!.id || l.metadata?.orderId === orderData1.order!.id
+  );
   assert.equal(ledgerForOrder.length > 0, true, "Ledger contains financial entries for order");
   console.log(`[PASS] Market order and fill assertions verified.\n`);
 
