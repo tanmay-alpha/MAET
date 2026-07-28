@@ -312,7 +312,9 @@ async function runE2ECertification() {
   assert.equal(orderCountForIdem, 1, "Order count for idempotency key unchanged");
   const fillCountForOrder = (state2.fills || []).filter((f) => f.orderId === orderData1.order!.id).length;
   assert.equal(fillCountForOrder, 1, "Fill count for order unchanged by replay");
-  const ledgerCountForOrder = (state2.ledger || []).filter((l) => l.orderId === orderData1.order!.id).length;
+  const ledgerCountForOrder = (state2.ledger || []).filter(
+    (l: any) => l.fillId === orderData1.fill!.id || l.sourceId === orderData1.order!.id || l.metadata?.orderId === orderData1.order!.id
+  ).length;
   assert.equal(ledgerCountForOrder, ledgerForOrder.length, "Ledger-entry count unchanged by replay");
 
   const pos2 = (state2.positions || []).find((p) => p.symbol === "RELIANCE");
