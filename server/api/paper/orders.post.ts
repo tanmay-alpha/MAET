@@ -40,11 +40,11 @@ export default defineEventHandler(async (event) => {
       asOf: result.asOf.toISOString(),
     };
   } catch (error: unknown) {
-    if (error instanceof PaperTradingError) {
+    if (error instanceof Error) {
       throw createError({
         statusCode: 400,
         statusMessage: error.message,
-        data: { code: error.code, details: error.details },
+        data: { code: (error as any).code || "PAPER_ERROR" },
       });
     }
     throw error;
