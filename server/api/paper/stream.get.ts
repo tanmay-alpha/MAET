@@ -34,7 +34,7 @@ export default defineEventHandler(async (event) => {
     if (!res.writableEnded) {
       res.write(`: heartbeat ${new Date().toISOString()}\n\n`);
     }
-  }, 20000);
+  }, 5000);
 
   sub.on("message", (subChannel, message) => {
     if (subChannel === channel && !res.writableEnded) {
