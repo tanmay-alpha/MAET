@@ -1,6 +1,7 @@
 import { defineEventHandler } from "h3";
 import { requireAuth } from "../trpc/auth";
 import { createPaperTradingService } from "../../modules/paper-trading/service";
+import { toPaperHttpError } from "./orders.post";
 
 export default defineEventHandler(async (event) => {
   try {
@@ -15,14 +16,13 @@ export default defineEventHandler(async (event) => {
         userId: account.userId,
         generation: account.generation,
         version: account.version,
-        cashBalance: account.cashBalance,
-        allocatedMargin: account.allocatedMargin,
+        cashBalance: Number(account.cashBalance),
+        allocatedMargin: Number(account.allocatedMargin),
         status: account.status,
       },
     };
   } catch (error: any) {
-    console.error("[api/paper/account.post] Error:", error);
-    throw error;
+    throw toPaperHttpError(error);
   }
 });
 
