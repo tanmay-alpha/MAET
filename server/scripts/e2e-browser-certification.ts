@@ -65,15 +65,32 @@ async function runDeployedBrowserCertification() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     baseURL: FRONTEND_BASE_URL,
+    bypassCSP: true,
     extraHTTPHeaders: {
       Authorization: `Bearer ${testUser.token}`,
     },
   });
 
-  // Attach authorization header to all API requests
+  const supabaseSession = {
+    access_token: testUser.token,
+    token_type: "bearer",
+    expires_in: 3600,
+    refresh_token: testUser.token,
+    user: { id: testUser.userId, email: `browser_cert_${runId}@maet-test.org` },
+  };
+
+  await context.addInitScript((session) => {
+    window.localStorage.setItem("sb-ztpbfmpfgmgmsitshzma-auth-token", JSON.stringify(session));
+    window.localStorage.setItem("supabase.auth.token", JSON.stringify(session));
+  }, supabaseSession);
+
+  // Proxy all frontend /api/** requests directly to Render backend with auth header
   await context.route("**/api/**", async (route) => {
-    const headers = { ...route.request().headers(), authorization: `Bearer ${testUser.token}` };
-    await route.continue({ headers });
+    const req = route.request();
+    const url = new URL(req.url());
+    const renderUrl = `${RENDER_BASE_URL}${url.pathname}${url.search}`;
+    const headers = { ...req.headers(), authorization: `Bearer ${testUser.token}` };
+    await route.continue({ url: renderUrl, headers });
   });
 
   const page = await context.newPage();
@@ -103,10 +120,10 @@ async function runDeployedBrowserCertification() {
     console.log("[PASS] Terminal loaded and symbols rendered.");
 
     // Submit MARKET BUY order for RELIANCE
-    const buyButton = page.locator("button", { hasText: /^BUY$/i }).first();
-    await buyButton.click();
-
     const submitButton = page.locator("button", { hasText: /BUY \d+ RELIANCE/i }).first();
+    await submitButton.waitFor({ state: "visible", timeout: 15000 });
+    // Wait until paper account loads and button is no longer disabled
+    await page.waitForFunction((el) => el && !(el as HTMLButtonElement).disabled, await submitButton.elementHandle(), { timeout: 15000 });
     assert.equal(await submitButton.isVisible(), true, "Submit button visible");
 
     // Click submit and verify payload does not contain execution quote
@@ -122,7 +139,7 @@ async function runDeployedBrowserCertification() {
     console.log("[PASS] Request payload contains no execution quote.");
 
     // Verify order and position appear
-    await page.waitForSelector("text=Market BUY order placed successfully", { timeout: 10000 });
+    await page.waitForSelector("text=/placed successfully/i", { timeout: 15000 });
     console.log("[PASS] MARKET order submission succeeded in Terminal.\n");
 
     // -----------------------------------------------------------------

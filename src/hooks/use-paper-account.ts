@@ -83,6 +83,7 @@ export function usePaperAccount(): UsePaperAccountResult {
   const placeOrderMutation = useMutation({
     mutationFn: async (command: Omit<PaperOrderCommand, "clientOrderId" | "idempotencyKey">) => {
       const fullCommand: PaperOrderCommand = {
+        exchange: "NSE",
         ...command,
         clientOrderId: crypto.randomUUID(),
         idempotencyKey: crypto.randomUUID(),
