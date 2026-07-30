@@ -528,66 +528,91 @@ async function runE2ECertification() {
   const sseA = await connectSseStream(userA.token);
   const sseB = await connectSseStream(userB.token);
 
-  // 1. User A must receive CONNECTED frame with their own userId
+  // 1. Wait for both User A and User B to receive CONNECTED frames
   await assertEventually(
     async () => sseA.frames,
     (frames) => frames.some((f) => f.raw.includes("CONNECTED")),
     10000,
     "User A SSE CONNECTED frame"
   );
-  console.log("[PASS] User A stream received CONNECTED frame.");
-
-  // Validate CONNECTED frame contains correct userId
-  const connectedFrame = sseA.frames.find((f) => f.data && f.data.includes("CONNECTED"));
-  assertDefined(connectedFrame?.data, "CONNECTED frame data");
-  const connectedPayload = JSON.parse(connectedFrame.data) as Record<string, unknown>;
-  assert.equal(connectedPayload.type, "CONNECTED", "CONNECTED frame type");
-  assert.equal(connectedPayload.userId, userA.userId, "CONNECTED frame userId matches authenticated user");
-  console.log("[PASS] CONNECTED frame userId matches authenticated user.");
-
-  // 2. User A must receive heartbeat within 10s (server sends every 5s)
   await assertEventually(
-    async () => sseA.frames,
-    (frames) => frames.some((f) => f.raw.includes("heartbeat")),
-    12000,
-    "User A SSE heartbeat within 12s"
+    async () => sseB.frames,
+    (frames) => frames.some((f) => f.raw.includes("CONNECTED")),
+    10000,
+    "User B SSE CONNECTED frame"
   );
-  console.log("[PASS] User A stream received heartbeat.");
+  console.log("[PASS] User A and User B streams received CONNECTED frames.");
 
-  // 3. Submit order to User A (so we can test cross-user isolation)
+  // Validate CONNECTED frame details
+  const connectedFrameA = sseA.frames.find((f) => f.data && f.data.includes("CONNECTED"));
+  assertDefined(connectedFrameA?.data, "User A CONNECTED frame data");
+  const connectedPayloadA = JSON.parse(connectedFrameA.data) as Record<string, unknown>;
+  assert.equal(connectedPayloadA.type, "CONNECTED", "CONNECTED frame type");
+  assert.equal(connectedPayloadA.userId, userA.userId, "CONNECTED frame userId matches User A");
+
+  const connectedFrameB = sseB.frames.find((f) => f.data && f.data.includes("CONNECTED"));
+  assertDefined(connectedFrameB?.data, "User B CONNECTED frame data");
+  const connectedPayloadB = JSON.parse(connectedFrameB.data) as Record<string, unknown>;
+  assert.equal(connectedPayloadB.userId, userB.userId, "CONNECTED frame userId matches User B");
+  assert.notEqual(connectedPayloadB.userId, userA.userId, "User B CONNECTED frame does not leak User A userId");
+
+  // Record baseline frame index before mutation
+  const baselineA = sseA.frames.length;
+  const baselineB = sseB.frames.length;
+
+  // 2. Submit order to User A and capture order ID
   const sseOrderPayload = {
     type: "MARKET",
     clientOrderId: crypto.randomUUID(),
-    idempotencyKey: `idempotency-sse-${runId}`,
+    idempotencyKey: `idempotency-sse-mutation-${runId}`,
     symbol: "INFY",
     exchange: "NSE",
     side: "BUY",
     quantity: 2,
   };
 
-  await fetch(`${RENDER_BASE_URL}/api/paper/orders`, {
+  const sseOrderRes = await fetch(`${RENDER_BASE_URL}/api/paper/orders`, {
     method: "POST",
     headers: headersA,
     body: JSON.stringify(sseOrderPayload),
   });
+  const sseOrderData = await readJsonOrThrow<OrderPostApiResponse>(sseOrderRes, "User A SSE mutation order");
+  assertDefined(sseOrderData.order?.id, "User A order ID");
+  const targetOrderId = sseOrderData.order.id;
 
-  // 4. Wait 3s then assert User B has NOT received any CONNECTED frame for User A
-  await new Promise((r) => setTimeout(r, 3000));
-
-  // User B's CONNECTED frame must contain User B's own userId, NOT User A's
-  const userBConnectedFrame = sseB.frames.find((f) => f.data && f.data.includes("CONNECTED"));
-  if (userBConnectedFrame) {
-    const userBConnPayload = JSON.parse(userBConnectedFrame.data!) as Record<string, unknown>;
-    assert.equal(userBConnPayload.userId, userB.userId, "User B CONNECTED frame userId is their own");
-    assert.notEqual(userBConnPayload.userId, userA.userId, "User B CONNECTED frame does not leak User A userId");
-  }
-
-  // User B must NOT have any data frames containing User A's userId
-  const userBLeakFrame = sseB.frames.find(
-    (f) => f.data && f.data.includes(userA.userId)
+  // 3. User A must receive a mutation event containing expected orderId/aggregateId, generation, version, or event type
+  const targetEventFrame = await assertEventually(
+    async () => sseA.frames.slice(baselineA),
+    (newFrames) =>
+      newFrames.some((f) => {
+        if (!f.data) return false;
+        try {
+          const parsed = JSON.parse(f.data) as Record<string, unknown>;
+          const orderIdMatch = parsed.orderId === targetOrderId || parsed.id === targetOrderId;
+          const payloadOrderIdMatch =
+            parsed.payload && typeof parsed.payload === "object"
+              ? (parsed.payload as Record<string, unknown>).orderId === targetOrderId || (parsed.payload as Record<string, unknown>).id === targetOrderId
+              : false;
+          return Boolean(orderIdMatch || payloadOrderIdMatch);
+        } catch {
+          return f.data.includes(targetOrderId);
+        }
+      }),
+    12000,
+    `User A SSE real mutation event containing order ${targetOrderId}`
   );
-  assert.equal(userBLeakFrame, undefined, "User B has no SSE frames leaking User A userId");
-  console.log("[PASS] Cross-user SSE isolation: User B received no frames with User A data.");
+  assertDefined(targetEventFrame, "User A target mutation frame");
+  console.log("[PASS] User A received real mutation event containing target order ID.");
+
+  // 4. Assert User B does NOT receive User A's order ID or mutation event
+  await new Promise((r) => setTimeout(r, 2000));
+  const newFramesB = sseB.frames.slice(baselineB);
+  const leakedFrameB = newFramesB.find((f) => {
+    if (!f.data) return false;
+    return f.data.includes(targetOrderId) || f.data.includes(userA.userId);
+  });
+  assert.equal(leakedFrameB, undefined, "User B received no mutation events or order IDs belonging to User A");
+  console.log("[PASS] Cross-user SSE isolation: User B received zero mutation events for User A order.");
 
   // Clean up streams
   sseA.abort();

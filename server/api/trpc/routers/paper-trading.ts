@@ -5,13 +5,56 @@ import {
   createPaperTradingService,
   PaperTradingService,
 } from "../../../modules/paper-trading/service";
-import { PaperTradingError } from "../../../modules/paper-trading/errors";
+import {
+  PaperTradingError,
+  PaperValidationError,
+  PaperAuthenticationError,
+  PaperOrderNotFoundError,
+  PaperQuoteRejectedError,
+  PaperInsufficientMarginError,
+  PaperAccountLockedError,
+  PaperOrderConflictError,
+  PaperIdempotencyConflictError,
+  PaperConcurrencyError,
+} from "../../../modules/paper-trading/errors";
 import {
   PaperOrderCommandSchema,
   PaperOrderCommand,
 } from "../../../modules/paper-trading/contracts";
 
 const defaultService = createPaperTradingService();
+
+export function toTrpcError(error: unknown): TRPCError {
+  if (error instanceof TRPCError) {
+    return error;
+  }
+  if (error instanceof PaperValidationError) {
+    return new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+  }
+  if (error instanceof PaperAuthenticationError) {
+    return new TRPCError({ code: "UNAUTHORIZED", message: error.message, cause: error });
+  }
+  if (error instanceof PaperOrderNotFoundError) {
+    return new TRPCError({ code: "NOT_FOUND", message: error.message, cause: error });
+  }
+  if (
+    error instanceof PaperQuoteRejectedError ||
+    error instanceof PaperInsufficientMarginError ||
+    error instanceof PaperAccountLockedError ||
+    error instanceof PaperOrderConflictError ||
+    error instanceof PaperIdempotencyConflictError ||
+    error instanceof PaperConcurrencyError
+  ) {
+    return new TRPCError({ code: "CONFLICT", message: error.message, cause: error });
+  }
+  if (error instanceof PaperTradingError) {
+    return new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+  }
+  return new TRPCError({
+    code: "INTERNAL_SERVER_ERROR",
+    message: "Paper trading request failed",
+  });
+}
 
 export function createPaperTradingRouter(service: PaperTradingService = defaultService) {
   return createRouter({
@@ -20,7 +63,11 @@ export function createPaperTradingRouter(service: PaperTradingService = defaultS
       if (!userId) {
         throw new TRPCError({ code: "UNAUTHORIZED" });
       }
-      return service.getState({ userId });
+      try {
+        return await service.getState({ userId });
+      } catch (error) {
+        throw toTrpcError(error);
+      }
     }),
 
     placeOrder: protectedProcedure
@@ -48,17 +95,7 @@ export function createPaperTradingRouter(service: PaperTradingService = defaultS
           };
           return await service.placeOrder({ userId, command });
         } catch (error) {
-          if (error instanceof PaperTradingError) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              cause: error,
-              message: error.message,
-            });
-          }
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to place order",
-          });
+          throw toTrpcError(error);
         }
       }),
 
@@ -73,17 +110,7 @@ export function createPaperTradingRouter(service: PaperTradingService = defaultS
           await service.cancelOrder({ userId, orderId: input.orderId });
           return { success: true };
         } catch (error) {
-          if (error instanceof PaperTradingError) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              cause: error,
-              message: error.message,
-            });
-          }
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to cancel order",
-          });
+          throw toTrpcError(error);
         }
       }),
 
@@ -100,17 +127,7 @@ export function createPaperTradingRouter(service: PaperTradingService = defaultS
             confirmation: input?.confirmation ?? true,
           });
         } catch (error) {
-          if (error instanceof PaperTradingError) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              cause: error,
-              message: error.message,
-            });
-          }
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to reset account",
-          });
+          throw toTrpcError(error);
         }
       }),
 

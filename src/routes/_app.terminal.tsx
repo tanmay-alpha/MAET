@@ -273,9 +273,10 @@ function Terminal() {
                               onClick={() => {
                                 placeOrder({
                                   symbol: pos.symbol,
+                                  exchange: "NSE",
                                   side: "SELL",
                                   type: "MARKET",
-                                  qty: pos.totalShares,
+                                  quantity: pos.totalShares,
                                 });
                               }}
                               disabled={!isTradingAvailable}
