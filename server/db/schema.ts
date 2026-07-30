@@ -677,5 +677,199 @@ export const paperPortfolioSnapshots = pgTable("paper_portfolio_snapshots", {
   index("paper_portfolio_snapshots_time_idx").on(table.snapshotTime),
 ]);
 
+// =============================================================================
+// Advanced Product Features (migration 0013)
+// =============================================================================
+
+export const userWatchlists = pgTable("user_watchlists", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  isPinned: boolean("is_pinned").notNull().default(false),
+  position: integer("position").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("user_watchlists_user_idx").on(table.userId, table.position),
+]);
+
+export const watchlistItems = pgTable("watchlist_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  watchlistId: uuid("watchlist_id").notNull().references(() => userWatchlists.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  symbol: text("symbol").notNull(),
+  exchange: text("exchange").notNull().default("NSE"),
+  note: text("note"),
+  position: integer("position").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("watchlist_items_unique").on(table.watchlistId, table.symbol, table.exchange),
+  index("watchlist_items_user_idx").on(table.userId, table.position),
+]);
+
+export const savedScreenerDefinitions = pgTable("saved_screener_definitions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  universe: text("universe").notNull().default("NSE"),
+  criteria: jsonb("criteria").notNull(),
+  isPinned: boolean("is_pinned").notNull().default(false),
+  isArchived: boolean("is_archived").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+}, (table) => [
+  index("saved_screeners_user_pinned_idx").on(table.userId, table.isPinned, table.updatedAt),
+]);
+
+export const savedScreenerRuns = pgTable("saved_screener_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  screenerId: uuid("screener_id").notNull().references(() => savedScreenerDefinitions.id, { onDelete: "cascade" }),
+  runStartedAt: timestamp("run_started_at", { withTimezone: true }).notNull().defaultNow(),
+  runCompletedAt: timestamp("run_completed_at", { withTimezone: true }),
+  matchCount: integer("match_count"),
+  symbols: text("symbols").array().notNull().default([]),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("saved_screener_runs_user_idx").on(table.userId, table.runStartedAt),
+  index("saved_screener_runs_screener_idx").on(table.screenerId, table.runStartedAt),
+]);
+
+export const alertEvents = pgTable("alert_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  alertId: uuid("alert_id").notNull().references(() => alerts.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  symbol: text("symbol").notNull(),
+  exchange: text("exchange").notNull().default("NSE"),
+  triggeredAt: timestamp("triggered_at", { withTimezone: true }).notNull().defaultNow(),
+  observedValue: numeric("observed_value", { precision: 24, scale: 4 }),
+  targetValue: numeric("target_value", { precision: 24, scale: 4 }).notNull(),
+  conditionType: text("condition_type").notNull(),
+  message: text("message"),
+  provider: text("provider").notNull(),
+  providerTimestamp: timestamp("provider_timestamp", { withTimezone: true }),
+  fingerprint: text("fingerprint").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("alert_events_fingerprint_unique").on(table.alertId, table.fingerprint),
+  index("alert_events_user_triggered_idx").on(table.userId, table.triggeredAt),
+]);
+
+export const userNotifications = pgTable("user_notifications", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  title: text("title").notNull(),
+  body: text("body"),
+  symbol: text("symbol"),
+  alertId: uuid("alert_id").references(() => alerts.id, { onDelete: "set null" }),
+  alertEventId: uuid("alert_event_id").references(() => alertEvents.id, { onDelete: "set null" }),
+  payload: jsonb("payload").notNull().default({}),
+  readAt: timestamp("read_at", { withTimezone: true }),
+  dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("user_notifications_user_created_idx").on(table.userId, table.createdAt),
+]);
+
+export const portfolioSnapshots = pgTable("portfolio_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  snapshotDate: text("snapshot_date").notNull(),
+  cashBalance: numeric("cash_balance", { precision: 18, scale: 4 }).notNull(),
+  totalEquity: numeric("total_equity", { precision: 18, scale: 4 }).notNull(),
+  marginUsed: numeric("margin_used", { precision: 18, scale: 4 }).notNull().default("0"),
+  unrealizedPnl: numeric("unrealized_pnl", { precision: 18, scale: 4 }).notNull().default("0"),
+  realizedPnl: numeric("realized_pnl", { precision: 18, scale: 4 }).notNull().default("0"),
+  positionsCount: integer("positions_count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("portfolio_snapshots_date_unique").on(table.userId, table.snapshotDate),
+  index("portfolio_snapshots_user_date_idx").on(table.userId, table.snapshotDate),
+]);
+
+export const researchNotes = pgTable("research_notes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  symbol: text("symbol").notNull(),
+  exchange: text("exchange").notNull().default("NSE"),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  tags: text("tags").array().notNull().default([]),
+  eventAt: timestamp("event_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("research_notes_user_symbol_idx").on(table.userId, table.symbol, table.createdAt),
+  index("research_notes_user_created_idx").on(table.userId, table.createdAt),
+]);
+
+export const featurePreferences = pgTable("feature_preferences", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  capability: text("capability").notNull(),
+  enabled: boolean("enabled").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.capability] }),
+]);
+
+export const ingestionRuns = pgTable("ingestion_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  batchId: text("batch_id").notNull(),
+  source: text("source").notNull(),
+  dataType: text("data_type").notNull(),
+  operation: text("operation").notNull(),
+  status: text("status").notNull().default("pending"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  durationMs: integer("duration_ms"),
+  attempted: integer("attempted").notNull().default(0),
+  inserted: integer("inserted").notNull().default(0),
+  updated: integer("updated").notNull().default(0),
+  failed: integer("failed").notNull().default(0),
+  retryCount: integer("retry_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("ingestion_runs_source_type_idx").on(table.source, table.dataType),
+  index("ingestion_runs_status_started_idx").on(table.status, table.startedAt),
+  index("ingestion_runs_batch_idx").on(table.batchId),
+]);
+
+export const deadLetterQueue = pgTable("dead_letter_queue", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  source: text("source").notNull(),
+  dataType: text("data_type").notNull(),
+  batchId: text("batch_id"),
+  payload: jsonb("payload").notNull(),
+  errorMessage: text("error_message").notNull(),
+  retryCount: integer("retry_count").notNull().default(0),
+  lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  resolvedBy: text("resolved_by"),
+  resolutionNote: text("resolution_note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("dlq_unresolved_idx").on(table.createdAt),
+]);
+
+export const savedComparisons = pgTable("saved_comparisons", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  symbols: text("symbols").array().notNull(),
+  metricKeys: text("metric_keys").array().notNull().default([]),
+  isPinned: boolean("is_pinned").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("saved_comparisons_user_idx").on(table.userId, table.updatedAt),
+]);
+
 
 

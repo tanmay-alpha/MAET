@@ -8,13 +8,13 @@ import { companiesRouter } from "./routers/companies";
 import { analysisRouter } from "./routers/analysis";
 import { ingestionRouter } from "./routers/ingestion";
 import { paperTradingRouter } from "./routers/paper-trading";
-
-/**
- * tRPC initialization for MAET backend.
- *
- * All procedures require authentication by default. Public procedures should
- * use `.allow()`. Auth context is attached to every call.
- */
+import { capabilitiesRouter } from "./routers/capabilities";
+import { workspaceRouter } from "./routers/workspace";
+import { alertsEngineRouter } from "./routers/alerts-engine";
+import { dataQualityRouter } from "./routers/data-quality";
+import { marketBreadthRouter } from "./routers/market-breadth";
+import { screenerDslRouter } from "./routers/screener-dsl";
+import { backtestV2Router } from "./routers/backtest-v2";
 
 export const appRouter = createRouter({
   market: marketRouter,
@@ -26,6 +26,13 @@ export const appRouter = createRouter({
   analysis: analysisRouter,
   ingestion: ingestionRouter,
   paperTrading: paperTradingRouter,
+  capabilities: capabilitiesRouter,
+  workspace: workspaceRouter,
+  alertsEngine: alertsEngineRouter,
+  dataQuality: dataQualityRouter,
+  marketBreadth: marketBreadthRouter,
+  screenerDsl: screenerDslRouter,
+  backtestV2: backtestV2Router,
 });
 
 export const router = appRouter;
