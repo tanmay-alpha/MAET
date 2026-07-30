@@ -254,9 +254,10 @@ function PortfolioPage() {
                               if (window.confirm(`Are you sure you want to close position in ${position.symbol}?`)) {
                                 placeOrder({
                                   symbol: position.symbol,
+                                  exchange: "NSE",
                                   side: "SELL",
                                   type: "MARKET",
-                                  qty: position.totalShares,
+                                  quantity: position.totalShares,
                                 });
                               }
                             }}

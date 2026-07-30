@@ -42,9 +42,10 @@ export function OrderPanel({
       if (type === "MKT") {
         await placeOrder({
           symbol,
+          exchange: "NSE",
           side,
           type: "MARKET",
-          qty,
+          quantity: qty,
           stopLossPrice: stopLoss ? Number(stopLoss) : undefined,
           takeProfitPrice: takeProfit ? Number(takeProfit) : undefined,
         });
@@ -52,9 +53,10 @@ export function OrderPanel({
       } else if (type === "LMT") {
         await placeOrder({
           symbol,
+          exchange: "NSE",
           side,
           type: "LIMIT",
-          qty,
+          quantity: qty,
           limitPrice: Number(limit),
           stopLossPrice: stopLoss ? Number(stopLoss) : undefined,
           takeProfitPrice: takeProfit ? Number(takeProfit) : undefined,
@@ -63,9 +65,10 @@ export function OrderPanel({
       } else {
         await placeOrder({
           symbol,
+          exchange: "NSE",
           side,
           type: "STOP_LOSS_LIMIT",
-          qty,
+          quantity: qty,
           stopPrice: Number(limit),
           limitPrice: Number(limit),
         });

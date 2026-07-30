@@ -84,15 +84,17 @@ export function QuickTradeModal({
         await placeOrder({
           type: "MARKET",
           symbol: symbol.toUpperCase(),
+          exchange: "NSE",
           side,
-          qty,
+          quantity: qty,
         });
       } else {
         await placeOrder({
           type: "LIMIT",
           symbol: symbol.toUpperCase(),
+          exchange: "NSE",
           side,
-          qty,
+          quantity: qty,
           limitPrice: limitPriceNum!,
         });
       }
