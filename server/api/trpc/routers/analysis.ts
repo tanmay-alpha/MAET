@@ -6,6 +6,9 @@ import { companies, fundamentals, financialStatements, candles } from "../../../
 import { eq, desc, and } from "drizzle-orm";
 import { calculateAllIndicators } from "../../../domain/technical/indicators-extended";
 import type { Candle } from "@shared/types";
+import { getStockScorecard } from "../../../modules/analysis/scorecard-service";
+import { getPeerComparison } from "../../../modules/peers/service";
+import { PeerComparisonRequestSchema } from "../../../modules/peers/contracts";
 
 // Fallback helper to fetch candles from Yahoo Finance
 async function fetchYahooCandles(symbol: string): Promise<Candle[]> {
@@ -262,5 +265,21 @@ export const analysisRouter = createRouter({
           statementType: s.statementType,
         })),
       };
+    }),
+
+  // Get stock scorecard (deterministic, no LLM required)
+  getStockScorecard: protectedProcedure
+    .input(z.object({
+      symbol: z.string().min(1).max(20),
+    }))
+    .query(async ({ input }) => {
+      return await getStockScorecard(input.symbol);
+    }),
+
+  // Get peer comparison
+  getPeerComparison: protectedProcedure
+    .input(PeerComparisonRequestSchema)
+    .query(async ({ input }) => {
+      return await getPeerComparison(input.symbol, input.limit);
     }),
 });

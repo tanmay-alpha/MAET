@@ -144,13 +144,13 @@ async function runDeployedBrowserCertification() {
 
     // Assert real outgoing order request payload & headers
     assertDefined(capturedRequest, "Captured placeOrder request");
-    const reqInstance = capturedRequest as Request;
+    const reqInstance = capturedRequest as unknown as Request;
     const headers = reqInstance.headers();
     assert.equal(typeof headers.authorization, "string", "Authorization header exists on outgoing request");
     assert.equal(headers.authorization.startsWith("Bearer "), true, "Authorization header starts with Bearer");
 
     assertDefined(capturedPayload, "Captured placeOrder payload");
-    const payloadInstance = capturedPayload as Record<string, unknown>;
+    const payloadInstance = capturedPayload as unknown as Record<string, unknown>;
     assert.equal(typeof payloadInstance.quantity, "number", "Payload contains numeric quantity");
     assert.equal((payloadInstance.quantity as number) > 0, true, "Payload quantity is positive");
     assert.equal(typeof payloadInstance.exchange, "string", "Payload contains string exchange");
