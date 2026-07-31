@@ -125,7 +125,7 @@ export const idempotency = pgTable("idempotency", {
 ]);
 
 export const alerts = pgTable("alerts", {
-  id: uuid("id").primaryKey(),
+  id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   symbol: text("symbol").notNull(),
   exchange: text("exchange").notNull().default("NSE"),
@@ -135,6 +135,13 @@ export const alerts = pgTable("alerts", {
   message: text("message"),
   triggered: boolean("triggered").notNull().default(false),
   triggeredAt: timestamp("triggered_at", { withTimezone: true }),
+  label: text("label"),
+  enabled: boolean("enabled").notNull().default(true),
+  mode: text("mode").notNull().default("ONCE"),
+  cooldownMinutes: integer("cooldown_minutes").notNull().default(60),
+  lastTriggeredAt: timestamp("last_triggered_at", { withTimezone: true }),
+  triggerCount: integer("trigger_count").notNull().default(0),
+  config: jsonb("config").notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

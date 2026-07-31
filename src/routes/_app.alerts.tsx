@@ -20,7 +20,7 @@ function AlertBadge({ type }: { type: AlertType["type"] }) {
     indicator: { icon: Activity, label: "Indicator", className: "bg-blue-500/10 text-blue-500 border-blue-500/20" },
   };
 
-  const cfg = config[type];
+  const cfg = config[type as keyof typeof config] ?? config.price_above;
   const Icon = cfg.icon;
 
   return (
@@ -38,9 +38,9 @@ function CreateAlertForm({ onClose }: { onClose: () => void }) {
   const [value, setValue] = useState("");
   const [repeat, setRepeat] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const result = createAlert({
+    const result = await createAlert({
       symbol,
       type: alertType,
       condition: alertType === "price_below" ? "below" : "above",

@@ -102,9 +102,24 @@ CREATE TABLE IF NOT EXISTS public.alerts (
   message         text,
   triggered       boolean NOT NULL DEFAULT false,
   triggered_at    timestamptz,
+  label           text,
+  enabled         boolean NOT NULL DEFAULT true,
+  mode            text NOT NULL DEFAULT 'ONCE',
+  cooldown_minutes integer NOT NULL DEFAULT 60,
+  last_triggered_at timestamptz,
+  trigger_count   integer NOT NULL DEFAULT 0,
+  config          jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.alerts ADD COLUMN IF NOT EXISTS label text;
+ALTER TABLE public.alerts ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
+ALTER TABLE public.alerts ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'ONCE';
+ALTER TABLE public.alerts ADD COLUMN IF NOT EXISTS cooldown_minutes integer NOT NULL DEFAULT 60;
+ALTER TABLE public.alerts ADD COLUMN IF NOT EXISTS last_triggered_at timestamptz;
+ALTER TABLE public.alerts ADD COLUMN IF NOT EXISTS trigger_count integer NOT NULL DEFAULT 0;
+ALTER TABLE public.alerts ADD COLUMN IF NOT EXISTS config jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS alerts_user_idx
   ON public.alerts(user_id);
@@ -228,15 +243,12 @@ CREATE TABLE IF NOT EXISTS public.feature_preferences (
 
 -- --- Ingestion Runs (batches for QA) ---
 
--- Drop and recreate to ensure consistent schema regardless of prior state.
-DROP TABLE IF EXISTS public.ingestion_runs CASCADE;
-
-CREATE TABLE public.ingestion_runs (
+CREATE TABLE IF NOT EXISTS public.ingestion_runs (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  batch_id        text NOT NULL,
+  batch_id        text,
   source          text NOT NULL,
-  data_type       text NOT NULL,
-  operation       text NOT NULL,
+  data_type       text,
+  operation       text NOT NULL DEFAULT 'ingest',
   status          text NOT NULL DEFAULT 'pending',
   started_at      timestamptz NOT NULL DEFAULT now(),
   completed_at    timestamptz,
@@ -248,11 +260,50 @@ CREATE TABLE public.ingestion_runs (
   retry_count     integer NOT NULL DEFAULT 0,
   error_summary   text,
   metadata        jsonb NOT NULL DEFAULT '{}'::jsonb,
-  created_at      timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT ingestion_runs_status_whitelist CHECK (
-    status IN ('pending','running','succeeded','failed','partial')
-  )
+  created_at      timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS batch_id text;
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS data_type text;
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS operation text NOT NULL DEFAULT 'ingest';
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS attempted integer NOT NULL DEFAULT 0;
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS inserted integer NOT NULL DEFAULT 0;
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS updated integer NOT NULL DEFAULT 0;
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS failed integer NOT NULL DEFAULT 0;
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS retry_count integer NOT NULL DEFAULT 0;
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS error_summary text;
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE public.ingestion_runs ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ingestion_runs' AND column_name = 'run_id') THEN
+    UPDATE public.ingestion_runs SET batch_id = COALESCE(batch_id, run_id) WHERE batch_id IS NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ingestion_runs' AND column_name = 'pipeline') THEN
+    UPDATE public.ingestion_runs SET data_type = COALESCE(data_type, pipeline) WHERE data_type IS NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ingestion_runs' AND column_name = 'symbols_attempted') THEN
+    UPDATE public.ingestion_runs SET attempted = COALESCE(attempted, symbols_attempted) WHERE attempted = 0 AND symbols_attempted > 0;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ingestion_runs' AND column_name = 'records_inserted') THEN
+    UPDATE public.ingestion_runs SET inserted = COALESCE(inserted, records_inserted) WHERE inserted = 0 AND records_inserted > 0;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ingestion_runs' AND column_name = 'records_updated') THEN
+    UPDATE public.ingestion_runs SET updated = COALESCE(updated, records_updated) WHERE updated = 0 AND records_updated > 0;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ingestion_runs' AND column_name = 'symbols_failed') THEN
+    UPDATE public.ingestion_runs SET failed = COALESCE(failed, symbols_failed) WHERE failed = 0 AND symbols_failed > 0;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ingestion_runs' AND column_name = 'error_message') THEN
+    UPDATE public.ingestion_runs SET error_summary = COALESCE(error_summary, error_message) WHERE error_summary IS NULL;
+  END IF;
+  UPDATE public.ingestion_runs SET batch_id = COALESCE(batch_id, id::text) WHERE batch_id IS NULL;
+  UPDATE public.ingestion_runs SET data_type = COALESCE(data_type, 'unknown') WHERE data_type IS NULL;
+END $$;
+
+ALTER TABLE public.ingestion_runs ALTER COLUMN batch_id SET NOT NULL;
+ALTER TABLE public.ingestion_runs ALTER COLUMN data_type SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ingestion_runs_source_type_idx
   ON public.ingestion_runs(source, data_type);
@@ -265,14 +316,12 @@ CREATE INDEX IF NOT EXISTS ingestion_runs_batch_idx
 
 -- --- Dead Letter Queue (failed ingestion records) ---
 
-DROP TABLE IF EXISTS public.dead_letter_queue CASCADE;
-
-CREATE TABLE public.dead_letter_queue (
+CREATE TABLE IF NOT EXISTS public.dead_letter_queue (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   source          text NOT NULL,
-  data_type       text NOT NULL,
+  data_type       text,
   batch_id        text,
-  payload         jsonb NOT NULL,
+  payload         jsonb,
   error_message   text NOT NULL,
   retry_count     integer NOT NULL DEFAULT 0,
   last_attempted_at timestamptz NOT NULL DEFAULT now(),
@@ -281,6 +330,55 @@ CREATE TABLE public.dead_letter_queue (
   resolution_note text,
   created_at      timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.dead_letter_queue ADD COLUMN IF NOT EXISTS data_type text;
+ALTER TABLE public.dead_letter_queue ADD COLUMN IF NOT EXISTS batch_id text;
+ALTER TABLE public.dead_letter_queue ADD COLUMN IF NOT EXISTS payload jsonb;
+ALTER TABLE public.dead_letter_queue ADD COLUMN IF NOT EXISTS last_attempted_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE public.dead_letter_queue ADD COLUMN IF NOT EXISTS resolved_by text;
+ALTER TABLE public.dead_letter_queue ADD COLUMN IF NOT EXISTS resolution_note text;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'dead_letter_queue' AND column_name = 'pipeline') THEN
+    UPDATE public.dead_letter_queue SET data_type = COALESCE(data_type, pipeline) WHERE data_type IS NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'dead_letter_queue' AND column_name = 'raw_payload') THEN
+    UPDATE public.dead_letter_queue SET payload = COALESCE(payload, raw_payload) WHERE payload IS NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'dead_letter_queue' AND column_name = 'resolved') THEN
+    UPDATE public.dead_letter_queue SET resolved_at = COALESCE(resolved_at, now()) WHERE resolved = true AND resolved_at IS NULL;
+  END IF;
+  UPDATE public.dead_letter_queue SET data_type = COALESCE(data_type, 'unknown') WHERE data_type IS NULL;
+  UPDATE public.dead_letter_queue SET payload = COALESCE(payload, '{}'::jsonb) WHERE payload IS NULL;
+END $$;
+
+ALTER TABLE public.dead_letter_queue ALTER COLUMN data_type SET NOT NULL;
+ALTER TABLE public.dead_letter_queue ALTER COLUMN payload SET NOT NULL;
+
+-- Migrate legacy watchlist data into user_watchlists & watchlist_items
+DO $$
+DECLARE
+  u_rec RECORD;
+  wl_id uuid;
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'watchlist') THEN
+    FOR u_rec IN SELECT DISTINCT user_id FROM public.watchlist LOOP
+      SELECT id INTO wl_id FROM public.user_watchlists WHERE user_id = u_rec.user_id AND lower(name) = 'default';
+      IF wl_id IS NULL THEN
+        INSERT INTO public.user_watchlists (user_id, name, description, is_pinned, position)
+        VALUES (u_rec.user_id, 'Default', 'Migrated watchlist', true, 0)
+        RETURNING id INTO wl_id;
+      END IF;
+      
+      INSERT INTO public.watchlist_items (watchlist_id, user_id, symbol, exchange)
+      SELECT wl_id, w.user_id, w.symbol, w.exchange
+      FROM public.watchlist w
+      WHERE w.user_id = u_rec.user_id
+      ON CONFLICT (watchlist_id, symbol, exchange) DO NOTHING;
+    END LOOP;
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS dlq_unresolved_idx
   ON public.dead_letter_queue(created_at DESC)

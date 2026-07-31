@@ -7,23 +7,19 @@
  */
 
 import { createRouter, publicProcedure } from "../core";
-import { evaluateCapabilities } from "../../../modules/capabilities";
+import { evaluateReadiness } from "../../../modules/capabilities/readiness";
 
 export const capabilitiesRouter = createRouter({
   /**
-   * Returns the canonical state of every declared capability.
-   *
-   * Authenticated callers see authenticated features enabled when the schema
-   * is available. Anonymous callers see only features that do not require
-   * user data.
+   * Returns the canonical state of every declared capability based on env flags,
+   * database schema readiness, authentication, and role authorization.
    */
-  get: publicProcedure.query(({ ctx }) => {
-    const hasAuthenticatedSession = typeof ctx.userId === "string" && ctx.userId.length > 0;
-    return {
-      capabilities: evaluateCapabilities({
-        hasAuthenticatedSession,
-        schemaAvailable: true,
-      }),
-    };
+  get: publicProcedure.query(async ({ ctx }) => {
+    const capabilities = await evaluateReadiness({
+      userId: ctx.userId,
+      isAdmin: (ctx as any).isAdmin,
+      userRole: (ctx as any).userRole,
+    });
+    return { capabilities };
   }),
 });

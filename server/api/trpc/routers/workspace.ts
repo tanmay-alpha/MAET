@@ -58,6 +58,12 @@ export const workspaceRouter = createRouter({
     .input(z.object({ watchlistId: z.string().uuid(), symbol: z.string().min(1).max(20), exchange: z.enum(["NSE", "BSE"]).default("NSE") }).strict())
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId!;
+      // Verify watchlist ownership
+      const [watchlist] = await db.select().from(userWatchlists).where(and(eq(userWatchlists.id, input.watchlistId), eq(userWatchlists.userId, userId))).limit(1);
+      if (!watchlist) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Watchlist not found or access denied" });
+      }
+
       const result = await db.insert(watchlistItems).values({ userId, watchlistId: input.watchlistId, symbol: input.symbol.toUpperCase(), exchange: input.exchange }).returning();
       return result[0];
     }),
@@ -71,18 +77,25 @@ export const workspaceRouter = createRouter({
     }),
 
   reorderWatchlistItems: protectedProcedure
-    .input(z.object({ items: z.array(z.object({ itemId: z.string().uuid(), position: z.number().int() })).min(1) }).strict())
+    .input(z.object({ items: z.array(z.object({ itemId: z.string().uuid(), position: z.number().int().min(0) })).min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId!;
-      // Validate ownership then batch update
       const itemIds = input.items.map(i => i.itemId);
-      const rows = await db.select().from(watchlistItems).where(and(eq(watchlistItems.userId, userId), sql`${watchlistItems.id} = ANY(${itemIds}::uuid[])`));
-      if (rows.length !== itemIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid item IDs" });
-
-      for (const item of input.items) {
-        await db.update(watchlistItems).set({ position: item.position }).where(eq(watchlistItems.id, item.itemId));
+      if (new Set(itemIds).size !== itemIds.length) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Duplicate item IDs in reorder request" });
       }
-      return { success: true };
+
+      return await db.transaction(async (tx) => {
+        const rows = await tx.select().from(watchlistItems).where(and(eq(watchlistItems.userId, userId), sql`${watchlistItems.id} = ANY(${itemIds}::uuid[])`));
+        if (rows.length !== itemIds.length) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "One or more items do not belong to user" });
+        }
+
+        for (const item of input.items) {
+          await tx.update(watchlistItems).set({ position: Math.min(item.position, input.items.length) }).where(and(eq(watchlistItems.id, item.itemId), eq(watchlistItems.userId, userId)));
+        }
+        return { success: true };
+      });
     }),
 
   // Saved screener CRUD
@@ -120,6 +133,11 @@ export const workspaceRouter = createRouter({
     .input(z.object({ screenerId: z.string().uuid() }).strict())
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId!;
+      const [screener] = await db.select().from(savedScreenerDefinitions).where(and(eq(savedScreenerDefinitions.id, input.screenerId), eq(savedScreenerDefinitions.userId, userId))).limit(1);
+      if (!screener) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Saved screener not found or access denied" });
+      }
+
       const run = await db.insert(savedScreenerRuns).values({ userId, screenerId: input.screenerId, symbols: [], matchCount: 0 }).returning();
       return { runId: run[0].id };
     }),
