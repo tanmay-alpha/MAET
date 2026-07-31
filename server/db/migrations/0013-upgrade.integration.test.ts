@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { readFileSync, readdirSync } from "fs";
+import { readFileSync } from "fs";
 import { join } from "path";
+import { getSqlClient } from "../../data/drizzle/client";
 
 describe("Migration 0013 Additive Upgrade Integration Test Suite", () => {
   const migrationsDir = join(__dirname);
@@ -38,5 +39,34 @@ describe("Migration 0013 Additive Upgrade Integration Test Suite", () => {
   it("4. Migration 0013 preserves backward compatibility and data mapping", () => {
     expect(migration0013Sql).toContain("UPDATE public.ingestion_runs SET batch_id = COALESCE(batch_id, run_id)");
     expect(migration0013Sql).toContain("UPDATE public.dead_letter_queue SET data_type = COALESCE(data_type, pipeline)");
+  });
+
+  it("5. Live PostgreSQL migration upgrade verification (DB contract test)", async () => {
+    const client = getSqlClient();
+    if (!client) {
+      console.warn("TEST_DATABASE_URL not set; skipping live PostgreSQL DDL execution");
+      return;
+    }
+
+    // Verify all 13 tables created by migration 0013 exist in live DB
+    const rows = await client`
+      SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+    `;
+    const tables = new Set(rows.map((r: any) => r.tablename));
+
+    expect(tables.has("user_watchlists")).toBeTrue();
+    expect(tables.has("watchlist_items")).toBeTrue();
+    expect(tables.has("saved_screener_definitions")).toBeTrue();
+    expect(tables.has("saved_screener_runs")).toBeTrue();
+    expect(tables.has("alerts")).toBeTrue();
+    expect(tables.has("alert_events")).toBeTrue();
+    expect(tables.has("user_notifications")).toBeTrue();
+    expect(tables.has("portfolio_snapshots")).toBeTrue();
+    expect(tables.has("research_notes")).toBeTrue();
+    expect(tables.has("feature_preferences")).toBeTrue();
+    expect(tables.has("ingestion_runs")).toBeTrue();
+    expect(tables.has("dead_letter_queue")).toBeTrue();
+    expect(tables.has("backtest_runs")).toBeTrue();
+    expect(tables.has("backtest_presets")).toBeTrue();
   });
 });

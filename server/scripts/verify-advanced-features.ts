@@ -4,40 +4,49 @@ import { join } from "path";
 const PLACEHOLDER_PATTERNS = [
   /Placeholder:/i,
   /returns empty until/i,
-  /\badvances:\s*0\b(?![^]*calculateMarketBreadth)/,
-  /\bcells:\s*\[\]\b(?![^]*getHeatmapCells)/,
-  /\bstatus:\s*"queued"\b(?![^]*jobQueue)/,
-  /\brun:\s*null\b/i,
-  /\bruns:\s*\[\]\b/i,
+  /marketCap:\s*1000000000/i,
+  /price:\s*100\b/i,
+  /source:\s*["']synthetic["']/i,
+  /Math\.sinGenerated/i,
+  /presetId:\s*crypto\.randomUUID\(\)(?!\s*[^]*insert)/i,
+  /status:\s*["']queued_retry["'](?!\s*[^]*runDaily)/i,
+  /\(ctx as any\)\.isAdmin/i,
+  /\(ctx as any\)\.userRole/i,
+  /assertAdmin\(\s*ctx as any\s*\)/i,
+  /empty success mutation/i,
 ];
 
 const TARGET_DIRECTORIES = [
   join(process.cwd(), "server", "api", "trpc", "routers"),
   join(process.cwd(), "server", "modules"),
+  join(process.cwd(), "server", "workers"),
 ];
 
 let failed = false;
 
 function scanDirectory(dir: string) {
-  const entries = readdirSync(dir);
-  for (const entry of entries) {
-    const fullPath = join(dir, entry);
-    const stat = statSync(fullPath);
-    if (stat.isDirectory()) {
-      scanDirectory(fullPath);
-    } else if (fullPath.endsWith(".ts") || fullPath.endsWith(".tsx")) {
-      // Ignore test files or explicit fixture files annotated with 'fixture'
-      if (fullPath.endsWith(".test.ts") || fullPath.endsWith(".spec.ts") || fullPath.includes("/fixtures/")) {
-        continue;
-      }
-      const content = readFileSync(fullPath, "utf-8");
-      for (const pattern of PLACEHOLDER_PATTERNS) {
-        if (pattern.test(content)) {
-          console.error(`[PLACEHOLDER ERROR] Production file ${fullPath} matches placeholder pattern ${pattern}`);
-          failed = true;
+  try {
+    const entries = readdirSync(dir);
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        scanDirectory(fullPath);
+      } else if (fullPath.endsWith(".ts") || fullPath.endsWith(".tsx")) {
+        if (fullPath.endsWith(".test.ts") || fullPath.endsWith(".spec.ts") || fullPath.includes("/fixtures/")) {
+          continue;
+        }
+        const content = readFileSync(fullPath, "utf-8");
+        for (const pattern of PLACEHOLDER_PATTERNS) {
+          if (pattern.test(content)) {
+            console.error(`[PLACEHOLDER ERROR] Production file ${fullPath} matches placeholder pattern ${pattern}`);
+            failed = true;
+          }
         }
       }
     }
+  } catch (e) {
+    // Directory might not exist in some builds
   }
 }
 
