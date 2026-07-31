@@ -14,6 +14,8 @@ import { updateHealthStatus } from "./infra/health";
 import { hydrateAngelOneCompanyTokens } from "./data/sources/nse-company-master";
 import { marketDataMultiplexer } from "./domain/market/data-multiplexer";
 
+import { alertEvaluatorWorker } from "./workers/alert-evaluator";
+
 const yahooPoller = new YahooPoller({ intervalMs: 60_000 });
 const angelOne = new AngelOneWorker();
 const candleWriter = new CandleWriter();
@@ -25,6 +27,7 @@ let started = false;
 let angelRetryTimer: ReturnType<typeof setTimeout> | undefined;
 let angelReadyOff: (() => void) | undefined;
 let angelFailedOff: (() => void) | undefined;
+let quoteBusOff: (() => void) | undefined;
 const ANGEL_FEED_USER = "render-market-feed";
 
 function activeAngelTokens(): string[] {
@@ -111,6 +114,7 @@ export function startOrchestrator(): void {
   screenerRunner.start();
   yahooPoller.start();
   orderMatcher.start();
+  void alertEvaluatorWorker.start();
   marketDataMultiplexer.start();
   angelReadyOff = bus.on("user:angelone:ready", ({ userId }) => {
     if (userId === ANGEL_FEED_USER) updateHealthStatus("marketData", true);
@@ -119,6 +123,16 @@ export function startOrchestrator(): void {
     if (userId !== ANGEL_FEED_USER) return;
     updateHealthStatus("marketData", false);
     scheduleAngelLogin(5_000);
+  });
+  quoteBusOff = bus.on("tick", (tick) => {
+    void alertEvaluatorWorker.processQuote({
+      symbol: tick.symbol,
+      price: tick.price,
+      previousClose: tick.previousClose ?? tick.price,
+      volume: tick.volume,
+      quoteTimestamp: new Date(tick.ts).getTime(),
+      source: tick.source,
+    });
   });
   angelOne.start();
   void connectAngelOne();
@@ -141,6 +155,8 @@ export async function stopOrchestrator(): Promise<void> {
   if (dailyProcessorTimer) clearInterval(dailyProcessorTimer);
   angelReadyOff?.();
   angelFailedOff?.();
+  quoteBusOff?.();
+  await alertEvaluatorWorker.stop();
   angelOne.stop();
   orderMatcher.stop();
   yahooPoller.stop();
