@@ -70,7 +70,7 @@ describe("Capabilities Readiness Evaluator Test Suite", () => {
     try {
       const nonAdminCaps = await evaluateReadiness({
         userId: "user-regular",
-        isAdmin: false,
+        role: "user",
         schemaMap: {
           ingestion_runs: true,
           dead_letter_queue: true,
@@ -84,7 +84,7 @@ describe("Capabilities Readiness Evaluator Test Suite", () => {
 
       const adminCaps = await evaluateReadiness({
         userId: "user-admin",
-        isAdmin: true,
+        role: "admin",
         schemaMap: {
           ingestion_runs: true,
           dead_letter_queue: true,

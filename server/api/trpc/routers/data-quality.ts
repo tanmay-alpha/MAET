@@ -1,7 +1,6 @@
-import { createRouter, protectedProcedure } from "../core";
+import { createRouter, adminProcedure } from "../core";
 import { z } from "zod";
 import {
-  assertAdmin,
   getDataQualityOverview,
   listAudits,
   listAnomalies,
@@ -12,48 +11,41 @@ import {
 } from "../../../modules/data-quality/service";
 
 export const dataQualityRouter = createRouter({
-  getOverview: protectedProcedure.query(async ({ ctx }) => {
-    assertAdmin(ctx as any);
+  getOverview: adminProcedure.query(async () => {
     return await getDataQualityOverview();
   }),
 
-  listAudits: protectedProcedure
+  listAudits: adminProcedure
     .input(z.object({ limit: z.number().int().positive().max(50).default(20) }).optional())
-    .query(async ({ ctx, input }) => {
-      assertAdmin(ctx as any);
+    .query(async ({ input }) => {
       return await listAudits(input?.limit ?? 20);
     }),
 
-  listAnomalies: protectedProcedure
+  listAnomalies: adminProcedure
     .input(z.object({ limit: z.number().int().positive().max(50).default(20) }).optional())
-    .query(async ({ ctx, input }) => {
-      assertAdmin(ctx as any);
+    .query(async ({ input }) => {
       return await listAnomalies(input?.limit ?? 20);
     }),
 
-  resolveAnomaly: protectedProcedure
+  resolveAnomaly: adminProcedure
     .input(z.object({ anomalyId: z.string().uuid(), resolutionNote: z.string().optional() }).strict())
-    .mutation(async ({ ctx, input }) => {
-      assertAdmin(ctx as any);
+    .mutation(async ({ input }) => {
       return await resolveAnomaly(input.anomalyId, input.resolutionNote);
     }),
 
-  suppressAnomaly: protectedProcedure
+  suppressAnomaly: adminProcedure
     .input(z.object({ anomalyId: z.string().uuid() }).strict())
-    .mutation(async ({ ctx, input }) => {
-      assertAdmin(ctx as any);
+    .mutation(async ({ input }) => {
       return await suppressAnomaly(input.anomalyId);
     }),
 
-  retryBatch: protectedProcedure
+  retryBatch: adminProcedure
     .input(z.object({ batchId: z.string().min(1) }).strict())
-    .mutation(async ({ ctx, input }) => {
-      assertAdmin(ctx as any);
+    .mutation(async ({ input }) => {
       return await retryBatch(input.batchId);
     }),
 
-  getCoverage: protectedProcedure.query(async ({ ctx }) => {
-    assertAdmin(ctx as any);
+  getCoverage: adminProcedure.query(async () => {
     return await getDataCoverage();
   }),
 });

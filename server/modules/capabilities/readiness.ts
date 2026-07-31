@@ -13,8 +13,8 @@ import type { CapabilityKey, CapabilityState } from "./contracts";
 
 export interface ReadinessContext {
   userId?: string | null;
-  isAdmin?: boolean;
-  userRole?: string;
+  email?: string | null;
+  role?: "user" | "admin";
   schemaMap?: Record<string, boolean>;
 }
 
@@ -84,7 +84,7 @@ export async function checkDatabaseTablesExist(): Promise<Record<string, boolean
 export async function evaluateReadiness(ctx: ReadinessContext): Promise<CapabilityState[]> {
   const tables = ctx.schemaMap ?? (await checkDatabaseTablesExist());
   const hasAuth = typeof ctx.userId === "string" && ctx.userId.length > 0;
-  const isAdmin = ctx.isAdmin === true || ctx.userRole === "admin";
+  const isAdmin = ctx.role === "admin";
 
   const results: CapabilityState[] = [];
 

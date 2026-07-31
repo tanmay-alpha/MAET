@@ -24,6 +24,7 @@ import { getConfig } from "../../config";
 export type AuthContext = {
   userId: string;
   email: string | null;
+  role: "user" | "admin";
 };
 
 export type AuthErrorCode =
@@ -64,9 +65,12 @@ export async function verifyJwt(token: string): Promise<AuthContext | null> {
     if (typeof payload.sub !== "string" || payload.sub.length === 0) {
       return null;
     }
+    const appRole = (payload.app_metadata as Record<string, unknown> | undefined)?.role ?? (payload.user_metadata as Record<string, unknown> | undefined)?.role;
+    const role: "user" | "admin" = appRole === "admin" ? "admin" : "user";
     return {
       userId: payload.sub,
       email: typeof payload.email === "string" ? payload.email : null,
+      role,
     };
   } catch (err) {
     if (err instanceof joseErrors.JWTExpired) return null;
