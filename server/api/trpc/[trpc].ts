@@ -18,7 +18,7 @@ export default defineEventHandler(async (event) => {
       endpoint: "/api/trpc",
       req: timedReq,
       router: appRouter,
-      createContext: () => ({ userId: authCtx?.userId, email: authCtx?.email ?? null }),
+      createContext: () => ({ userId: authCtx?.userId, email: authCtx?.email ?? null, role: authCtx?.role ?? "user" }),
       onError:
         process.env.NODE_ENV === "development"
           ? ({ path, error }) => {

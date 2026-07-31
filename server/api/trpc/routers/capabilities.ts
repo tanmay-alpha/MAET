@@ -17,8 +17,8 @@ export const capabilitiesRouter = createRouter({
   get: publicProcedure.query(async ({ ctx }) => {
     const capabilities = await evaluateReadiness({
       userId: ctx.userId,
-      isAdmin: (ctx as any).isAdmin,
-      userRole: (ctx as any).userRole,
+      email: ctx.email,
+      role: ctx.role,
     });
     return { capabilities };
   }),
