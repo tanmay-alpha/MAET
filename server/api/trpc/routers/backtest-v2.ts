@@ -2,7 +2,7 @@ import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
-import { backtestRuns, candles } from "../../../db/schema";
+import { backtestRuns, backtestPresets, candles } from "../../../db/schema";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { runBacktest, InsufficientHistoryError } from "../../../domain/backtest/runner";
 import { StrategyTypeSchema } from "../../../modules/backtest/contracts";
@@ -64,7 +64,7 @@ export const backtestV2Router = createRouter({
         .orderBy(desc(candles.ts))
         .limit(500);
 
-      let candleList: Candle[] = dbCandles.map((c) => ({
+      const candleList: Candle[] = dbCandles.map((c) => ({
         symbol: c.symbol,
         tf: c.timeframe as any,
         ts: c.ts.toISOString(),
@@ -76,25 +76,13 @@ export const backtestV2Router = createRouter({
         source: c.source,
       }));
 
-      // Synthetic baseline candles if DB empty (for test environments)
-      if (candleList.length < 50) {
-        const now = Date.now();
-        let basePrice = 1000;
-        candleList = Array.from({ length: 100 }, (_, i) => {
-          const ts = new Date(now - (100 - i) * 86400000).toISOString();
-          const change = (Math.sin(i) * 15) + ((i % 2 === 0 ? 1 : -1) * 5);
-          basePrice = Math.max(10, basePrice + change);
-          return {
-            symbol,
-            tf: "1d",
-            ts,
-            open: basePrice - 2,
-            high: basePrice + 5,
-            low: basePrice - 5,
-            close: basePrice,
-            volume: 10000,
-            source: "synthetic",
-          };
+      const slowPeriod = input.strategy.slowPeriod ?? 26;
+      const requiredCandleCount = slowPeriod + 20;
+
+      if (candleList.length < requiredCandleCount) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Insufficient history for ${symbol} (${input.timeframe}): required ${requiredCandleCount} candles, available ${candleList.length}`,
         });
       }
 
@@ -108,7 +96,21 @@ export const backtestV2Router = createRouter({
           riskConfig: input.risk,
         }, candleList);
 
-        // Persist run in PostgreSQL
+        // Persist run in PostgreSQL with typed JSON result contract (no 'as any')
+        const resultPayload: Record<string, unknown> = {
+          runId: result.runId,
+          symbol: result.symbol,
+          from: result.from,
+          to: result.to,
+          strategy: result.strategy,
+          metrics: result.metrics,
+          equityCurve: result.equityCurve,
+          benchmarkCurve: result.benchmarkCurve,
+          trades: result.trades,
+          signalCount: result.signalCount,
+          insufficientHistory: result.insufficientHistory,
+        };
+
         const [saved] = await db
           .insert(backtestRuns)
           .values({
@@ -117,7 +119,7 @@ export const backtestV2Router = createRouter({
             timeframe: input.timeframe,
             strategy: input.strategy.type,
             parameters: input.strategy,
-            result: result as any,
+            result: resultPayload,
           })
           .returning();
 
@@ -128,9 +130,16 @@ export const backtestV2Router = createRouter({
         };
       } catch (err: any) {
         if (err instanceof InsufficientHistoryError) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: err.message,
+          });
         }
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: err.message ?? "Backtest execution failed" });
+        if (err instanceof TRPCError) throw err;
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Backtest execution failed due to an internal server error",
+        });
       }
     }),
 
@@ -180,7 +189,18 @@ export const backtestV2Router = createRouter({
 
   savePreset: protectedProcedure
     .input(z.object({ name: z.string().min(1).max(80), strategy: StrictStrategySchema, risk: StrictRiskSchema }).strict())
-    .mutation(async ({ input }) => {
-      return { presetId: crypto.randomUUID(), name: input.name };
+    .mutation(async ({ ctx, input }) => {
+      const [saved] = await db
+        .insert(backtestPresets)
+        .values({
+          userId: ctx.userId!,
+          name: input.name,
+          strategy: input.strategy.type,
+          parameters: input.strategy,
+          riskConfig: input.risk,
+        })
+        .returning();
+
+      return { presetId: saved.id, name: saved.name };
     }),
 });
