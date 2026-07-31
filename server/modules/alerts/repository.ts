@@ -1,7 +1,7 @@
 import { db } from "../../data/drizzle/client";
 import { alerts, alertEvents, userNotifications } from "../../db/schema";
 import { eq, and, desc, sql } from "drizzle-orm";
-import type { AlertDefinitionInput } from "./contracts";
+import type { AlertDefinitionInput, AlertConfig } from "./contracts";
 
 export async function createAlert(userId: string, input: AlertDefinitionInput) {
   const [result] = await db
@@ -15,7 +15,7 @@ export async function createAlert(userId: string, input: AlertDefinitionInput) {
       target: String(input.config.threshold ?? 0),
       label: input.label,
       enabled: input.enabled,
-      mode: input.config.mode === "repeating" ? "REPEATING" : "ONCE",
+      mode: input.config.mode === "repeating" ? "REPEATING" : "ONE_TIME",
       cooldownMinutes: input.config.cooldownMinutes ?? 60,
       config: input.config,
     })
@@ -25,6 +25,28 @@ export async function createAlert(userId: string, input: AlertDefinitionInput) {
 
 export async function listUserAlerts(userId: string) {
   return await db.select().from(alerts).where(eq(alerts.userId, userId)).orderBy(desc(alerts.createdAt));
+}
+
+export async function loadActiveAlertsForSymbol(symbol: string) {
+  const rows = await db
+    .select()
+    .from(alerts)
+    .where(and(eq(alerts.symbol, symbol.toUpperCase()), eq(alerts.enabled, true)));
+  return rows.map((r) => ({
+    id: r.id,
+    userId: r.userId,
+    symbol: r.symbol,
+    type: r.type,
+    condition: r.condition,
+    target: r.target,
+    label: r.label,
+    enabled: r.enabled,
+    mode: r.mode ?? "ONE_TIME",
+    cooldownMinutes: r.cooldownMinutes ?? 60,
+    lastTriggeredAt: r.lastTriggeredAt,
+    triggerCount: r.triggerCount ?? 0,
+    config: (r.config as AlertConfig) ?? { type: r.type, threshold: Number(r.target) },
+  }));
 }
 
 export async function toggleAlert(alertId: string, userId: string, enabled: boolean) {
@@ -88,6 +110,7 @@ export async function recordAlertTriggerTransaction(params: {
   message: string;
   provider: string;
   fingerprint: string;
+  isOneTime?: boolean;
 }) {
   return await db.transaction(async (tx) => {
     // 1. Insert alert event
@@ -112,10 +135,11 @@ export async function recordAlertTriggerTransaction(params: {
 
     if (!eventRow) return null; // Deduplicated
 
-    // 2. Update alert definition state
+    // 2. Update alert definition state (and disable if one-time)
     await tx
       .update(alerts)
       .set({
+        enabled: params.isOneTime ? false : true,
         triggered: true,
         triggeredAt: new Date(),
         lastTriggeredAt: new Date(),
