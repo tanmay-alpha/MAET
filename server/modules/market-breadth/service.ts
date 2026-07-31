@@ -1,10 +1,10 @@
-import { fetchMarketQuotesWithFundamentals } from "./repository";
+import { fetchMarketQuotesWithFundamentals, type VerifiedQuoteData } from "./repository";
 
 export interface HeatmapCell {
   symbol: string;
   name: string;
   sector: string;
-  marketCap: number;
+  marketCap?: number;
   weight: number;
   price: number;
   changePct: number;
@@ -13,6 +13,8 @@ export interface HeatmapCell {
 }
 
 export interface BreadthOverview {
+  available: boolean;
+  reason?: string;
   advances: number;
   declines: number;
   unchanged: number;
@@ -26,12 +28,38 @@ export interface BreadthOverview {
   medianChange: number;
   marketCapWeightedChange: number;
   sectorContribution: Record<string, { count: number; avgChange: number; weight: number }>;
+  excludedCount: number;
+  dataCoverage: number;
   asOf: string;
 }
 
 export async function calculateMarketBreadth(universe = "ALL_NSE"): Promise<BreadthOverview> {
-  const data = await fetchMarketQuotesWithFundamentals(universe);
+  const result = await fetchMarketQuotesWithFundamentals(universe);
 
+  if (!result.available) {
+    return {
+      available: false,
+      reason: result.reason,
+      advances: 0,
+      declines: 0,
+      unchanged: 0,
+      advanceDeclineRatio: 0,
+      new20DayHigh: 0,
+      new20DayLow: 0,
+      aboveSma20: 0,
+      aboveSma50: 0,
+      aboveSma200: 0,
+      averageChange: 0,
+      medianChange: 0,
+      marketCapWeightedChange: 0,
+      sectorContribution: {},
+      excludedCount: 0,
+      dataCoverage: 0,
+      asOf: new Date().toISOString(),
+    };
+  }
+
+  const data = result.data;
   let advances = 0;
   let declines = 0;
   let unchanged = 0;
@@ -48,25 +76,29 @@ export async function calculateMarketBreadth(universe = "ALL_NSE"): Promise<Brea
 
   for (const item of data) {
     changes.push(item.changePct);
-    totalMarketCap += item.marketCap;
-    weightedChangeSum += item.changePct * item.marketCap;
+    if (item.marketCap) {
+      totalMarketCap += item.marketCap;
+      weightedChangeSum += item.changePct * item.marketCap;
+    }
 
     if (item.changePct > 0) advances++;
     else if (item.changePct < 0) declines++;
     else unchanged++;
 
-    if (item.high20d && item.price >= item.high20d) new20DayHigh++;
-    if (item.low20d && item.price <= item.low20d) new20DayLow++;
-    if (item.sma20 && item.price > item.sma20) aboveSma20++;
-    if (item.sma50 && item.price > item.sma50) aboveSma50++;
-    if (item.sma200 && item.price > item.sma200) aboveSma200++;
+    if (item.high20d !== undefined && item.price >= item.high20d) new20DayHigh++;
+    if (item.low20d !== undefined && item.price <= item.low20d) new20DayLow++;
+    if (item.sma20 !== undefined && item.price > item.sma20) aboveSma20++;
+    if (item.sma50 !== undefined && item.price > item.sma50) aboveSma50++;
+    if (item.sma200 !== undefined && item.price > item.sma200) aboveSma200++;
 
     if (!sectorMap[item.sector]) {
       sectorMap[item.sector] = { count: 0, changeSum: 0, mcSum: 0 };
     }
     sectorMap[item.sector].count++;
     sectorMap[item.sector].changeSum += item.changePct;
-    sectorMap[item.sector].mcSum += item.marketCap;
+    if (item.marketCap) {
+      sectorMap[item.sector].mcSum += item.marketCap;
+    }
   }
 
   changes.sort((a, b) => a - b);
@@ -86,6 +118,7 @@ export async function calculateMarketBreadth(universe = "ALL_NSE"): Promise<Brea
   }
 
   return {
+    available: true,
     advances,
     declines,
     unchanged,
@@ -99,20 +132,34 @@ export async function calculateMarketBreadth(universe = "ALL_NSE"): Promise<Brea
     medianChange: Math.round(medianChange * 100) / 100,
     marketCapWeightedChange: Math.round(marketCapWeightedChange * 100) / 100,
     sectorContribution,
+    excludedCount: result.excludedCount,
+    dataCoverage: result.dataCoverage,
     asOf: new Date().toISOString(),
   };
 }
 
-export async function getHeatmapCells(universe = "ALL_NSE"): Promise<{ cells: HeatmapCell[]; universe: string; asOf: string }> {
-  const data = await fetchMarketQuotesWithFundamentals(universe);
-  const totalMarketCap = data.reduce((acc, item) => acc + item.marketCap, 0);
+export async function getHeatmapCells(universe = "ALL_NSE"): Promise<{ available: boolean; reason?: string; cells: HeatmapCell[]; universe: string; asOf: string }> {
+  const result = await fetchMarketQuotesWithFundamentals(universe);
+
+  if (!result.available) {
+    return {
+      available: false,
+      reason: result.reason,
+      cells: [],
+      universe,
+      asOf: new Date().toISOString(),
+    };
+  }
+
+  const data = result.data;
+  const totalMarketCap = data.reduce((acc, item) => acc + (item.marketCap ?? 0), 0);
 
   const cells: HeatmapCell[] = data.map((item) => ({
     symbol: item.symbol,
     name: item.name,
     sector: item.sector,
     marketCap: item.marketCap,
-    weight: totalMarketCap > 0 ? Math.round((item.marketCap / totalMarketCap) * 10000) / 100 : 1,
+    weight: totalMarketCap > 0 && item.marketCap ? Math.round((item.marketCap / totalMarketCap) * 10000) / 100 : 0,
     price: item.price,
     changePct: item.changePct,
     source: item.source,
@@ -120,6 +167,7 @@ export async function getHeatmapCells(universe = "ALL_NSE"): Promise<{ cells: He
   }));
 
   return {
+    available: true,
     cells,
     universe,
     asOf: new Date().toISOString(),
