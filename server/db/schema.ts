@@ -12,6 +12,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  varchar,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -878,5 +879,15 @@ export const savedComparisons = pgTable("saved_comparisons", {
   index("saved_comparisons_user_idx").on(table.userId, table.updatedAt),
 ]);
 
-
-
+export const backtestPresets = pgTable("backtest_presets", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 100 }).notNull(),
+  strategy: varchar("strategy", { length: 50 }).notNull(),
+  parameters: jsonb("parameters").notNull(),
+  riskConfig: jsonb("risk_config").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_backtest_presets_user_id").on(table.userId),
+  index("idx_backtest_presets_created_at").on(table.createdAt),
+]);
