@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppWorkspaceRouteImport } from './routes/_app.workspace'
 import { Route as AppUniverseRouteImport } from './routes/_app.universe'
 import { Route as AppTerminalRouteImport } from './routes/_app.terminal'
 import { Route as AppStrategiesRouteImport } from './routes/_app.strategies'
@@ -33,6 +34,7 @@ import { Route as ApiMarketCandlesRouteImport } from './routes/api.market.candle
 import { Route as AppStockSymbolRouteImport } from './routes/_app.stock.$symbol'
 import { Route as AppOptionsUnderlyingRouteImport } from './routes/_app.options.$underlying'
 import { Route as AppChartSymbolRouteImport } from './routes/_app.chart.$symbol'
+import { Route as AppAdminDataQualityRouteImport } from './routes/_app.admin.data-quality'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -42,6 +44,11 @@ const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppWorkspaceRoute = AppWorkspaceRouteImport.update({
+  id: '/workspace',
+  path: '/workspace',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppUniverseRoute = AppUniverseRouteImport.update({
   id: '/universe',
@@ -153,6 +160,11 @@ const AppChartSymbolRoute = AppChartSymbolRouteImport.update({
   path: '/chart/$symbol',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminDataQualityRoute = AppAdminDataQualityRouteImport.update({
+  id: '/admin/data-quality',
+  path: '/admin/data-quality',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -171,6 +183,8 @@ export interface FileRoutesByFullPath {
   '/strategies': typeof AppStrategiesRoute
   '/terminal': typeof AppTerminalRoute
   '/universe': typeof AppUniverseRoute
+  '/workspace': typeof AppWorkspaceRoute
+  '/admin/data-quality': typeof AppAdminDataQualityRoute
   '/chart/$symbol': typeof AppChartSymbolRoute
   '/options/$underlying': typeof AppOptionsUnderlyingRoute
   '/stock/$symbol': typeof AppStockSymbolRoute
@@ -196,6 +210,8 @@ export interface FileRoutesByTo {
   '/strategies': typeof AppStrategiesRoute
   '/terminal': typeof AppTerminalRoute
   '/universe': typeof AppUniverseRoute
+  '/workspace': typeof AppWorkspaceRoute
+  '/admin/data-quality': typeof AppAdminDataQualityRoute
   '/chart/$symbol': typeof AppChartSymbolRoute
   '/options/$underlying': typeof AppOptionsUnderlyingRoute
   '/stock/$symbol': typeof AppStockSymbolRoute
@@ -223,6 +239,8 @@ export interface FileRoutesById {
   '/_app/strategies': typeof AppStrategiesRoute
   '/_app/terminal': typeof AppTerminalRoute
   '/_app/universe': typeof AppUniverseRoute
+  '/_app/workspace': typeof AppWorkspaceRoute
+  '/_app/admin/data-quality': typeof AppAdminDataQualityRoute
   '/_app/chart/$symbol': typeof AppChartSymbolRoute
   '/_app/options/$underlying': typeof AppOptionsUnderlyingRoute
   '/_app/stock/$symbol': typeof AppStockSymbolRoute
@@ -250,6 +268,8 @@ export interface FileRouteTypes {
     | '/strategies'
     | '/terminal'
     | '/universe'
+    | '/workspace'
+    | '/admin/data-quality'
     | '/chart/$symbol'
     | '/options/$underlying'
     | '/stock/$symbol'
@@ -275,6 +295,8 @@ export interface FileRouteTypes {
     | '/strategies'
     | '/terminal'
     | '/universe'
+    | '/workspace'
+    | '/admin/data-quality'
     | '/chart/$symbol'
     | '/options/$underlying'
     | '/stock/$symbol'
@@ -301,6 +323,8 @@ export interface FileRouteTypes {
     | '/_app/strategies'
     | '/_app/terminal'
     | '/_app/universe'
+    | '/_app/workspace'
+    | '/_app/admin/data-quality'
     | '/_app/chart/$symbol'
     | '/_app/options/$underlying'
     | '/_app/stock/$symbol'
@@ -334,6 +358,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/workspace': {
+      id: '/_app/workspace'
+      path: '/workspace'
+      fullPath: '/workspace'
+      preLoaderRoute: typeof AppWorkspaceRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/universe': {
       id: '/_app/universe'
@@ -489,6 +520,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppChartSymbolRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/admin/data-quality': {
+      id: '/_app/admin/data-quality'
+      path: '/admin/data-quality'
+      fullPath: '/admin/data-quality'
+      preLoaderRoute: typeof AppAdminDataQualityRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -508,6 +546,8 @@ interface AppRouteChildren {
   AppStrategiesRoute: typeof AppStrategiesRoute
   AppTerminalRoute: typeof AppTerminalRoute
   AppUniverseRoute: typeof AppUniverseRoute
+  AppWorkspaceRoute: typeof AppWorkspaceRoute
+  AppAdminDataQualityRoute: typeof AppAdminDataQualityRoute
   AppChartSymbolRoute: typeof AppChartSymbolRoute
   AppOptionsUnderlyingRoute: typeof AppOptionsUnderlyingRoute
   AppStockSymbolRoute: typeof AppStockSymbolRoute
@@ -529,6 +569,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppStrategiesRoute: AppStrategiesRoute,
   AppTerminalRoute: AppTerminalRoute,
   AppUniverseRoute: AppUniverseRoute,
+  AppWorkspaceRoute: AppWorkspaceRoute,
+  AppAdminDataQualityRoute: AppAdminDataQualityRoute,
   AppChartSymbolRoute: AppChartSymbolRoute,
   AppOptionsUnderlyingRoute: AppOptionsUnderlyingRoute,
   AppStockSymbolRoute: AppStockSymbolRoute,

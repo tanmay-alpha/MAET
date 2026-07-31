@@ -35,6 +35,16 @@ export type ScorecardInputs = {
 };
 
 export type ScorecardResult = {
+  quality: number | undefined;
+  valuation: number | undefined;
+  growth: number | undefined;
+  momentum: number | undefined;
+  financialHealth: number | undefined;
+  risk: number | undefined;
+  overall: number | undefined;
+  confidence: number;
+  coverage: number;
+  methodVersion: string;
   qualityScore: number | undefined;
   valuationScore: number | undefined;
   growthScore: number | undefined;
@@ -117,10 +127,10 @@ export function calculateStockScorecard(input: ScorecardInputs): ScorecardResult
 
   // --- Valuation Score (lower is better for PE/PB) ---
   const qualityWeighted = [
-    invertPercentile(input.earningsYield, 0.15, 0),
-    input.earningsYield !== undefined ? invertPercentile(input.freeCashFlowYield, 0.12, -0.05) : undefined,
-    isStrong(input.roe) ? 85 : isRisky(input.roe) ? 25 : undefined,
-    isStrong(input.roce) ? 85 : isRisky(input.roce) ? 25 : undefined,
+    percentile(input.earningsYield, 0.15, 0),
+    percentile(input.freeCashFlowYield, 0.12, -0.05),
+    input.roe !== undefined ? (input.roe >= 0.15 ? 85 : input.roe <= 0.05 ? 25 : 55) : undefined,
+    input.roce !== undefined ? (input.roce >= 0.15 ? 85 : input.roce <= 0.05 ? 25 : 55) : undefined,
     input.netMargin !== undefined ? Math.max(0, Math.min(100, input.netMargin * 400)) : undefined,
   ].filter((v): v is number => v !== undefined);
 
@@ -250,16 +260,36 @@ export function calculateStockScorecard(input: ScorecardInputs): ScorecardResult
 
   const asOf = input.asOf ?? new Date().toISOString();
 
+  const qClamped = clampScore(qualityScore);
+  const vClamped = clampScore(valuationScore);
+  const gClamped = clampScore(growthScore);
+  const mClamped = clampScore(momentumScore);
+  const fClamped = clampScore(financialHealthScore);
+  const rClamped = clampScore(riskScore);
+  const oClamped = clampScore(overallScore);
+  const confClamped = Math.round(confidenceScore * 100) / 100;
+  const covClamped = Math.round(inputCoverage * 100) / 100;
+
   return {
-    qualityScore: clampScore(qualityScore),
-    valuationScore: clampScore(valuationScore),
-    growthScore: clampScore(growthScore),
-    momentumScore: clampScore(momentumScore),
-    financialHealthScore: clampScore(financialHealthScore),
-    riskScore: clampScore(riskScore),
-    overallScore: clampScore(overallScore),
-    confidenceScore: Math.round(confidenceScore * 100) / 100,
-    inputCoverage: Math.round(inputCoverage * 100) / 100,
+    quality: qClamped,
+    valuation: vClamped,
+    growth: gClamped,
+    momentum: mClamped,
+    financialHealth: fClamped,
+    risk: rClamped,
+    overall: oClamped,
+    confidence: confClamped,
+    coverage: covClamped,
+    methodVersion: "1.0.0",
+    qualityScore: qClamped,
+    valuationScore: vClamped,
+    growthScore: gClamped,
+    momentumScore: mClamped,
+    financialHealthScore: fClamped,
+    riskScore: rClamped,
+    overallScore: oClamped,
+    confidenceScore: confClamped,
+    inputCoverage: covClamped,
     strengths,
     risks,
     missingInputs: missing,
