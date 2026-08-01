@@ -55,31 +55,37 @@ export interface CalculatorEntry {
   calculate: CalculatorFn;
 }
 
-const registry = new Map<string, CalculatorEntry>();
+function getRegistry(): Map<string, CalculatorEntry> {
+  if (!(globalThis as any).__maet_calculator_registry) {
+    (globalThis as any).__maet_calculator_registry = new Map<string, CalculatorEntry>();
+  }
+  return (globalThis as any).__maet_calculator_registry;
+}
 
 export function registerCalculator(entry: CalculatorEntry): void {
-  registry.set(entry.meta.name, entry);
+  getRegistry().set(entry.meta.name, entry);
 }
 
 export function getCalculator(name: string): CalculatorEntry | undefined {
-  return registry.get(name);
+  return getRegistry().get(name);
 }
 
 export function getAllCalculators(): CalculatorEntry[] {
-  return Array.from(registry.values());
+  return Array.from(getRegistry().values());
 }
 
 export function getCalculatorsByCategory(category: CalculatorCategory): CalculatorEntry[] {
-  return Array.from(registry.values()).filter((e) => e.meta.category === category);
+  return Array.from(getRegistry().values()).filter((e) => e.meta.category === category);
 }
 
 export function getCalculatorsByFrequency(frequency: CalculatorFrequency): CalculatorEntry[] {
-  return Array.from(registry.values()).filter((e) => e.meta.frequency === frequency);
+  return Array.from(getRegistry().values()).filter((e) => e.meta.frequency === frequency);
 }
 
 export function getRegistryStats(): Record<string, number> {
-  const stats: Record<string, number> = { total: registry.size };
-  for (const entry of registry.values()) {
+  const reg = getRegistry();
+  const stats: Record<string, number> = { total: reg.size };
+  for (const entry of reg.values()) {
     stats[entry.meta.category] = (stats[entry.meta.category] ?? 0) + 1;
   }
   return stats;
