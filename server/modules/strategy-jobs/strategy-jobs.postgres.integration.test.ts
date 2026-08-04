@@ -105,7 +105,7 @@ describe("Strategy Jobs — PostgreSQL Integration Test Suite", () => {
 
     // 5. Cancellation Request & Worker Detection
     if (claimedJob1) {
-      await requestCancellation(userA, claimedJob1.id);
+      await requestCancellation(claimedJob1.userId, claimedJob1.id);
       const [cancelJob] = await sql`
         SELECT cancel_requested_at FROM public.strategy_backtest_jobs WHERE id = ${claimedJob1.id}
       `;
