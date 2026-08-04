@@ -19,6 +19,17 @@ export type MarketDataSource = z.infer<typeof MarketDataSourceSchema>;
 export const MarketDataQualitySchema = z.enum(["live", "delayed", "stale", "synthetic"]);
 export type MarketDataQuality = z.infer<typeof MarketDataQualitySchema>;
 
+export interface MarketDataMetadata {
+  source: "angelone" | "yahoo" | "database" | "nse";
+  quality: "live" | "delayed" | "stale" | "historical";
+  asOf: string;
+  receivedAt?: string;
+  marketStatus: "open" | "closed" | "preopen" | "unknown";
+  fallbackActive: boolean;
+  stale: boolean;
+  staleReason?: string;
+}
+
 export const TickSchema = z.object({
   exchange: ExchangeSchema,
   symbol: z.string().min(1),
