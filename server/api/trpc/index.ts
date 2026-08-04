@@ -15,6 +15,8 @@ import { dataQualityRouter } from "./routers/data-quality";
 import { marketBreadthRouter } from "./routers/market-breadth";
 import { screenerDslRouter } from "./routers/screener-dsl";
 import { backtestV2Router } from "./routers/backtest-v2";
+import { chartWorkspacesRouter } from "./routers/chart-workspaces";
+import { tradeThesesRouter } from "./routers/trade-theses";
 
 export const appRouter = createRouter({
   market: marketRouter,
@@ -33,6 +35,8 @@ export const appRouter = createRouter({
   marketBreadth: marketBreadthRouter,
   screenerDsl: screenerDslRouter,
   backtestV2: backtestV2Router,
+  chartWorkspaces: chartWorkspacesRouter,
+  tradeTheses: tradeThesesRouter,
 });
 
 export const router = appRouter;
