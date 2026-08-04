@@ -891,3 +891,167 @@ export const backtestPresets = pgTable("backtest_presets", {
   index("idx_backtest_presets_user_id").on(table.userId),
   index("idx_backtest_presets_created_at").on(table.createdAt),
 ]);
+
+export const chartWorkspaces = pgTable("chart_workspaces", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 80 }).notNull(),
+  layoutType: varchar("layout_type", { length: 20 }).notNull().default("SINGLE"),
+  activeSymbol: varchar("active_symbol", { length: 30 }).notNull().default("RELIANCE"),
+  activeExchange: varchar("active_exchange", { length: 10 }).notNull().default("NSE"),
+  isDefault: boolean("is_default").notNull().default(false),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  settings: jsonb("settings").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_chart_workspaces_user_id").on(table.userId),
+  index("idx_chart_workspaces_updated_at").on(table.updatedAt),
+]);
+
+export const chartPanes = pgTable("chart_panes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  workspaceId: uuid("workspace_id").notNull().references(() => chartWorkspaces.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  paneKey: varchar("pane_key", { length: 30 }).notNull(),
+  symbol: varchar("symbol", { length: 30 }).notNull(),
+  exchange: varchar("exchange", { length: 10 }).notNull().default("NSE"),
+  timeframe: varchar("timeframe", { length: 10 }).notNull().default("5m"),
+  chartType: varchar("chart_type", { length: 20 }).notNull().default("CANDLE"),
+  position: integer("position").notNull().default(0),
+  settings: jsonb("settings").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_chart_panes_workspace_id").on(table.workspaceId),
+  index("idx_chart_panes_user_id").on(table.userId),
+]);
+
+export const chartDrawings = pgTable("chart_drawings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  workspaceId: uuid("workspace_id").notNull().references(() => chartWorkspaces.id, { onDelete: "cascade" }),
+  paneId: uuid("pane_id").references(() => chartPanes.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  symbol: varchar("symbol", { length: 30 }).notNull(),
+  exchange: varchar("exchange", { length: 10 }).notNull().default("NSE"),
+  timeframeScope: varchar("timeframe_scope", { length: 20 }),
+  drawingType: varchar("drawing_type", { length: 40 }).notNull(),
+  points: jsonb("points").notNull(),
+  style: jsonb("style").notNull().default({}),
+  label: text("label"),
+  locked: boolean("locked").notNull().default(false),
+  visible: boolean("visible").notNull().default(true),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_chart_drawings_workspace_id").on(table.workspaceId),
+  index("idx_chart_drawings_user_symbol").on(table.userId, table.symbol),
+]);
+
+export const indicatorTemplates = pgTable("indicator_templates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 80 }).notNull(),
+  indicators: jsonb("indicators").notNull().default([]),
+  isDefault: boolean("is_default").notNull().default(false),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_indicator_templates_user_id").on(table.userId),
+]);
+
+export const tradeTheses = pgTable("trade_theses", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  companyId: uuid("company_id"),
+  symbol: varchar("symbol", { length: 30 }).notNull(),
+  exchange: varchar("exchange", { length: 10 }).notNull().default("NSE"),
+  screenerRunId: varchar("screener_run_id", { length: 100 }),
+  workspaceId: uuid("workspace_id").references(() => chartWorkspaces.id, { onDelete: "set null" }),
+  title: varchar("title", { length: 120 }).notNull(),
+  setupType: varchar("setup_type", { length: 50 }).notNull(),
+  direction: varchar("direction", { length: 20 }).notNull(),
+  hypothesis: text("hypothesis").notNull(),
+  entryPlan: text("entry_plan"),
+  stopPrice: numeric("stop_price", { precision: 12, scale: 4 }),
+  targetPrice: numeric("target_price", { precision: 12, scale: 4 }),
+  riskAmount: numeric("risk_amount", { precision: 12, scale: 4 }),
+  riskPercent: numeric("risk_percent", { precision: 6, scale: 3 }),
+  status: varchar("status", { length: 20 }).notNull().default("DRAFT"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+}, (table) => [
+  index("idx_trade_theses_user_id").on(table.userId),
+  index("idx_trade_theses_symbol").on(table.symbol),
+]);
+
+export const thesisSignals = pgTable("thesis_signals", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  thesisId: uuid("thesis_id").notNull().references(() => tradeTheses.id, { onDelete: "cascade" }),
+  signalType: varchar("signal_type", { length: 30 }).notNull(),
+  field: varchar("field", { length: 50 }).notNull(),
+  operator: varchar("operator", { length: 20 }).notNull(),
+  observedValue: text("observed_value").notNull(),
+  targetValue: text("target_value"),
+  source: varchar("source", { length: 50 }).notNull(),
+  sourceTimestamp: timestamp("source_timestamp", { withTimezone: true }),
+  metadata: jsonb("metadata").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_thesis_signals_thesis_id").on(table.thesisId),
+]);
+
+export const thesisSnapshots = pgTable("thesis_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  thesisId: uuid("thesis_id").notNull().references(() => tradeTheses.id, { onDelete: "cascade" }),
+  quotePrice: numeric("quote_price", { precision: 12, scale: 4 }).notNull(),
+  quoteSource: varchar("quote_source", { length: 30 }).notNull(),
+  quoteQuality: varchar("quote_quality", { length: 30 }).notNull(),
+  quoteTimestamp: timestamp("quote_timestamp", { withTimezone: true }).notNull(),
+  timeframe: varchar("timeframe", { length: 10 }).notNull(),
+  indicatorValues: jsonb("indicator_values").notNull().default({}),
+  fundamentalValues: jsonb("fundamental_values").notNull().default({}),
+  matchedFilters: jsonb("matched_filters").notNull().default([]),
+  dataQualityFlags: jsonb("data_quality_flags").notNull().default([]),
+  chartState: jsonb("chart_state").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_thesis_snapshots_thesis_id").on(table.thesisId),
+]);
+
+export const thesisOrderLinks = pgTable("thesis_order_links", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  thesisId: uuid("thesis_id").notNull().references(() => tradeTheses.id, { onDelete: "cascade" }),
+  paperOrderId: uuid("paper_order_id").notNull().references(() => paperOrders.id, { onDelete: "cascade" }),
+  relationship: varchar("relationship", { length: 20 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_thesis_order_links_thesis").on(table.thesisId),
+  index("idx_thesis_order_links_order").on(table.paperOrderId),
+]);
+
+export const tradeReviews = pgTable("trade_reviews", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  thesisId: uuid("thesis_id").notNull().references(() => tradeTheses.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  outcome: varchar("outcome", { length: 20 }).notNull(),
+  reviewText: text("review_text").notNull(),
+  plannedEntry: numeric("planned_entry", { precision: 12, scale: 4 }),
+  averageEntry: numeric("average_entry", { precision: 12, scale: 4 }),
+  plannedStop: numeric("planned_stop", { precision: 12, scale: 4 }),
+  plannedTarget: numeric("planned_target", { precision: 12, scale: 4 }),
+  realizedPnl: numeric("realized_pnl", { precision: 14, scale: 4 }).notNull().default("0"),
+  returnPercent: numeric("return_percent", { precision: 8, scale: 4 }).notNull().default("0"),
+  holdingDurationSeconds: integer("holding_duration_seconds"),
+  ruleFollowed: boolean("rule_followed").notNull().default(true),
+  mistakes: text("mistakes"),
+  lessons: text("lessons"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_trade_reviews_thesis_id").on(table.thesisId),
+  index("idx_trade_reviews_user_id").on(table.userId),
+]);
