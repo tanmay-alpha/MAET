@@ -73,7 +73,7 @@ async function processJob(job: Awaited<ReturnType<typeof jobs.claimNextJob>>): P
     // Fetch definition
     const jobWithDef = await jobs.getJobWithVersion(job.id);
     if (!jobWithDef) {
-      await jobs.failJob(job.id, "DEFINITION_NOT_FOUND", "Strategy version definition not found");
+      await jobs.markFailed(job.id, "DEFINITION_NOT_FOUND", "Strategy version definition not found");
       return;
     }
     const { definition } = jobWithDef;
@@ -94,7 +94,7 @@ async function processJob(job: Awaited<ReturnType<typeof jobs.claimNextJob>>): P
     const candleData = await fetchCandles(symbol, job.timeframe, job.fromDate, job.toDate);
 
     if (candleData.length < 50) {
-      await jobs.failJob(
+      await jobs.markFailed(
         job.id,
         "INSUFFICIENT_HISTORY",
         `Insufficient candle history for ${symbol} (${job.timeframe}): found ${candleData.length} bars, need at least 50`,
@@ -195,8 +195,8 @@ async function processJob(job: Awaited<ReturnType<typeof jobs.claimNextJob>>): P
       shortTradeCount: result.shortTradeCount,
       feesPaid: result.feesPaid.toFixed(4),
       slippageCost: result.slippageCost.toFixed(4),
-      netProfit: (result.equityCurve[result.equityCurve.length - 1]?.equity ?? definition.execution.initialCapital) - definition.execution.initialCapital
-        <= 0 ? "0" : ((result.equityCurve[result.equityCurve.length - 1]?.equity ?? 0) - definition.execution.initialCapital).toFixed(4),
+      netProfit: (result.equityCurve[result.equityCurve.length - 1]?.equity ?? (definition.execution?.initialCapital ?? 100000)) - (definition.execution?.initialCapital ?? 100000)
+        <= 0 ? "0" : ((result.equityCurve[result.equityCurve.length - 1]?.equity ?? 0) - (definition.execution?.initialCapital ?? 100000)).toFixed(4),
       exposurePercent: m.exposure.toFixed(6),
       benchmarkReturn: m.benchmarkReturn.toFixed(6),
       alpha: m.alpha.toFixed(6),
@@ -216,7 +216,7 @@ async function processJob(job: Awaited<ReturnType<typeof jobs.claimNextJob>>): P
     const code = err instanceof InsufficientHistoryV3Error ? "INSUFFICIENT_HISTORY" : "BACKTEST_ERROR";
     // Redact raw SQL errors before storing
     const safeMessage = message.replace(/column|table|index|constraint|syntax/gi, "[db]");
-    await jobs.failJob(job.id, code, safeMessage);
+    await jobs.markFailed(job.id, code, safeMessage);
     console.error(`[backtest-worker:${WORKER_ID}] Job ${job.id} failed: ${safeMessage}`);
   } finally {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -237,8 +237,20 @@ function downsample<T>(arr: T[], maxPoints: number): T[] {
 // Worker main loop
 // ============================================================
 
-async function workerLoop(): Promise<never> {
+let isShuttingDown = false;
+
+function setupGracefulShutdown() {
+  const shutdownHandler = (signal: string) => {
+    console.log(`[backtest-worker:${WORKER_ID}] Received ${signal}, shutting down gracefully...`);
+    isShuttingDown = true;
+  };
+  process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
+  process.on("SIGINT", () => shutdownHandler("SIGINT"));
+}
+
+async function workerLoop(): Promise<void> {
   console.log(`[backtest-worker] Starting worker ${WORKER_ID}`);
+  setupGracefulShutdown();
 
   // Attempt to recover abandoned jobs on startup
   try {
@@ -248,7 +260,7 @@ async function workerLoop(): Promise<never> {
     console.warn(`[backtest-worker] Recovery scan failed: ${err}`);
   }
 
-  while (true) {
+  while (!isShuttingDown) {
     try {
       const job = await jobs.claimNextJob(WORKER_ID);
       if (job) {
@@ -261,6 +273,9 @@ async function workerLoop(): Promise<never> {
       await sleep(POLL_INTERVAL_MS);
     }
   }
+
+  console.log(`[backtest-worker:${WORKER_ID}] Shutdown complete. Exiting.`);
+  process.exit(0);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -268,7 +283,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 // Start if run directly
-workerLoop().catch((err) => {
-  console.error("[backtest-worker] Fatal error:", err);
-  process.exit(1);
-});
+if (import.meta.main || process.argv[1]?.endsWith("backtest-worker.ts")) {
+  workerLoop().catch((err) => {
+    console.error("[backtest-worker] Fatal error:", err);
+    process.exit(1);
+  });
+}

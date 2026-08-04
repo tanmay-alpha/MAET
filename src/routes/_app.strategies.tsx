@@ -116,6 +116,7 @@ function StrategyLibraryTab() {
 }
 
 function TemplateDetail({ template }: { template: StrategyTemplate }) {
+  const createMutation = trpc.strategyDefinitions.create.useMutation();
   return (
     <div className="max-w-2xl">
       <div className="flex items-start gap-3 mb-6">
@@ -151,11 +152,27 @@ function TemplateDetail({ template }: { template: StrategyTemplate }) {
 
       <div className="flex gap-3">
         <button
-          className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-          onClick={() => {/* TODO: create strategy from template */}}
+          className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          disabled={createMutation.isPending}
+          onClick={() => {
+            createMutation.mutate(
+              {
+                name: template.name,
+                description: template.description,
+                definition: template.definition,
+              },
+              {
+                onSuccess: (data: any) => {
+                  if (data?.strategy?.id) {
+                    window.location.href = `/_app/strategies/${data.strategy.id}`;
+                  }
+                },
+              },
+            );
+          }}
         >
           <Plus className="h-4 w-4" />
-          Use This Template
+          {createMutation.isPending ? "Creating..." : "Use This Template"}
         </button>
         <button
           className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground"

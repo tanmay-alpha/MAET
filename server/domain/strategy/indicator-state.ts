@@ -229,8 +229,9 @@ export class IndicatorStateCache {
     this.candles = candles;
   }
 
-  private key(indicator: IndicatorType, params: Record<string, number>): string {
-    const sortedParams = Object.keys(params).sort().map((k) => `${k}=${params[k]}`).join(",");
+  private key(indicator: IndicatorType, params: Record<string, number> | undefined): string {
+    const p = params ?? {};
+    const sortedParams = Object.keys(p).sort().map((k) => `${k}=${p[k]}`).join(",");
     return `${indicator}::${sortedParams}`;
   }
 
@@ -249,12 +250,13 @@ export class IndicatorStateCache {
     return val === undefined || isNaN(val) ? null : val;
   }
 
-  private computeIndicator(indicator: IndicatorType, params: Record<string, number>): number[] {
+  private computeIndicator(indicator: IndicatorType, params: Record<string, number> | undefined): number[] {
+    const p = params ?? {};
     const closes = this.candles.map((c) => c.close);
-    const period = params.period ?? 14;
-    const fastPeriod = params.fastPeriod ?? 12;
-    const slowPeriod = params.slowPeriod ?? 26;
-    const signalPeriod = params.signalPeriod ?? 9;
+    const period = p.period ?? 14;
+    const fastPeriod = p.fastPeriod ?? 12;
+    const slowPeriod = p.slowPeriod ?? 26;
+    const signalPeriod = p.signalPeriod ?? 9;
 
     switch (indicator) {
       case "SMA": return computeSma(closes, period);
@@ -263,13 +265,13 @@ export class IndicatorStateCache {
       case "MACD_LINE": return computeMacd(closes, fastPeriod, slowPeriod, signalPeriod).macdLine;
       case "MACD_SIGNAL": return computeMacd(closes, fastPeriod, slowPeriod, signalPeriod).signalLine;
       case "MACD_HISTOGRAM": return computeMacd(closes, fastPeriod, slowPeriod, signalPeriod).histogram;
-      case "BOLLINGER_UPPER": return computeBollinger(closes, period, params.stdDev ?? 2).upper;
-      case "BOLLINGER_MIDDLE": return computeBollinger(closes, period, params.stdDev ?? 2).middle;
-      case "BOLLINGER_LOWER": return computeBollinger(closes, period, params.stdDev ?? 2).lower;
+      case "BOLLINGER_UPPER": return computeBollinger(closes, period, p.stdDev ?? 2).upper;
+      case "BOLLINGER_MIDDLE": return computeBollinger(closes, period, p.stdDev ?? 2).middle;
+      case "BOLLINGER_LOWER": return computeBollinger(closes, period, p.stdDev ?? 2).lower;
       case "ATR": return computeAtr(this.candles, period);
       case "VWAP": return computeVwap(this.candles);
       case "OBV": return computeObv(this.candles);
-      case "SUPERTREND": return computeSupertrend(this.candles, period, params.multiplier ?? 3);
+      case "SUPERTREND": return computeSupertrend(this.candles, period, p.multiplier ?? 3);
       case "DONCHIAN_HIGH": return computeDonchian(this.candles, period).high;
       case "DONCHIAN_LOW": return computeDonchian(this.candles, period).low;
       default: return new Array(this.candles.length).fill(NaN);

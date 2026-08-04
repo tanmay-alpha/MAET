@@ -96,7 +96,31 @@ export async function claimNextJob(workerId: string): Promise<BacktestJobRow | n
 
   const rows = result as unknown as Record<string, unknown>[];
   if (!rows || rows.length === 0) return null;
-  return rows[0] as unknown as BacktestJobRow;
+  const row = rows[0];
+  return {
+    id: row.id as string,
+    userId: row.user_id as string,
+    strategyVersionId: row.strategy_version_id as string,
+    status: row.status as string,
+    symbolOrUniverse: row.symbol_or_universe as string,
+    timeframe: row.timeframe as string,
+    fromDate: new Date(row.from_date as string | Date),
+    toDate: new Date(row.to_date as string | Date),
+    initialCapital: row.initial_capital ? String(row.initial_capital) : null,
+    benchmarkSymbol: (row.benchmark_symbol as string) ?? null,
+    progress: Number(row.progress ?? 0),
+    errorCode: (row.error_code as string) ?? null,
+    errorSummary: (row.error_summary as string) ?? null,
+    requestedAt: new Date(row.requested_at as string | Date),
+    startedAt: row.started_at ? new Date(row.started_at as string | Date) : null,
+    completedAt: row.completed_at ? new Date(row.completed_at as string | Date) : null,
+    cancelRequestedAt: row.cancel_requested_at ? new Date(row.cancel_requested_at as string | Date) : null,
+    workerId: (row.worker_id as string) ?? null,
+    heartbeatAt: row.heartbeat_at ? new Date(row.heartbeat_at as string | Date) : null,
+    runId: (row.run_id as string) ?? null,
+    createdAt: new Date(row.created_at as string | Date),
+    updatedAt: new Date(row.updated_at as string | Date),
+  };
 }
 
 // ============================================================
@@ -143,7 +167,12 @@ export async function completeJob(jobId: string, runId: string): Promise<void> {
 // Fail
 // ============================================================
 
-export async function failJob(
+export function redactSqlKeywords(text: string): string {
+  const redacted = text.replace(/SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|DROP|TRUNCATE|ALTER/gi, "[REDACTED]");
+  return redacted.length > 500 ? `${redacted.slice(0, 497)}...` : redacted;
+}
+
+export async function markFailed(
   jobId: string,
   errorCode: string,
   errorSummary: string,
@@ -153,8 +182,7 @@ export async function failJob(
     .set({
       status: "FAILED",
       errorCode,
-      // Redact raw SQL errors
-      errorSummary: errorSummary.length > 500 ? `${errorSummary.slice(0, 497)}...` : errorSummary,
+      errorSummary: redactSqlKeywords(errorSummary),
       completedAt: new Date(),
       heartbeatAt: new Date(),
       updatedAt: new Date(),
@@ -198,8 +226,8 @@ export async function markCancelled(jobId: string): Promise<void> {
 // Abandoned job recovery
 // ============================================================
 
-export async function recoverAbandonedJobs(): Promise<number> {
-  const cutoff = new Date(Date.now() - HEARTBEAT_TIMEOUT_MS);
+export async function recoverAbandonedJobs(maxStaleMs: number = HEARTBEAT_TIMEOUT_MS): Promise<number> {
+  const cutoff = new Date(Date.now() - maxStaleMs);
   const result = await db
     .update(strategyBacktestJobs)
     .set({

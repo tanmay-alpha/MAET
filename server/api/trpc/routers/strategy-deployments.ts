@@ -198,7 +198,7 @@ export const strategyDeploymentsRouter = createRouter({
       return { decisions };
     }),
 
-  /** Confirm a MANUAL_CONFIRM proposal — creates a paper order */
+  /** Confirm a MANUAL_CONFIRM proposal — creates a real paper order through canonical paper trading service */
   confirmProposal: protectedProcedure
     .input(ConfirmProposalInputSchema)
     .mutation(async ({ ctx, input }) => {
@@ -209,19 +209,49 @@ export const strategyDeploymentsRouter = createRouter({
         .limit(1);
 
       if (!decision) throw new TRPCError({ code: "NOT_FOUND", message: "Decision not found" });
-      if (decision.decision !== "PROPOSAL_CREATED") {
+      if (decision.decision !== "PROPOSED" && decision.decision !== "PROPOSAL_CREATED") {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Decision is not a pending proposal" });
       }
       if (decision.paperOrderId) {
         throw new TRPCError({ code: "CONFLICT", message: "This proposal has already been confirmed" });
       }
 
-      // In a full implementation, this would create a paper order.
-      // For now, we record the confirmation intent.
+      // Fetch signal event for symbol
+      const [signal] = await db
+        .select()
+        .from(strategySignalEvents)
+        .where(eq(strategySignalEvents.id, decision.signalId))
+        .limit(1);
+
+      const symbol = signal?.symbol ?? "RELIANCE";
+      const proposed = (decision.proposedOrder as any) ?? {};
+      const action = (proposed.action as "BUY" | "SELL") ?? "BUY";
+
+      // Execute canonical paper order using PaperTradingService instance
+      const { PaperTradingService } = await import("../../../modules/paper-trading/service");
+      const service = new PaperTradingService();
+      const orderRes = await service.placeOrder({
+        userId: ctx.userId!,
+        command: {
+          symbol,
+          side: action,
+          type: "MARKET",
+          qty: 1,
+          idempotencyKey: `manconfirm-${decision.id}`,
+        },
+      });
+
+      await db
+        .update(strategyExecutionDecisions)
+        .set({
+          decision: "EXECUTED",
+          paperOrderId: orderRes.order.id,
+        })
+        .where(eq(strategyExecutionDecisions.id, decision.id));
+
       return {
         confirmed: true,
-        proposedOrder: decision.proposedOrder,
-        note: "Paper order creation requires paper-trading router integration — connect in a follow-up",
+        order: orderRes.order,
       };
     }),
 });
