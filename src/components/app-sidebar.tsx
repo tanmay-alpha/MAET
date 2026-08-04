@@ -1,4 +1,9 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { useState } from "react";
+import {
+  Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
+  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter,
+} from "@/components/ui/sidebar";
 import {
   CandlestickChart,
   Table2,
@@ -17,12 +22,9 @@ import {
   Newspaper,
   ArrowUpDown,
   ChevronDown,
+  BookOpen,
+  Bell,
 } from "lucide-react";
-import { useState } from "react";
-import {
-  Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
-  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter,
-} from "@/components/ui/sidebar";
 
 const researchItems = [
   { title: "Screener", url: "/screener", icon: Table2 },
@@ -33,6 +35,11 @@ const tradingItems = [
   { title: "Terminal", url: "/terminal", icon: CandlestickChart },
   { title: "Orders", url: "/orders", icon: ClipboardList },
   { title: "Portfolio", url: "/portfolio", icon: Briefcase },
+];
+
+const reviewItems = [
+  { title: "Journal", url: "/journal", icon: BookOpen },
+  { title: "Alerts", url: "/alerts", icon: Bell },
 ];
 
 const systemItems = [
@@ -98,6 +105,25 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {tradingItems.map((item) => (
+                <SidebarMenuItem key={item.url}>
+                  <SidebarMenuButton asChild isActive={pathname === item.url} tooltip={item.title}>
+                    <Link to={item.url} className="flex items-center gap-2">
+                      <item.icon className="h-4 w-4" />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* REVIEW */}
+        <SidebarGroup>
+          <SidebarGroupLabel>Review</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {reviewItems.map((item) => (
                 <SidebarMenuItem key={item.url}>
                   <SidebarMenuButton asChild isActive={pathname === item.url} tooltip={item.title}>
                     <Link to={item.url} className="flex items-center gap-2">
