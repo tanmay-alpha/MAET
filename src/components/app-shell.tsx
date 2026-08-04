@@ -9,16 +9,15 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 export function AppShell() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+
   const topLinks = [
-    { to: "/dashboard", label: "Dashboard" },
     { to: "/screener", label: "Screener" },
     { to: "/terminal", label: "Terminal" },
-    { to: "/chart-grid", label: "Chart Grid" },
-    { to: "/universe", label: "Universe" },
-    { to: "/compare", label: "Compare" },
-    { to: "/strategies", label: "Strategies" },
-    { to: "/backtest", label: "Backtest" },
+    { to: "/orders", label: "Orders" },
+    { to: "/portfolio", label: "Portfolio" },
+    { to: "/admin/data-quality", label: "Data Status" },
   ];
+
   const currentLabel = topLinks.find((link) => pathname.startsWith(link.to))?.label ??
     pathname.split("/").filter(Boolean).at(-1)?.replaceAll("-", " ") ?? "MAET";
 
@@ -37,7 +36,7 @@ export function AppShell() {
                   key={link.to}
                   to={link.to}
                   className="rounded px-2.5 py-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
-                  activeProps={{ className: "rounded px-2.5 py-1 bg-accent text-foreground" }}
+                  activeProps={{ className: "rounded px-2.5 py-1 bg-accent text-foreground font-medium" }}
                 >
                   {link.label}
                 </Link>
@@ -47,7 +46,7 @@ export function AppShell() {
               <div className="hidden items-center gap-1.5 rounded-md bg-panel-elevated px-2.5 py-1 md:flex">
                 <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                 <span className="text-muted-foreground">NSE</span>
-                <span className="font-medium">Market</span>
+                <span className="font-medium">Paper Workstation</span>
               </div>
               <div className="relative">
                 <button
