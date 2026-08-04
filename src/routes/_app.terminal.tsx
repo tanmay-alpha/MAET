@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { CandlestickChartSimple as CandlestickChart } from "@/components/trading/candlestick-chart";
+import { CandlestickChart } from "@/components/trading/candlestick-chart";
 import { OrderPanel } from "@/components/trading/order-panel";
 import { Watchlist } from "@/components/trading/watchlist";
 import { useMarketCandles } from "@/hooks/use-market-candles";
@@ -12,6 +12,9 @@ import { ShieldAlert, RefreshCw, Layers, ClipboardList, History } from "lucide-r
 import { useTerminalStore } from "@/store/useTerminalStore";
 import { DepthMeter } from "@/components/trading/depth-meter";
 import type { PaperOrderRow, PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
+
+import { useActiveSymbol } from "@/hooks/use-active-symbol";
+import { Filter, Sparkles, X } from "lucide-react";
 
 export const Route = createFileRoute("/_app/terminal")({
   head: () => ({ meta: [{ title: "Terminal — MAET" }] }),
@@ -30,7 +33,7 @@ const INTERVAL_CONFIG: Record<string, { timeframe: MarketCandle["tf"]; range: st
 const WATCHLIST_SYMBOLS = WATCHLIST.map((item) => item.symbol);
 
 function Terminal() {
-  const active = useTerminalStore((state) => state.activeSymbol);
+  const { activeSymbol: active, context, setSymbolContext } = useActiveSymbol();
   const [interval, setInterval] = useState("5m");
   const [activeTab, setActiveTab] = useState<"positions" | "orders" | "history">("positions");
 
@@ -87,6 +90,39 @@ function Terminal() {
       marginUsagePercent: Math.max(0, Math.min(100, usage)),
     };
   }, [positions, account, quoteMap]);
+
+  const [chartType, setChartType] = useState<"candle" | "line">(() => {
+    if (typeof window === "undefined") return "candle";
+    return (localStorage.getItem("maet_chart_type") as "candle" | "line") || "candle";
+  });
+  const [indicators, setIndicators] = useState({
+    sma: false,
+    ema: false,
+    rsi: false,
+    macd: false,
+    volume: true,
+  });
+
+  const toggleIndicator = (key: keyof typeof indicators) => {
+    setIndicators((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleSetInterval = (tf: string) => {
+    setInterval(tf);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("maet_chart_interval", tf);
+    }
+  };
+
+  const handleSetChartType = (type: "candle" | "line") => {
+    setChartType(type);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("maet_chart_type", type);
+    }
+  };
+
+  const dataQuality = liveQuote?.quality ?? (candleQuery.data?.delayed ? "delayed" : "historical");
+  const dataSource = liveQuote?.source ?? candleQuery.data?.source ?? "database";
 
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col bg-background">
@@ -146,19 +182,37 @@ function Terminal() {
         </div>
       </div>
 
+      {context.sourceContext === "screener" && (
+        <div className="flex items-center justify-between border-b border-primary/20 bg-primary/10 px-4 py-1.5 text-xs text-primary">
+          <div className="flex items-center gap-2 font-medium">
+            <Filter className="h-3.5 w-3.5" />
+            <span>Opened from Screener: <strong>{context.screenerRunId ?? "Custom Filter Match"}</strong></span>
+            <span className="text-[10px] opacity-75">· Matched equity criteria</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSymbolContext({ sourceContext: undefined, screenerRunId: undefined })}
+            className="rounded p-0.5 hover:bg-primary/20"
+            title="Dismiss context badge"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-1 overflow-hidden">
         {/* Left Watchlist */}
         <div className="w-56 border-r border-border bg-panel">
-          <Watchlist quotes={quoteMap as any} onSelect={() => {}} />
+          <Watchlist quotes={quoteMap as any} onSelect={(item) => setSymbolContext({ symbol: item.symbol, exchange: ((item as any).exchange as "NSE" | "BSE") || "NSE", sourceContext: "watchlist" })} />
         </div>
 
         {/* Main Chart and Bottom Tabs Area */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Chart Header Bar */}
-          <div className="flex items-center justify-between border-b border-border bg-panel px-3 py-1.5 text-xs">
+          <div className="flex flex-wrap items-center justify-between border-b border-border bg-panel px-3 py-1.5 text-xs gap-2">
             <div className="flex items-center gap-3">
               <span className="font-bold text-foreground">{current.symbol}</span>
-              <span className="text-muted-foreground">{current.name}</span>
+              <span className="text-muted-foreground hidden sm:inline">{current.name}</span>
               {currentPrice !== undefined && (
                 <span className="font-mono font-semibold text-foreground">₹{currentPrice.toFixed(2)}</span>
               )}
@@ -167,27 +221,73 @@ function Terminal() {
                   {currentChange >= 0 ? "+" : ""}{currentChange.toFixed(2)} ({currentChangePct?.toFixed(2)}%)
                 </span>
               )}
+              <span className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase ${
+                dataQuality === "live" ? "bg-bull/15 text-bull border border-bull/30" : "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+              }`}>
+                {dataSource} · {dataQuality}
+              </span>
             </div>
 
-            <div className="flex items-center gap-1">
-              {INTERVALS.map((tf) => (
+            <div className="flex items-center gap-2">
+              {/* Interval selector */}
+              <div className="flex items-center gap-0.5 rounded border border-border bg-background p-0.5">
+                {INTERVALS.map((tf) => (
+                  <button
+                    key={tf}
+                    onClick={() => handleSetInterval(tf)}
+                    className={`rounded px-1.5 py-0.5 text-[11px] font-medium transition ${
+                      interval === tf ? "bg-primary text-primary-foreground font-semibold" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {tf}
+                  </button>
+                ))}
+              </div>
+
+              {/* Chart type toggle */}
+              <div className="flex items-center gap-0.5 rounded border border-border bg-background p-0.5 text-[11px]">
                 <button
-                  key={tf}
-                  onClick={() => setInterval(tf)}
-                  className={`rounded px-2 py-0.5 text-[11px] font-medium transition ${
-                    interval === tf ? "bg-primary text-primary-foreground font-semibold" : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  }`}
+                  onClick={() => handleSetChartType("candle")}
+                  className={`rounded px-2 py-0.5 font-medium transition ${chartType === "candle" ? "bg-accent text-foreground font-semibold" : "text-muted-foreground"}`}
                 >
-                  {tf}
+                  Candles
                 </button>
-              ))}
+                <button
+                  onClick={() => handleSetChartType("line")}
+                  className={`rounded px-2 py-0.5 font-medium transition ${chartType === "line" ? "bg-accent text-foreground font-semibold" : "text-muted-foreground"}`}
+                >
+                  Line
+                </button>
+              </div>
+
+              {/* Indicators menu */}
+              <div className="flex items-center gap-1 border-l border-border pl-2 text-[11px]">
+                {(["sma", "ema", "rsi", "macd", "volume"] as const).map((key) => (
+                  <button
+                    key={key}
+                    onClick={() => toggleIndicator(key)}
+                    className={`rounded px-1.5 py-0.5 font-medium uppercase transition ${
+                      indicators[key] ? "bg-primary/20 text-primary border border-primary/40" : "text-muted-foreground hover:bg-accent"
+                    }`}
+                  >
+                    {key}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
           {/* Chart Canvas */}
           <div className="flex-1 overflow-hidden bg-background">
             {candles.length > 1 ? (
-              <CandlestickChart data={candles} height={350} />
+              <CandlestickChart
+                data={candles}
+                height={350}
+                indicators={indicators}
+                chartState={{ zoom: 1, panOffset: 0, drawings: [] }}
+                onChartStateChange={() => {}}
+                drawingTool={null}
+              />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                 {candleQuery.isError ? "Market candles are temporarily unavailable" : "Loading historical candles…"}
