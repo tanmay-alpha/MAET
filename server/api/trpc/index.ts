@@ -17,6 +17,11 @@ import { screenerDslRouter } from "./routers/screener-dsl";
 import { backtestV2Router } from "./routers/backtest-v2";
 import { chartWorkspacesRouter } from "./routers/chart-workspaces";
 import { tradeThesesRouter } from "./routers/trade-theses";
+import { strategyDefinitionsRouter } from "./routers/strategy-definitions";
+import { strategyBacktestsRouter } from "./routers/strategy-backtests";
+import { strategyOptimisationRouter } from "./routers/strategy-optimisation";
+import { strategyReplayRouter } from "./routers/strategy-replay";
+import { strategyDeploymentsRouter } from "./routers/strategy-deployments";
 
 export const appRouter = createRouter({
   market: marketRouter,
@@ -37,6 +42,12 @@ export const appRouter = createRouter({
   backtestV2: backtestV2Router,
   chartWorkspaces: chartWorkspacesRouter,
   tradeTheses: tradeThesesRouter,
+  // Phase 3 — Strategy Lab
+  strategyDefinitions: strategyDefinitionsRouter,
+  strategyBacktests: strategyBacktestsRouter,
+  strategyOptimisation: strategyOptimisationRouter,
+  strategyReplay: strategyReplayRouter,
+  strategyDeployments: strategyDeploymentsRouter,
 });
 
 export const router = appRouter;

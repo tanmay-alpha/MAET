@@ -36,6 +36,11 @@ import { Route as AppStockSymbolRouteImport } from './routes/_app.stock.$symbol'
 import { Route as AppOptionsUnderlyingRouteImport } from './routes/_app.options.$underlying'
 import { Route as AppChartSymbolRouteImport } from './routes/_app.chart.$symbol'
 import { Route as AppAdminDataQualityRouteImport } from './routes/_app.admin.data-quality'
+import { Route as AppReplayRouteImport } from './routes/_app.replay'
+import { Route as AppPerformanceRouteImport } from './routes/_app.performance'
+import { Route as AppStrategiesStrategyIdRouteImport } from './routes/_app.strategies.$strategyId'
+import { Route as AppStrategiesStrategyIdBacktestsRouteImport } from './routes/_app.strategies.$strategyId.backtests'
+import { Route as AppStrategiesStrategyIdDeploymentsRouteImport } from './routes/_app.strategies.$strategyId.deployments'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -171,6 +176,31 @@ const AppAdminDataQualityRoute = AppAdminDataQualityRouteImport.update({
   path: '/admin/data-quality',
   getParentRoute: () => AppRoute,
 } as any)
+const AppReplayRoute = AppReplayRouteImport.update({
+  id: '/replay',
+  path: '/replay',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPerformanceRoute = AppPerformanceRouteImport.update({
+  id: '/performance',
+  path: '/performance',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStrategiesStrategyIdRoute = AppStrategiesStrategyIdRouteImport.update({
+  id: '/strategies/$strategyId',
+  path: '/strategies/$strategyId',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStrategiesStrategyIdBacktestsRoute = AppStrategiesStrategyIdBacktestsRouteImport.update({
+  id: '/strategies/$strategyId/backtests',
+  path: '/strategies/$strategyId/backtests',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStrategiesStrategyIdDeploymentsRoute = AppStrategiesStrategyIdDeploymentsRouteImport.update({
+  id: '/strategies/$strategyId/deployments',
+  path: '/strategies/$strategyId/deployments',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -199,6 +229,11 @@ export interface FileRoutesByFullPath {
   '/api/market/companies': typeof ApiMarketCompaniesRoute
   '/api/market/company': typeof ApiMarketCompanyRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
+  '/performance': typeof AppPerformanceRoute
+  '/replay': typeof AppReplayRoute
+  '/strategies/$strategyId': typeof AppStrategiesStrategyIdRoute
+  '/strategies/$strategyId/backtests': typeof AppStrategiesStrategyIdBacktestsRoute
+  '/strategies/$strategyId/deployments': typeof AppStrategiesStrategyIdDeploymentsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -227,6 +262,11 @@ export interface FileRoutesByTo {
   '/api/market/companies': typeof ApiMarketCompaniesRoute
   '/api/market/company': typeof ApiMarketCompanyRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
+  '/performance': typeof AppPerformanceRoute
+  '/replay': typeof AppReplayRoute
+  '/strategies/$strategyId': typeof AppStrategiesStrategyIdRoute
+  '/strategies/$strategyId/backtests': typeof AppStrategiesStrategyIdBacktestsRoute
+  '/strategies/$strategyId/deployments': typeof AppStrategiesStrategyIdDeploymentsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -257,6 +297,11 @@ export interface FileRoutesById {
   '/api/market/companies': typeof ApiMarketCompaniesRoute
   '/api/market/company': typeof ApiMarketCompanyRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
+  '/_app/performance': typeof AppPerformanceRoute
+  '/_app/replay': typeof AppReplayRoute
+  '/_app/strategies/$strategyId': typeof AppStrategiesStrategyIdRoute
+  '/_app/strategies/$strategyId/backtests': typeof AppStrategiesStrategyIdBacktestsRoute
+  '/_app/strategies/$strategyId/deployments': typeof AppStrategiesStrategyIdDeploymentsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -287,6 +332,11 @@ export interface FileRouteTypes {
     | '/api/market/companies'
     | '/api/market/company'
     | '/api/market/quotes'
+    | '/performance'
+    | '/replay'
+    | '/strategies/$strategyId'
+    | '/strategies/$strategyId/backtests'
+    | '/strategies/$strategyId/deployments'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -315,6 +365,11 @@ export interface FileRouteTypes {
     | '/api/market/companies'
     | '/api/market/company'
     | '/api/market/quotes'
+    | '/performance'
+    | '/replay'
+    | '/strategies/$strategyId'
+    | '/strategies/$strategyId/backtests'
+    | '/strategies/$strategyId/deployments'
   id:
     | '__root__'
     | '/'
@@ -344,6 +399,11 @@ export interface FileRouteTypes {
     | '/api/market/companies'
     | '/api/market/company'
     | '/api/market/quotes'
+    | '/_app/performance'
+    | '/_app/replay'
+    | '/_app/strategies/$strategyId'
+    | '/_app/strategies/$strategyId/backtests'
+    | '/_app/strategies/$strategyId/deployments'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -546,6 +606,41 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminDataQualityRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/replay': {
+      id: '/_app/replay'
+      path: '/replay'
+      fullPath: '/replay'
+      preLoaderRoute: typeof AppReplayRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/performance': {
+      id: '/_app/performance'
+      path: '/performance'
+      fullPath: '/performance'
+      preLoaderRoute: typeof AppPerformanceRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/strategies/$strategyId': {
+      id: '/_app/strategies/$strategyId'
+      path: '/strategies/$strategyId'
+      fullPath: '/strategies/$strategyId'
+      preLoaderRoute: typeof AppStrategiesStrategyIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/strategies/$strategyId/backtests': {
+      id: '/_app/strategies/$strategyId/backtests'
+      path: '/strategies/$strategyId/backtests'
+      fullPath: '/strategies/$strategyId/backtests'
+      preLoaderRoute: typeof AppStrategiesStrategyIdBacktestsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/strategies/$strategyId/deployments': {
+      id: '/_app/strategies/$strategyId/deployments'
+      path: '/strategies/$strategyId/deployments'
+      fullPath: '/strategies/$strategyId/deployments'
+      preLoaderRoute: typeof AppStrategiesStrategyIdDeploymentsRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -571,6 +666,11 @@ interface AppRouteChildren {
   AppChartSymbolRoute: typeof AppChartSymbolRoute
   AppOptionsUnderlyingRoute: typeof AppOptionsUnderlyingRoute
   AppStockSymbolRoute: typeof AppStockSymbolRoute
+  AppReplayRoute: typeof AppReplayRoute
+  AppPerformanceRoute: typeof AppPerformanceRoute
+  AppStrategiesStrategyIdRoute: typeof AppStrategiesStrategyIdRoute
+  AppStrategiesStrategyIdBacktestsRoute: typeof AppStrategiesStrategyIdBacktestsRoute
+  AppStrategiesStrategyIdDeploymentsRoute: typeof AppStrategiesStrategyIdDeploymentsRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -595,6 +695,11 @@ const AppRouteChildren: AppRouteChildren = {
   AppChartSymbolRoute: AppChartSymbolRoute,
   AppOptionsUnderlyingRoute: AppOptionsUnderlyingRoute,
   AppStockSymbolRoute: AppStockSymbolRoute,
+  AppReplayRoute: AppReplayRoute,
+  AppPerformanceRoute: AppPerformanceRoute,
+  AppStrategiesStrategyIdRoute: AppStrategiesStrategyIdRoute,
+  AppStrategiesStrategyIdBacktestsRoute: AppStrategiesStrategyIdBacktestsRoute,
+  AppStrategiesStrategyIdDeploymentsRoute: AppStrategiesStrategyIdDeploymentsRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

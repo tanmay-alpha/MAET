@@ -1,238 +1,356 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { Activity, ArrowUpRight, GitCompareArrows, BarChart3, Layers, TrendingUp, TrendingDown, ArrowDownRight } from "lucide-react";
-import { StrategyBuilder } from "@/components/options/strategy-builder";
-import { ContractPanel } from "@/components/common/contract-panel";
+import {
+  Layers, Plus, FlaskConical, Play, GitBranch,
+  BookOpen, Archive, TrendingUp, Activity, Zap,
+  ChevronRight, Code2, BarChart3,
+} from "lucide-react";
+import {
+  STRATEGY_TEMPLATES,
+  TEMPLATE_CATEGORY_LABELS,
+  TEMPLATE_CATEGORY_COLORS,
+  type StrategyTemplate,
+} from "@/components/strategy/strategy-library";
+import { trpc } from "@/lib/trpc";
 
 export const Route = createFileRoute("/_app/strategies")({
-  head: () => ({ meta: [{ title: "Strategies — MAET" }] }),
-  component: Strategies,
+  head: () => ({ meta: [{ title: "Strategy Lab — MAET" }] }),
+  component: StrategyLab,
 });
 
-type TabType = "presets" | "builder";
+type LabTab = "library" | "my-strategies" | "new";
 
-function Strategies() {
-  const [activeTab, setActiveTab] = useState<TabType>("presets");
+function StrategyLab() {
+  const [activeTab, setActiveTab] = useState<LabTab>("library");
 
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-5 py-3">
         <div className="flex items-center gap-3">
-          <Layers className="h-5 w-5 text-primary" />
-          <h1 className="text-lg font-semibold">Options Strategies</h1>
+          <FlaskConical className="h-5 w-5 text-primary" />
+          <h1 className="text-lg font-semibold">Strategy Lab</h1>
+          <span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary uppercase tracking-wide">
+            Paper Only
+          </span>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <button
-            onClick={() => setActiveTab("presets")}
-            className={`rounded-md border px-3 py-1.5 ${
-              activeTab === "presets"
-                ? "border-primary bg-primary/10 text-primary"
-                : "border-border text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Strategy Presets
-          </button>
-          <button
-            onClick={() => setActiveTab("builder")}
-            className={`rounded-md border px-3 py-1.5 ${
-              activeTab === "builder"
-                ? "border-primary bg-primary/10 text-primary"
-                : "border-border text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Strategy Builder
-          </button>
+        <div className="flex items-center gap-2">
+          {(["library", "my-strategies", "new"] as LabTab[]).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`rounded-md border px-3 py-1.5 text-xs transition-colors ${
+                activeTab === tab
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {tab === "library" ? "Strategy Library" : tab === "my-strategies" ? "My Strategies" : "New Strategy"}
+            </button>
+          ))}
         </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === "presets" ? <StrategyPresets setActiveTab={setActiveTab} /> : <StrategyBuilderContent />}
-      </div>
-
-      {/* Bottom panel */}
-      <div className="border-t border-border bg-panel p-3 text-center text-xs text-muted-foreground">
-        <ContractPanel message="Strategy builder with real-time payoff visualization — connect broker for live orders" />
+        {activeTab === "library" && <StrategyLibraryTab />}
+        {activeTab === "my-strategies" && <MyStrategiesTab />}
+        {activeTab === "new" && <NewStrategyTab />}
       </div>
     </div>
   );
 }
 
-function StrategyPresets({ setActiveTab }: { setActiveTab: (tab: TabType) => void }) {
-  const presets = [
-    {
-      id: "straddle",
-      name: "Straddle",
-      type: "neutral",
-      icon: GitCompareArrows,
-      description: "Buy ATM Call + Buy ATM Put at same strike. Profits from large moves in either direction.",
-      maxProfit: "Unlimited",
-      maxLoss: "Net Premium",
-      breakeven: "Strike ± Net Premium",
-      bestFor: "High volatility events (earnings, RBI policy)",
-      color: "text-purple-400",
-    },
-    {
-      id: "strangle",
-      name: "Strangle",
-      type: "neutral",
-      icon: Layers,
-      description: "Buy OTM Call + Buy OTM Put. Lower cost than straddle, needs bigger move to profit.",
-      maxProfit: "Unlimited",
-      maxLoss: "Net Premium",
-      breakeven: "Strike ± (Net Premium + Distance)",
-      bestFor: "Expecting volatility but unsure of direction",
-      color: "text-indigo-400",
-    },
-    {
-      id: "iron_condor",
-      name: "Iron Condor",
-      type: "range_bound",
-      icon: BarChart3,
-      description: "Sell OTM Call Spread + Sell OTM Put Spread. Profits when price stays within range.",
-      maxProfit: "Net Credit",
-      maxLoss: "Width - Net Credit",
-      breakeven: "Lower BE: Lower Short Strike - Net Credit / Upper BE: Upper Short Strike + Net Credit",
-      bestFor: "Low volatility, expecting consolidation",
-      color: "text-cyan-400",
-    },
-    {
-      id: "bull_call_spread",
-      name: "Bull Call Spread",
-      type: "bullish",
-      icon: TrendingUp,
-      description: "Buy Call at lower strike, Sell Call at higher strike. Debit spread with limited risk.",
-      maxProfit: "Strike Width - Net Premium",
-      maxLoss: "Net Premium Paid",
-      breakeven: "Lower Strike + Net Premium",
-      bestFor: "Moderately bullish outlook",
-      color: "text-bull",
-    },
-    {
-      id: "bear_put_spread",
-      name: "Bear Put Spread",
-      type: "bearish",
-      icon: TrendingDown,
-      description: "Buy Put at higher strike, Sell Put at lower strike. Debit spread with limited risk.",
-      maxProfit: "Strike Width - Net Premium",
-      maxLoss: "Net Premium Paid",
-      breakeven: "Higher Strike - Net Premium",
-      bestFor: "Moderately bearish outlook",
-      color: "text-bear",
-    },
-    {
-      id: "ratio_spread",
-      name: "Ratio Spread",
-      type: "neutral",
-      icon: Activity,
-      description: "Buy 2 OTM Puts, Sell 1 ATM Put (1:2 ratio). Credits premium, profits from range-bound action.",
-      maxProfit: "Limited (Strike Width - Net Credit)",
-      maxLoss: "Unlimited on sharp decline",
-      breakeven: "Short Strike - Net Credit",
-      bestFor: "Slightly bearish to neutral with downside protection",
-      color: "text-amber-400",
-    },
-    {
-      id: "butterfly_spread",
-      name: "Butterfly Spread",
-      type: "neutral",
-      icon: ArrowUpRight,
-      description: "Buy 1 ITM, Sell 2 ATM, Buy 1 OTM Call at equal intervals. Maximum profit at exact ATM strike.",
-      maxProfit: "Difference between strikes - Net Premium",
-      maxLoss: "Net Premium Paid",
-      breakeven: "Lower: Lower Strike + Net Premium / Upper: Upper Strike - Net Premium",
-      bestFor: "Expecting price to stay near current level",
-      color: "text-pink-400",
-    },
-    {
-      id: "iron_butterfly",
-      name: "Iron Butterfly",
-      type: "neutral",
-      icon: ArrowDownRight,
-      description: "Short Straddle + Long OTM Strangle. Defined risk on both sides, profits from low volatility.",
-      maxProfit: "Short Strike - Long Strike + Net Credit",
-      maxLoss: "Short Strike - Long Strike - Net Credit",
-      breakeven: "Center Strike ± Net Credit",
-      bestFor: "Very low volatility, price pinned to center strike",
-      color: "text-teal-400",
-    },
-  ];
+// ============================================================
+// Strategy Library Tab
+// ============================================================
 
-  const typeColors: Record<string, string> = {
-    bullish: "bg-bull/10 border-bull/30",
-    bearish: "bg-bear/10 border-bear/30",
-    neutral: "bg-purple-500/10 border-purple-500/30",
-    range_bound: "bg-cyan-500/10 border-cyan-500/30",
-  };
+function StrategyLibraryTab() {
+  const [selected, setSelected] = useState<StrategyTemplate | null>(null);
+
+  return (
+    <div className="flex h-full overflow-hidden">
+      {/* Template list */}
+      <div className="w-72 border-r border-border overflow-y-auto p-3 flex-shrink-0">
+        <div className="mb-3 text-xs text-muted-foreground">
+          Educational templates — no returns claimed. Backtest before use.
+        </div>
+        <div className="space-y-1.5">
+          {STRATEGY_TEMPLATES.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setSelected(t)}
+              className={`w-full text-left rounded-lg border p-3 transition-colors ${
+                selected?.id === t.id
+                  ? "border-primary bg-primary/10"
+                  : "border-border hover:border-border/80 hover:bg-panel/60"
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`text-[10px] rounded border px-1.5 py-0.5 uppercase tracking-wide ${TEMPLATE_CATEGORY_COLORS[t.category]}`}>
+                  {TEMPLATE_CATEGORY_LABELS[t.category]}
+                </span>
+              </div>
+              <div className="text-sm font-medium">{t.name}</div>
+              <div className="text-xs text-muted-foreground mt-1 line-clamp-2">{t.description}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Template detail */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {selected ? (
+          <TemplateDetail template={selected} />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <div className="text-center space-y-3">
+              <BookOpen className="h-12 w-12 text-muted-foreground/30 mx-auto" />
+              <p className="text-muted-foreground">Select a template to view details</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TemplateDetail({ template }: { template: StrategyTemplate }) {
+  return (
+    <div className="max-w-2xl">
+      <div className="flex items-start gap-3 mb-6">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className={`text-[10px] rounded border px-1.5 py-0.5 uppercase tracking-wide ${TEMPLATE_CATEGORY_COLORS[template.category]}`}>
+              {TEMPLATE_CATEGORY_LABELS[template.category]}
+            </span>
+          </div>
+          <h2 className="text-xl font-semibold">{template.name}</h2>
+          <p className="text-sm text-muted-foreground mt-1">{template.description}</p>
+        </div>
+      </div>
+
+      <div className="space-y-4 mb-6">
+        <div className="rounded-lg border border-border bg-panel p-4">
+          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Hypothesis</div>
+          <p className="text-sm">{template.hypothesis}</p>
+        </div>
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+          <div className="text-xs font-medium text-amber-400 uppercase tracking-wide mb-2">Known Limitations</div>
+          <p className="text-sm text-muted-foreground">{template.limitations}</p>
+        </div>
+        <div className="rounded-lg border border-border bg-panel p-4">
+          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Typical Timeframes</div>
+          <div className="flex gap-2">
+            {template.timeframes.map((tf) => (
+              <span key={tf} className="rounded bg-background px-2 py-1 text-xs font-mono">{tf}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-3">
+        <button
+          className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          onClick={() => {/* TODO: create strategy from template */}}
+        >
+          <Plus className="h-4 w-4" />
+          Use This Template
+        </button>
+        <button
+          className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <FlaskConical className="h-4 w-4" />
+          Quick Backtest
+        </button>
+      </div>
+
+      <div className="mt-6 rounded-lg border border-primary/20 bg-primary/5 p-4 text-xs text-muted-foreground">
+        <strong className="text-foreground">Educational Disclaimer:</strong> These templates are provided for research purposes only.
+        Past strategy performance in backtests does not guarantee future results.
+        This is a paper trading simulation — no real money is at risk.
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// My Strategies Tab
+// ============================================================
+
+function MyStrategiesTab() {
+  const { data, isLoading } = trpc.strategyDefinitions.list.useQuery();
+  const strategies = data?.strategies ?? [];
 
   return (
     <div className="h-full overflow-y-auto p-4">
-      <div className="mb-4">
-        <p className="text-xs text-muted-foreground">
-          Pre-built strategies with payoff diagrams. Select &quot;Strategy Builder&quot; to customize.
-        </p>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="font-medium">My Strategies</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {strategies.length} {strategies.length === 1 ? "strategy" : "strategies"}
+          </p>
+        </div>
+        <button
+          className="flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
+          onClick={() => {}}
+        >
+          <Plus className="h-4 w-4" />
+          New Strategy
+        </button>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {presets.map((preset) => (
-          <div key={preset.id} className="rounded-lg border border-border bg-panel p-4">
-            <div className="flex items-start gap-3">
-              <div className={`rounded-md bg-background p-2 ${preset.color}`}>
-                <preset.icon className="h-5 w-5" />
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <div className="font-semibold">{preset.name}</div>
-                  <span className={`rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${typeColors[preset.type]}`}>
-                    {preset.type.replace("_", " ")}
-                  </span>
-                </div>
-                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{preset.description}</p>
-              </div>
-            </div>
+      {isLoading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-20 rounded-lg border border-border bg-panel animate-pulse" />
+          ))}
+        </div>
+      ) : strategies.length === 0 ? (
+        <EmptyStrategies />
+      ) : (
+        <div className="space-y-2">
+          {strategies.map((s: any) => (
+            <StrategyCard key={s.id} strategy={s} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
-            <div className="mt-4 grid grid-cols-2 gap-2 rounded bg-background p-2 text-[10px]">
-              <div>
-                <div className="text-muted-foreground">Max Profit</div>
-                <div className="mt-0.5 font-mono font-medium text-bull">{preset.maxProfit}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">Max Loss</div>
-                <div className="mt-0.5 font-mono font-medium text-bear">{preset.maxLoss}</div>
-              </div>
-              <div className="col-span-2">
-                <div className="text-muted-foreground">Best For</div>
-                <div className="mt-0.5 text-muted-foreground">{preset.bestFor}</div>
-              </div>
-            </div>
+function StrategyCard({ strategy }: { strategy: any }) {
+  const statusColors: Record<string, string> = {
+    DRAFT: "text-muted-foreground border-border",
+    VALIDATED: "text-emerald-400 border-emerald-400/30 bg-emerald-400/5",
+    ARCHIVED: "text-muted-foreground/50 border-border/50",
+  };
 
-            <div className="mt-4 border-t border-border pt-3">
-              <Link
-                to="/strategies"
-                className="inline-flex items-center gap-1.5 rounded bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/20"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setActiveTab("builder");
-                }}
-              >
-                Build This <ArrowUpRight className="h-3 w-3" />
-              </Link>
-            </div>
-          </div>
-        ))}
+  return (
+    <div className="flex items-center gap-4 rounded-lg border border-border bg-panel p-4 hover:border-border/80">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="font-medium truncate">{strategy.name}</span>
+          <span className={`text-[10px] rounded border px-1.5 py-0.5 uppercase tracking-wide shrink-0 ${statusColors[strategy.status] ?? statusColors.DRAFT}`}>
+            {strategy.status}
+          </span>
+        </div>
+        {strategy.description && (
+          <p className="text-xs text-muted-foreground mt-0.5 truncate">{strategy.description}</p>
+        )}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <Link
+          to="/strategies/$strategyId"
+          params={{ strategyId: strategy.id }}
+          className="flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <Code2 className="h-3 w-3" />
+          Edit
+        </Link>
+        <Link
+          to="/strategies/$strategyId/backtests"
+          params={{ strategyId: strategy.id }}
+          className="flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <FlaskConical className="h-3 w-3" />
+          Backtests
+        </Link>
       </div>
     </div>
   );
 }
 
-function StrategyBuilderContent() {
-  const underlying = "RELIANCE";
-  const spot = 2450;
-
+function EmptyStrategies() {
   return (
-    <div className="h-full overflow-hidden">
-      <StrategyBuilder underlying={underlying} spot={spot} />
+    <div className="flex h-64 flex-col items-center justify-center rounded-lg border border-dashed border-border">
+      <Layers className="h-10 w-10 text-muted-foreground/30 mb-3" />
+      <p className="text-sm font-medium text-muted-foreground mb-1">No strategies yet</p>
+      <p className="text-xs text-muted-foreground mb-4">Start from the library or create a blank strategy</p>
+      <div className="flex gap-2">
+        <button className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+          <BookOpen className="h-3.5 w-3.5" />
+          Browse Library
+        </button>
+        <button className="flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">
+          <Plus className="h-3.5 w-3.5" />
+          New Strategy
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// New Strategy Tab
+// ============================================================
+
+function NewStrategyTab() {
+  return (
+    <div className="h-full overflow-y-auto p-6">
+      <div className="max-w-xl mx-auto">
+        <h2 className="text-lg font-semibold mb-1">Create New Strategy</h2>
+        <p className="text-sm text-muted-foreground mb-6">
+          Choose a starting point. You can customise all parameters in the visual rule builder.
+        </p>
+
+        <div className="space-y-3">
+          {[
+            {
+              icon: BookOpen,
+              title: "From Library Template",
+              desc: "Start from one of the 7 educational templates",
+              color: "text-blue-400",
+              action: "Browse Library →",
+            },
+            {
+              icon: Code2,
+              title: "Blank Strategy",
+              desc: "Start with an empty rule tree and build from scratch",
+              color: "text-primary",
+              action: "Start Blank →",
+            },
+            {
+              icon: GitBranch,
+              title: "Duplicate Existing",
+              desc: "Copy one of your existing strategies and modify it",
+              color: "text-purple-400",
+              action: "My Strategies →",
+            },
+          ].map((opt) => (
+            <button
+              key={opt.title}
+              className="w-full text-left flex items-start gap-4 rounded-lg border border-border bg-panel p-4 hover:border-primary/50 transition-colors"
+            >
+              <div className={`mt-0.5 ${opt.color}`}>
+                <opt.icon className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <div className="font-medium">{opt.title}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{opt.desc}</div>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-8 rounded-lg border border-border bg-panel p-4 text-xs text-muted-foreground space-y-1">
+          <div className="font-medium text-foreground mb-2">Strategy Lab features</div>
+          {[
+            "Visual rule builder — no code required",
+            "Backtest engine V3 with look-ahead protection",
+            "Parameter sweep to explore strategy variants",
+            "Walk-forward validation to test robustness",
+            "ALERT_ONLY, MANUAL_CONFIRM, or AUTO_PAPER deployment",
+            "Bar replay workspace for manual strategy testing",
+          ].map((f) => (
+            <div key={f} className="flex items-center gap-2">
+              <div className="h-1 w-1 rounded-full bg-primary shrink-0" />
+              {f}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
