@@ -24,6 +24,9 @@ import {
   ChevronDown,
   BookOpen,
   Bell,
+  Play,
+  BarChart2,
+  Layers,
 } from "lucide-react";
 
 const researchItems = [
@@ -47,13 +50,18 @@ const systemItems = [
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
+const strategyItems = [
+  { title: "Strategy Lab", url: "/strategies", icon: FlaskConical },
+  { title: "Performance", url: "/performance", icon: BarChart2 },
+  { title: "Bar Replay", url: "/replay", icon: Play },
+];
+
 const experimentalItems = [
   { title: "Chart Grid", url: "/chart-grid", icon: Grid3x3 },
   { title: "Compare", url: "/compare", icon: ArrowUpDown },
   { title: "Universe", url: "/universe", icon: Search },
   { title: "Heatmap", url: "/heatmap", icon: TrendingUp },
-  { title: "Strategies", url: "/strategies", icon: Cpu },
-  { title: "Backtest", url: "/backtest", icon: FlaskConical },
+  { title: "Backtest", url: "/backtest", icon: Layers },
   { title: "Options", url: "/options/RELIANCE", icon: LineChart },
   { title: "Futures", url: "/futures", icon: BarChart3 },
   { title: "News", url: "/news", icon: Newspaper },
@@ -126,6 +134,25 @@ export function AppSidebar() {
               {reviewItems.map((item) => (
                 <SidebarMenuItem key={item.url}>
                   <SidebarMenuButton asChild isActive={pathname === item.url} tooltip={item.title}>
+                    <Link to={item.url} className="flex items-center gap-2">
+                      <item.icon className="h-4 w-4" />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* STRATEGY */}
+        <SidebarGroup>
+          <SidebarGroupLabel>Strategy Lab</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {strategyItems.map((item) => (
+                <SidebarMenuItem key={item.url}>
+                  <SidebarMenuButton asChild isActive={pathname.startsWith(item.url)} tooltip={item.title}>
                     <Link to={item.url} className="flex items-center gap-2">
                       <item.icon className="h-4 w-4" />
                       <span>{item.title}</span>

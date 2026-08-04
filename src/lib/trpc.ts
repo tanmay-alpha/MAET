@@ -1,3 +1,4 @@
+import { useQuery as useReactQuery, useMutation as useReactMutation } from "@tanstack/react-query";
 import { getCurrentAccessToken } from "./auth-token";
 import type {
   PaperOrderCommandInput,
@@ -76,6 +77,29 @@ async function trpcMutation<TInput, TOutput>(path: string, input: TInput): Promi
   }
   const json = (await res.json()) as { result: { data: TOutput } };
   return json.result.data;
+}
+
+export function createQueryProcedure<TInput = void, TOutput = any>(path: string) {
+  return {
+    query: (input?: TInput): Promise<TOutput> => trpcQuery<TOutput>(path, input as Record<string, any>),
+    useQuery: (input?: TInput, options?: any) =>
+      useReactQuery<TOutput>({
+        queryKey: [path, input],
+        queryFn: () => trpcQuery<TOutput>(path, input as Record<string, any>),
+        ...(options ?? {}),
+      }),
+  };
+}
+
+export function createMutationProcedure<TInput = void, TOutput = any>(path: string) {
+  return {
+    mutate: (input: TInput, options?: any): Promise<TOutput> => trpcMutation<TInput, TOutput>(path, input),
+    useMutation: (options?: any) =>
+      useReactMutation<TOutput, Error, TInput>({
+        mutationFn: (input: TInput) => trpcMutation<TInput, TOutput>(path, input),
+        ...(options ?? {}),
+      }),
+  };
 }
 
 export interface ListResponse<T> {
@@ -263,5 +287,55 @@ export const trpc = {
     get: {
       query: (): Promise<{ capabilities: any[] }> => trpcQuery("capabilities.get"),
     },
+  },
+  // ============================================================
+  // Phase 3 — Strategy Lab
+  // ============================================================
+  strategyDefinitions: {
+    list: createQueryProcedure<{ limit?: number }, { strategies: any[] }>("strategyDefinitions.list"),
+    get: createQueryProcedure<{ strategyId: string }, { strategy: any; versions: any[] }>("strategyDefinitions.get"),
+    create: createMutationProcedure<any, { strategy: any }>("strategyDefinitions.create"),
+    update: createMutationProcedure<any, { strategy: any }>("strategyDefinitions.update"),
+    createVersion: createMutationProcedure<{ strategyId: string; changeNote?: string }, { version: any }>("strategyDefinitions.createVersion"),
+    archive: createMutationProcedure<{ strategyId: string }, { archived: boolean }>("strategyDefinitions.archive"),
+  },
+  strategyBacktests: {
+    createJob: createMutationProcedure<any, { job: any }>("strategyBacktests.createJob"),
+    getJob: createQueryProcedure<{ jobId: string }, { job: any; snapshot: any | null }>("strategyBacktests.getJob"),
+    cancelJob: createMutationProcedure<{ jobId: string }, { requested: boolean }>("strategyBacktests.cancelJob"),
+    listJobs: createQueryProcedure<{ strategyVersionId?: string; limit?: number }, { jobs: any[] }>("strategyBacktests.listJobs"),
+    getTrades: createQueryProcedure<{ jobId: string }, { trades: any[] }>("strategyBacktests.getTrades"),
+    getEquityCurve: createQueryProcedure<{ jobId: string }, { points: any[] }>("strategyBacktests.getEquityCurve"),
+    compareJobs: createQueryProcedure<{ jobIds: string[] }, { snapshots: any[] }>("strategyBacktests.compareJobs"),
+    getPerformance: createQueryProcedure<{ jobId: string }, { snapshot: any | null }>("strategyBacktests.getPerformance"),
+  },
+  strategyOptimisation: {
+    createSweep: createMutationProcedure<any, { sweep: any }>("strategyOptimisation.createSweep"),
+    getSweep: createQueryProcedure<{ sweepId: string }, { sweep: any; results: any[] }>("strategyOptimisation.getSweep"),
+    listSweeps: createQueryProcedure<{ strategyId: string }, { sweeps: any[] }>("strategyOptimisation.listSweeps"),
+    cancelSweep: createMutationProcedure<{ sweepId: string }, { cancelled: boolean }>("strategyOptimisation.cancelSweep"),
+    createWalkForward: createMutationProcedure<any, { run: any }>("strategyOptimisation.createWalkForward"),
+    getWalkForward: createQueryProcedure<{ runId: string }, { run: any; windows: any[] }>("strategyOptimisation.getWalkForward"),
+  },
+  strategyReplay: {
+    create: createMutationProcedure<{ symbol: string; timeframe: string; startTimestamp: string; initialCapital?: number }, { session: any }>("strategyReplay.create"),
+    step: createMutationProcedure<{ sessionId: string }, { bar: any | null; endOfData: boolean; barsRevealed: number }>("strategyReplay.step"),
+    getState: createQueryProcedure<{ sessionId: string }, { session: any; bars: any[] }>("strategyReplay.getState"),
+    reset: createMutationProcedure<{ sessionId: string }, { reset: boolean }>("strategyReplay.reset"),
+    close: createMutationProcedure<{ sessionId: string }, { closed: boolean }>("strategyReplay.close"),
+    list: createQueryProcedure<void, { sessions: any[] }>("strategyReplay.list"),
+  },
+  strategyDeployments: {
+    list: createQueryProcedure<void, { deployments: any[] }>("strategyDeployments.list"),
+    get: createQueryProcedure<{ deploymentId: string }, { deployment: any; signals: any[] }>("strategyDeployments.get"),
+    create: createMutationProcedure<any, { deployment: any }>("strategyDeployments.create"),
+    activate: createMutationProcedure<{ deploymentId: string }, { activated: boolean }>("strategyDeployments.activate"),
+    pause: createMutationProcedure<{ deploymentId: string }, { paused: boolean }>("strategyDeployments.pause"),
+    stop: createMutationProcedure<{ deploymentId: string }, { stopped: boolean }>("strategyDeployments.stop"),
+    toggleKillSwitch: createMutationProcedure<{ deploymentId: string; enabled: boolean }, { killSwitch: boolean }>("strategyDeployments.toggleKillSwitch"),
+    updateRiskLimits: createMutationProcedure<{ deploymentId: string; riskLimits: any }, { updated: boolean }>("strategyDeployments.updateRiskLimits"),
+    getSignals: createQueryProcedure<{ deploymentId: string; limit?: number }, { signals: any[] }>("strategyDeployments.getSignals"),
+    getDecisions: createQueryProcedure<{ deploymentId: string; limit?: number }, { decisions: any[] }>("strategyDeployments.getDecisions"),
+    confirmProposal: createMutationProcedure<{ decisionId: string }, any>("strategyDeployments.confirmProposal"),
   },
 };

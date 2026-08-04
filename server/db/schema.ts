@@ -1055,3 +1055,300 @@ export const tradeReviews = pgTable("trade_reviews", {
   index("idx_trade_reviews_thesis_id").on(table.thesisId),
   index("idx_trade_reviews_user_id").on(table.userId),
 ]);
+
+// ============================================================
+// Phase 3 — Strategy Lab Tables (Migration 0016)
+// ============================================================
+
+export const strategyDefinitions = pgTable("strategy_definitions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 120 }).notNull(),
+  description: text("description"),
+  status: varchar("status", { length: 20 }).notNull().default("DRAFT"),
+  currentDraft: jsonb("current_draft").notNull(),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+}, (table) => [
+  index("idx_strategy_definitions_user_updated").on(table.userId, table.updatedAt),
+]);
+
+export const strategyVersions = pgTable("strategy_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  strategyId: uuid("strategy_id").notNull().references(() => strategyDefinitions.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  versionNumber: integer("version_number").notNull(),
+  definition: jsonb("definition").notNull(),
+  definitionHash: text("definition_hash").notNull(),
+  engineVersion: text("engine_version").notNull(),
+  indicatorVersion: text("indicator_version").notNull(),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("unique_strategy_version").on(table.strategyId, table.versionNumber),
+  uniqueIndex("unique_strategy_definition_hash").on(table.strategyId, table.definitionHash),
+  index("idx_strategy_versions_user_id").on(table.userId),
+]);
+
+export const strategyBacktestJobs = pgTable("strategy_backtest_jobs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  strategyVersionId: uuid("strategy_version_id").notNull().references(() => strategyVersions.id),
+  status: varchar("status", { length: 20 }).notNull().default("QUEUED"),
+  symbolOrUniverse: text("symbol_or_universe").notNull(),
+  timeframe: varchar("timeframe", { length: 10 }).notNull(),
+  fromDate: timestamp("from_date", { withTimezone: true }).notNull(),
+  toDate: timestamp("to_date", { withTimezone: true }).notNull(),
+  initialCapital: numeric("initial_capital", { precision: 18, scale: 4 }),
+  benchmarkSymbol: text("benchmark_symbol"),
+  progress: integer("progress").notNull().default(0),
+  errorCode: text("error_code"),
+  errorSummary: text("error_summary"),
+  requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+  workerId: text("worker_id"),
+  heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+  runId: uuid("run_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_backtest_jobs_user_status").on(table.userId, table.status, table.requestedAt),
+  index("idx_backtest_jobs_version").on(table.strategyVersionId),
+]);
+
+export const strategyBacktestTrades = pgTable("strategy_backtest_trades", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  jobId: uuid("job_id").notNull().references(() => strategyBacktestJobs.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  strategyVersionId: uuid("strategy_version_id").notNull().references(() => strategyVersions.id),
+  symbol: text("symbol").notNull(),
+  direction: varchar("direction", { length: 10 }).notNull(),
+  entrySignalTimestamp: timestamp("entry_signal_timestamp", { withTimezone: true }),
+  entryOrderTimestamp: timestamp("entry_order_timestamp", { withTimezone: true }),
+  entryFillTimestamp: timestamp("entry_fill_timestamp", { withTimezone: true }),
+  entryPrice: numeric("entry_price", { precision: 18, scale: 4 }).notNull(),
+  entryQuantity: numeric("entry_quantity", { precision: 18, scale: 4 }).notNull(),
+  exitSignalTimestamp: timestamp("exit_signal_timestamp", { withTimezone: true }),
+  exitFillTimestamp: timestamp("exit_fill_timestamp", { withTimezone: true }),
+  exitPrice: numeric("exit_price", { precision: 18, scale: 4 }),
+  exitQuantity: numeric("exit_quantity", { precision: 18, scale: 4 }),
+  grossPnl: numeric("gross_pnl", { precision: 18, scale: 4 }),
+  fees: numeric("fees", { precision: 18, scale: 4 }).notNull().default("0"),
+  slippage: numeric("slippage", { precision: 18, scale: 4 }).notNull().default("0"),
+  netPnl: numeric("net_pnl", { precision: 18, scale: 4 }),
+  returnPercent: numeric("return_percent", { precision: 12, scale: 6 }),
+  holdingBars: integer("holding_bars"),
+  holdingSeconds: bigint("holding_seconds", { mode: "number" }),
+  mfe: numeric("mfe", { precision: 18, scale: 4 }),
+  mae: numeric("mae", { precision: 18, scale: 4 }),
+  entryReason: text("entry_reason"),
+  exitReason: text("exit_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_backtest_trades_job_id").on(table.jobId),
+  index("idx_backtest_trades_user_symbol").on(table.userId, table.symbol),
+]);
+
+export const strategyEquityPoints = pgTable("strategy_equity_points", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  jobId: uuid("job_id").notNull().references(() => strategyBacktestJobs.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  timestamp: timestamp("timestamp", { withTimezone: true }).notNull(),
+  equity: numeric("equity", { precision: 18, scale: 4 }).notNull(),
+  benchmark: numeric("benchmark", { precision: 18, scale: 4 }),
+  drawdown: numeric("drawdown", { precision: 12, scale: 6 }),
+}, (table) => [
+  index("idx_equity_points_job_ts").on(table.jobId, table.timestamp),
+]);
+
+export const strategyParameterSweeps = pgTable("strategy_parameter_sweeps", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  strategyId: uuid("strategy_id").notNull().references(() => strategyDefinitions.id, { onDelete: "cascade" }),
+  parameters: jsonb("parameters").notNull(),
+  combinationCount: integer("combination_count").notNull(),
+  symbolOrUniverse: text("symbol_or_universe").notNull(),
+  timeframe: varchar("timeframe", { length: 10 }).notNull(),
+  fromDate: timestamp("from_date", { withTimezone: true }).notNull(),
+  toDate: timestamp("to_date", { withTimezone: true }).notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("QUEUED"),
+  completedCount: integer("completed_count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_sweeps_user_strategy").on(table.userId, table.strategyId, table.createdAt),
+]);
+
+export const strategySweepResults = pgTable("strategy_sweep_results", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  sweepId: uuid("sweep_id").notNull().references(() => strategyParameterSweeps.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  parameterValues: jsonb("parameter_values").notNull(),
+  combinationIndex: integer("combination_index").notNull(),
+  jobId: uuid("job_id").references(() => strategyBacktestJobs.id),
+  resultSummary: jsonb("result_summary"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_sweep_results_sweep_id").on(table.sweepId, table.combinationIndex),
+]);
+
+export const strategyWalkForwardRuns = pgTable("strategy_walk_forward_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  strategyId: uuid("strategy_id").notNull().references(() => strategyDefinitions.id, { onDelete: "cascade" }),
+  mode: varchar("mode", { length: 20 }).notNull(),
+  parameters: jsonb("parameters").notNull(),
+  symbol: varchar("symbol", { length: 30 }).notNull(),
+  timeframe: varchar("timeframe", { length: 10 }).notNull(),
+  fromDate: timestamp("from_date", { withTimezone: true }).notNull(),
+  toDate: timestamp("to_date", { withTimezone: true }).notNull(),
+  trainingDays: integer("training_days").notNull(),
+  validationDays: integer("validation_days").notNull(),
+  windowCount: integer("window_count").notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("QUEUED"),
+  oosSummary: jsonb("oos_summary"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_wf_runs_user").on(table.userId, table.createdAt),
+]);
+
+export const strategyWalkForwardWindows = pgTable("strategy_walk_forward_windows", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  runId: uuid("run_id").notNull().references(() => strategyWalkForwardRuns.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  windowIndex: integer("window_index").notNull(),
+  trainingFrom: timestamp("training_from", { withTimezone: true }).notNull(),
+  trainingTo: timestamp("training_to", { withTimezone: true }).notNull(),
+  validationFrom: timestamp("validation_from", { withTimezone: true }).notNull(),
+  validationTo: timestamp("validation_to", { withTimezone: true }).notNull(),
+  selectedParameters: jsonb("selected_parameters"),
+  trainingMetrics: jsonb("training_metrics"),
+  validationMetrics: jsonb("validation_metrics"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_wf_windows_run_id").on(table.runId, table.windowIndex),
+]);
+
+export const strategyDeployments = pgTable("strategy_deployments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  strategyVersionId: uuid("strategy_version_id").notNull().references(() => strategyVersions.id),
+  mode: varchar("mode", { length: 20 }).notNull().default("OFF"),
+  universe: text("universe").notNull(),
+  timeframe: varchar("timeframe", { length: 10 }).notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("DRAFT"),
+  riskLimits: jsonb("risk_limits").notNull().default({}),
+  userKillSwitch: boolean("user_kill_switch").notNull().default(false),
+  deploymentKillSwitch: boolean("deployment_kill_switch").notNull().default(false),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  pausedAt: timestamp("paused_at", { withTimezone: true }),
+  stoppedAt: timestamp("stopped_at", { withTimezone: true }),
+  lastEvaluatedAt: timestamp("last_evaluated_at", { withTimezone: true }),
+  lastSignalAt: timestamp("last_signal_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_deployments_user_status").on(table.userId, table.status, table.updatedAt),
+  index("idx_deployments_version_id").on(table.strategyVersionId),
+]);
+
+export const strategySignalEvents = pgTable("strategy_signal_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  deploymentId: uuid("deployment_id").notNull().references(() => strategyDeployments.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  strategyVersionId: uuid("strategy_version_id").notNull().references(() => strategyVersions.id),
+  symbol: text("symbol").notNull(),
+  timeframe: varchar("timeframe", { length: 10 }).notNull(),
+  barCloseTimestamp: timestamp("bar_close_timestamp", { withTimezone: true }).notNull(),
+  signalType: varchar("signal_type", { length: 30 }).notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  indicatorSnapshot: jsonb("indicator_snapshot").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("unique_signal_fingerprint").on(table.deploymentId, table.fingerprint),
+  index("idx_signals_deployment_ts").on(table.deploymentId, table.barCloseTimestamp),
+  index("idx_signals_user_ts").on(table.userId, table.createdAt),
+]);
+
+export const strategyExecutionDecisions = pgTable("strategy_execution_decisions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  signalId: uuid("signal_id").notNull().references(() => strategySignalEvents.id, { onDelete: "cascade" }),
+  deploymentId: uuid("deployment_id").notNull().references(() => strategyDeployments.id),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  decision: varchar("decision", { length: 40 }).notNull(),
+  reasonCode: text("reason_code"),
+  reasonDetails: text("reason_details"),
+  proposedOrder: jsonb("proposed_order"),
+  paperOrderId: uuid("paper_order_id").references(() => paperOrders.id),
+  accountVersion: integer("account_version"),
+  quoteSource: text("quote_source"),
+  quoteTimestamp: timestamp("quote_timestamp", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_decisions_deployment").on(table.deploymentId, table.createdAt),
+  index("idx_decisions_signal").on(table.signalId),
+  index("idx_decisions_user").on(table.userId, table.createdAt),
+]);
+
+export const strategyPerformanceSnapshots = pgTable("strategy_performance_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  jobId: uuid("job_id").notNull().references(() => strategyBacktestJobs.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  strategyVersionId: uuid("strategy_version_id").notNull().references(() => strategyVersions.id),
+  symbolOrUniverse: text("symbol_or_universe").notNull(),
+  timeframe: varchar("timeframe", { length: 10 }).notNull(),
+  fromDate: timestamp("from_date", { withTimezone: true }).notNull(),
+  toDate: timestamp("to_date", { withTimezone: true }).notNull(),
+  totalReturn: numeric("total_return", { precision: 12, scale: 6 }),
+  annualizedReturn: numeric("annualized_return", { precision: 12, scale: 6 }),
+  maxDrawdown: numeric("max_drawdown", { precision: 12, scale: 6 }),
+  sharpe: numeric("sharpe", { precision: 10, scale: 4 }),
+  sortino: numeric("sortino", { precision: 10, scale: 4 }),
+  calmar: numeric("calmar", { precision: 10, scale: 4 }),
+  winRate: numeric("win_rate", { precision: 10, scale: 6 }),
+  profitFactor: numeric("profit_factor", { precision: 12, scale: 4 }),
+  expectancy: numeric("expectancy", { precision: 12, scale: 6 }),
+  tradeCount: integer("trade_count"),
+  longTradeCount: integer("long_trade_count"),
+  shortTradeCount: integer("short_trade_count"),
+  feesPaid: numeric("fees_paid", { precision: 18, scale: 4 }),
+  slippageCost: numeric("slippage_cost", { precision: 18, scale: 4 }),
+  netProfit: numeric("net_profit", { precision: 18, scale: 4 }),
+  exposurePercent: numeric("exposure_percent", { precision: 10, scale: 6 }),
+  benchmarkReturn: numeric("benchmark_return", { precision: 12, scale: 6 }),
+  alpha: numeric("alpha", { precision: 12, scale: 6 }),
+  dataHash: text("data_hash"),
+  engineVersion: text("engine_version"),
+  executionPolicy: text("execution_policy"),
+  intrabarPolicy: text("intrabar_policy"),
+  feeModel: text("fee_model"),
+  warnings: jsonb("warnings").notNull().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("idx_perf_snapshots_job_unique").on(table.jobId),
+  index("idx_perf_snapshots_user").on(table.userId, table.createdAt),
+]);
+
+export const strategyReplaySessions = pgTable("strategy_replay_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  symbol: varchar("symbol", { length: 30 }).notNull(),
+  timeframe: varchar("timeframe", { length: 10 }).notNull(),
+  startTimestamp: timestamp("start_timestamp", { withTimezone: true }).notNull(),
+  currentBarTimestamp: timestamp("current_bar_timestamp", { withTimezone: true }).notNull(),
+  barsRevealed: integer("bars_revealed").notNull().default(0),
+  initialCapital: numeric("initial_capital", { precision: 18, scale: 4 }).notNull().default("1000000"),
+  currentEquity: numeric("current_equity", { precision: 18, scale: 4 }).notNull().default("1000000"),
+  state: jsonb("state").notNull().default({}),
+  status: varchar("status", { length: 20 }).notNull().default("ACTIVE"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_replay_sessions_user").on(table.userId, table.status, table.createdAt),
+]);
+
