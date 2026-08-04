@@ -165,19 +165,22 @@ function Landing() {
               no real money. Just the workspace you wish you had while studying the market.
             </p>
 
-            {/* Quick links — secondary, not duplicate CTAs */}
-            <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
-              <a href="#scanner" className="inline-flex items-center gap-1 hover:text-foreground">
-                <Table2 className="h-3.5 w-3.5 text-primary" /> Browse the scanner
-              </a>
-              <span className="text-border">·</span>
-              <a href="#paper" className="inline-flex items-center gap-1 hover:text-foreground">
-                <Activity className="h-3.5 w-3.5 text-primary" /> Paper trading
-              </a>
-              <span className="text-border">·</span>
-              <a href="#lab" className="inline-flex items-center gap-1 hover:text-foreground">
-                <FlaskConical className="h-3.5 w-3.5 text-primary" /> Strategy lab
-              </a>
+            {/* Hero CTAs */}
+            <div className="mt-8 flex flex-wrap items-center gap-3 text-sm">
+              <Link
+                to="/terminal"
+                className="group flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 font-semibold text-primary-foreground transition hover:opacity-95 shadow-lg shadow-primary/20"
+              >
+                Open MAET Workspace
+                <ArrowUpRight className="h-4 w-4 transition group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+              </Link>
+              <Link
+                to="/screener"
+                className="flex items-center gap-2 rounded-md border border-border bg-panel px-4 py-2.5 font-semibold text-foreground transition hover:bg-accent"
+              >
+                <Table2 className="h-4 w-4 text-primary" />
+                Explore Screener
+              </Link>
             </div>
 
             {/* Honest meta strip — no fake metrics */}
