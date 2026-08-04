@@ -171,20 +171,37 @@ check("S3.10 position-sizer.ts exists with VOLATILITY_TARGET", () =>
 check("S4.1 backtest-worker.ts exists", () =>
   requireFile(join(SERVER_ROOT, "workers", "backtest-worker.ts")));
 
-check("S4.2 worker uses FOR UPDATE SKIP LOCKED via claimNextJob", () =>
+check("S4.2 sweep-worker.ts exists", () =>
+  requireFile(join(SERVER_ROOT, "workers", "sweep-worker.ts")));
+
+check("S4.3 walk-forward-worker.ts exists", () =>
+  requireFile(join(SERVER_ROOT, "workers", "walk-forward-worker.ts")));
+
+check("S4.4 strategy-evaluator.ts exists", () =>
+  requireFile(join(SERVER_ROOT, "workers", "strategy-evaluator.ts")));
+
+check("S4.5 package.json contains all 4 runnable worker scripts", () => {
+  const pkgPath = join(ROOT, "package.json");
+  return fileContains(pkgPath, "worker:backtest") &&
+         fileContains(pkgPath, "worker:sweep") &&
+         fileContains(pkgPath, "worker:walk-forward") &&
+         fileContains(pkgPath, "worker:evaluator");
+});
+
+check("S4.6 worker uses FOR UPDATE SKIP LOCKED via claimNextJob", () =>
   fileContains(join(SERVER_ROOT, "modules", "strategy-jobs", "repository.ts"), "FOR UPDATE SKIP LOCKED"));
 
-check("S4.3 worker checks cancellation during run", () =>
+check("S4.7 worker checks cancellation during run", () =>
   fileContains(join(SERVER_ROOT, "workers", "backtest-worker.ts"), "isCancellationRequested"));
 
-check("S4.4 worker sets up heartbeat interval", () =>
+check("S4.8 worker sets up heartbeat interval", () =>
   fileContains(join(SERVER_ROOT, "workers", "backtest-worker.ts"), "HEARTBEAT_INTERVAL_MS"));
 
-check("S4.5 worker calls recoverAbandonedJobs on startup", () =>
+check("S4.9 worker calls recoverAbandonedJobs on startup", () =>
   fileContains(join(SERVER_ROOT, "workers", "backtest-worker.ts"), "recoverAbandonedJobs"));
 
 // ============================================================
-// Slice 7: Deployments safety
+// Slice 7: Deployments & Replay safety
 // ============================================================
 
 check("S7.1 strategy-deployments router has toggleKillSwitch", () =>
@@ -192,6 +209,18 @@ check("S7.1 strategy-deployments router has toggleKillSwitch", () =>
 
 check("S7.2 AUTO_PAPER requires maximumDailyLossPercent validation", () =>
   fileContains(join(SERVER_ROOT, "api", "trpc", "routers", "strategy-deployments.ts"), "AUTO_PAPER"));
+
+check("S7.3 confirmProposal executes real PaperTradingService order (no placeholder)", () => {
+  const routerPath = join(SERVER_ROOT, "api", "trpc", "routers", "strategy-deployments.ts");
+  return fileContains(routerPath, "PaperTradingService") &&
+         fileNotContains(routerPath, "requires paper-trading router integration");
+});
+
+check("S7.4 replay-engine.ts exists and isolates replay trading", () =>
+  requireFile(join(SERVER_ROOT, "modules", "strategy-replay", "replay-engine.ts")));
+
+check("S7.5 portfolio-runner.ts exists and implements multi-symbol runner", () =>
+  requireFile(join(SERVER_ROOT, "domain", "strategy", "portfolio-runner.ts")));
 
 // ============================================================
 // Slice 8: Frontend routes

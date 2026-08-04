@@ -112,8 +112,9 @@ function evalGroup(
   cache: IndicatorStateCache,
   barIndex: number,
 ): boolean {
-  const results = group.children.map((child) => {
-    if (child.kind === "CONDITION") return evalCondition(child, cache, barIndex);
+  const items = group.children ?? (group as any).conditions ?? [];
+  const results = items.map((child: any) => {
+    if (child.kind === "CONDITION" || child.kind === "COMPARISON") return evalCondition(child, cache, barIndex);
     return evalGroup(child, cache, barIndex);
   });
 
@@ -141,10 +142,11 @@ export interface AstEvalResult {
  * No future bars are ever accessed.
  */
 export function evaluateRuleGroup(
-  group: StrategyRuleGroup,
+  group: StrategyRuleGroup | undefined | null,
   cache: IndicatorStateCache,
   barIndex: number,
-): AstEvalResult {
+): { matched: boolean } {
+  if (!group) return { matched: false };
   const matched = evalGroup(group, cache, barIndex);
-  return { matched, barIndex };
+  return { matched };
 }

@@ -210,13 +210,16 @@ export interface StrategyExecutionConfig {
 export interface StrategyDefinition {
   name: string;
   description?: string;
-  direction: StrategyDirection;
-  universe: StrategyUniverse;
-  timeframe: string;
+  direction?: StrategyDirection;
+  universe?: StrategyUniverse;
+  timeframe?: string;
   entry: StrategyRuleGroup;
   exit: StrategyRuleGroup;
-  risk: StrategyRiskConfig;
-  execution: StrategyExecutionConfig;
+  entryRules?: StrategyRuleGroup;
+  exitRules?: StrategyRuleGroup;
+  risk?: StrategyRiskConfig;
+  execution?: StrategyExecutionConfig;
+  portfolio?: any;
 }
 
 // ============================================================
@@ -291,13 +294,13 @@ export function validateAst(definition: StrategyDefinition): StrategyValidationR
   if (exitCount === 0) {
     warnings.push({ path: "exit", message: "No explicit exit rules — position will only close at end of period" });
   }
-  if (definition.execution.initialCapital <= 0 || !isFinite(definition.execution.initialCapital)) {
+  if (definition.execution && (definition.execution.initialCapital <= 0 || !isFinite(definition.execution.initialCapital))) {
     errors.push({ path: "execution.initialCapital", message: "Initial capital must be a positive finite number" });
   }
-  if (definition.risk.maximumOpenPositions < 1 || definition.risk.maximumOpenPositions > MAX_OPEN_POSITIONS) {
+  if (definition.risk && (definition.risk.maximumOpenPositions < 1 || definition.risk.maximumOpenPositions > MAX_OPEN_POSITIONS)) {
     errors.push({ path: "risk.maximumOpenPositions", message: `Must be between 1 and ${MAX_OPEN_POSITIONS}` });
   }
-  if (definition.risk.allowPyramiding && (definition.risk.maximumPyramids ?? 0) > MAX_PYRAMIDS) {
+  if (definition.risk?.allowPyramiding && (definition.risk.maximumPyramids ?? 0) > MAX_PYRAMIDS) {
     errors.push({ path: "risk.maximumPyramids", message: `Max pyramids is ${MAX_PYRAMIDS}` });
   }
 

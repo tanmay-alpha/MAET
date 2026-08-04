@@ -90,9 +90,22 @@ describe("Strategy Jobs — Job Queue Logic", () => {
       return;
     }
 
-    const { createJob, claimNextJob, failJob } = await import("./repository");
+    const { createJob, claimNextJob, markFailed } = await import("./repository");
+    const { getSqlClient } = await import("../../data/drizzle/client");
+    const sql = getSqlClient();
+
     const testUserId = "00000000-0000-0000-0000-000000000001";
-    const testVersionId = "00000000-0000-0000-0000-000000000002";
+    const testStratId = "00000000-0000-0000-0000-000000000002";
+    const testVersionId = "00000000-0000-0000-0000-000000000003";
+
+    await sql.unsafe(`
+      INSERT INTO auth.users (id) VALUES ('${testUserId}') ON CONFLICT DO NOTHING;
+      INSERT INTO public.users (id, email) VALUES ('${testUserId}', 'test_user_jobs@maet.com') ON CONFLICT DO NOTHING;
+      INSERT INTO public.strategy_definitions (id, user_id, name, current_draft)
+      VALUES ('${testStratId}', '${testUserId}', 'Test Strat', '{"name":"Test"}') ON CONFLICT DO NOTHING;
+      INSERT INTO public.strategy_versions (id, strategy_id, user_id, version_number, definition, definition_hash, engine_version, indicator_version)
+      VALUES ('${testVersionId}', '${testStratId}', '${testUserId}', 1, '{"name":"v1"}', 'hash_test', '3.0.0', '1.0.0') ON CONFLICT DO NOTHING;
+    `);
 
     const job = await createJob(
       testUserId, testVersionId, "TEST", "1d",
@@ -106,6 +119,6 @@ describe("Strategy Jobs — Job Queue Logic", () => {
     expect(claimed?.status).toBe("RUNNING");
     expect(claimed?.workerId).toBe("test-worker-1");
 
-    await failJob(claimed!.id, "TEST_ERROR", "Test failure");
+    await markFailed(claimed!.id, "TEST_ERROR", "Test failure");
   });
 });

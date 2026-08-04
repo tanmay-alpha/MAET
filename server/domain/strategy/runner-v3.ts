@@ -120,8 +120,8 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     : `run-${Date.now().toString(36)}-${(++_runCounter).toString(36)}`;
   const dataHash = computeDataHash(sorted);
 
-  const risk: StrategyRiskConfig = definition.risk;
-  const exec: StrategyExecutionConfig = definition.execution;
+  const risk: StrategyRiskConfig = definition.risk ?? ({} as any);
+  const exec: StrategyExecutionConfig = definition.execution ?? ({ initialCapital: 100000 } as any);
   const initialCapital = request.overrideCapital ?? exec.initialCapital;
 
   // Build indicator state cache
@@ -159,12 +159,15 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     const prevBar = sorted[i - 1];
 
     // Evaluate AST entry/exit signals on PREVIOUS bar (i-1) for NEXT_BAR_OPEN execution on bar i
+    const entryGroup = definition.entry ?? definition.entryRules;
+    const exitGroup = definition.exit ?? definition.exitRules;
+
     const prevEntryEval = !inPosition && cooldownBarsRemaining === 0
-      ? evaluateRuleGroup(definition.entry, cache, i - 1)
+      ? evaluateRuleGroup(entryGroup, cache, i - 1)
       : { matched: false };
 
     const prevExitEval = inPosition
-      ? evaluateRuleGroup(definition.exit, cache, i - 1)
+      ? evaluateRuleGroup(exitGroup, cache, i - 1)
       : { matched: false };
 
     if (inPosition) {
