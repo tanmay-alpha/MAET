@@ -62,26 +62,33 @@ export function generateCombinations(ranges: SweepParameterRange[], maxCombinati
 export function injectParametersIntoAST(definition: StrategyDefinition, params: Record<string, number>): StrategyDefinition {
   const cloned: StrategyDefinition = JSON.parse(JSON.stringify(definition));
 
-  // Override numeric parameters in rules
-  function traverse(obj: any) {
-    if (!obj || typeof obj !== "object") return;
-    if (obj.kind === "INDICATOR" && typeof obj.indicator === "object") {
-      const pName = obj.indicator.params;
-      for (const [k, v] of Object.entries(params)) {
-        if (obj.indicator.type?.toLowerCase()?.includes(k.toLowerCase()) || k.toLowerCase().includes(obj.indicator.type?.toLowerCase())) {
-          obj.indicator.params = { ...obj.indicator.params, period: v, value: v };
+  function applyParamsToRuleGroup(group: any) {
+    if (!group || !Array.isArray(group.rules)) return;
+    for (const rule of group.rules) {
+      if (!rule) continue;
+      // Target rule parameters directly if specified by path or parameter name
+      for (const [paramName, paramVal] of Object.entries(params)) {
+        if (rule.indicator && typeof rule.indicator === "object") {
+          rule.indicator.params = rule.indicator.params || {};
+          rule.indicator.params[paramName] = paramVal;
+        }
+        if (rule.params && typeof rule.params === "object") {
+          rule.params[paramName] = paramVal;
+        }
+        if (rule.left && typeof rule.left === "object" && rule.left.params) {
+          rule.left.params[paramName] = paramVal;
+        }
+        if (rule.right && typeof rule.right === "object" && rule.right.params) {
+          rule.right.params[paramName] = paramVal;
         }
       }
     }
-    for (const key of Object.keys(obj)) {
-      traverse(obj[key]);
-    }
   }
 
-  const entry = cloned.entry ?? cloned.entryRules;
-  const exit = cloned.exit ?? cloned.exitRules;
-  traverse(entry);
-  traverse(exit);
+  const entry = cloned.entry ?? (cloned as any).entryRules;
+  const exit = cloned.exit ?? (cloned as any).exitRules;
+  applyParamsToRuleGroup(entry);
+  applyParamsToRuleGroup(exit);
   return cloned;
 }
 
@@ -89,7 +96,6 @@ async function claimNextSweepJob(workerId: string) {
   const result = await db.execute(sql`
     UPDATE strategy_parameter_sweeps
     SET status = 'RUNNING',
-        started_at = now(),
         updated_at = now()
     WHERE id = (
       SELECT id FROM strategy_parameter_sweeps
@@ -129,23 +135,25 @@ async function fetchCandles(symbol: string, timeframe: string, from: Date, to: D
 }
 
 export async function processSweep(sweep: any): Promise<void> {
-  const sweepId = sweep.id as string;
-  const userId = sweep.user_id as string;
-  const versionId = sweep.strategy_version_id as string;
-  const ranges = (sweep.parameter_ranges ?? []) as SweepParameterRange[];
-  const symbol = (sweep.symbol_or_universe as string) ?? "RELIANCE";
-  const timeframe = (sweep.timeframe as string) ?? "1d";
-  const fromDate = new Date(sweep.from_date ?? Date.now() - 90 * 86400000);
-  const toDate = new Date(sweep.to_date ?? Date.now());
+  const sweepId = (sweep.id ?? sweep.id) as string;
+  const userId = (sweep.userId ?? sweep.user_id) as string;
+  const strategyId = (sweep.strategyId ?? sweep.strategy_id) as string;
+  const rawParams = sweep.parameters ?? sweep.parameter_ranges ?? [];
+  const ranges = (Array.isArray(rawParams) ? rawParams : rawParams.ranges ?? []) as SweepParameterRange[];
+  const symbol = (sweep.symbolOrUniverse ?? sweep.symbol_or_universe ?? "RELIANCE") as string;
+  const timeframe = (sweep.timeframe ?? "1d") as string;
+  const fromDate = new Date(sweep.fromDate ?? sweep.from_date ?? Date.now() - 90 * 86400000);
+  const toDate = new Date(sweep.toDate ?? sweep.to_date ?? Date.now());
 
-  // Fetch base strategy version
-  const [versionRow] = await db
+  // Fetch latest version for strategy
+  const versionRows = await db
     .select()
     .from(strategyVersions)
-    .where(eq(strategyVersions.id, versionId))
+    .where(eq(strategyVersions.strategyId, strategyId))
+    .orderBy(desc(strategyVersions.versionNumber))
     .limit(1);
 
-  if (!versionRow) {
+  if (versionRows.length === 0) {
     await db
       .update(strategyParameterSweeps)
       .set({ status: "FAILED", updatedAt: new Date() })
@@ -153,6 +161,8 @@ export async function processSweep(sweep: any): Promise<void> {
     return;
   }
 
+  const versionRow = versionRows[0];
+  const versionId = versionRow.id;
   const baseDef = versionRow.definition as unknown as StrategyDefinition;
   const combinations = generateCombinations(ranges, 500);
 
@@ -182,8 +192,9 @@ export async function processSweep(sweep: any): Promise<void> {
     });
 
     const m = backtestRes.metrics;
-    if (m.sharpe > bestSharpe) {
-      bestSharpe = m.sharpe;
+    const sharpeVal = isFinite(m.sharpe) ? m.sharpe : 0;
+    if (sharpeVal > bestSharpe) {
+      bestSharpe = sharpeVal;
       bestParams = combo;
     }
 
@@ -193,12 +204,12 @@ export async function processSweep(sweep: any): Promise<void> {
       parameterValues: combo,
       combinationIndex: i,
       resultSummary: {
-        sharpe: m.sharpe.toFixed(4),
-        sortino: m.sortino.toFixed(4),
-        totalReturn: m.totalReturn.toFixed(6),
-        maxDrawdown: m.maxDrawdown.toFixed(6),
-        winRate: m.winRate.toFixed(6),
-        profitFactor: isFinite(m.profitFactor) ? m.profitFactor.toFixed(4) : "0",
+        sharpe: isFinite(m.sharpe) ? m.sharpe.toFixed(4) : "0.0000",
+        sortino: isFinite(m.sortino) ? m.sortino.toFixed(4) : "0.0000",
+        totalReturn: isFinite(m.totalReturn) ? m.totalReturn.toFixed(6) : "0.000000",
+        maxDrawdown: isFinite(m.maxDrawdown) ? m.maxDrawdown.toFixed(6) : "0.000000",
+        winRate: isFinite(m.winRate) ? m.winRate.toFixed(6) : "0.000000",
+        profitFactor: isFinite(m.profitFactor) ? m.profitFactor.toFixed(4) : "0.0000",
         tradeCount: backtestRes.tradeCount,
       },
     });
