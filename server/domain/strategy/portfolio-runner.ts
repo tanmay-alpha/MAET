@@ -71,10 +71,14 @@ export function runPortfolioBacktest(input: PortfolioRunnerInput): PortfolioRunn
   const capital = input.initialCapital ?? input.definition.execution?.initialCapital ?? 100000;
   const maxPositions = input.maxPositions ?? input.definition.portfolio?.maximumOpenPositions ?? 5;
   const maxSymbolExposure = input.maxSymbolExposurePercent ?? input.definition.portfolio?.maxSymbolExposurePercent ?? 20;
+  const maxSectorExposure = input.maxSectorExposurePercent ?? 40;
+  const symbolSectors = input.symbolSectors ?? {};
+  const rankingMethod = input.signalRankingMethod ?? "SYMBOL_ASCENDING";
 
   const symbols = Object.keys(input.symbolCandles).sort();
   const symbolResults: Record<string, V3BacktestRunResult> = {};
-  const allTrades: PortfolioTrade[] = [];
+  const allTrades: (PortfolioTrade & { volume?: number; score?: number; sector?: string })[] = [];
+  let earliestCandleTs = Infinity;
   let excludedSignalsCount = 0;
 
   // Run single-symbol engines for each symbol
@@ -82,12 +86,15 @@ export function runPortfolioBacktest(input: PortfolioRunnerInput): PortfolioRunn
     const candles = input.symbolCandles[sym];
     if (!candles || candles.length < 50) continue;
 
+    const firstTs = new Date(candles[0].ts).getTime();
+    if (firstTs < earliestCandleTs) earliestCandleTs = firstTs;
+
     const singleRes = runBacktestV3({
       strategyVersionId: input.strategyVersionId,
       definition: input.definition,
       symbol: sym,
       candles,
-      overrideCapital: capital / maxPositions,
+      overrideCapital: (capital * (maxSymbolExposure / 100)),
     });
 
     symbolResults[sym] = singleRes;
@@ -103,31 +110,78 @@ export function runPortfolioBacktest(input: PortfolioRunnerInput): PortfolioRunn
         netPnl: t.netPnl,
         fees: t.fees,
         returnPercent: t.return,
+        volume: t.mfe, // use mfe as proxy volume or score if volume unattached
+        score: t.netPnl,
+        sector: symbolSectors[sym] ?? "GENERAL",
       });
     }
   }
 
-  // Sort trades chronologically
-  allTrades.sort((a, b) => a.entryTimestamp - b.entryTimestamp);
-
-  // Filter trades by position limit and exposure rules
-  const acceptedTrades: PortfolioTrade[] = [];
-  const activePositionsByTime: { symbol: string; exitTs: number }[] = [];
-
-  for (const trade of allTrades) {
-    // Remove expired active positions
-    const active = activePositionsByTime.filter((p) => p.exitTs > trade.entryTimestamp);
-    if (active.length < maxPositions) {
-      acceptedTrades.push(trade);
-      activePositionsByTime.push({ symbol: trade.symbol, exitTs: trade.exitTimestamp });
-    } else {
-      excludedSignalsCount++;
-    }
+  // Fallback timestamp if no valid candles found
+  if (earliestCandleTs === Infinity) {
+    earliestCandleTs = 1700000000000;
   }
 
-  // Calculate aggregated equity curve
+  // Sort trades chronologically, then rank by specified ranking method for simultaneous entries
+  allTrades.sort((a, b) => {
+    if (a.entryTimestamp !== b.entryTimestamp) return a.entryTimestamp - b.entryTimestamp;
+    const ranked = rankSignals([a, b], rankingMethod);
+    return ranked[0].symbol === a.symbol ? -1 : 1;
+  });
+
+  // Filter trades by shared cash, position limit, and sector/symbol exposure rules
+  const acceptedTrades: PortfolioTrade[] = [];
+  const activePositionsByTime: { symbol: string; exitTs: number; sector: string; capitalAllocated: number }[] = [];
+
+  let availableCash = capital;
+
+  for (const trade of allTrades) {
+    // Release capital from expired active positions
+    const remainingActive = activePositionsByTime.filter((p) => {
+      if (p.exitTs <= trade.entryTimestamp) {
+        availableCash += p.capitalAllocated;
+        return false;
+      }
+      return true;
+    });
+
+    activePositionsByTime.length = 0;
+    activePositionsByTime.push(...remainingActive);
+
+    // Enforce max open positions
+    if (activePositionsByTime.length >= maxPositions) {
+      excludedSignalsCount++;
+      continue;
+    }
+
+    // Enforce sector exposure limit
+    const sectorCount = activePositionsByTime.filter((p) => p.sector === (trade.sector ?? "GENERAL")).length;
+    const currentSectorExposurePct = (sectorCount / Math.max(1, maxPositions)) * 100;
+    if (currentSectorExposurePct >= maxSectorExposure) {
+      excludedSignalsCount++;
+      continue;
+    }
+
+    // Allocate position capital
+    const positionCapital = Math.min(availableCash, capital * (maxSymbolExposure / 100));
+    if (positionCapital <= 0 || availableCash < positionCapital * 0.5) {
+      excludedSignalsCount++;
+      continue;
+    }
+
+    availableCash -= positionCapital;
+    acceptedTrades.push(trade);
+    activePositionsByTime.push({
+      symbol: trade.symbol,
+      exitTs: trade.exitTimestamp,
+      sector: trade.sector ?? "GENERAL",
+      capitalAllocated: positionCapital,
+    });
+  }
+
+  // Calculate aggregated equity curve starting at earliest candle timestamp
   let currentEquity = capital;
-  const equityCurve: { timestamp: number; equity: number }[] = [{ timestamp: Date.now() - 90 * 86400000, equity: capital }];
+  const equityCurve: { timestamp: number; equity: number }[] = [{ timestamp: earliestCandleTs, equity: capital }];
   let maxEq = capital;
   let maxDD = 0;
 
