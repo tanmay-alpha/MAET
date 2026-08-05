@@ -15,6 +15,9 @@ import {
   strategyExecutionDecisions,
   strategyVersions,
   candles,
+  paperAccounts,
+  paperPositions,
+  userNotifications,
 } from "../db/schema";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { evaluateRuleGroup } from "../domain/strategy/ast-evaluator";
@@ -23,13 +26,38 @@ import type { StrategyDefinition } from "../../shared/strategy/ast";
 import type { Candle } from "@shared/types";
 import { createHash } from "crypto";
 
+export interface DeploymentRiskLimits {
+  maxPositions?: number;
+  maxPositionCapital?: number;
+  maxDailyLossPercent?: number;
+  maxDrawdownPercent?: number;
+  maxSectorExposurePercent?: number;
+  maxSymbolExposurePercent?: number;
+  cooldownMinutes?: number;
+}
+
+export interface DeploymentEvaluationContext {
+  id: string;
+  userId: string;
+  strategyVersionId: string;
+  mode: "ALERT_ONLY" | "MANUAL_CONFIRM" | "AUTO_PAPER";
+  universe: string;
+  timeframe: string;
+  status: string;
+  riskLimits: DeploymentRiskLimits;
+  userKillSwitch: boolean;
+  deploymentKillSwitch: boolean;
+  lastEvaluatedAt?: Date | null;
+  lastSignalAt?: Date | null;
+}
+
 export interface DeploymentRiskCheckResult {
   passed: boolean;
   rejectReason?: string;
 }
 
 export function evaluateRiskGate(
-  deployment: any,
+  deployment: DeploymentEvaluationContext | any,
   signal: { type: "ENTRY" | "EXIT"; symbol: string },
   accountCash: number,
   activePositionsCount: number,
@@ -38,14 +66,21 @@ export function evaluateRiskGate(
   if (deployment.status !== "ACTIVE") {
     return { passed: false, rejectReason: "DEPLOYMENT_INACTIVE" };
   }
-  if (deployment.kill_switch_enabled || deployment.killSwitchEnabled) {
+
+  const userKill = deployment.userKillSwitch ?? deployment.user_kill_switch ?? false;
+  const depKill = deployment.deploymentKillSwitch ?? deployment.deployment_kill_switch ?? false;
+  const legacyKill = deployment.killSwitchEnabled ?? deployment.kill_switch_enabled ?? false;
+
+  if (userKill || depKill || legacyKill) {
     return { passed: false, rejectReason: "KILL_SWITCH_ACTIVE" };
   }
+
   if (dataFreshnessMs > 300_000) { // > 5 mins
     return { passed: false, rejectReason: "STALE_MARKET_DATA" };
   }
 
-  const maxPositions = deployment.max_positions ?? deployment.maxPositions ?? 5;
+  const limits = deployment.riskLimits ?? {};
+  const maxPositions = limits.maxPositions ?? deployment.maxPositions ?? deployment.max_positions ?? 5;
   if (signal.type === "ENTRY" && activePositionsCount >= maxPositions) {
     return { passed: false, rejectReason: "MAX_OPEN_POSITIONS_REACHED" };
   }
@@ -71,14 +106,14 @@ export function computeSignalFingerprint(
 }
 
 export async function evaluateDeploymentForBar(
-  deployment: any,
+  deployment: DeploymentEvaluationContext,
   bar: Candle,
   allCandles: Candle[],
 ): Promise<{ signalEvent: any | null; decision: any | null }> {
-  const deploymentId = deployment.id as string;
-  const userId = deployment.user_id as string;
-  const versionId = deployment.strategy_version_id as string;
-  const mode = deployment.mode as "ALERT_ONLY" | "MANUAL_CONFIRM" | "AUTO_PAPER";
+  const deploymentId = deployment.id;
+  const userId = deployment.userId;
+  const versionId = deployment.strategyVersionId;
+  const mode = deployment.mode;
   const symbol = bar.symbol;
   const timeframe = bar.tf;
 
@@ -97,8 +132,8 @@ export async function evaluateDeploymentForBar(
   const barIndex = allCandles.findIndex((c) => c.ts === bar.ts);
   if (barIndex <= 0) return { signalEvent: null, decision: null };
 
-  const entryGroup = definition.entry ?? definition.entryRules;
-  const exitGroup = definition.exit ?? definition.exitRules;
+  const entryGroup = definition.entry ?? (definition as any).entryRules;
+  const exitGroup = definition.exit ?? (definition as any).exitRules;
 
   const entryEval = evaluateRuleGroup(entryGroup, cache, barIndex - 1);
   const exitEval = evaluateRuleGroup(exitGroup, cache, barIndex - 1);
@@ -144,14 +179,41 @@ export async function evaluateDeploymentForBar(
     })
     .returning();
 
+  // Update deployment lastSignalAt
+  await db
+    .update(strategyDeployments)
+    .set({ lastSignalAt: new Date(), updatedAt: new Date() })
+    .where(eq(strategyDeployments.id, deploymentId));
+
   let decision: any = null;
 
   // 4. Mode Routing
   if (mode === "ALERT_ONLY") {
-    // In-app notification, no paper order
-    console.log(`[evaluator] ALERT_ONLY signal for ${symbol} @ ${bar.close}`);
+    // Insert user notification + ALERT_ONLY decision
+    const [dec] = await db
+      .insert(strategyExecutionDecisions)
+      .values({
+        signalId: signalEvent.id,
+        deploymentId,
+        userId,
+        decision: "ALERT_ONLY",
+        reasonCode: "NOTIFICATION_EMITTED",
+        reasonDetails: `Alert signal for ${symbol} @ ₹${bar.close}`,
+      })
+      .returning();
+    decision = dec;
+
+    await db.insert(userNotifications).values({
+      userId,
+      kind: "STRATEGY_SIGNAL",
+      title: `Strategy Alert: ${symbol} ${signalType}`,
+      body: `Deployment emitted ${signalType} signal for ${symbol} at ₹${bar.close} (${timeframe})`,
+      symbol,
+      payload: { deploymentId, signalId: signalEvent.id, price: bar.close },
+    });
   } else if (mode === "MANUAL_CONFIRM") {
-    // Insert proposed execution decision awaiting user confirmation
+    // Insert proposed execution decision awaiting user confirmation with complete payload
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const [dec] = await db
       .insert(strategyExecutionDecisions)
       .values({
@@ -159,13 +221,57 @@ export async function evaluateDeploymentForBar(
         deploymentId,
         userId,
         decision: "PROPOSED",
-        proposedOrder: { action: signalType === "ENTRY" ? "BUY" : "SELL", symbol, quantity: 1 },
+        proposedOrder: {
+          symbol,
+          exchange: "NSE",
+          side: signalType === "ENTRY" ? "BUY" : "SELL",
+          type: "MARKET",
+          quantity: 1,
+          strategyVersionId: versionId,
+          signalId: signalEvent.id,
+          quoteMetadata: { price: bar.close, ts: bar.ts },
+          expiresAt: expiresAt.toISOString(),
+        },
       })
       .returning();
     decision = dec;
   } else if (mode === "AUTO_PAPER") {
-    // Evaluate risk gate
-    const riskRes = evaluateRiskGate(deployment, { type: signalType, symbol }, 50000, 1, 1000);
+    // Check global paper automation feature flag
+    const globalAutomationEnabled = process.env.GLOBAL_PAPER_AUTOMATION_ENABLED === "true";
+    if (!globalAutomationEnabled) {
+      const [dec] = await db
+        .insert(strategyExecutionDecisions)
+        .values({
+          signalId: signalEvent.id,
+          deploymentId,
+          userId,
+          decision: "REJECTED",
+          reasonCode: "GLOBAL_PAPER_AUTOMATION_DISABLED",
+          reasonDetails: "Global paper automation is disabled by default for safety",
+        })
+        .returning();
+      decision = dec;
+      return { signalEvent, decision };
+    }
+
+    // Load actual server-side paper account & positions
+    const [account] = await db
+      .select()
+      .from(paperAccounts)
+      .where(eq(paperAccounts.userId, userId))
+      .limit(1);
+
+    const positions = await db
+      .select()
+      .from(paperPositions)
+      .where(and(eq(paperPositions.userId, userId), sql`${paperPositions.totalShares} > 0`));
+
+    const cashBalance = account ? Number(account.cashBalance) : 0;
+    const activePositionsCount = positions.length;
+    const dataFreshnessMs = Date.now() - new Date(bar.ts).getTime();
+
+    // Evaluate risk gate with real state
+    const riskRes = evaluateRiskGate(deployment, { type: signalType, symbol }, cashBalance, activePositionsCount, dataFreshnessMs);
 
     if (riskRes.passed) {
       // Execute auto paper order via canonical paper trading service
@@ -191,7 +297,16 @@ export async function evaluateDeploymentForBar(
             userId,
             decision: "EXECUTED",
             paperOrderId: orderRes.order.id,
-            proposedOrder: { action: signalType === "ENTRY" ? "BUY" : "SELL", symbol, quantity: 1 },
+            proposedOrder: {
+              symbol,
+              exchange: "NSE",
+              side: signalType === "ENTRY" ? "BUY" : "SELL",
+              type: "MARKET",
+              quantity: 1,
+              strategyVersionId: versionId,
+              signalId: signalEvent.id,
+              quoteMetadata: { price: bar.close, ts: bar.ts },
+            },
           })
           .returning();
         decision = dec;
@@ -204,7 +319,7 @@ export async function evaluateDeploymentForBar(
             userId,
             decision: "REJECTED",
             reasonCode: "PAPER_ORDER_FAILED",
-            reasonDetails: err.message,
+            reasonDetails: err?.message ?? String(err),
           })
           .returning();
         decision = dec;
@@ -235,38 +350,65 @@ async function evaluatorWorkerLoop(): Promise<void> {
 
   while (!isShuttingDown) {
     try {
-      // Poll active deployments
+      // Poll active deployments using typed fields
       const activeDeployments = await db
         .select()
         .from(strategyDeployments)
         .where(eq(strategyDeployments.status, "ACTIVE"));
 
-      for (const dep of activeDeployments) {
-        const sym = dep.universe.includes("|") ? dep.universe.split("|")[0] : dep.universe;
+      for (const depRow of activeDeployments) {
+        const deployment: DeploymentEvaluationContext = {
+          id: depRow.id,
+          userId: depRow.userId,
+          strategyVersionId: depRow.strategyVersionId,
+          mode: depRow.mode as any,
+          universe: depRow.universe,
+          timeframe: depRow.timeframe,
+          status: depRow.status,
+          riskLimits: (depRow.riskLimits as DeploymentRiskLimits) ?? {},
+          userKillSwitch: depRow.userKillSwitch,
+          deploymentKillSwitch: depRow.deploymentKillSwitch,
+          lastEvaluatedAt: depRow.lastEvaluatedAt,
+          lastSignalAt: depRow.lastSignalAt,
+        };
 
-        const barRows = await db
-          .select()
-          .from(candles)
-          .where(and(eq(candles.symbol, sym), eq(candles.timeframe, dep.timeframe)))
-          .orderBy(desc(candles.ts))
-          .limit(100);
+        // Parse universe symbols (supporting '|' and ',' separators)
+        const symbols = deployment.universe
+          .split(/[|,]/)
+          .map((s) => s.trim())
+          .filter(Boolean);
 
-        if (barRows.length > 0) {
-          const barCandles: Candle[] = barRows.reverse().map((r) => ({
-            symbol: r.symbol,
-            tf: r.timeframe as any,
-            ts: r.ts.toISOString(),
-            open: Number(r.open),
-            high: Number(r.high),
-            low: Number(r.low),
-            close: Number(r.close),
-            volume: r.volume ?? 0,
-            source: r.source,
-          }));
+        for (const sym of symbols) {
+          const barRows = await db
+            .select()
+            .from(candles)
+            .where(and(eq(candles.symbol, sym), eq(candles.timeframe, deployment.timeframe)))
+            .orderBy(desc(candles.ts))
+            .limit(100);
 
-          const latestBar = barCandles[barCandles.length - 1];
-          await evaluateDeploymentForBar(dep, latestBar, barCandles);
+          if (barRows.length > 0) {
+            const barCandles: Candle[] = barRows.reverse().map((r) => ({
+              symbol: r.symbol,
+              tf: r.timeframe as any,
+              ts: r.ts.toISOString(),
+              open: Number(r.open),
+              high: Number(r.high),
+              low: Number(r.low),
+              close: Number(r.close),
+              volume: r.volume ?? 0,
+              source: r.source,
+            }));
+
+            const latestBar = barCandles[barCandles.length - 1];
+            await evaluateDeploymentForBar(deployment, latestBar, barCandles);
+          }
         }
+
+        // Update lastEvaluatedAt
+        await db
+          .update(strategyDeployments)
+          .set({ lastEvaluatedAt: new Date(), updatedAt: new Date() })
+          .where(eq(strategyDeployments.id, deployment.id));
       }
       await new Promise((r) => setTimeout(r, 5000));
     } catch (err) {

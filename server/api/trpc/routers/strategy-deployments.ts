@@ -208,35 +208,79 @@ export const strategyDeploymentsRouter = createRouter({
         .where(and(eq(strategyExecutionDecisions.id, input.decisionId), eq(strategyExecutionDecisions.userId, ctx.userId!)))
         .limit(1);
 
-      if (!decision) throw new TRPCError({ code: "NOT_FOUND", message: "Decision not found" });
+      if (!decision) throw new TRPCError({ code: "NOT_FOUND", message: "Execution decision not found" });
       if (decision.decision !== "PROPOSED" && decision.decision !== "PROPOSAL_CREATED") {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Decision is not a pending proposal" });
       }
       if (decision.paperOrderId) {
-        throw new TRPCError({ code: "CONFLICT", message: "This proposal has already been confirmed" });
+        throw new TRPCError({ code: "CONFLICT", message: "This proposal has already been confirmed and executed" });
       }
 
-      // Fetch signal event for symbol
+      // Fetch signal event
       const [signal] = await db
         .select()
         .from(strategySignalEvents)
         .where(eq(strategySignalEvents.id, decision.signalId))
         .limit(1);
 
-      const symbol = signal?.symbol ?? "RELIANCE";
-      const proposed = (decision.proposedOrder as any) ?? {};
-      const action = (proposed.action as "BUY" | "SELL") ?? "BUY";
+      if (!signal) throw new TRPCError({ code: "NOT_FOUND", message: "Associated signal event not found" });
 
-      // Execute canonical paper order using PaperTradingService instance
+      const proposed = (decision.proposedOrder as any) ?? {};
+      const symbol = proposed.symbol ?? signal.symbol;
+      const side = (proposed.side ?? proposed.action) as "BUY" | "SELL";
+      const qty = Number(proposed.quantity ?? proposed.qty ?? 1);
+
+      if (!symbol || !side || isNaN(qty) || qty <= 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Malformed proposed order payload in execution decision" });
+      }
+
+      if (proposed.expiresAt && new Date(proposed.expiresAt) < new Date()) {
+        await db
+          .update(strategyExecutionDecisions)
+          .set({ decision: "EXPIRED", reasonCode: "PROPOSAL_EXPIRED" })
+          .where(eq(strategyExecutionDecisions.id, decision.id));
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Proposal has expired" });
+      }
+
+      // Load deployment and re-run risk gate
+      const [deploymentRow] = await db
+        .select()
+        .from(strategyDeployments)
+        .where(eq(strategyDeployments.id, decision.deploymentId))
+        .limit(1);
+
+      if (!deploymentRow) throw new TRPCError({ code: "NOT_FOUND", message: "Associated deployment not found" });
+
+      const { evaluateRiskGate } = await import("../../../workers/strategy-evaluator");
       const { PaperTradingService } = await import("../../../modules/paper-trading/service");
       const service = new PaperTradingService();
+      const paperState = await service.getState({ userId: ctx.userId! });
+
+      const riskRes = evaluateRiskGate(
+        deploymentRow,
+        { type: side === "BUY" ? "ENTRY" : "EXIT", symbol },
+        Number(paperState.account.cashBalance),
+        paperState.positions.filter((p: any) => p.totalShares > 0).length,
+        0,
+      );
+
+
+      if (!riskRes.passed) {
+        await db
+          .update(strategyExecutionDecisions)
+          .set({ decision: "REJECTED", reasonCode: riskRes.rejectReason })
+          .where(eq(strategyExecutionDecisions.id, decision.id));
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Risk gate check failed: ${riskRes.rejectReason}` });
+      }
+
+      // Execute canonical paper order using PaperTradingService instance
       const orderRes = await service.placeOrder({
         userId: ctx.userId!,
         command: {
           symbol,
-          side: action,
+          side,
           type: "MARKET",
-          qty: 1,
+          qty,
           idempotencyKey: `manconfirm-${decision.id}`,
         },
       });
@@ -254,4 +298,5 @@ export const strategyDeploymentsRouter = createRouter({
         order: orderRes.order,
       };
     }),
+
 });
