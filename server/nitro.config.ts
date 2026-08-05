@@ -12,6 +12,7 @@ const config = {
   compatibilityDate: "2026-07-03" as const,
   alias: {
     "@shared": resolve(currentDir, "../shared"),
+    "@server": resolve(currentDir, "."),
   },
 
   // Exclude test files, spec files, and domain modules directory

@@ -70,3 +70,5 @@ docs/smoke-test-checklist.md
 # Performance tracing outputs
 trace.json
 *.heapsnapshot
+test-results/
+
