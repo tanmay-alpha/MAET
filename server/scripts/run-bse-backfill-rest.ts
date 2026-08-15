@@ -35,16 +35,7 @@ async function main() {
   console.log(`Loaded ${existingList.length} existing companies from database.`);
 
   // 2. Read Zerodha instruments CSV file
-  const scratchDir = path.join(
-    "C:",
-    "Users",
-    "TANMAY",
-    ".gemini",
-    "antigravity-ide",
-    "brain",
-    "d7266fc6-94b9-40fd-93fc-4e48c060bbd6",
-    "scratch"
-  );
+  const scratchDir = path.join(process.cwd(), "tmp");
   const filePath = path.join(scratchDir, "api-scrip-master.csv");
   let text = "";
   if (fs.existsSync(filePath)) {
