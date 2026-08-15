@@ -51,6 +51,60 @@ export interface PortfolioAnalytics {
   hasData: boolean;
 }
 
+// Constants
+const TRADING_DAYS_PER_YEAR = 252;
+const RISK_FREE_RATE = 0.05; // 5% annual risk-free rate
+
+// Generate mock equity curve from trades for visualization
+function generateEquityCurve(
+  orders: { filledAt?: string; status?: string; side: string; fillPrice: number; qty: number; symbol: string }[],
+  initialCash: number
+): PerformanceDataPoint[] {
+  const filledOrders = orders
+    .filter((o) => o.status === "filled" && o.filledAt)
+    .sort((a, b) => new Date(a.filledAt!).getTime() - new Date(b.filledAt!).getTime());
+
+  if (filledOrders.length === 0) {
+    // Return initial value as single point
+    return [{ date: new Date().toISOString().split("T")[0], value: initialCash, pnl: 0 }];
+  }
+
+  const points: PerformanceDataPoint[] = [];
+  let runningCash = initialCash;
+  const holdings: Map<string, { qty: number; avgPrice: number }> = new Map();
+
+  filledOrders.forEach((order) => {
+    const date = order.filledAt!.split("T")[0];
+
+    if (order.side === "BUY") {
+      runningCash -= order.fillPrice * order.qty;
+      const existing = holdings.get(order.symbol);
+      if (existing) {
+        const totalQty = existing.qty + order.qty;
+        const totalCost = existing.avgPrice * existing.qty + order.fillPrice * order.qty;
+        holdings.set(order.symbol, { qty: totalQty, avgPrice: totalCost / totalQty });
+      } else {
+        holdings.set(order.symbol, { qty: order.qty, avgPrice: order.fillPrice });
+      }
+    } else {
+      runningCash += order.fillPrice * order.qty;
+      const existing = holdings.get(order.symbol);
+      if (existing) {
+        existing.qty -= order.qty;
+        if (existing.qty <= 0) holdings.delete(order.symbol);
+      }
+    }
+  });
+
+  // Simplified: just return the cash position
+  points.push({
+    date: new Date().toISOString().split("T")[0],
+    value: runningCash,
+    pnl: runningCash - initialCash,
+  });
+
+  return points;
+}
 export function usePortfolioAnalytics() {
   const { account, positions, orders, fills } = usePaperAccount();
 

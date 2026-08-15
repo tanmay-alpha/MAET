@@ -97,6 +97,13 @@ export default defineConfig({
         // directory than the alias target. We register an absolute `@`
         // alias here so `@/lib/foo` resolves to `<absolute-root>/src/lib/foo`
         // regardless of which file is doing the importing.
+        // Vite's resolve.alias requires absolute paths — relative values
+        // are "used as-is" (per https://vite.dev/config/shared-options.html).
+        // vite-tsconfig-paths emits relative paths, which fail under
+        // rolldown (Vite v8's bundler) when an import sits in a different
+        // directory than the alias target. We register an absolute `@`
+        // alias here so `@/lib/foo` resolves to `<absolute-root>/src/lib/foo`
+        // regardless of which file is doing the importing.
         const rootPath = mutableConfig.root.replace(/\\/g, "/").replace(/\/+$/, "");
         const existing = Array.isArray(mutableConfig.resolve?.alias)
           ? mutableConfig.resolve.alias

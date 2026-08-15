@@ -121,7 +121,6 @@ export const idempotency = pgTable("idempotency", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  primaryKey({ columns: [table.userId, table.key] }),
   index("idempotency_expiry_idx").on(table.expiresAt),
 ]);
 
@@ -1348,7 +1347,4 @@ export const strategyReplaySessions = pgTable("strategy_replay_sessions", {
   status: varchar("status", { length: 20 }).notNull().default("ACTIVE"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [
-  index("idx_replay_sessions_user").on(table.userId, table.status, table.createdAt),
-]);
-
+});

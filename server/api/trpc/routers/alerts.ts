@@ -6,6 +6,9 @@ import { createRouter, protectedProcedure } from "../core";
 import { AlertDefinitionInputSchema, AlertTypeSchema } from "@server/modules/alerts/contracts";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { db } from "../../../data/drizzle/client";
+import { alerts } from "../../../db/schema";
+import { eq, and } from "drizzle-orm";
 
 export const alertsRouter = createRouter({
   list: protectedProcedure
