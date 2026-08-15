@@ -3,7 +3,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { getCurrentAccessToken } from "@/lib/auth-token";
 import { connectPaperTradingStream } from "@/lib/paper-sse-client";
-import { initializeLegacyPaperBackup } from "@/lib/legacy-paper-account-backup";
 import type {
   PaperAccountRow,
   PaperOrderRow,
@@ -42,9 +41,6 @@ export function usePaperAccount(): UsePaperAccountResult {
   const reconnectAttemptRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    initializeLegacyPaperBackup();
-  }, []);
 
   const stateQuery = useQuery({
     queryKey: ["paperTrading", "state"],

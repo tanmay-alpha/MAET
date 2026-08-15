@@ -267,7 +267,7 @@ export const analysisRouter = createRouter({
       };
     }),
 
-  // Get stock scorecard (deterministic, no LLM required)
+  // Get stock scorecard
   getStockScorecard: protectedProcedure
     .input(z.object({
       symbol: z.string().min(1).max(20),

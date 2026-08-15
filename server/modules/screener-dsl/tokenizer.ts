@@ -1,8 +1,7 @@
 /**
  * Natural-language screener tokenizer.
  *
- * Converts a raw natural-language string into a sequence of tokens that the
- * parser can process. No LLM — purely deterministic tokenization.
+ * Converts a raw screener filter string into a sequence of structured tokens.
  */
 
 export enum TokenKind {

@@ -2,8 +2,7 @@
  * Screener AST types shared between frontend and backend.
  *
  * The AST is the intermediate representation between the natural language
- * parser and the compiled screener criteria. It is always deterministically
- * produced; no LLM is involved.
+ * parser and the compiled screener criteria.
  */
 
 import { z } from "zod";

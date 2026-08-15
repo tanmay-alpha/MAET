@@ -1,10 +1,8 @@
 /**
  * Natural-language screener compiler.
  *
- * Transforms the AST produced by the parser into the validated screener
- * criteria format used by the existing screener engine.
- *
- * No SQL generation. No LLM dependency.
+ * Transforms the AST produced by the parser into validated screener
+ * criteria used by the screening engine.
  */
 
 import type { NlNode, NlLiteralNode, NlCompositeNode } from "@shared/screener/ast";

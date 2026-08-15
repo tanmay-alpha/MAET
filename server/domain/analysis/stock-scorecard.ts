@@ -1,5 +1,5 @@
 /**
- * Stock scorecard domain — deterministic, versioned, no LLM required.
+ * Stock scorecard domain — versioned scoring system.
  *
  * Each score is a percentile-normalised value from 0 to 100, or undefined when
  * the underlying data is insufficient. Missing inputs lower confidence but
