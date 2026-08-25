@@ -22,8 +22,8 @@ export function OrderPanel({
   const [showConfirmation, setShowConfirmation] = useState(false);
 
   useEffect(() => {
-    if (price && !limit) {
-      setLimit(price.toFixed(2));
+    if (price) {
+      setLimit((currentLimit) => currentLimit || price.toFixed(2));
     }
     setMessage("");
   }, [price, symbol]);

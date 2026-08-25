@@ -21,7 +21,7 @@ const env = {
 };
 
 console.log(`[preview] building local Node server for http://${host}:${port}`);
-const build = Bun.spawn(["bun", "run", "build"], {
+const build = Bun.spawn([process.execPath, "run", "build"], {
   cwd: projectDir,
   env,
   stdout: "inherit",

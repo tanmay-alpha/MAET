@@ -2,7 +2,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
-import tsConfigPaths from "vite-tsconfig-paths";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { nitro } from "nitro/vite";
@@ -27,6 +26,9 @@ export default defineConfig({
     tsconfigPaths: true,
     alias: {
       "@": __dirname,
+      // Radix's CommonJS dependencies require tslib. Resolve to its ESM entry
+      // so Rolldown can bundle it without a broken default-export wrapper.
+      "tslib": path.resolve(__dirname, "node_modules/tslib/tslib.es6.mjs"),
     },
     dedupe: [
       "react",
@@ -46,7 +48,6 @@ export default defineConfig({
   },
   plugins: [
     tailwindcss(),
-    tsConfigPaths({ projects: ["./tsconfig.json"] }),
     tanstackStart({
       importProtection: {
         behavior: "error",

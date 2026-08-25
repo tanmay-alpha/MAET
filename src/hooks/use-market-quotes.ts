@@ -227,7 +227,7 @@ export function useMarketQuotes(symbols: string[]) {
     return () => {
       unsubscribe();
     };
-  }, [symbolKey, queryClient, queryKey]);
+  }, [normalized, queryClient, queryKey]);
 
   const quoteMap = useMemo(
     () => new Map((query.data?.quotes ?? []).map((quote) => [quote.symbol, quote])),
