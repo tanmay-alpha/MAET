@@ -46,12 +46,29 @@ export type AngelOneOptionGreek = {
   tradeVolume?: number;
 };
 
+export type AngelOneOptionContractRequest = {
+  name: string;
+  expiry: string;
+};
+
+export type AngelOneOptionContract = {
+  token: string;
+  tradingSymbol: string;
+  name: string;
+  expiry: string;
+  strikePrice: number;
+  optionType: "CE" | "PE";
+  lotSize: number;
+};
+
 const LOGIN_URL =
   "https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword";
 const MARKET_QUOTE_URL =
   "https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/";
 const OPTION_GREEK_URL =
   "https://apiconnect.angelone.in/rest/secure/angelbroking/marketData/v1/optionGreek";
+const INSTRUMENT_MASTER_URL =
+  "https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json";
 
 let activeMarketSession: AngelOneSession | undefined;
 
@@ -266,6 +283,72 @@ export async function getAngelOneOptionGreeks(request: AngelOneOptionGreekReques
       impliedVolatility: parseFiniteNumber(providerGreek.impliedVolatility),
       tradeVolume: parseFiniteNumber(providerGreek.tradeVolume),
     }];
+  });
+}
+
+export async function resolveAngelOneOptionContracts(
+  request: AngelOneOptionContractRequest,
+): Promise<AngelOneOptionContract[]> {
+  const response = await fetch(INSTRUMENT_MASTER_URL, {
+    method: "GET",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`angelone instrument master failed: ${response.status}`);
+  const instrumentMaster = await response.json() as unknown;
+  if (!Array.isArray(instrumentMaster)) {
+    throw new Error("angelone instrument master returned a non-array response");
+  }
+
+  const requestedName = request.name.trim().toUpperCase();
+  const requestedExpiry = request.expiry.trim().toUpperCase();
+  const contracts = instrumentMaster.flatMap((instrument) => {
+    if (!instrument || typeof instrument !== "object") return [];
+    const providerRow = instrument as Record<string, unknown>;
+    if (
+      providerRow.exch_seg !== "NFO" ||
+      (providerRow.instrumenttype !== "OPTIDX" && providerRow.instrumenttype !== "OPTSTK") ||
+      typeof providerRow.name !== "string" ||
+      providerRow.name.trim().toUpperCase() !== requestedName ||
+      typeof providerRow.expiry !== "string" ||
+      providerRow.expiry.trim().toUpperCase() !== requestedExpiry ||
+      typeof providerRow.token !== "string" ||
+      providerRow.token.trim() === "" ||
+      typeof providerRow.symbol !== "string" ||
+      providerRow.symbol.trim() === ""
+    ) return [];
+
+    const rawStrike = parseFiniteNumber(providerRow.strike);
+    const strikePrice = rawStrike === undefined ? undefined : rawStrike / 100;
+    const lotSize = parseFiniteNumber(providerRow.lotsize);
+    const optionTypeMatch = /(?:CE|PE)$/u.exec(providerRow.symbol.trim());
+    const optionType = optionTypeMatch?.[0] as "CE" | "PE" | undefined;
+    if (
+      strikePrice === undefined ||
+      !Number.isFinite(strikePrice) ||
+      strikePrice <= 0 ||
+      lotSize === undefined ||
+      !Number.isInteger(lotSize) ||
+      lotSize <= 0 ||
+      !optionType
+    ) return [];
+
+    return [{
+      token: providerRow.token,
+      tradingSymbol: providerRow.symbol,
+      name: providerRow.name,
+      expiry: providerRow.expiry,
+      strikePrice,
+      optionType,
+      lotSize,
+    }];
+  });
+
+  return contracts.sort((left, right) => {
+    const strikeDifference = left.strikePrice - right.strikePrice;
+    if (strikeDifference !== 0) return strikeDifference;
+    if (left.optionType !== right.optionType) return left.optionType === "CE" ? -1 : 1;
+    const symbolDifference = left.tradingSymbol.localeCompare(right.tradingSymbol);
+    return symbolDifference !== 0 ? symbolDifference : left.token.localeCompare(right.token);
   });
 }
 

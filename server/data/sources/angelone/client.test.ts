@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { generateTotp, getAngelOneMarketQuotes, getAngelOneOptionGreeks, login, parseAngelOneExchangeTime, setAngelOneMarketSession } from "./client";
+import { generateTotp, getAngelOneMarketQuotes, getAngelOneOptionGreeks, login, parseAngelOneExchangeTime, resolveAngelOneOptionContracts, setAngelOneMarketSession } from "./client";
 
 const origFetch = globalThis.fetch;
 
@@ -164,5 +164,67 @@ describe("angelone option greeks", () => {
 
     globalThis.fetch = (async () => Response.json({ status: false, message: "Invalid request" })) as unknown as typeof fetch;
     await expect(getAngelOneOptionGreeks({ name: "NIFTY", expirydate: "28AUG2026" })).rejects.toThrow("angelone option greek returned an unsuccessful response");
+  });
+});
+
+describe("angelone option contracts", () => {
+  it("resolves and sorts valid NFO options from the instrument master", async () => {
+    globalThis.fetch = (async (url) => {
+      expect(String(url)).toBe("https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json");
+      return Response.json([
+        { token: "17500PE", symbol: "NIFTY28AUG2617500PE", name: "NIFTY", expiry: "28AUG2026", strike: "1750000.000000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "570PE", symbol: "ABC28AUG26570PE", name: "ABC", expiry: "28AUG2026", strike: "57000.000000", lotsize: "100", instrumenttype: "OPTSTK", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "17500CE", symbol: "NIFTY28AUG2617500CE", name: " NIFTY ", expiry: "28AUG2026", strike: "1750000.000000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "17600PE", symbol: "NIFTY28AUG2617600PE", name: "NIFTY", expiry: "28AUG2026", strike: "1760000.000000", lotsize: "75", instrumenttype: "OPTSTK", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "CASH", symbol: "NIFTY-EQ", name: "NIFTY", expiry: "", strike: "0.000000", lotsize: "1", instrumenttype: "EQ", exch_seg: "NSE", tick_size: "5.000000" },
+        { token: "FUT", symbol: "NIFTY28AUG26FUT", name: "NIFTY", expiry: "28AUG2026", strike: "0.000000", lotsize: "75", instrumenttype: "FUTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "OTHER-UNDERLYING", symbol: "BANKNIFTY28AUG2617500CE", name: "BANKNIFTY", expiry: "28AUG2026", strike: "1750000.000000", lotsize: "15", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "OTHER-EXPIRY", symbol: "NIFTY04SEP2617500CE", name: "NIFTY", expiry: "04SEP2026", strike: "1750000.000000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "ZERO-STRIKE", symbol: "NIFTY28AUG260CE", name: "NIFTY", expiry: "28AUG2026", strike: "0", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "NEGATIVE-STRIKE", symbol: "NIFTY28AUG2617500PE", name: "NIFTY", expiry: "28AUG2026", strike: "-1750000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "NAN-STRIKE", symbol: "NIFTY28AUG2617500CE", name: "NIFTY", expiry: "28AUG2026", strike: "NaN", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "BAD-LOT", symbol: "NIFTY28AUG2617600CE", name: "NIFTY", expiry: "28AUG2026", strike: "1760000", lotsize: "75.5", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "AMBIGUOUS-SIDE", symbol: "NIFTY28AUG2617600XX", name: "NIFTY", expiry: "28AUG2026", strike: "1760000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "", symbol: "NIFTY28AUG2617600CE", name: "NIFTY", expiry: "28AUG2026", strike: "1760000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: "MISSING-SYMBOL", symbol: "", name: "NIFTY", expiry: "28AUG2026", strike: "1760000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+      ]);
+    }) as unknown as typeof fetch;
+
+    expect(await resolveAngelOneOptionContracts({ name: "nifty", expiry: "28aug2026" })).toEqual([
+      { token: "17500CE", tradingSymbol: "NIFTY28AUG2617500CE", name: " NIFTY ", expiry: "28AUG2026", strikePrice: 17500, optionType: "CE", lotSize: 75 },
+      { token: "17500PE", tradingSymbol: "NIFTY28AUG2617500PE", name: "NIFTY", expiry: "28AUG2026", strikePrice: 17500, optionType: "PE", lotSize: 75 },
+      { token: "17600PE", tradingSymbol: "NIFTY28AUG2617600PE", name: "NIFTY", expiry: "28AUG2026", strikePrice: 17600, optionType: "PE", lotSize: 75 },
+    ]);
+  });
+
+  it("returns no contracts when the master has no matching provider rows", async () => {
+    globalThis.fetch = (async () => Response.json([
+      { token: "123", symbol: "NIFTY28AUG2617500CE", name: "NIFTY", expiry: "28AUG2026", strike: "1750000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+    ])) as unknown as typeof fetch;
+
+    expect(await resolveAngelOneOptionContracts({ name: "NIFTY", expiry: "04SEP2026" })).toEqual([]);
+  });
+
+  it("keeps master HTTP and data-contract failures explicit", async () => {
+    globalThis.fetch = (async () => new Response("upstream unavailable", { status: 503 })) as unknown as typeof fetch;
+    await expect(resolveAngelOneOptionContracts({ name: "NIFTY", expiry: "28AUG2026" })).rejects.toThrow("angelone instrument master failed: 503");
+
+    globalThis.fetch = (async () => Response.json({ status: true, data: [] })) as unknown as typeof fetch;
+    await expect(resolveAngelOneOptionContracts({ name: "NIFTY", expiry: "28AUG2026" })).rejects.toThrow("angelone instrument master returned a non-array response");
+
+    globalThis.fetch = (async () => new Response("not-json", { headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+    await expect(resolveAngelOneOptionContracts({ name: "NIFTY", expiry: "28AUG2026" })).rejects.toThrow();
+  });
+
+  it("does not add unavailable market fields to resolved contracts", async () => {
+    globalThis.fetch = (async () => Response.json([
+      { token: "123", symbol: "NIFTY28AUG2617500CE", name: "NIFTY", expiry: "28AUG2026", strike: "1750000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+    ])) as unknown as typeof fetch;
+
+    const [contract] = await resolveAngelOneOptionContracts({ name: "NIFTY", expiry: "28AUG2026" });
+    expect(contract).not.toHaveProperty("ltp");
+    expect(contract).not.toHaveProperty("openInterest");
+    expect(contract).not.toHaveProperty("delta");
+    expect(contract).not.toHaveProperty("timestamp");
   });
 });
