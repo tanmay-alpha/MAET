@@ -28,10 +28,30 @@ export type AngelOneMarketQuote = {
   changePct?: number;
 };
 
+export type AngelOneOptionGreekRequest = {
+  name: string;
+  expirydate: string;
+};
+
+export type AngelOneOptionGreek = {
+  name: string;
+  expiry: string;
+  strikePrice: number;
+  optionType: "CE" | "PE";
+  delta?: number;
+  gamma?: number;
+  theta?: number;
+  vega?: number;
+  impliedVolatility?: number;
+  tradeVolume?: number;
+};
+
 const LOGIN_URL =
   "https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword";
 const MARKET_QUOTE_URL =
   "https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/";
+const OPTION_GREEK_URL =
+  "https://apiconnect.angelone.in/rest/secure/angelbroking/marketData/v1/optionGreek";
 
 let activeMarketSession: AngelOneSession | undefined;
 
@@ -177,6 +197,76 @@ export async function login(creds: AngelOneCreds): Promise<AngelOneSession> {
 
 export function setAngelOneMarketSession(session: AngelOneSession | undefined): void {
   activeMarketSession = session;
+}
+
+function parseFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" && typeof value !== "string") return undefined;
+  const parsed = typeof value === "string" && value.trim() === "" ? NaN : Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export async function getAngelOneOptionGreeks(request: AngelOneOptionGreekRequest): Promise<AngelOneOptionGreek[]> {
+  const session = activeMarketSession;
+  if (!session) return [];
+  const response = await fetch(OPTION_GREEK_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${session.jwt}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-UserType": "USER",
+      "X-SourceID": "WEB",
+      "X-ClientLocalIP": "127.0.0.1",
+      "X-ClientPublicIP": "127.0.0.1",
+      "X-MACAddress": "00:00:00:00:00:00",
+      "X-PrivateKey": session.apiKey,
+    },
+    body: JSON.stringify(request),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`angelone option greek failed: ${response.status}`);
+  const payload = await response.json() as {
+    status?: boolean;
+    message?: string;
+    data?: Array<{
+      name?: unknown;
+      expiry?: unknown;
+      strikePrice?: unknown;
+      optionType?: unknown;
+      delta?: unknown;
+      gamma?: unknown;
+      theta?: unknown;
+      vega?: unknown;
+      impliedVolatility?: unknown;
+      tradeVolume?: unknown;
+    }>;
+  };
+  if (!payload.status) {
+    if (payload.message?.trim().toLowerCase() === "no data available") return [];
+    throw new Error("angelone option greek returned an unsuccessful response");
+  }
+
+  return (payload.data ?? []).flatMap((providerGreek) => {
+    const name = typeof providerGreek.name === "string" && providerGreek.name.trim();
+    const expiry = typeof providerGreek.expiry === "string" && providerGreek.expiry.trim();
+    const strikePrice = parseFiniteNumber(providerGreek.strikePrice);
+    const optionType = providerGreek.optionType === "CE" || providerGreek.optionType === "PE"
+      ? providerGreek.optionType
+      : undefined;
+    if (!name || !expiry || !strikePrice || strikePrice <= 0 || !optionType) return [];
+    return [{
+      name,
+      expiry,
+      strikePrice,
+      optionType,
+      delta: parseFiniteNumber(providerGreek.delta),
+      gamma: parseFiniteNumber(providerGreek.gamma),
+      theta: parseFiniteNumber(providerGreek.theta),
+      vega: parseFiniteNumber(providerGreek.vega),
+      impliedVolatility: parseFiniteNumber(providerGreek.impliedVolatility),
+      tradeVolume: parseFiniteNumber(providerGreek.tradeVolume),
+    }];
+  });
 }
 
 export async function getAngelOneMarketQuotes(requests: AngelOneQuoteRequest[]): Promise<AngelOneMarketQuote[]> {
