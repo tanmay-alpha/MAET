@@ -9,9 +9,9 @@ import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import {
   paperAccounts, paperOrders, paperPositions,
-  companies, candles, fills, watchlist,
+  companies, candles, fills, paperFills, watchlist,
 } from "../../../db/schema";
-import { eq, desc, and, inArray, sql } from "drizzle-orm";
+import { eq, desc, asc, and, gte, inArray, lte, sql } from "drizzle-orm";
 import { loadQuotes } from "../../../domain/market/quote-service";
 import { getRedis } from "../../../data/redis/client";
 
@@ -104,6 +104,206 @@ function computePositionPnl(fills: Array<{ side: string; qty: number; price: num
   const avgPrice = netQty > 0 ? avgBuyPrice : netQty < 0 ? avgSellPrice : 0;
 
   return { totalQty: netQty, avgPrice, realizedPnl };
+}
+
+const TRADING_DAYS_PER_YEAR = 252;
+const DAILY_RISK_FREE_RATE = 0.065 / TRADING_DAYS_PER_YEAR;
+
+type AnalyticsFill = {
+  symbol: string;
+  exchange: string;
+  side: string;
+  quantity: number;
+  fillPrice: string | number;
+  fees: string | number;
+  realizedPnl: string | number;
+  executedAt: Date;
+};
+
+type BenchmarkCandle = {
+  close: string | number;
+  ts: Date;
+};
+
+function calculatePortfolioAnalytics(
+  initialCash: number,
+  fills: AnalyticsFill[],
+  benchmarkCandles: BenchmarkCandle[],
+) {
+  const positions = new Map<string, { quantity: number; averagePrice: number; fees: number }>();
+  const closedTrades: Array<{ pnl: number; executedAt: Date }> = [];
+
+  for (const fill of [...fills].sort((a, b) => a.executedAt.getTime() - b.executedAt.getTime())) {
+    const quantity = Number(fill.quantity);
+    const price = Number(fill.fillPrice);
+    const fees = Number(fill.fees);
+    const realizedPnl = Number(fill.realizedPnl);
+    if (
+      quantity <= 0 ||
+      !Number.isFinite(price) ||
+      !Number.isFinite(fees) ||
+      !Number.isFinite(realizedPnl)
+    ) continue;
+
+    const signedQuantity = fill.side === "BUY" ? quantity : -quantity;
+    const key = `${fill.exchange}:${fill.symbol}`;
+    const position = positions.get(key);
+
+    if (!position) {
+      positions.set(key, { quantity: signedQuantity, averagePrice: price, fees });
+      continue;
+    }
+
+    if (Math.sign(position.quantity) === Math.sign(signedQuantity)) {
+      const totalQuantity = Math.abs(position.quantity) + quantity;
+      positions.set(key, {
+        quantity: position.quantity + signedQuantity,
+        averagePrice: (position.averagePrice * Math.abs(position.quantity) + price * quantity) / totalQuantity,
+        fees: position.fees + fees,
+      });
+      continue;
+    }
+
+    const openQuantity = Math.abs(position.quantity);
+    const closedQuantity = Math.min(openQuantity, quantity);
+    const openingFees = position.fees * (closedQuantity / openQuantity);
+    const closingFees = fees * (closedQuantity / quantity);
+    closedTrades.push({
+      pnl: realizedPnl - openingFees - closingFees,
+      executedAt: fill.executedAt,
+    });
+
+    const remainingQuantity = position.quantity + signedQuantity;
+    if (remainingQuantity === 0) {
+      positions.delete(key);
+    } else if (Math.sign(remainingQuantity) === Math.sign(position.quantity)) {
+      positions.set(key, {
+        quantity: remainingQuantity,
+        averagePrice: position.averagePrice,
+        fees: position.fees - openingFees,
+      });
+    } else {
+      positions.set(key, {
+        quantity: remainingQuantity,
+        averagePrice: price,
+        fees: fees - closingFees,
+      });
+    }
+  }
+
+  const dailyPnl = new Map<string, number>();
+  for (const trade of closedTrades) {
+    const day = trade.executedAt.toISOString().slice(0, 10);
+    dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + trade.pnl);
+  }
+
+  const dailyReturns = new Map<string, number>();
+  let equity = initialCash;
+  let peak = equity;
+  let maxDrawdown = 0;
+  for (const [day, pnl] of [...dailyPnl.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const previousEquity = equity;
+    equity += pnl;
+    dailyReturns.set(day, previousEquity > 0 ? pnl / previousEquity : 0);
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.max(maxDrawdown, peak > 0 ? (peak - equity) / peak : 0);
+  }
+
+  const returns = [...dailyReturns.values()];
+  const excessReturns = returns.map((value) => value - DAILY_RISK_FREE_RATE);
+  const meanExcessReturn = excessReturns.length > 0
+    ? excessReturns.reduce((sum, value) => sum + value, 0) / excessReturns.length
+    : 0;
+  const standardDeviation = excessReturns.length > 0
+    ? Math.sqrt(excessReturns.reduce((sum, value) => sum + (value - meanExcessReturn) ** 2, 0) / excessReturns.length)
+    : 0;
+  const downsideReturns = excessReturns.filter((value) => value < 0);
+  const downsideDeviation = downsideReturns.length > 0
+    ? Math.sqrt(downsideReturns.reduce((sum, value) => sum + value ** 2, 0) / downsideReturns.length)
+    : 0;
+
+  let benchmarkVariance = 0;
+  let covariance = 0;
+  let beta: number | null = null;
+  let alpha: number | null = null;
+  const benchmarkReturns = new Map<string, number>();
+  const sortedBenchmarkCandles = [...benchmarkCandles].sort((a, b) => a.ts.getTime() - b.ts.getTime());
+  for (let index = 1; index < sortedBenchmarkCandles.length; index++) {
+    const previousClose = Number(sortedBenchmarkCandles[index - 1].close);
+    const close = Number(sortedBenchmarkCandles[index].close);
+    if (previousClose > 0 && Number.isFinite(close)) {
+      benchmarkReturns.set(sortedBenchmarkCandles[index].ts.toISOString().slice(0, 10), (close - previousClose) / previousClose);
+    }
+  }
+
+  const pairedReturns = [...dailyReturns.entries()]
+    .map(([day, portfolioReturn]) => ({ day, portfolioReturn, benchmarkReturn: benchmarkReturns.get(day) }))
+    .filter((pair): pair is { day: string; portfolioReturn: number; benchmarkReturn: number } => pair.benchmarkReturn !== undefined);
+
+  if (pairedReturns.length >= 2) {
+    const meanPortfolioReturn = pairedReturns.reduce((sum, pair) => sum + pair.portfolioReturn, 0) / pairedReturns.length;
+    const meanBenchmarkReturn = pairedReturns.reduce((sum, pair) => sum + pair.benchmarkReturn, 0) / pairedReturns.length;
+    for (const pair of pairedReturns) {
+      const portfolioDifference = pair.portfolioReturn - meanPortfolioReturn;
+      const benchmarkDifference = pair.benchmarkReturn - meanBenchmarkReturn;
+      covariance += portfolioDifference * benchmarkDifference;
+      benchmarkVariance += benchmarkDifference ** 2;
+    }
+    beta = benchmarkVariance > 0 ? covariance / benchmarkVariance : null;
+    alpha = beta === null
+      ? null
+      : (pairedReturns.reduce(
+        (sum, pair) => sum + (pair.portfolioReturn - DAILY_RISK_FREE_RATE) - beta! * (pair.benchmarkReturn - DAILY_RISK_FREE_RATE),
+        0,
+      ) / pairedReturns.length) * TRADING_DAYS_PER_YEAR;
+  } else {
+    // Beta and alpha need at least two aligned NIFTY 50 daily returns.
+  }
+
+  const winningTrades = closedTrades.filter((trade) => trade.pnl > 0);
+  const losingTrades = closedTrades.filter((trade) => trade.pnl < 0);
+  let consecutiveWins = 0;
+  let consecutiveLosses = 0;
+  let currentWins = 0;
+  let currentLosses = 0;
+  for (const trade of closedTrades) {
+    if (trade.pnl > 0) {
+      currentWins++;
+      currentLosses = 0;
+      consecutiveWins = Math.max(consecutiveWins, currentWins);
+    } else if (trade.pnl < 0) {
+      currentLosses++;
+      currentWins = 0;
+      consecutiveLosses = Math.max(consecutiveLosses, currentLosses);
+    } else {
+      currentWins = 0;
+      currentLosses = 0;
+    }
+  }
+
+  const totalWins = winningTrades.reduce((sum, trade) => sum + trade.pnl, 0);
+  const totalLosses = losingTrades.reduce((sum, trade) => sum + trade.pnl, 0);
+  const annualizedReturn = returns.length > 0 && initialCash > 0
+    ? (equity / initialCash) ** (TRADING_DAYS_PER_YEAR / returns.length) - 1
+    : 0;
+
+  return {
+    sharpeRatio: standardDeviation > 0 ? (meanExcessReturn / standardDeviation) * Math.sqrt(TRADING_DAYS_PER_YEAR) : 0,
+    sortinoRatio: downsideDeviation > 0 ? (meanExcessReturn / downsideDeviation) * Math.sqrt(TRADING_DAYS_PER_YEAR) : 0,
+    maxDrawdown,
+    calmarRatio: maxDrawdown > 0 ? annualizedReturn / maxDrawdown : 0,
+    beta,
+    alpha,
+    winRate: closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0,
+    profitFactor: totalLosses < 0 ? totalWins / Math.abs(totalLosses) : totalWins > 0 ? Infinity : 0,
+    avgWin: winningTrades.length > 0 ? totalWins / winningTrades.length : 0,
+    avgLoss: losingTrades.length > 0 ? totalLosses / losingTrades.length : 0,
+    largestWin: winningTrades.length > 0 ? Math.max(...winningTrades.map((trade) => trade.pnl)) : 0,
+    largestLoss: losingTrades.length > 0 ? Math.min(...losingTrades.map((trade) => trade.pnl)) : 0,
+    consecutiveWins,
+    consecutiveLosses,
+    totalTrades: closedTrades.length,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -428,8 +628,6 @@ export const portfolioRouter = createRouter({
 
   getAnalytics: protectedProcedure
     .query(async ({ ctx }) => {
-      // Phase 2: calculate from stored trade history
-      // For now, return zeros but DO NOT swallow errors
       const userOrders = await db.select().from(paperOrders)
         .where(eq(paperOrders.userId, ctx.userId));
 
@@ -442,12 +640,42 @@ export const portfolioRouter = createRouter({
         };
       }
 
-      // TODO: Implement proper analytics calculation in Phase 2
-      return {
-        sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, calmarRatio: 0,
-        beta: 1, alpha: 0, winRate: 0, profitFactor: 0,
-        avgWin: 0, avgLoss: 0, largestWin: 0, largestLoss: 0,
-        consecutiveWins: 0, consecutiveLosses: 0, totalTrades: userOrders.length,
-      };
+      const [account] = await db.select({
+        generation: paperAccounts.generation,
+        initialCash: paperAccounts.initialCash,
+      }).from(paperAccounts).where(eq(paperAccounts.userId, ctx.userId));
+      const generation = account?.generation ?? 1;
+      const userFills = await db.select({
+        symbol: paperFills.symbol,
+        exchange: paperFills.exchange,
+        side: paperFills.side,
+        quantity: paperFills.quantity,
+        fillPrice: paperFills.fillPrice,
+        fees: paperFills.fees,
+        realizedPnl: paperFills.realizedPnl,
+        executedAt: paperFills.executedAt,
+      }).from(paperFills).where(and(
+        eq(paperFills.userId, ctx.userId),
+        eq(paperFills.generation, generation),
+      )).orderBy(asc(paperFills.executedAt));
+
+      const firstFill = userFills[0];
+      const lastFill = userFills[userFills.length - 1];
+      const benchmarkCandles = firstFill && lastFill
+        ? await db.select({ close: candles.close, ts: candles.ts }).from(candles)
+            .where(and(
+              eq(candles.symbol, "NIFTY50"),
+              eq(candles.timeframe, "1d"),
+              gte(candles.ts, new Date(firstFill.executedAt.getTime() - 7 * 24 * 60 * 60 * 1000)),
+              lte(candles.ts, lastFill.executedAt),
+            ))
+            .orderBy(asc(candles.ts))
+        : [];
+
+      return calculatePortfolioAnalytics(
+        Number(account?.initialCash ?? 0),
+        userFills,
+        benchmarkCandles,
+      );
     }),
 });
