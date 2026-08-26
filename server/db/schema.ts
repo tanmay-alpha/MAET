@@ -1,6 +1,8 @@
 import {
   bigint,
   boolean,
+  check,
+  date,
   index,
   integer,
   jsonb,
@@ -638,6 +640,78 @@ export const indexValuations = pgTable("index_valuations", {
   dividendYield: numeric("dividend_yield", { precision: 5, scale: 2 }),
   asOf: timestamp("as_of", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const optionContracts = pgTable("option_contracts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  provider: text("provider").notNull().default("angelone"),
+  exchange: text("exchange").notNull().default("NFO"),
+  token: text("token").notNull(),
+  tradingSymbol: text("trading_symbol").notNull(),
+  underlying: text("underlying").notNull(),
+  expiryDate: date("expiry_date").notNull(),
+  strikePrice: numeric("strike_price", { precision: 18, scale: 4 }).notNull(),
+  optionType: text("option_type").notNull(),
+  lotSize: integer("lot_size").notNull(),
+  instrumentType: text("instrument_type").notNull(),
+  isActive: boolean("is_active").notNull(),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("option_contracts_identity_unique").on(table.provider, table.exchange, table.tradingSymbol),
+  index("option_contracts_provider_exchange_token_idx").on(table.provider, table.exchange, table.token),
+  index("option_contracts_chain_lookup_idx").on(table.underlying, table.expiryDate, table.strikePrice, table.optionType),
+  check("option_contracts_provider_nonempty", sql`btrim(${table.provider}) <> ''`),
+  check("option_contracts_exchange_nonempty", sql`btrim(${table.exchange}) <> ''`),
+  check("option_contracts_token_nonempty", sql`btrim(${table.token}) <> ''`),
+  check("option_contracts_symbol_nonempty", sql`btrim(${table.tradingSymbol}) <> ''`),
+  check("option_contracts_underlying_nonempty", sql`btrim(${table.underlying}) <> ''`),
+  check("option_contracts_strike_positive", sql`${table.strikePrice} > 0`),
+  check("option_contracts_option_type", sql`${table.optionType} IN ('CE', 'PE')`),
+  check("option_contracts_lot_size_positive", sql`${table.lotSize} > 0`),
+]);
+
+export const optionQuoteSnapshots = pgTable("option_quote_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  contractId: uuid("contract_id").notNull().references(() => optionContracts.id),
+  ltp: numeric("ltp", { precision: 18, scale: 4 }),
+  open: numeric("open", { precision: 18, scale: 4 }),
+  high: numeric("high", { precision: 18, scale: 4 }),
+  low: numeric("low", { precision: 18, scale: 4 }),
+  close: numeric("close", { precision: 18, scale: 4 }),
+  volume: bigint("volume", { mode: "number" }),
+  openInterest: bigint("open_interest", { mode: "number" }),
+  netChange: numeric("net_change", { precision: 18, scale: 4 }),
+  percentChange: numeric("percent_change", { precision: 18, scale: 4 }),
+  averagePrice: numeric("average_price", { precision: 18, scale: 4 }),
+  totalBuyQuantity: bigint("total_buy_quantity", { mode: "number" }),
+  totalSellQuantity: bigint("total_sell_quantity", { mode: "number" }),
+  bestBidPrice: numeric("best_bid_price", { precision: 18, scale: 4 }),
+  bestBidQuantity: bigint("best_bid_quantity", { mode: "number" }),
+  bestAskPrice: numeric("best_ask_price", { precision: 18, scale: 4 }),
+  bestAskQuantity: bigint("best_ask_quantity", { mode: "number" }),
+  exchangeFeedAt: timestamp("exchange_feed_at", { withTimezone: true }).notNull(),
+  exchangeTradeAt: timestamp("exchange_trade_at", { withTimezone: true }),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  source: text("source").notNull(),
+}, (table) => [
+  uniqueIndex("option_quote_snapshots_contract_feed_unique").on(table.contractId, table.exchangeFeedAt),
+  index("option_quote_snapshots_contract_feed_idx").on(table.contractId, table.exchangeFeedAt.desc()),
+]);
+
+export const optionGreekSnapshots = pgTable("option_greek_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  contractId: uuid("contract_id").notNull().references(() => optionContracts.id),
+  delta: numeric("delta", { precision: 18, scale: 8 }),
+  gamma: numeric("gamma", { precision: 18, scale: 8 }),
+  theta: numeric("theta", { precision: 18, scale: 8 }),
+  vega: numeric("vega", { precision: 18, scale: 8 }),
+  impliedVolatility: numeric("implied_volatility", { precision: 18, scale: 8 }),
+  tradeVolume: bigint("trade_volume", { mode: "number" }),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  source: text("source").notNull(),
+}, (table) => [
+  index("option_greek_snapshots_contract_observed_idx").on(table.contractId, table.observedAt.desc()),
+]);
 
 // ---------------------------------------------------------------------------
 // Paper Trading Extensions: Ledger, Margin Audit, and Equity Snapshots
