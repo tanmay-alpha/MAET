@@ -129,6 +129,7 @@ describe("Migration 0017 options market data upgrade", () => {
       }
 
       const userId = "00000000-0000-0000-0000-000000000001";
+      await sql.unsafe(`INSERT INTO ${authSchema}.users (id) VALUES ('${userId}') ON CONFLICT DO NOTHING`);
       await sql.unsafe(`INSERT INTO users (id, email) VALUES ('${userId}', 'options_upgrade@maet.com')`);
       await sql.unsafe(`
         INSERT INTO candles (symbol, timeframe, ts, open, high, low, close, volume, source)

@@ -109,7 +109,7 @@ describe("Migration 0016 Additive Upgrade Integration Test Suite", () => {
 
       const migrationsDir = join(process.cwd(), "server/db/migrations");
       const migrationFiles = readdirSync(migrationsDir)
-        .filter((f) => f.endsWith(".sql"))
+        .filter((f) => f.endsWith(".sql") && f <= "0016_strategy_lab.sql")
         .sort();
 
       const scopeSql = (content: string, schema: string) => {
@@ -169,7 +169,7 @@ describe("Migration 0016 Additive Upgrade Integration Test Suite", () => {
       await sql.unsafe(`SET search_path TO ${upgradeSchema}, auth;`);
 
       // Apply migrations 0001..0015 in upgradeSchema
-      for (const file of migrationFiles.filter((f) => !f.startsWith("0016"))) {
+      for (const file of migrationFiles.filter((f) => f < "0016_strategy_lab.sql")) {
         const content = readFileSync(join(migrationsDir, file), "utf-8");
         await sql.unsafe(scopeSql(content, upgradeSchema));
       }
