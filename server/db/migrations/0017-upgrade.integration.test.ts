@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { optionGreekSnapshots, optionQuoteSnapshots } from "../schema";
@@ -90,50 +90,21 @@ describe("Migration 0017 options market data upgrade", () => {
     const postgres = (await import("postgres")).default;
     const sql = postgres(databaseUrl, { max: 1 });
     const isolatedSchema = `test_upgrade_0017_${Date.now()}`;
-    const authSchema = `${isolatedSchema}_auth`;
-
-    const scopeSql = (content: string, schema: string, scopedAuthSchema: string) => content
-      .replace(/schemaname = 'public'/gi, "schemaname = current_schema()")
-      .replace(/public\./g, `${schema}.`)
-      .replace(/auth\./g, `${scopedAuthSchema}.`)
-      .replace(
-        /WHERE typname = '/gi,
-        "WHERE typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema()) AND typname = '",
-      );
 
     try {
-      await sql.unsafe(`CREATE SCHEMA ${authSchema}`);
+      await sql.unsafe(`CREATE SCHEMA ${isolatedSchema}`);
+      await sql.unsafe(`SET search_path TO ${isolatedSchema}`);
       await sql.unsafe(`
-        CREATE TABLE ${authSchema}.users (
-          id uuid PRIMARY KEY DEFAULT gen_random_uuid()
+        CREATE TABLE candles (
+          symbol text NOT NULL,
+          timeframe text NOT NULL,
+          ts timestamptz NOT NULL,
+          close numeric NOT NULL
         )
       `);
       await sql.unsafe(`
-        CREATE FUNCTION ${authSchema}.uid() RETURNS uuid AS $$
-          SELECT COALESCE(
-            NULLIF(current_setting('request.jwt.claim.sub', true), '')::uuid,
-            '00000000-0000-0000-0000-000000000000'::uuid
-          )
-        $$ LANGUAGE sql STABLE
-      `);
-
-      await sql.unsafe(`CREATE SCHEMA ${isolatedSchema}`);
-      await sql.unsafe(`SET search_path TO ${isolatedSchema}, ${authSchema}`);
-
-      const migrationsDir = join(process.cwd(), "server/db/migrations");
-      const existingMigrations = readdirSync(migrationsDir)
-        .filter((file) => file.endsWith(".sql") && file <= "0016_strategy_lab.sql")
-        .sort();
-      for (const file of existingMigrations) {
-        await sql.unsafe(scopeSql(readFileSync(join(migrationsDir, file), "utf-8"), isolatedSchema, authSchema));
-      }
-
-      const userId = "00000000-0000-0000-0000-000000000001";
-      await sql.unsafe(`INSERT INTO ${authSchema}.users (id) VALUES ('${userId}') ON CONFLICT DO NOTHING`);
-      await sql.unsafe(`INSERT INTO users (id, email) VALUES ('${userId}', 'options_upgrade@maet.com')`);
-      await sql.unsafe(`
-        INSERT INTO candles (symbol, timeframe, ts, open, high, low, close, volume, source)
-        VALUES ('NIFTY', '1d', NOW(), 22000, 22100, 21950, 22050, 100000, 'test')
+        INSERT INTO candles (symbol, timeframe, ts, close)
+        VALUES ('NIFTY', '1d', NOW(), 22050)
       `);
 
       const beforeUpgrade = (await sql.unsafe(`
@@ -142,7 +113,7 @@ describe("Migration 0017 options market data upgrade", () => {
         FROM candles
       `))[0];
 
-      await sql.unsafe(scopeSql(migrationSql, isolatedSchema, authSchema));
+      await sql.unsafe(migrationSql.replace(/public\./g, `${isolatedSchema}.`));
 
       const afterUpgrade = (await sql.unsafe(`
         SELECT count(*)::int AS count,
@@ -255,8 +226,7 @@ describe("Migration 0017 options market data upgrade", () => {
     } finally {
       await sql.unsafe("SET search_path TO public");
       await sql.unsafe(`DROP SCHEMA IF EXISTS ${isolatedSchema} CASCADE`);
-      await sql.unsafe(`DROP SCHEMA IF EXISTS ${authSchema} CASCADE`);
       await sql.end();
     }
-  }, 60_000);
+  });
 });
