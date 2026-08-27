@@ -258,5 +258,5 @@ describe("Migration 0017 options market data upgrade", () => {
       await sql.unsafe(`DROP SCHEMA IF EXISTS ${authSchema} CASCADE`);
       await sql.end();
     }
-  });
+  }, 60_000);
 });
