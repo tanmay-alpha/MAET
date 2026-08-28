@@ -16,7 +16,7 @@ export const Route = createFileRoute("/_app/journal")({
 
 function JournalPage() {
   const [activeTab, setActiveTab] = useState<"THEASES" | "REVIEWS">("THEASES");
-  const thesesQuery = (trpc as any).tradeTheses.list.useQuery();
+  const thesesQuery = trpc.tradeTheses.list.useQuery();
   const { positions } = usePaperAccount();
 
   const theses = thesesQuery.data || [];

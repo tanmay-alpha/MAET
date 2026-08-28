@@ -149,6 +149,9 @@ export const trpc = {
         trpcQuery<ListResponse<PaperLedgerEntryRow>>("paperTrading.listLedger", input),
     },
   },
+  tradeTheses: {
+    list: createQueryProcedure<void, any[]>("tradeTheses.list"),
+  },
   workspace: {
     getOverview: {
       query: (): Promise<{ watchlistCount: number; screenerCount: number; unreadNotifications: number }> =>
