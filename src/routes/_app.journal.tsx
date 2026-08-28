@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
+import { usePaperAccount } from "@/hooks/use-paper-account";
 import { trpc } from "@/lib/trpc";
 import { BookOpen, Award, AlertTriangle, CheckCircle2, FileText, ArrowUpRight, ArrowDownRight } from "lucide-react";
 
@@ -16,10 +17,10 @@ export const Route = createFileRoute("/_app/journal")({
 function JournalPage() {
   const [activeTab, setActiveTab] = useState<"THEASES" | "REVIEWS">("THEASES");
   const thesesQuery = (trpc as any).tradeTheses.list.useQuery();
-  const portfolioQuery = (trpc as any).paperTrading.getState.useQuery();
+  const { positions } = usePaperAccount();
 
   const theses = thesesQuery.data || [];
-  const closedPositions = ((portfolioQuery.data as any)?.positions || []).filter((p: any) => p.quantity === 0);
+  const closedPositions = positions.filter((position) => position.totalShares === 0);
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground overflow-y-auto p-6 space-y-6">
@@ -72,7 +73,8 @@ function JournalPage() {
         </div>
         <div className="rounded-lg border border-border bg-panel p-4 space-y-1">
           <div className="text-[10px] text-muted-foreground uppercase">Win Rate (Review)</div>
-          <div className="text-xl font-bold text-primary">100.0%</div>
+          <div className="text-xl font-bold text-muted-foreground">—</div>
+          <div className="text-[10px] text-muted-foreground">Unavailable until review outcomes are recorded.</div>
         </div>
       </div>
 
