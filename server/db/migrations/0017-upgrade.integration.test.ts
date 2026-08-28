@@ -14,6 +14,16 @@ function nonCommentSql(sql: string): string {
     .join("\n");
 }
 
+async function expectRejectedSql(query: PromiseLike<unknown>): Promise<void> {
+  try {
+    await query;
+  } catch {
+    return;
+  }
+
+  throw new Error("Expected SQL query to reject");
+}
+
 describe("Migration 0017 options market data upgrade", () => {
   it("is additive and does not destroy existing data", () => {
     const executableSql = nonCommentSql(migrationSql);
@@ -143,30 +153,30 @@ describe("Migration 0017 options market data upgrade", () => {
         "NIFTY28AUG2622100CE",
       ]);
 
-      await expect(sql.unsafe(`
+      await expectRejectedSql(sql.unsafe(`
         INSERT INTO option_contracts (
           provider, exchange, token, trading_symbol, underlying, expiry_date,
           strike_price, option_type, lot_size, instrument_type, is_active, first_seen_at, last_seen_at
         ) VALUES ('angelone', 'NFO', '104', 'NIFTY28AUG260000CE', 'NIFTY', '2026-08-28', 0, 'CE', 75, 'OPTIDX', true, NOW(), NOW())
-      `)).rejects.toThrow();
-      await expect(sql.unsafe(`
+      `));
+      await expectRejectedSql(sql.unsafe(`
         INSERT INTO option_contracts (
           provider, exchange, token, trading_symbol, underlying, expiry_date,
           strike_price, option_type, lot_size, instrument_type, is_active, first_seen_at, last_seen_at
         ) VALUES ('angelone', 'NFO', '105', 'NIFTY28AUG2622100XX', 'NIFTY', '2026-08-28', 22100, 'XX', 75, 'OPTIDX', true, NOW(), NOW())
-      `)).rejects.toThrow();
-      await expect(sql.unsafe(`
+      `));
+      await expectRejectedSql(sql.unsafe(`
         INSERT INTO option_contracts (
           provider, exchange, token, trading_symbol, underlying, expiry_date,
           strike_price, option_type, lot_size, instrument_type, is_active, first_seen_at, last_seen_at
         ) VALUES ('angelone', 'NFO', '106', 'NIFTY28AUG2622200CE', 'NIFTY', '2026-08-28', 22200, 'CE', 0, 'OPTIDX', true, NOW(), NOW())
-      `)).rejects.toThrow();
-      await expect(sql.unsafe(`
+      `));
+      await expectRejectedSql(sql.unsafe(`
         INSERT INTO option_contracts (
           provider, exchange, token, trading_symbol, underlying, expiry_date,
           strike_price, option_type, lot_size, instrument_type, is_active, first_seen_at, last_seen_at
         ) VALUES ('angelone', 'NFO', '107', 'NIFTY28AUG2622300CE', ' ', '2026-08-28', 22300, 'CE', 75, 'OPTIDX', true, NOW(), NOW())
-      `)).rejects.toThrow();
+      `));
 
       const contractId = (await sql.unsafe(`
         SELECT id FROM option_contracts WHERE trading_symbol = 'NIFTY28AUG2622000CE'
@@ -175,27 +185,27 @@ describe("Migration 0017 options market data upgrade", () => {
         INSERT INTO option_quote_snapshots (contract_id, ltp, exchange_feed_at, received_at, source)
         VALUES ('${contractId}', 101.25, '2026-08-26T09:30:00Z', NOW(), 'angelone')
       `);
-      await expect(sql.unsafe(`
+      await expectRejectedSql(sql.unsafe(`
         INSERT INTO option_quote_snapshots (contract_id, ltp, exchange_feed_at, received_at, source)
         VALUES ('${contractId}', 101.25, '2026-08-26T09:30:00Z', NOW(), 'angelone')
-      `)).rejects.toThrow();
-      await expect(sql.unsafe(`
+      `));
+      await expectRejectedSql(sql.unsafe(`
         UPDATE option_quote_snapshots SET ltp = 102 WHERE contract_id = '${contractId}'
-      `)).rejects.toThrow();
-      await expect(sql.unsafe(`
+      `));
+      await expectRejectedSql(sql.unsafe(`
         DELETE FROM option_quote_snapshots WHERE contract_id = '${contractId}'
-      `)).rejects.toThrow();
+      `));
 
       await sql.unsafe(`
         INSERT INTO option_greek_snapshots (contract_id, delta, observed_at, source)
         VALUES ('${contractId}', 0.5, NOW(), 'angelone')
       `);
-      await expect(sql.unsafe(`
+      await expectRejectedSql(sql.unsafe(`
         UPDATE option_greek_snapshots SET delta = 0.6 WHERE contract_id = '${contractId}'
-      `)).rejects.toThrow();
-      await expect(sql.unsafe(`
+      `));
+      await expectRejectedSql(sql.unsafe(`
         DELETE FROM option_greek_snapshots WHERE contract_id = '${contractId}'
-      `)).rejects.toThrow();
+      `));
 
       const forbiddenColumns = await sql`
         SELECT column_name
