@@ -4,7 +4,8 @@
  */
 
 import { db } from "../../../data/drizzle/client";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { ingestionRuns } from "../../../db/schema";
 import { getLogger } from "../../../infra/logger";
 import type { OHLCVRow } from "../validators/schema-validator";
 
@@ -112,21 +113,14 @@ export async function writeCalculationResultsBatch(rows: IndicatorCacheRow[]): P
 // Ingestion Run Tracking
 // ============================================================================
 
-export async function startIngestionRun(opts: {
+interface StartIngestionRunOptions {
   runId: string;
   source: string;
   pipeline: string;
   metadata?: Record<string, unknown>;
-}): Promise<void> {
-  await db.execute(sql`
-    INSERT INTO ingestion_runs (run_id, source, pipeline, status, metadata)
-    VALUES (${opts.runId}, ${opts.source}, ${opts.pipeline}, 'running',
-            ${opts.metadata ? JSON.stringify(opts.metadata) : null}::jsonb)
-    ON CONFLICT DO NOTHING
-  `);
 }
 
-export async function completeIngestionRun(opts: {
+interface CompleteIngestionRunOptions {
   runId: string;
   status: "success" | "failed" | "partial";
   symbolsAttempted?: number;
@@ -136,19 +130,45 @@ export async function completeIngestionRun(opts: {
   recordsUpdated?: number;
   errorMessage?: string;
   startedAt: Date;
-}): Promise<void> {
-  const durationMs = Date.now() - opts.startedAt.getTime();
-  await db.execute(sql`
-    UPDATE ingestion_runs SET
-      status = ${opts.status},
-      symbols_attempted = ${opts.symbolsAttempted ?? 0},
-      symbols_succeeded = ${opts.symbolsSucceeded ?? 0},
-      symbols_failed = ${opts.symbolsFailed ?? 0},
-      records_inserted = ${opts.recordsInserted ?? 0},
-      records_updated = ${opts.recordsUpdated ?? 0},
-      error_message = ${opts.errorMessage ?? null},
-      completed_at = NOW(),
-      duration_ms = ${durationMs}
-    WHERE run_id = ${opts.runId}
-  `);
+}
+
+export function getIngestionRunStartValues(
+  opts: StartIngestionRunOptions,
+): typeof ingestionRuns.$inferInsert {
+  return {
+    batchId: opts.runId,
+    source: opts.source,
+    dataType: opts.pipeline,
+    operation: "ingest",
+    status: "running",
+    metadata: opts.metadata ?? {},
+  };
+}
+
+export function getIngestionRunCompletionValues(
+  opts: CompleteIngestionRunOptions,
+  completedAt: Date,
+) {
+  return {
+    status: opts.status === "success" ? "succeeded" : opts.status,
+    attempted: opts.symbolsAttempted ?? 0,
+    failed: opts.symbolsFailed ?? 0,
+    inserted: opts.recordsInserted ?? 0,
+    updated: opts.recordsUpdated ?? 0,
+    errorSummary: opts.errorMessage ?? null,
+    completedAt,
+    durationMs: completedAt.getTime() - opts.startedAt.getTime(),
+  };
+}
+
+export async function startIngestionRun(opts: StartIngestionRunOptions): Promise<void> {
+  await db.insert(ingestionRuns).values(getIngestionRunStartValues(opts));
+}
+
+export async function completeIngestionRun(opts: CompleteIngestionRunOptions): Promise<void> {
+  const completedAt = new Date();
+  await db
+    .update(ingestionRuns)
+    .set(getIngestionRunCompletionValues(opts, completedAt))
+    .where(eq(ingestionRuns.batchId, opts.runId));
 }

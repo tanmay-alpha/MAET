@@ -25,7 +25,8 @@ export async function coordinateOHLCVWrite(
   rows: OHLCVRow[],
   source: string,
   pipeline: string,
-  timeframe = "1d"
+  timeframe = "1d",
+  batchId?: string,
 ): Promise<CoordinatorResult> {
   if (rows.length === 0) {
     return {
@@ -54,6 +55,7 @@ export async function coordinateOHLCVWrite(
     await pushToDLQ({
       source,
       pipeline,
+      batchId,
       errorCode: "SUPABASE_WRITE_FAILED",
       errorMessage: (sbResult.reason as Error).message,
       rawPayload: { rowCount: rows.length },

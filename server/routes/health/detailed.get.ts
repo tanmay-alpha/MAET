@@ -6,7 +6,8 @@
 
 import { defineEventHandler } from "h3";
 import { db } from "../../data/drizzle/client";
-import { sql } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
+import { ingestionRuns } from "../../db/schema";
 import { getDLQStats } from "../../workers/ingestion-engine/queue/dead-letter-queue";
 import * as YahooHistory from "../../workers/ingestion-engine/sources/yahoo-history";
 import * as NSEEquities from "../../workers/ingestion-engine/sources/nse-equities";
@@ -42,16 +43,23 @@ export default defineEventHandler(async () => {
           (SELECT COUNT(*) FROM fundamentals) as fundamentals,
           (SELECT COUNT(*) FROM calculation_results) as calculation_results,
           (SELECT COUNT(*) FROM corporate_actions) as corporate_actions,
-          (SELECT COUNT(*) FROM dead_letter_queue WHERE resolved = false) as dlq_pending,
-          (SELECT MAX(started_at) FROM ingestion_runs WHERE status = 'success') as last_successful_run
+          (SELECT COUNT(*) FROM dead_letter_queue WHERE resolved_at IS NULL) as dlq_pending,
+          (SELECT MAX(started_at) FROM ingestion_runs WHERE status IN ('succeeded', 'success')) as last_successful_run
       `).then((rows) => (rows as any[])[0] ?? {}),
       getDLQStats(),
-      db.execute(sql`
-        SELECT source, status, started_at, completed_at, symbols_succeeded, records_inserted
-        FROM ingestion_runs
-        ORDER BY started_at DESC
-        LIMIT 5
-      `).then((rows) => rows as any[]),
+      db
+        .select({
+          source: ingestionRuns.source,
+          status: ingestionRuns.status,
+          startedAt: ingestionRuns.startedAt,
+          completedAt: ingestionRuns.completedAt,
+          symbolsAttempted: ingestionRuns.attempted,
+          symbolsFailed: ingestionRuns.failed,
+          recordsInserted: ingestionRuns.inserted,
+        })
+        .from(ingestionRuns)
+        .orderBy(desc(ingestionRuns.startedAt))
+        .limit(5),
     ]);
 
     const counts = dbCounts.status === "fulfilled" ? dbCounts.value : {};
@@ -99,10 +107,10 @@ export default defineEventHandler(async () => {
       recentRuns: runs.slice(0, 5).map((r) => ({
         source: r.source,
         status: r.status,
-        startedAt: r.started_at,
-        completedAt: r.completed_at,
-        symbolsSucceeded: r.symbols_succeeded,
-        recordsInserted: r.records_inserted,
+        startedAt: r.startedAt,
+        completedAt: r.completedAt,
+        symbolsSucceeded: Math.max(r.symbolsAttempted - r.symbolsFailed, 0),
+        recordsInserted: r.recordsInserted,
       })),
     };
   } catch (err) {

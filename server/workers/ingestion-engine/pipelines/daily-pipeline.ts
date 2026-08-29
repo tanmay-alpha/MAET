@@ -68,6 +68,7 @@ export async function runDailyPipeline(opts: DailyPipelineOptions): Promise<Dail
       await pushToDLQ({
         source: "yahoo-history",
         pipeline: "daily",
+        batchId: runId,
         symbol: fr.symbol,
         errorCode: "FETCH_FAILED",
         errorMessage: fr.error,
@@ -100,13 +101,14 @@ export async function runDailyPipeline(opts: DailyPipelineOptions): Promise<Dail
 
     if (!opts.dryRun) {
       try {
-        const writeResult = await coordinateOHLCVWrite(rangeValid, "yahoo-history", "daily", "1d");
+        const writeResult = await coordinateOHLCVWrite(rangeValid, "yahoo-history", "daily", "1d", runId);
         result.recordsInserted += writeResult.supabase.inserted;
 
         if (writeResult.supabase.failed > 0) {
           await pushToDLQ({
             source: "yahoo-history",
             pipeline: "daily",
+            batchId: runId,
             symbol: fr.symbol,
             errorCode: "WRITE_FAILED",
             errorMessage: `${writeResult.supabase.failed} rows failed to write to Supabase`,

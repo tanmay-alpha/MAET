@@ -7,7 +7,8 @@ import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
-import { sql } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
+import { ingestionRuns } from "../../../db/schema";
 import { getDLQStats, getPendingRetries } from "../../../workers/ingestion-engine/queue/dead-letter-queue";
 import * as YahooHistory from "../../../workers/ingestion-engine/sources/yahoo-history";
 import * as NSEEquities from "../../../workers/ingestion-engine/sources/nse-equities";
@@ -56,13 +57,21 @@ export const ingestionRouter = createRouter({
   getStatus: protectedProcedure.query(async () => {
     const [dlqStats, latestRuns] = await Promise.all([
       getDLQStats(),
-      db.execute(sql`
-        SELECT source, pipeline, status, started_at, completed_at, duration_ms,
-               symbols_attempted, symbols_succeeded, symbols_failed, records_inserted
-        FROM ingestion_runs
-        ORDER BY started_at DESC
-        LIMIT 20
-      `).then((rows) => rows as any[]),
+      db
+        .select({
+          source: ingestionRuns.source,
+          pipeline: ingestionRuns.dataType,
+          status: ingestionRuns.status,
+          startedAt: ingestionRuns.startedAt,
+          completedAt: ingestionRuns.completedAt,
+          durationMs: ingestionRuns.durationMs,
+          symbolsAttempted: ingestionRuns.attempted,
+          symbolsFailed: ingestionRuns.failed,
+          recordsInserted: ingestionRuns.inserted,
+        })
+        .from(ingestionRuns)
+        .orderBy(desc(ingestionRuns.startedAt))
+        .limit(20),
     ]);
 
     const sourceStatus: Record<string, {
@@ -96,13 +105,13 @@ export const ingestionRouter = createRouter({
         source: r.source,
         pipeline: r.pipeline,
         status: r.status,
-        startedAt: r.started_at,
-        completedAt: r.completed_at,
-        durationMs: r.duration_ms,
-        symbolsAttempted: r.symbols_attempted,
-        symbolsSucceeded: r.symbols_succeeded,
-        symbolsFailed: r.symbols_failed,
-        recordsInserted: r.records_inserted,
+        startedAt: r.startedAt,
+        completedAt: r.completedAt,
+        durationMs: r.durationMs,
+        symbolsAttempted: r.symbolsAttempted,
+        symbolsSucceeded: Math.max(r.symbolsAttempted - r.symbolsFailed, 0),
+        symbolsFailed: r.symbolsFailed,
+        recordsInserted: r.recordsInserted,
       })),
     };
   }),
@@ -137,8 +146,8 @@ export const ingestionRouter = createRouter({
         (SELECT COUNT(*) FROM fundamentals) as fundamentals,
         (SELECT COUNT(*) FROM calculation_results) as calculation_results,
         (SELECT COUNT(*) FROM corporate_actions) as corporate_actions,
-        (SELECT COUNT(*) FROM dead_letter_queue WHERE resolved = false) as dlq_pending,
-        (SELECT MAX(started_at) FROM ingestion_runs WHERE status = 'success') as last_successful_run
+        (SELECT COUNT(*) FROM dead_letter_queue WHERE resolved_at IS NULL) as dlq_pending,
+        (SELECT MAX(started_at) FROM ingestion_runs WHERE status IN ('succeeded', 'success')) as last_successful_run
     `);
 
     return (counts as any[])[0] ?? {};
