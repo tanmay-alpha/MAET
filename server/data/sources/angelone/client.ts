@@ -28,6 +28,38 @@ export type AngelOneMarketQuote = {
   changePct?: number;
 };
 
+export type AngelOneFullMarketQuoteExchange = "NSE" | "NFO";
+
+export type AngelOneFullMarketQuoteRequest = {
+  exchange: AngelOneFullMarketQuoteExchange;
+  token: string;
+  tradingSymbol: string;
+};
+
+export type AngelOneFullMarketQuote = {
+  exchange: AngelOneFullMarketQuoteExchange;
+  token: string;
+  tradingSymbol: string;
+  ltp?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+  openInterest?: number;
+  netChange?: number;
+  percentChange?: number;
+  averagePrice?: number;
+  totalBuyQuantity?: number;
+  totalSellQuantity?: number;
+  bestBidPrice?: number;
+  bestBidQuantity?: number;
+  bestAskPrice?: number;
+  bestAskQuantity?: number;
+  exchangeFeedAt: string;
+  exchangeTradeAt?: string;
+};
+
 export type AngelOneOptionGreekRequest = {
   name: string;
   expirydate: string;
@@ -222,6 +254,22 @@ function parseFiniteNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parseNonNegativeNumber(value: unknown): number | undefined {
+  const parsed = parseFiniteNumber(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
+}
+
+function parseNonNegativeSafeInteger(value: unknown): number | undefined {
+  const parsed = parseFiniteNumber(value);
+  return parsed !== undefined && parsed >= 0 && Number.isSafeInteger(parsed)
+    ? parsed
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export async function getAngelOneOptionGreeks(request: AngelOneOptionGreekRequest): Promise<AngelOneOptionGreek[]> {
   const session = activeMarketSession;
   if (!session) return [];
@@ -349,6 +397,184 @@ export async function resolveAngelOneOptionContracts(
     if (left.optionType !== right.optionType) return left.optionType === "CE" ? -1 : 1;
     const symbolDifference = left.tradingSymbol.localeCompare(right.tradingSymbol);
     return symbolDifference !== 0 ? symbolDifference : left.token.localeCompare(right.token);
+  });
+}
+
+function normalizeFullMarketQuoteRequests(
+  requests: AngelOneFullMarketQuoteRequest[],
+): AngelOneFullMarketQuoteRequest[] {
+  const requestsByIdentity = new Map<string, AngelOneFullMarketQuoteRequest>();
+
+  for (const request of requests) {
+    if (request.exchange !== "NSE" && request.exchange !== "NFO") {
+      throw new Error("angelone full market quote exchange must be NSE or NFO");
+    }
+    const token = typeof request.token === "string" ? request.token.trim() : "";
+    if (!token) throw new Error("angelone full market quote token must not be empty");
+    const tradingSymbol = typeof request.tradingSymbol === "string"
+      ? request.tradingSymbol.trim()
+      : "";
+    if (!tradingSymbol) {
+      throw new Error("angelone full market quote trading symbol must not be empty");
+    }
+
+    const identity = `${request.exchange}:${token}`;
+    const existingRequest = requestsByIdentity.get(identity);
+    if (
+      existingRequest &&
+      existingRequest.tradingSymbol !== tradingSymbol
+    ) {
+      throw new Error(`angelone full market quote has conflicting trading symbols for ${identity}`);
+    }
+    if (!existingRequest) {
+      requestsByIdentity.set(identity, {
+        exchange: request.exchange,
+        token,
+        tradingSymbol,
+      });
+    }
+  }
+
+  const uniqueRequests = [...requestsByIdentity.values()];
+  if (uniqueRequests.length > 50) {
+    throw new Error("angelone full market quote accepts a maximum of 50 unique instruments");
+  }
+  return uniqueRequests;
+}
+
+function parseFullMarketQuoteExchange(
+  value: unknown,
+): AngelOneFullMarketQuoteExchange | undefined {
+  if (typeof value !== "string") return undefined;
+  const exchange = value.trim().toUpperCase();
+  return exchange === "NSE" || exchange === "NFO" ? exchange : undefined;
+}
+
+function getTopDepthLevel(
+  depth: unknown,
+  side: "buy" | "sell",
+): Record<string, unknown> | undefined {
+  if (!isRecord(depth) || !Array.isArray(depth[side])) return undefined;
+  const topLevel = depth[side][0];
+  return isRecord(topLevel) ? topLevel : undefined;
+}
+
+export async function getAngelOneFullMarketQuotes(
+  requests: AngelOneFullMarketQuoteRequest[],
+): Promise<AngelOneFullMarketQuote[]> {
+  if (requests.length === 0) return [];
+  const uniqueRequests = normalizeFullMarketQuoteRequests(requests);
+  const session = activeMarketSession;
+  if (!session) return [];
+
+  const exchangeTokens: Partial<Record<AngelOneFullMarketQuoteExchange, string[]>> = {};
+  for (const request of uniqueRequests) {
+    const tokens = exchangeTokens[request.exchange] ?? [];
+    tokens.push(request.token);
+    exchangeTokens[request.exchange] = tokens;
+  }
+
+  const response = await fetch(MARKET_QUOTE_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${session.jwt}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-UserType": "USER",
+      "X-SourceID": "WEB",
+      "X-ClientLocalIP": "127.0.0.1",
+      "X-ClientPublicIP": "127.0.0.1",
+      "X-MACAddress": "00:00:00:00:00:00",
+      "X-PrivateKey": session.apiKey,
+    },
+    body: JSON.stringify({ mode: "FULL", exchangeTokens }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`angelone full market quote failed: ${response.status}`);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error("angelone full market quote returned a malformed response");
+  }
+  if (!isRecord(payload)) {
+    throw new Error("angelone full market quote returned a malformed response");
+  }
+  if (payload.status === false) {
+    throw new Error("angelone full market quote returned an unsuccessful response");
+  }
+  if (
+    payload.status !== true ||
+    !isRecord(payload.data) ||
+    !Array.isArray(payload.data.fetched)
+  ) {
+    throw new Error("angelone full market quote returned a malformed response");
+  }
+
+  const requestedByIdentity = new Map(
+    uniqueRequests.map((request) => [`${request.exchange}:${request.token}`, request]),
+  );
+  const quotesByIdentity = new Map<string, AngelOneFullMarketQuote>();
+
+  for (const fetchedQuote of payload.data.fetched) {
+    if (!isRecord(fetchedQuote)) continue;
+    const exchange = parseFullMarketQuoteExchange(fetchedQuote.exchange);
+    const token = typeof fetchedQuote.symbolToken === "string"
+      ? fetchedQuote.symbolToken.trim()
+      : "";
+    if (!exchange || !token) continue;
+
+    const identity = `${exchange}:${token}`;
+    const requestedQuote = requestedByIdentity.get(identity);
+    if (!requestedQuote) continue;
+
+    if (fetchedQuote.tradingSymbol !== undefined && fetchedQuote.tradingSymbol !== null) {
+      if (typeof fetchedQuote.tradingSymbol !== "string") continue;
+      const providerTradingSymbol = fetchedQuote.tradingSymbol.trim();
+      if (
+        providerTradingSymbol &&
+        providerTradingSymbol.toUpperCase() !== requestedQuote.tradingSymbol.toUpperCase()
+      ) {
+        continue;
+      }
+    }
+
+    const exchangeFeedAt = parseAngelOneExchangeTime(fetchedQuote.exchFeedTime);
+    if (!exchangeFeedAt) continue;
+    const bestBid = getTopDepthLevel(fetchedQuote.depth, "buy");
+    const bestAsk = getTopDepthLevel(fetchedQuote.depth, "sell");
+
+    quotesByIdentity.set(identity, {
+      exchange: requestedQuote.exchange,
+      token: requestedQuote.token,
+      tradingSymbol: requestedQuote.tradingSymbol,
+      ltp: parseNonNegativeNumber(fetchedQuote.ltp),
+      open: parseNonNegativeNumber(fetchedQuote.open),
+      high: parseNonNegativeNumber(fetchedQuote.high),
+      low: parseNonNegativeNumber(fetchedQuote.low),
+      close: parseNonNegativeNumber(fetchedQuote.close),
+      volume: parseNonNegativeSafeInteger(fetchedQuote.tradeVolume),
+      openInterest: parseNonNegativeSafeInteger(fetchedQuote.opnInterest),
+      netChange: parseFiniteNumber(fetchedQuote.netChange),
+      percentChange: parseFiniteNumber(fetchedQuote.percentChange),
+      averagePrice: parseNonNegativeNumber(fetchedQuote.avgPrice),
+      totalBuyQuantity: parseNonNegativeSafeInteger(fetchedQuote.totBuyQuan),
+      totalSellQuantity: parseNonNegativeSafeInteger(fetchedQuote.totSellQuan),
+      bestBidPrice: parseNonNegativeNumber(bestBid?.price),
+      bestBidQuantity: parseNonNegativeSafeInteger(bestBid?.quantity),
+      bestAskPrice: parseNonNegativeNumber(bestAsk?.price),
+      bestAskQuantity: parseNonNegativeSafeInteger(bestAsk?.quantity),
+      exchangeFeedAt,
+      exchangeTradeAt: parseAngelOneExchangeTime(fetchedQuote.exchTradeTime),
+    });
+  }
+
+  return uniqueRequests.flatMap((request) => {
+    const quote = quotesByIdentity.get(`${request.exchange}:${request.token}`);
+    return quote ? [quote] : [];
   });
 }
 
