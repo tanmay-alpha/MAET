@@ -91,6 +91,7 @@ export type AngelOneOptionContract = {
   strikePrice: number;
   optionType: "CE" | "PE";
   lotSize: number;
+  instrumentType: "OPTIDX" | "OPTSTK";
 };
 
 const LOGIN_URL =
@@ -248,6 +249,10 @@ export function setAngelOneMarketSession(session: AngelOneSession | undefined): 
   activeMarketSession = session;
 }
 
+export function hasAngelOneMarketSession(): boolean {
+  return activeMarketSession !== undefined;
+}
+
 function parseFiniteNumber(value: unknown): number | undefined {
   if (typeof value !== "number" && typeof value !== "string") return undefined;
   const parsed = typeof value === "string" && value.trim() === "" ? NaN : Number(value);
@@ -328,8 +333,8 @@ export async function getAngelOneOptionGreeks(request: AngelOneOptionGreekReques
       gamma: parseFiniteNumber(providerGreek.gamma),
       theta: parseFiniteNumber(providerGreek.theta),
       vega: parseFiniteNumber(providerGreek.vega),
-      impliedVolatility: parseFiniteNumber(providerGreek.impliedVolatility),
-      tradeVolume: parseFiniteNumber(providerGreek.tradeVolume),
+      impliedVolatility: parseNonNegativeNumber(providerGreek.impliedVolatility),
+      tradeVolume: parseNonNegativeSafeInteger(providerGreek.tradeVolume),
     }];
   });
 }
@@ -370,6 +375,7 @@ export async function resolveAngelOneOptionContracts(
     const lotSize = parseFiniteNumber(providerRow.lotsize);
     const optionTypeMatch = /(?:CE|PE)$/u.exec(providerRow.symbol.trim());
     const optionType = optionTypeMatch?.[0] as "CE" | "PE" | undefined;
+    const instrumentType = providerRow.instrumenttype as "OPTIDX" | "OPTSTK";
     if (
       strikePrice === undefined ||
       !Number.isFinite(strikePrice) ||
@@ -381,13 +387,14 @@ export async function resolveAngelOneOptionContracts(
     ) return [];
 
     return [{
-      token: providerRow.token,
-      tradingSymbol: providerRow.symbol,
-      name: providerRow.name,
-      expiry: providerRow.expiry,
+      token: providerRow.token.trim(),
+      tradingSymbol: providerRow.symbol.trim(),
+      name: requestedName,
+      expiry: requestedExpiry,
       strikePrice,
       optionType,
       lotSize,
+      instrumentType,
     }];
   });
 

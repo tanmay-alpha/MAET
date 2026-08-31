@@ -4,6 +4,7 @@ import {
   getAngelOneFullMarketQuotes,
   getAngelOneMarketQuotes,
   getAngelOneOptionGreeks,
+  hasAngelOneMarketSession,
   login,
   parseAngelOneExchangeTime,
   resolveAngelOneOptionContracts,
@@ -27,6 +28,14 @@ function activateMarketSession(): void {
     obtainedAt: "2026-08-29T00:00:00.000Z",
   });
 }
+
+describe("angelone market session readiness", () => {
+  it("reports only whether an authenticated market session is active", () => {
+    expect(hasAngelOneMarketSession()).toBe(false);
+    activateMarketSession();
+    expect(hasAngelOneMarketSession()).toBe(true);
+  });
+});
 
 describe("angelone login", () => {
   it("generates the RFC 6238 SHA-1 TOTP vector", () => {
@@ -633,6 +642,40 @@ describe("angelone option greeks", () => {
     expect(greek).not.toHaveProperty("timestamp");
   });
 
+  it("rejects invalid Greek trade volumes while preserving provider zero", async () => {
+    activateMarketSession();
+    globalThis.fetch = (async () => Response.json({
+      status: true,
+      data: [
+        { name: "NIFTY", expiry: "28AUG2026", strikePrice: "24500", optionType: "CE", tradeVolume: "-1" },
+        { name: "NIFTY", expiry: "28AUG2026", strikePrice: "24600", optionType: "CE", tradeVolume: "1.5" },
+        { name: "NIFTY", expiry: "28AUG2026", strikePrice: "24700", optionType: "CE", tradeVolume: "9007199254740992" },
+        { name: "NIFTY", expiry: "28AUG2026", strikePrice: "24800", optionType: "CE", tradeVolume: "0" },
+      ],
+    })) as unknown as typeof fetch;
+
+    const greeks = await getAngelOneOptionGreeks({ name: "NIFTY", expirydate: "28AUG2026" });
+    expect(greeks[0].tradeVolume).toBeUndefined();
+    expect(greeks[1].tradeVolume).toBeUndefined();
+    expect(greeks[2].tradeVolume).toBeUndefined();
+    expect(greeks[3].tradeVolume).toBe(0);
+  });
+
+  it("rejects negative implied volatility while preserving provider zero", async () => {
+    activateMarketSession();
+    globalThis.fetch = (async () => Response.json({
+      status: true,
+      data: [
+        { name: "NIFTY", expiry: "28AUG2026", strikePrice: "24500", optionType: "CE", impliedVolatility: "-0.01" },
+        { name: "NIFTY", expiry: "28AUG2026", strikePrice: "24600", optionType: "CE", impliedVolatility: "0" },
+      ],
+    })) as unknown as typeof fetch;
+
+    const greeks = await getAngelOneOptionGreeks({ name: "NIFTY", expirydate: "28AUG2026" });
+    expect(greeks[0].impliedVolatility).toBeUndefined();
+    expect(greeks[1].impliedVolatility).toBe(0);
+  });
+
   it("returns no provider data without an active session", async () => {
     let called = false;
     globalThis.fetch = (async () => {
@@ -668,7 +711,7 @@ describe("angelone option contracts", () => {
       return Response.json([
         { token: "17500PE", symbol: "NIFTY28AUG2617500PE", name: "NIFTY", expiry: "28AUG2026", strike: "1750000.000000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
         { token: "570PE", symbol: "ABC28AUG26570PE", name: "ABC", expiry: "28AUG2026", strike: "57000.000000", lotsize: "100", instrumenttype: "OPTSTK", exch_seg: "NFO", tick_size: "5.000000" },
-        { token: "17500CE", symbol: "NIFTY28AUG2617500CE", name: " NIFTY ", expiry: "28AUG2026", strike: "1750000.000000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
+        { token: " 17500CE ", symbol: " NIFTY28AUG2617500CE ", name: " NIFTY ", expiry: " 28AUG2026 ", strike: "1750000.000000", lotsize: "75", instrumenttype: "OPTIDX", exch_seg: "NFO", tick_size: "5.000000" },
         { token: "17600PE", symbol: "NIFTY28AUG2617600PE", name: "NIFTY", expiry: "28AUG2026", strike: "1760000.000000", lotsize: "75", instrumenttype: "OPTSTK", exch_seg: "NFO", tick_size: "5.000000" },
         { token: "CASH", symbol: "NIFTY-EQ", name: "NIFTY", expiry: "", strike: "0.000000", lotsize: "1", instrumenttype: "EQ", exch_seg: "NSE", tick_size: "5.000000" },
         { token: "FUT", symbol: "NIFTY28AUG26FUT", name: "NIFTY", expiry: "28AUG2026", strike: "0.000000", lotsize: "75", instrumenttype: "FUTIDX", exch_seg: "NFO", tick_size: "5.000000" },
@@ -685,9 +728,9 @@ describe("angelone option contracts", () => {
     }) as unknown as typeof fetch;
 
     expect(await resolveAngelOneOptionContracts({ name: "nifty", expiry: "28aug2026" })).toEqual([
-      { token: "17500CE", tradingSymbol: "NIFTY28AUG2617500CE", name: " NIFTY ", expiry: "28AUG2026", strikePrice: 17500, optionType: "CE", lotSize: 75 },
-      { token: "17500PE", tradingSymbol: "NIFTY28AUG2617500PE", name: "NIFTY", expiry: "28AUG2026", strikePrice: 17500, optionType: "PE", lotSize: 75 },
-      { token: "17600PE", tradingSymbol: "NIFTY28AUG2617600PE", name: "NIFTY", expiry: "28AUG2026", strikePrice: 17600, optionType: "PE", lotSize: 75 },
+      { token: "17500CE", tradingSymbol: "NIFTY28AUG2617500CE", name: "NIFTY", expiry: "28AUG2026", strikePrice: 17500, optionType: "CE", lotSize: 75, instrumentType: "OPTIDX" },
+      { token: "17500PE", tradingSymbol: "NIFTY28AUG2617500PE", name: "NIFTY", expiry: "28AUG2026", strikePrice: 17500, optionType: "PE", lotSize: 75, instrumentType: "OPTIDX" },
+      { token: "17600PE", tradingSymbol: "NIFTY28AUG2617600PE", name: "NIFTY", expiry: "28AUG2026", strikePrice: 17600, optionType: "PE", lotSize: 75, instrumentType: "OPTSTK" },
     ]);
   });
 
