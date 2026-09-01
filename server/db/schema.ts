@@ -566,27 +566,8 @@ export const paperOutboxEvents = pgTable("paper_outbox_events", {
 ]);
 
 // ---------------------------------------------------------------------------
-// Schema Expansion: Option Chain, Corporate Actions, Shareholding Patterns, Institutional Deals, Index Valuations
+// Schema Expansion: Corporate Actions, Shareholding Patterns, Institutional Deals, Index Valuations
 // ---------------------------------------------------------------------------
-
-export const optionChain = pgTable("option_chain", {
-  symbol: text("symbol").notNull(),
-  expiryDate: timestamp("expiry_date", { withTimezone: true }).notNull(),
-  strikePrice: numeric("strike_price", { precision: 18, scale: 2 }).notNull(),
-  optionType: text("option_type").notNull(), // 'CE' or 'PE'
-  price: numeric("price", { precision: 18, scale: 4 }).notNull(),
-  openInterest: integer("open_interest").notNull().default(0),
-  changeInOi: integer("change_in_oi").notNull().default(0),
-  impliedVolatility: numeric("implied_volatility", { precision: 8, scale: 4 }),
-  delta: numeric("delta", { precision: 6, scale: 4 }),
-  gamma: numeric("gamma", { precision: 6, scale: 4 }),
-  theta: numeric("theta", { precision: 6, scale: 4 }),
-  vega: numeric("vega", { precision: 6, scale: 4 }),
-  asOf: timestamp("as_of", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [
-  primaryKey({ columns: [table.symbol, table.expiryDate, table.strikePrice, table.optionType, table.asOf] }),
-  index("option_chain_symbol_expiry_idx").on(table.symbol, table.expiryDate),
-]);
 
 export const corporateActions = pgTable("corporate_actions", {
   id: text("id").primaryKey().default(sql`gen_random_uuid()::text`),
