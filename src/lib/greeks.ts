@@ -20,6 +20,7 @@ export interface OptionData {
   premium?: number;
   iv?: number;
   riskFreeRate?: number;
+  asOf?: Date;
 }
 
 /**
@@ -52,9 +53,8 @@ function standardNormalPDF(x: number): number {
 /**
  * Calculate days to expiration
  */
-function daysToExpiry(expiry: Date): number {
-  const now = new Date();
-  const diffMs = expiry.getTime() - now.getTime();
+function daysToExpiry(expiry: Date, asOf: Date = new Date()): number {
+  const diffMs = expiry.getTime() - asOf.getTime();
   return Math.max(0.001, diffMs / (1000 * 60 * 60 * 24)); // Convert to days, ensure positive
 }
 
@@ -62,9 +62,9 @@ function daysToExpiry(expiry: Date): number {
  * Calculate all Greeks for an option
  */
 export function calculateGreeks(data: OptionData): Greeks {
-  const { strike, spot, expiry, type, iv = 0.2, riskFreeRate = 0.06 } = data;
+  const { strike, spot, expiry, type, iv = 0.2, riskFreeRate = 0.06, asOf } = data;
 
-  const T = daysToExpiry(expiry) / 365; // Years to expiration
+  const T = daysToExpiry(expiry, asOf) / 365; // Years to expiration
   const r = riskFreeRate;
   const sigma = iv;
 
@@ -126,9 +126,9 @@ export function calculatePCR(callOI: number, putOI: number): number {
  * Calculate theoretical option price using Black-Scholes
  */
 export function calculateOptionPrice(data: OptionData): number {
-  const { strike, spot, expiry, type, iv = 0.2, riskFreeRate = 0.06 } = data;
+  const { strike, spot, expiry, type, iv = 0.2, riskFreeRate = 0.06, asOf } = data;
 
-  const T = daysToExpiry(expiry) / 365;
+  const T = daysToExpiry(expiry, asOf) / 365;
   const r = riskFreeRate;
   const sigma = iv;
 
