@@ -22,6 +22,7 @@ import { strategyBacktestsRouter } from "./routers/strategy-backtests";
 import { strategyOptimisationRouter } from "./routers/strategy-optimisation";
 import { strategyReplayRouter } from "./routers/strategy-replay";
 import { strategyDeploymentsRouter } from "./routers/strategy-deployments";
+import { optionsRouter } from "./routers/options";
 
 export const appRouter = createRouter({
   market: marketRouter,
@@ -48,6 +49,7 @@ export const appRouter = createRouter({
   strategyOptimisation: strategyOptimisationRouter,
   strategyReplay: strategyReplayRouter,
   strategyDeployments: strategyDeploymentsRouter,
+  options: optionsRouter,
 });
 
 export const router = appRouter;

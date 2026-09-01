@@ -9,6 +9,12 @@ import type {
   MatchingReceipt,
   PaperAccountRow,
 } from "../../server/modules/paper-trading/contracts";
+import type {
+  GetLatestOptionChainInput,
+  LatestOptionChainResponse,
+  ListPersistedOptionExpiriesInput,
+  PersistedOptionExpiryView,
+} from "../../server/modules/options/contracts";
 
 export class AuthenticationError extends Error {
   constructor(message = "AUTHENTICATION_REQUIRED") {
@@ -119,6 +125,10 @@ export interface ResetAccountResult {
 }
 
 export const trpc = {
+  options: {
+    listExpiries: createQueryProcedure<ListPersistedOptionExpiriesInput, PersistedOptionExpiryView[]>("options.listExpiries"),
+    getLatestChain: createQueryProcedure<GetLatestOptionChainInput, LatestOptionChainResponse>("options.getLatestChain"),
+  },
   paperTrading: {
     getState: {
       query: (): Promise<PaperTradingState> =>
