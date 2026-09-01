@@ -12,9 +12,11 @@ import { ingestionRuns } from "../../../db/schema";
 import { getDLQStats, getPendingRetries } from "../../../workers/ingestion-engine/queue/dead-letter-queue";
 import * as YahooHistory from "../../../workers/ingestion-engine/sources/yahoo-history";
 import * as NSEEquities from "../../../workers/ingestion-engine/sources/nse-equities";
+import { normalizeAngelOneOptionExpiry } from "../../../modules/options/repository";
 
 // FIX 3: Concurrency guard — only one manual pipeline run at a time
 const runningPipelines = new Map<string, { startedAt: Date; runId: string }>();
+const runningOptionChains = new Set<string>();
 
 function acquirePipelineSlot(source: string): { runId: string; acquired: boolean } {
   const existing = runningPipelines.get(source);
@@ -48,6 +50,23 @@ const ADMIN_USER_IDS = new Set(
 function isAdmin(userId: string | undefined): boolean {
   if (!userId) return false;
   return ADMIN_USER_IDS.has(userId);
+}
+
+function normalizeOptionChainTrigger(input: { underlying: string; expiry: string }) {
+  const underlying = input.underlying.trim().toUpperCase();
+  if (!underlying) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Option-chain underlying is required" });
+  }
+
+  const expiry = input.expiry.trim().toUpperCase();
+  try {
+    normalizeAngelOneOptionExpiry(expiry);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Option-chain expiry is invalid";
+    throw new TRPCError({ code: "BAD_REQUEST", message });
+  }
+
+  return { underlying, expiry };
 }
 
 export const ingestionRouter = createRouter({
@@ -222,6 +241,44 @@ export const ingestionRouter = createRouter({
       } finally {
         // Always release the concurrency slot
         releasePipelineSlot(input.source);
+      }
+    }),
+
+  triggerOptionsChain: protectedProcedure
+    .input(z.object({
+      underlying: z.string().max(32),
+      expiry: z.string().max(16),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      if (!isAdmin(ctx.userId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Admin access required",
+        });
+      }
+
+      const { underlying, expiry } = normalizeOptionChainTrigger(input);
+      const key = `options-chain:${underlying}:${expiry}`;
+      if (runningOptionChains.has(key)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `An options-chain refresh is already running for ${underlying} ${expiry}`,
+        });
+      }
+
+      runningOptionChains.add(key);
+      try {
+        const { runOptionChainIngestion } = await import("../../../workers/ingestion-engine/pipelines/options-chain-pipeline");
+        return await runOptionChainIngestion({ underlying, expiry });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown option-chain pipeline error";
+        console.error(`[ingestion] Options chain ${key} failed:`, error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Options-chain refresh failed: ${message}`,
+        });
+      } finally {
+        runningOptionChains.delete(key);
       }
     }),
 });
