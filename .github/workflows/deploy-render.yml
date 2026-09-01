@@ -17,7 +17,7 @@ jobs:
   verify:
     name: Build backend and verify Render
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -37,14 +37,85 @@ jobs:
       - name: Verify production health endpoint
         shell: bash
         run: |
-          for attempt in {1..12}; do
-            status="$(curl --silent --show-error --output /tmp/maet-health.json --write-out '%{http_code}' --max-time 15 https://maet.onrender.com/api/health || true)"
-            if [[ "$status" == "200" ]]; then
-              cat /tmp/maet-health.json
-              exit 0
+          expected_sha="$GITHUB_SHA"
+          deadline=$((SECONDS + 900))
+          last_http_status="unavailable"
+          last_version=""
+          last_health_status=""
+          last_health_response=""
+
+          while (( SECONDS < deadline )); do
+            http_status="$(curl --silent --show-error --output /tmp/maet-health.json --write-out '%{http_code}' --max-time 15 https://maet.onrender.com/api/health || true)"
+            last_http_status="${http_status:-curl-error}"
+
+            health_fields=()
+            mapfile -t health_fields < <(
+              bun -e '
+                const response = JSON.parse(await Bun.file(process.argv[1]).text());
+                const checks = response.checks;
+                const safeHealthResponse = {
+                  status: response.status,
+                  uptime: response.uptime,
+                  version: response.version,
+                  checks,
+                };
+
+                if (
+                  typeof response.version !== "string" ||
+                  !["ok", "degraded", "down"].includes(response.status) ||
+                  typeof response.uptime !== "number" ||
+                  !checks ||
+                  typeof checks.database !== "boolean" ||
+                  typeof checks.redis !== "boolean" ||
+                  typeof checks.orchestrator !== "boolean" ||
+                  typeof checks.marketData !== "boolean"
+                ) {
+                  process.exit(1);
+                }
+
+                console.log(response.version);
+                console.log(response.status);
+                console.log(JSON.stringify(safeHealthResponse));
+              ' /tmp/maet-health.json 2>/dev/null || true
+            )
+
+            if (( ${#health_fields[@]} == 3 )); then
+              observed_version="${health_fields[0]}"
+              observed_health_status="${health_fields[1]}"
+              last_version="$observed_version"
+              last_health_status="$observed_health_status"
+              last_health_response="${health_fields[2]}"
+
+              if [[ "$http_status" == "200" && "$observed_version" == "$expected_sha" && "$observed_health_status" == "ok" ]]; then
+                echo "Render deployment verified: revision=${observed_version:0:7} status=$observed_health_status"
+                exit 0
+              fi
+
+              if [[ "$observed_version" != "$expected_sha" ]]; then
+                echo "Render still serving previous revision: expected=${expected_sha:0:7} observed=${observed_version:0:7}"
+              elif [[ "$observed_health_status" != "ok" ]]; then
+                echo "Expected revision is live but health is degraded: revision=${observed_version:0:7} status=$observed_health_status"
+              else
+                echo "Render deployment not ready: HTTP $http_status"
+              fi
+            elif [[ "$http_status" == "200" ]]; then
+              echo "Render deployment not ready: HTTP 200 with malformed health response"
+            else
+              echo "Render deployment not ready: HTTP $last_http_status"
             fi
-            echo "Render health attempt $attempt returned HTTP $status"
+
+            if (( SECONDS >= deadline )); then
+              break
+            fi
             sleep 10
           done
-          echo "Render did not return HTTP 200 within the verification window"
+
+          echo "Render deployment verification timed out"
+          echo "expected_sha=$expected_sha"
+          echo "last_http_status=$last_http_status"
+          echo "last_observed_version=${last_version:-unavailable}"
+          echo "last_observed_health_status=${last_health_status:-unavailable}"
+          if [[ -n "$last_health_response" ]]; then
+            echo "last_health_response=$last_health_response"
+          fi
           exit 1
