@@ -195,4 +195,14 @@ describe("Phase 0.1: Financial Integrity Remediation Suite", () => {
     expect(ciYaml).not.toMatch(/run: bun install\s*$/m);
     expect(renderYaml).toContain("bun install --frozen-lockfile");
   });
+
+  it("14. All workflows use the Node 24 checkout action", () => {
+    const ciYaml = readFileSync(join(process.cwd(), ".github/workflows/ci.yml"), "utf-8");
+    const renderYaml = readFileSync(join(process.cwd(), ".github/workflows/deploy-render.yml"), "utf-8");
+
+    expect(ciYaml).not.toContain("actions/checkout@v4");
+    expect(ciYaml).toContain("actions/checkout@v6");
+    expect(renderYaml).not.toContain("actions/checkout@v4");
+    expect(renderYaml).toContain("actions/checkout@v6");
+  });
 });
