@@ -71,6 +71,30 @@ describe("Authenticated tRPC Client", () => {
     expect(capturedHeader).toBe("Bearer test-valid-access-token");
   });
 
+  test("encodes a query input as the tRPC input parameter", async () => {
+    const session = {
+      currentSession: {
+        access_token: "test-options-token",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      },
+    };
+    window.localStorage.setItem("supabase.auth.token", JSON.stringify(session));
+
+    let capturedUrl = "";
+    globalThis.fetch = mock(async (url: string | URL | Request) => {
+      capturedUrl = String(url);
+      return new Response(JSON.stringify({ result: { data: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await trpc.options.listExpiries.query({ underlying: "NIFTY" });
+
+    const requestUrl = new URL(capturedUrl, "http://localhost");
+    expect(requestUrl.searchParams.get("input")).toBe(JSON.stringify({ underlying: "NIFTY" }));
+  });
+
   test("sends Bearer token and Content-Type on mutations", async () => {
     const session = {
       currentSession: {

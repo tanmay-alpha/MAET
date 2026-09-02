@@ -55,9 +55,7 @@ async function trpcQuery<T>(path: string, queryParams?: Record<string, any>): Pr
   let url = `/api/trpc/${path}`;
   if (queryParams) {
     const search = new URLSearchParams();
-    for (const [k, v] of Object.entries(queryParams)) {
-      if (v !== undefined) search.set(k, typeof v === "object" ? JSON.stringify(v) : String(v));
-    }
+    search.set("input", JSON.stringify(queryParams));
     const queryString = search.toString();
     if (queryString) url += `?${queryString}`;
   }

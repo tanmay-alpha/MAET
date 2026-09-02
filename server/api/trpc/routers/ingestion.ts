@@ -3,7 +3,7 @@
  * FIX 3: Replaced void fire-and-forget with try/catch, concurrency limit, and proper error reporting.
  */
 
-import { createRouter, protectedProcedure } from "../core";
+import { adminProcedure, createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
@@ -244,19 +244,12 @@ export const ingestionRouter = createRouter({
       }
     }),
 
-  triggerOptionsChain: protectedProcedure
+  triggerOptionsChain: adminProcedure
     .input(z.object({
       underlying: z.string().max(32),
       expiry: z.string().max(16),
     }))
-    .mutation(async ({ input, ctx }) => {
-      if (!isAdmin(ctx.userId)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Admin access required",
-        });
-      }
-
+    .mutation(async ({ input }) => {
       const { underlying, expiry } = normalizeOptionChainTrigger(input);
       const key = `options-chain:${underlying}:${expiry}`;
       if (runningOptionChains.has(key)) {
