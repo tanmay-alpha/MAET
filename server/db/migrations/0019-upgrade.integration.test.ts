@@ -38,7 +38,7 @@ describe("Migration 0019 legacy watchlist retirement", () => {
 
     const postgres = (await import("postgres")).default;
     const sql = postgres(databaseUrl, { max: 1 });
-    const isolatedSchema = `test_upgrade_0019_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`;
+    const isolatedSchema = `t_m0019_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const userA = crypto.randomUUID();
     const userB = crypto.randomUUID();
     const importedWatchlistB = crypto.randomUUID();
