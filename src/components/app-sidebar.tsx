@@ -31,7 +31,7 @@ import {
 
 const researchItems = [
   { title: "Screener", url: "/screener", icon: Table2 },
-  { title: "Watchlists", url: "/terminal", icon: ListFilter },
+  { title: "Watchlists", url: "/watchlists", icon: ListFilter },
 ];
 
 const tradingItems = [

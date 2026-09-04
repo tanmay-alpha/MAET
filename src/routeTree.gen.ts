@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppWorkspaceRouteImport } from './routes/_app.workspace'
+import { Route as AppWatchlistsRouteImport } from './routes/_app.watchlists'
 import { Route as AppUniverseRouteImport } from './routes/_app.universe'
 import { Route as AppTerminalRouteImport } from './routes/_app.terminal'
 import { Route as AppStrategiesRouteImport } from './routes/_app.strategies'
@@ -54,6 +55,11 @@ const IndexRoute = IndexRouteImport.update({
 const AppWorkspaceRoute = AppWorkspaceRouteImport.update({
   id: '/workspace',
   path: '/workspace',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppWatchlistsRoute = AppWatchlistsRouteImport.update({
+  id: '/watchlists',
+  path: '/watchlists',
   getParentRoute: () => AppRoute,
 } as any)
 const AppUniverseRoute = AppUniverseRouteImport.update({
@@ -224,6 +230,7 @@ export interface FileRoutesByFullPath {
   '/strategies': typeof AppStrategiesRouteWithChildren
   '/terminal': typeof AppTerminalRoute
   '/universe': typeof AppUniverseRoute
+  '/watchlists': typeof AppWatchlistsRoute
   '/workspace': typeof AppWorkspaceRoute
   '/admin/data-quality': typeof AppAdminDataQualityRoute
   '/chart/$symbol': typeof AppChartSymbolRoute
@@ -257,6 +264,7 @@ export interface FileRoutesByTo {
   '/strategies': typeof AppStrategiesRouteWithChildren
   '/terminal': typeof AppTerminalRoute
   '/universe': typeof AppUniverseRoute
+  '/watchlists': typeof AppWatchlistsRoute
   '/workspace': typeof AppWorkspaceRoute
   '/admin/data-quality': typeof AppAdminDataQualityRoute
   '/chart/$symbol': typeof AppChartSymbolRoute
@@ -292,6 +300,7 @@ export interface FileRoutesById {
   '/_app/strategies': typeof AppStrategiesRouteWithChildren
   '/_app/terminal': typeof AppTerminalRoute
   '/_app/universe': typeof AppUniverseRoute
+  '/_app/watchlists': typeof AppWatchlistsRoute
   '/_app/workspace': typeof AppWorkspaceRoute
   '/_app/admin/data-quality': typeof AppAdminDataQualityRoute
   '/_app/chart/$symbol': typeof AppChartSymbolRoute
@@ -327,6 +336,7 @@ export interface FileRouteTypes {
     | '/strategies'
     | '/terminal'
     | '/universe'
+    | '/watchlists'
     | '/workspace'
     | '/admin/data-quality'
     | '/chart/$symbol'
@@ -360,6 +370,7 @@ export interface FileRouteTypes {
     | '/strategies'
     | '/terminal'
     | '/universe'
+    | '/watchlists'
     | '/workspace'
     | '/admin/data-quality'
     | '/chart/$symbol'
@@ -394,6 +405,7 @@ export interface FileRouteTypes {
     | '/_app/strategies'
     | '/_app/terminal'
     | '/_app/universe'
+    | '/_app/watchlists'
     | '/_app/workspace'
     | '/_app/admin/data-quality'
     | '/_app/chart/$symbol'
@@ -438,6 +450,13 @@ declare module '@tanstack/react-router' {
       path: '/workspace'
       fullPath: '/workspace'
       preLoaderRoute: typeof AppWorkspaceRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/watchlists': {
+      id: '/_app/watchlists'
+      path: '/watchlists'
+      fullPath: '/watchlists'
+      preLoaderRoute: typeof AppWatchlistsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/universe': {
@@ -695,6 +714,7 @@ interface AppRouteChildren {
   AppStrategiesRoute: typeof AppStrategiesRouteWithChildren
   AppTerminalRoute: typeof AppTerminalRoute
   AppUniverseRoute: typeof AppUniverseRoute
+  AppWatchlistsRoute: typeof AppWatchlistsRoute
   AppWorkspaceRoute: typeof AppWorkspaceRoute
   AppAdminDataQualityRoute: typeof AppAdminDataQualityRoute
   AppChartSymbolRoute: typeof AppChartSymbolRoute
@@ -721,6 +741,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppStrategiesRoute: AppStrategiesRouteWithChildren,
   AppTerminalRoute: AppTerminalRoute,
   AppUniverseRoute: AppUniverseRoute,
+  AppWatchlistsRoute: AppWatchlistsRoute,
   AppWorkspaceRoute: AppWorkspaceRoute,
   AppAdminDataQualityRoute: AppAdminDataQualityRoute,
   AppChartSymbolRoute: AppChartSymbolRoute,
