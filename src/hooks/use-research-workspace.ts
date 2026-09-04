@@ -105,6 +105,8 @@ export function useResearchWorkspace() {
     overview: overviewQuery.data,
     watchlists: watchlistsQuery.data?.items ?? [],
     savedScreeners: savedScreenersQuery.data ?? [],
+    savedScreenersLoading: savedScreenersQuery.isLoading,
+    savedScreenersError: savedScreenersQuery.error,
     recentRuns: recentRunsQuery.data ?? [],
     isLoading: overviewQuery.isLoading || watchlistsQuery.isLoading,
     createWatchlist: createWatchlistMutation.mutateAsync,

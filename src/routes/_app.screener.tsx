@@ -2,10 +2,12 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3, BookmarkPlus, Building2, CandlestickChart, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink,
-  Eye, EyeOff, MoreHorizontal, RefreshCw, Search, SlidersHorizontal, Trash2, X, Zap,
+  Eye, EyeOff, RefreshCw, Search, SlidersHorizontal, Trash2, X, Zap,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { useResearchWorkspace } from "@/hooks/use-research-workspace";
+import type { WorkspaceSavedScreener } from "@/lib/trpc";
 import { fetchMarketCompanies, type MarketCompany, type ScreenerQuery } from "@/lib/market-api";
 import { getTradingViewUrl } from "@/lib/tradingview";
 
@@ -16,7 +18,7 @@ export const Route = createFileRoute("/_app/screener")({
 
 type ViewId = "overview" | "performance" | "technicals" | "valuation" | "profitability" | "financials" | "balance" | "dividends";
 type FilterState = Record<string, string>;
-type SavedView = {
+type LegacySavedView = {
   id: string;
   name: string;
   filters: FilterState;
@@ -25,6 +27,18 @@ type SavedView = {
   sortDir: "asc" | "desc";
   hiddenColumns: string[];
   updatedAt: string;
+};
+type SavedScreenerCriteriaV1 = {
+  schemaVersion: 1;
+  filters: FilterState;
+  view: ViewId;
+  sortBy: string;
+  sortDir: "asc" | "desc";
+  hiddenColumns: string[];
+};
+type SavedScreenerView = {
+  definition: WorkspaceSavedScreener;
+  savedCriteria: SavedScreenerCriteriaV1 | null;
 };
 type Column = {
   id: string;
@@ -65,9 +79,116 @@ const TABS: Array<{ id: ViewId; label: string }> = [
   { id: "balance", label: "Balance Sheet" }, { id: "dividends", label: "Dividends" },
 ];
 
-function loadSavedViews(): SavedView[] {
+const VIEW_IDS = new Set<string>(TABS.map((tab) => tab.id));
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseFilters(value: unknown): FilterState | null {
+  if (!isRecord(value)) return null;
+  const entries = Object.entries(value);
+  if (!entries.every(([, filterValue]) => typeof filterValue === "string")) return null;
+  return Object.fromEntries(entries) as FilterState;
+}
+
+function parseSavedCriteria(value: unknown): SavedScreenerCriteriaV1 | null {
+  if (!isRecord(value)) return null;
+  if (value.schemaVersion !== 1) return null;
+  const filters = parseFilters(value.filters);
+  if (
+    !filters ||
+    typeof value.view !== "string" ||
+    !VIEW_IDS.has(value.view) ||
+    typeof value.sortBy !== "string" ||
+    (value.sortDir !== "asc" && value.sortDir !== "desc") ||
+    !Array.isArray(value.hiddenColumns) ||
+    !value.hiddenColumns.every((column) => typeof column === "string")
+  ) {
+    return null;
+  }
+  return {
+    schemaVersion: 1,
+    filters,
+    view: value.view as ViewId,
+    sortBy: value.sortBy,
+    sortDir: value.sortDir,
+    hiddenColumns: [...new Set(value.hiddenColumns)],
+  };
+}
+
+function createSavedCriteria(
+  filters: FilterState,
+  view: ViewId,
+  sortBy: string,
+  sortDir: "asc" | "desc",
+  hiddenColumns: string[],
+): SavedScreenerCriteriaV1 {
+  const normalizedFilters = Object.fromEntries(
+    Object.entries(filters)
+      .filter(([, value]) => value.trim().length > 0)
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+  return {
+    schemaVersion: 1,
+    filters: normalizedFilters,
+    view,
+    sortBy,
+    sortDir,
+    hiddenColumns: [...new Set(hiddenColumns)].sort(),
+  };
+}
+
+function savedCriteriaKey(criteria: SavedScreenerCriteriaV1): string {
+  return JSON.stringify(createSavedCriteria(
+    criteria.filters,
+    criteria.view,
+    criteria.sortBy,
+    criteria.sortDir,
+    criteria.hiddenColumns,
+  ));
+}
+
+function parseLegacySavedView(value: unknown): LegacySavedView | null {
+  if (!isRecord(value)) return null;
+  const filters = parseFilters(value.filters);
+  if (
+    typeof value.id !== "string" ||
+    typeof value.name !== "string" ||
+    !value.name.trim() ||
+    !filters ||
+    typeof value.tab !== "string" ||
+    !VIEW_IDS.has(value.tab) ||
+    typeof value.sortBy !== "string" ||
+    (value.sortDir !== "asc" && value.sortDir !== "desc") ||
+    !Array.isArray(value.hiddenColumns) ||
+    !value.hiddenColumns.every((column) => typeof column === "string") ||
+    typeof value.updatedAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    name: value.name.trim(),
+    filters,
+    tab: value.tab as ViewId,
+    sortBy: value.sortBy,
+    sortDir: value.sortDir,
+    hiddenColumns: [...new Set(value.hiddenColumns)],
+    updatedAt: value.updatedAt,
+  };
+}
+
+function loadLegacySavedViews(): LegacySavedView[] {
   if (typeof window === "undefined") return [];
-  try { return JSON.parse(localStorage.getItem(SAVED_KEY) ?? "[]") as SavedView[]; } catch { return []; }
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(SAVED_KEY) ?? "[]");
+    return Array.isArray(value)
+      ? value.map(parseLegacySavedView).filter((view): view is LegacySavedView => view !== null)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function numberValue(value: number | undefined, options?: Intl.NumberFormatOptions): string {
@@ -165,6 +286,14 @@ function buildColumns(view: ViewId): Column[] {
 
 function Screener() {
   const navigate = useNavigate();
+  const {
+    savedScreeners,
+    savedScreenersLoading,
+    savedScreenersError,
+    saveScreener,
+    updateScreener,
+    deleteScreener,
+  } = useResearchWorkspace();
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [page, setPage] = useState(1);
@@ -176,11 +305,36 @@ function Screener() {
   const [showSaved, setShowSaved] = useState(false);
   const [showColumns, setShowColumns] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<string[]>([]);
-  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  const [activeSavedScreenerId, setActiveSavedScreenerId] = useState<string | null>(null);
+  const [savedNameDraft, setSavedNameDraft] = useState("");
+  const [showSaveAsNew, setShowSaveAsNew] = useState(false);
+  const [renamingSavedScreenerId, setRenamingSavedScreenerId] = useState<string | null>(null);
+  const [renameSavedScreenerDraft, setRenameSavedScreenerDraft] = useState("");
+  const [legacySavedViews, setLegacySavedViews] = useState<LegacySavedView[]>([]);
+  const [savedAction, setSavedAction] = useState<string | null>(null);
+  const [savedMessage, setSavedMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [sourceMode, setSourceMode] = useState("unknown");
 
-  useEffect(() => setSavedViews(loadSavedViews()), []);
+  // The legacy browser key is read only to offer an explicit one-time account import.
+  useEffect(() => setLegacySavedViews(loadLegacySavedViews()), []);
   useEffect(() => { setPage(1); }, [deferredQuery, filters, sortBy, sortDir]);
+
+  const savedViews = useMemo<SavedScreenerView[]>(
+    () => savedScreeners.map((definition) => ({
+      definition,
+      savedCriteria: parseSavedCriteria(definition.criteria),
+    })),
+    [savedScreeners],
+  );
+  const activeSavedView = savedViews.find(({ definition }) => definition.id === activeSavedScreenerId);
+  const currentSavedCriteria = useMemo(
+    () => createSavedCriteria(filters, activeView, sortBy, sortDir, hiddenColumns),
+    [activeView, filters, hiddenColumns, sortBy, sortDir],
+  );
+  const hasUnsavedChanges = Boolean(
+    activeSavedView?.savedCriteria &&
+    savedCriteriaKey(activeSavedView.savedCriteria) !== savedCriteriaKey(currentSavedCriteria),
+  );
 
   const serverQuery = useMemo<ScreenerQuery>(() => {
     const values: ScreenerQuery = { sortBy, sortDir };
@@ -256,19 +410,115 @@ function Screener() {
     if (sortBy === column.sortBy) setSortDir((current) => current === "asc" ? "desc" : "asc");
     else { setSortBy(column.sortBy); setSortDir("asc"); }
   }
-  function persistSaved(next: SavedView[]) {
-    localStorage.setItem(SAVED_KEY, JSON.stringify(next));
-    setSavedViews(next);
+  async function runSavedAction(name: string, operation: () => Promise<void>) {
+    setSavedAction(name);
+    setSavedMessage(null);
+    try {
+      await operation();
+    } catch (error) {
+      setSavedMessage({
+        kind: "error",
+        text: error instanceof Error ? error.message : "The saved-screener request failed",
+      });
+    } finally {
+      setSavedAction(null);
+    }
   }
-  function saveCurrent() {
-    const name = window.prompt("Name this screener view");
-    if (!name?.trim()) return;
-    const now = new Date().toISOString();
-    persistSaved([...savedViews, { id: crypto.randomUUID(), name: name.trim(), filters, tab: activeView, sortBy, sortDir, hiddenColumns, updatedAt: now }]);
-    setShowSaved(true);
+  async function saveCurrent() {
+    if (!activeSavedScreenerId) {
+      setShowSaved(true);
+      setShowSaveAsNew(true);
+      return;
+    }
+    await runSavedAction("save", async () => {
+      await updateScreener({
+        screenerId: activeSavedScreenerId,
+        criteria: currentSavedCriteria,
+      });
+      setSavedMessage({ kind: "success", text: "Saved view updated." });
+    });
   }
-  function applySaved(view: SavedView) {
-    setFilters(view.filters); setActiveView(view.tab); setSortBy(view.sortBy); setSortDir(view.sortDir); setHiddenColumns(view.hiddenColumns); setShowSaved(false);
+  async function saveAsNew(event: FormEvent) {
+    event.preventDefault();
+    const name = savedNameDraft.trim();
+    if (!name) return;
+    await runSavedAction("save-as-new", async () => {
+      const savedScreener = await saveScreener({ name, criteria: currentSavedCriteria });
+      setActiveSavedScreenerId(savedScreener.id);
+      setSavedNameDraft("");
+      setShowSaveAsNew(false);
+      setSavedMessage({ kind: "success", text: `Saved “${savedScreener.name}” to your account.` });
+    });
+  }
+  async function renameSavedScreener(event: FormEvent, screenerId: string) {
+    event.preventDefault();
+    const name = renameSavedScreenerDraft.trim();
+    if (!name) return;
+    await runSavedAction(`rename:${screenerId}`, async () => {
+      await updateScreener({ screenerId, name });
+      setRenamingSavedScreenerId(null);
+      setRenameSavedScreenerDraft("");
+      setSavedMessage({ kind: "success", text: "Saved view renamed." });
+    });
+  }
+  async function archiveSavedScreener(screenerId: string) {
+    await runSavedAction(`delete:${screenerId}`, async () => {
+      await deleteScreener(screenerId);
+      if (activeSavedScreenerId === screenerId) setActiveSavedScreenerId(null);
+      setSavedMessage({ kind: "success", text: "Saved view deleted." });
+    });
+  }
+  function applySaved(view: SavedScreenerView) {
+    if (!view.savedCriteria) {
+      setSavedMessage({
+        kind: "error",
+        text: "Unsupported saved criteria: this definition cannot be applied by the current Screener.",
+      });
+      return;
+    }
+    setFilters({ ...view.savedCriteria.filters });
+    setActiveView(view.savedCriteria.view);
+    setSortBy(view.savedCriteria.sortBy);
+    setSortDir(view.savedCriteria.sortDir);
+    setHiddenColumns([...view.savedCriteria.hiddenColumns]);
+    setActiveSavedScreenerId(view.definition.id);
+    setSavedMessage(null);
+    setShowSaved(false);
+  }
+  async function importLegacySavedViews() {
+    if (legacySavedViews.length === 0) return;
+    let importedCount = 0;
+    setSavedAction("import");
+    setSavedMessage(null);
+    try {
+      for (const legacyView of legacySavedViews) {
+        await saveScreener({
+          name: legacyView.name,
+          criteria: createSavedCriteria(
+            legacyView.filters,
+            legacyView.tab,
+            legacyView.sortBy,
+            legacyView.sortDir,
+            legacyView.hiddenColumns,
+          ),
+        });
+        importedCount += 1;
+      }
+      localStorage.removeItem(SAVED_KEY);
+      setLegacySavedViews([]);
+      setSavedMessage({
+        kind: "success",
+        text: `Imported ${importedCount} local saved view${importedCount === 1 ? "" : "s"} to your account.`,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "The import request failed";
+      setSavedMessage({
+        kind: "error",
+        text: `Local import stopped after ${importedCount} of ${legacySavedViews.length}. Browser data was kept. ${reason}`,
+      });
+    } finally {
+      setSavedAction(null);
+    }
   }
 
   const presets = [
@@ -340,7 +590,32 @@ function Screener() {
             </span>
             <span className="rounded border border-border bg-background px-2 py-1 text-muted-foreground">Universe {companiesQuery.data?.universeTotal.toLocaleString("en-IN") ?? "—"}</span>
             <span className="rounded border border-border bg-background px-2 py-1 text-muted-foreground">Updated {companiesQuery.data?.generatedAt ? new Date(companiesQuery.data.generatedAt).toLocaleTimeString("en-IN") : "—"}</span>
-            <button type="button" onClick={saveCurrent} className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 hover:bg-accent"><BookmarkPlus className="h-3.5 w-3.5" />Save</button>
+            {activeSavedView && (
+              <span className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
+                {activeSavedView.definition.name}
+              </span>
+            )}
+            {hasUnsavedChanges && <span className="text-amber-300">Unsaved changes</span>}
+            <button
+              type="button"
+              onClick={() => void saveCurrent()}
+              disabled={!activeSavedScreenerId || savedAction !== null}
+              className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Check className="h-3.5 w-3.5" />Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowSaved(true);
+                setShowSaveAsNew(true);
+                setSavedNameDraft("");
+              }}
+              disabled={savedAction !== null}
+              className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 hover:bg-accent disabled:opacity-40"
+            >
+              <BookmarkPlus className="h-3.5 w-3.5" />Save as new
+            </button>
             <button type="button" onClick={() => void companiesQuery.refetch()} className="rounded border border-border p-1.5 text-muted-foreground hover:bg-accent" aria-label="Refresh screener"><RefreshCw className={`h-4 w-4 ${companiesQuery.isFetching ? "animate-spin" : ""}`} /></button>
           </div>
         </div>
@@ -406,9 +681,135 @@ function Screener() {
           <button type="button" onClick={() => setFilters({})} className="ml-auto rounded px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent">Reset all</button></div>
       </div>}
 
-      {showSaved && <div className="border-b border-border bg-panel px-5 py-3"><div className="mb-2 flex items-center gap-2 text-xs font-semibold">Saved screeners <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">Local only</span></div>
-        {savedViews.length === 0 ? <p className="text-xs text-muted-foreground">Save the current filters, tab, sort, and visible columns to this browser.</p> : <div className="flex flex-wrap gap-2">{savedViews.map((view) => <div key={view.id} className="flex items-center rounded border border-border bg-background"><button type="button" onClick={() => applySaved(view)} className="px-3 py-1.5 text-xs hover:text-primary">{view.name}</button><button type="button" onClick={() => { const name = window.prompt("Rename screener", view.name); if (name?.trim()) persistSaved(savedViews.map((item) => item.id === view.id ? { ...item, name: name.trim(), updatedAt: new Date().toISOString() } : item)); }} className="border-l border-border p-1.5 text-muted-foreground" title="Rename"><MoreHorizontal className="h-3 w-3" /></button><button type="button" onClick={() => persistSaved(savedViews.filter((item) => item.id !== view.id))} className="border-l border-border p-1.5 text-muted-foreground hover:text-bear" title="Delete"><Trash2 className="h-3 w-3" /></button></div>)}</div>}
-      </div>}
+      {showSaved && (
+        <div className="border-b border-border bg-panel px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              Saved screeners
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">Account backed</span>
+            </div>
+            {legacySavedViews.length > 0 && (
+              <button
+                type="button"
+                onClick={() => void importLegacySavedViews()}
+                disabled={savedAction !== null}
+                className="rounded border border-amber-500/30 px-2.5 py-1.5 text-[11px] text-amber-300 hover:bg-amber-500/10 disabled:opacity-40"
+              >
+                Import local saved views ({legacySavedViews.length})
+              </button>
+            )}
+          </div>
+
+          {savedMessage && (
+            <div
+              role="status"
+              className={`mt-2 rounded border px-3 py-2 text-xs ${
+                savedMessage.kind === "error"
+                  ? "border-bear/30 bg-bear/10 text-bear"
+                  : "border-bull/30 bg-bull/10 text-bull"
+              }`}
+            >
+              {savedMessage.text}
+            </div>
+          )}
+
+          {showSaveAsNew && (
+            <form onSubmit={saveAsNew} className="mt-3 flex flex-col gap-2 rounded border border-border bg-background p-3 sm:flex-row">
+              <input
+                value={savedNameDraft}
+                onChange={(event) => setSavedNameDraft(event.target.value)}
+                placeholder="Saved view name"
+                maxLength={80}
+                autoFocus
+                className="min-w-0 flex-1 rounded border border-border bg-panel px-3 py-1.5 text-xs outline-none focus:border-primary/60"
+              />
+              <button type="submit" disabled={!savedNameDraft.trim() || savedAction !== null} className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-40">
+                Save as new
+              </button>
+              <button type="button" onClick={() => setShowSaveAsNew(false)} className="rounded border border-border px-3 py-1.5 text-xs hover:bg-accent">
+                Cancel
+              </button>
+            </form>
+          )}
+
+          {savedScreenersError ? (
+            <p className="mt-3 text-xs text-bear">
+              Saved views unavailable: {savedScreenersError instanceof Error ? savedScreenersError.message : "account storage could not be reached"}
+            </p>
+          ) : savedScreenersLoading ? (
+            <p className="mt-3 text-xs text-muted-foreground">Loading account saved views…</p>
+          ) : savedViews.length === 0 ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              No account saved views. Save the current filters, view, sort, and visible columns as a new definition.
+            </p>
+          ) : (
+            <div className="mt-3 grid gap-2 lg:grid-cols-2">
+              {savedViews.map((view) => {
+                const { definition, savedCriteria } = view;
+                const isActive = definition.id === activeSavedScreenerId;
+                return (
+                  <div key={definition.id} className={`rounded border bg-background p-2 ${isActive ? "border-primary/50" : "border-border"}`}>
+                    {renamingSavedScreenerId === definition.id ? (
+                      <form onSubmit={(event) => renameSavedScreener(event, definition.id)} className="flex items-center gap-2">
+                        <input
+                          value={renameSavedScreenerDraft}
+                          onChange={(event) => setRenameSavedScreenerDraft(event.target.value)}
+                          maxLength={80}
+                          autoFocus
+                          className="min-w-0 flex-1 rounded border border-border bg-panel px-2 py-1 text-xs outline-none focus:border-primary/60"
+                        />
+                        <button type="submit" disabled={!renameSavedScreenerDraft.trim() || savedAction !== null} className="rounded border border-border p-1 text-primary disabled:opacity-40" aria-label={`Save name for ${definition.name}`}>
+                          <Check className="h-3.5 w-3.5" />
+                        </button>
+                        <button type="button" onClick={() => setRenamingSavedScreenerId(null)} className="rounded p-1 text-muted-foreground hover:bg-accent" aria-label={`Cancel rename for ${definition.name}`}>
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </form>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-xs font-medium">{definition.name}</span>
+                          {isActive && <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">Active</span>}
+                          {!savedCriteria && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">Unsupported saved criteria</span>}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => applySaved(view)}
+                            disabled={!savedCriteria || savedAction !== null}
+                            className="rounded border border-border px-2 py-1 text-[11px] hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Apply
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRenamingSavedScreenerId(definition.id);
+                              setRenameSavedScreenerDraft(definition.name);
+                            }}
+                            disabled={savedAction !== null}
+                            className="rounded border border-border px-2 py-1 text-[11px] hover:bg-accent disabled:opacity-40"
+                          >
+                            Rename
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void archiveSavedScreener(definition.id)}
+                            disabled={savedAction !== null}
+                            className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-muted-foreground hover:text-bear disabled:opacity-40"
+                          >
+                            <Trash2 className="h-3 w-3" />Delete
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {showColumns && <div className="border-b border-border bg-panel px-5 py-3"><div className="flex flex-wrap gap-2">{allColumns.filter((column) => !["rank", "company"].includes(column.id)).map((column) => { const hidden = hiddenColumns.includes(column.id); return <button key={column.id} type="button" onClick={() => setHiddenColumns((current) => hidden ? current.filter((id) => id !== column.id) : [...current, column.id])} className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] ${hidden ? "border-border text-muted-foreground" : "border-primary/40 text-foreground"}`}>{hidden ? <EyeOff className="h-3 w-3" /> : <Check className="h-3 w-3" />}{column.label}</button>; })}</div></div>}
 
