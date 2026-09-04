@@ -109,13 +109,6 @@ export const backtestRuns = pgTable("backtest_runs", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [index("backtest_runs_user_idx").on(table.userId, table.createdAt)]);
 
-export const watchlist = pgTable("watchlist", {
-  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  exchange: text("exchange").notNull().default("NSE"),
-  symbol: text("symbol").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [primaryKey({ columns: [table.userId, table.exchange, table.symbol] })]);
-
 export const idempotency = pgTable("idempotency", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   key: text("key").notNull(),
