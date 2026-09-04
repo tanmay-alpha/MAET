@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
+import type { WorkspaceExchange } from "@/lib/trpc";
 
 export function useResearchWorkspace() {
   const queryClient = useQueryClient();
@@ -11,7 +12,7 @@ export function useResearchWorkspace() {
 
   const watchlistsQuery = useQuery({
     queryKey: ["workspace", "watchlists"],
-    queryFn: () => trpc.workspace.listWatchlists.query(),
+    queryFn: () => trpc.workspace.listWatchlists.query({ limit: 50 }),
   });
 
   const savedScreenersQuery = useQuery({
@@ -31,9 +32,40 @@ export function useResearchWorkspace() {
     },
   });
 
+  const renameWatchlistMutation = useMutation({
+    mutationFn: (input: { watchlistId: string; name: string }) =>
+      trpc.workspace.renameWatchlist.mutate(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+
+  const deleteWatchlistMutation = useMutation({
+    mutationFn: (watchlistId: string) => trpc.workspace.deleteWatchlist.mutate({ watchlistId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+
   const addWatchlistItemMutation = useMutation({
-    mutationFn: (data: { watchlistId: string; symbol: string; exchange?: "NSE" | "BSE" }) =>
-      trpc.workspace.addWatchlistItem.mutate(data),
+    mutationFn: (input: { watchlistId: string; symbol: string; exchange?: WorkspaceExchange }) =>
+      trpc.workspace.addWatchlistItem.mutate(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+
+  const updateWatchlistItemNoteMutation = useMutation({
+    mutationFn: (input: { itemId: string; note: string | null }) =>
+      trpc.workspace.updateWatchlistItemNote.mutate(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+
+  const reorderWatchlistItemsMutation = useMutation({
+    mutationFn: (items: Array<{ itemId: string; position: number }>) =>
+      trpc.workspace.reorderWatchlistItems.mutate({ items }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
@@ -47,8 +79,16 @@ export function useResearchWorkspace() {
   });
 
   const saveScreenerMutation = useMutation({
-    mutationFn: (data: { name: string; criteria: Record<string, any>; description?: string }) =>
-      trpc.workspace.saveScreener.mutate(data),
+    mutationFn: (input: { name: string; criteria: Record<string, unknown>; description?: string }) =>
+      trpc.workspace.saveScreener.mutate(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+
+  const updateScreenerMutation = useMutation({
+    mutationFn: (input: { screenerId: string; name?: string; criteria?: Record<string, unknown> }) =>
+      trpc.workspace.updateScreener.mutate(input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
@@ -68,9 +108,14 @@ export function useResearchWorkspace() {
     recentRuns: recentRunsQuery.data ?? [],
     isLoading: overviewQuery.isLoading || watchlistsQuery.isLoading,
     createWatchlist: createWatchlistMutation.mutateAsync,
+    renameWatchlist: renameWatchlistMutation.mutateAsync,
+    deleteWatchlist: deleteWatchlistMutation.mutateAsync,
     addWatchlistItem: addWatchlistItemMutation.mutateAsync,
     removeWatchlistItem: removeWatchlistItemMutation.mutateAsync,
+    updateWatchlistItemNote: updateWatchlistItemNoteMutation.mutateAsync,
+    reorderWatchlistItems: reorderWatchlistItemsMutation.mutateAsync,
     saveScreener: saveScreenerMutation.mutateAsync,
+    updateScreener: updateScreenerMutation.mutateAsync,
     deleteScreener: deleteScreenerMutation.mutateAsync,
   };
 }

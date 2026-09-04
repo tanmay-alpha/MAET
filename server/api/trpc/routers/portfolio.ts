@@ -9,7 +9,7 @@ import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import {
   paperAccounts, paperOrders, paperPositions,
-  companies, candles, fills, paperFills, watchlist,
+  companies, candles, fills, paperFills,
 } from "../../../db/schema";
 import { eq, desc, asc, and, gte, inArray, lte, sql } from "drizzle-orm";
 import { loadQuotes } from "../../../domain/market/quote-service";
@@ -511,54 +511,6 @@ export const portfolioRouter = createRouter({
       }
 
       return trades;
-    }),
-
-  getWatchlist: protectedProcedure
-    .query(async ({ ctx }) => {
-      const userWatchlist = await db.select().from(watchlist)
-        .where(eq(watchlist.userId, ctx.userId));
-
-      return userWatchlist.map(item => ({
-        symbol: item.symbol,
-        exchange: item.exchange,
-        addedAt: item.createdAt.toISOString(),
-      }));
-    }),
-
-  addToWatchlist: protectedProcedure
-    .input(z.object({
-      symbol: z.string().min(1).max(20),
-      exchange: z.string().default("NSE"),
-    }))
-    .mutation(async ({ input, ctx }) => {
-      await checkMutationRateLimit(ctx.userId);
-      const result = await db.insert(watchlist).values({
-        userId: ctx.userId,
-        symbol: input.symbol.toUpperCase(),
-        exchange: input.exchange.toUpperCase(),
-        createdAt: new Date(),
-      }).onConflictDoUpdate({
-        target: [watchlist.userId, watchlist.exchange, watchlist.symbol],
-        set: { createdAt: new Date() },
-      }).returning();
-
-      return { success: true, symbol: input.symbol.toUpperCase() };
-    }),
-
-  removeFromWatchlist: protectedProcedure
-    .input(z.object({
-      symbol: z.string(),
-      exchange: z.string().default("NSE"),
-    }))
-    .mutation(async ({ input, ctx }) => {
-      await db.delete(watchlist).where(
-        and(
-          eq(watchlist.userId, ctx.userId),
-          eq(watchlist.symbol, input.symbol.toUpperCase()),
-          eq(watchlist.exchange, input.exchange.toUpperCase()),
-        ),
-      );
-      return { success: true, symbol: input.symbol.toUpperCase() };
     }),
 
   getSectorAllocation: protectedProcedure

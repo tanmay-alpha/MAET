@@ -122,6 +122,55 @@ export interface ResetAccountResult {
   success: boolean;
 }
 
+export type WorkspaceExchange = "NSE" | "BSE";
+
+export interface WorkspaceWatchlistItem {
+  id: string;
+  symbol: string;
+  exchange: WorkspaceExchange;
+  note: string | null;
+  position: number;
+  createdAt: string;
+}
+
+export interface WorkspaceWatchlistRecord {
+  id: string;
+  name: string;
+  description: string | null;
+  isPinned: boolean;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceWatchlist extends WorkspaceWatchlistRecord {
+  items: WorkspaceWatchlistItem[];
+}
+
+export interface WorkspaceSavedScreener {
+  id: string;
+  name: string;
+  description: string | null;
+  universe: string;
+  criteria: unknown;
+  isPinned: boolean;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt: string | null;
+}
+
+export interface WorkspaceSavedScreenerRun {
+  id: string;
+  screenerId: string;
+  runStartedAt: string;
+  runCompletedAt: string | null;
+  matchCount: number | null;
+  symbols: string[];
+  errorMessage: string | null;
+  createdAt: string;
+}
+
 export const trpc = {
   options: {
     listExpiries: createQueryProcedure<ListPersistedOptionExpiriesInput, PersistedOptionExpiryView[]>("options.listExpiries"),
@@ -166,43 +215,59 @@ export const trpc = {
         trpcQuery("workspace.getOverview"),
     },
     listWatchlists: {
-      query: (): Promise<{ items: any[] }> => trpcQuery("workspace.listWatchlists"),
+      query: (input?: { limit?: number }): Promise<{ items: WorkspaceWatchlist[] }> =>
+        trpcQuery("workspace.listWatchlists", input),
     },
     createWatchlist: {
-      mutate: (input: { name: string }): Promise<any> => trpcMutation("workspace.createWatchlist", input),
+      mutate: (input: { name: string }): Promise<WorkspaceWatchlistRecord> =>
+        trpcMutation("workspace.createWatchlist", input),
     },
     renameWatchlist: {
-      mutate: (input: { watchlistId: string; name: string }): Promise<any> => trpcMutation("workspace.renameWatchlist", input),
+      mutate: (input: { watchlistId: string; name: string }): Promise<WorkspaceWatchlistRecord> =>
+        trpcMutation("workspace.renameWatchlist", input),
     },
     deleteWatchlist: {
-      mutate: (input: { watchlistId: string }): Promise<any> => trpcMutation("workspace.deleteWatchlist", input),
+      mutate: (input: { watchlistId: string }): Promise<{ success: true }> =>
+        trpcMutation("workspace.deleteWatchlist", input),
     },
     addWatchlistItem: {
-      mutate: (input: { watchlistId: string; symbol: string; exchange?: "NSE" | "BSE" }): Promise<any> =>
+      mutate: (input: { watchlistId: string; symbol: string; exchange?: WorkspaceExchange }): Promise<WorkspaceWatchlistItem> =>
         trpcMutation("workspace.addWatchlistItem", input),
     },
     removeWatchlistItem: {
-      mutate: (input: { itemId: string }): Promise<any> => trpcMutation("workspace.removeWatchlistItem", input),
+      mutate: (input: { itemId: string }): Promise<{ success: true }> =>
+        trpcMutation("workspace.removeWatchlistItem", input),
+    },
+    updateWatchlistItemNote: {
+      mutate: (input: { itemId: string; note: string | null }): Promise<WorkspaceWatchlistItem> =>
+        trpcMutation("workspace.updateWatchlistItemNote", input),
     },
     reorderWatchlistItems: {
-      mutate: (input: { items: Array<{ itemId: string; position: number }> }): Promise<any> =>
+      mutate: (input: { items: Array<{ itemId: string; position: number }> }): Promise<{ success: true }> =>
         trpcMutation("workspace.reorderWatchlistItems", input),
     },
     listSavedScreeners: {
-      query: (): Promise<any[]> => trpcQuery("workspace.listSavedScreeners"),
+      query: (): Promise<WorkspaceSavedScreener[]> => trpcQuery("workspace.listSavedScreeners"),
     },
     saveScreener: {
-      mutate: (input: { name: string; criteria: Record<string, any>; description?: string }): Promise<any> =>
+      mutate: (input: { name: string; criteria: Record<string, unknown>; description?: string }): Promise<WorkspaceSavedScreener> =>
         trpcMutation("workspace.saveScreener", input),
     },
+    updateScreener: {
+      mutate: (input: { screenerId: string; name?: string; criteria?: Record<string, unknown> }): Promise<WorkspaceSavedScreener> =>
+        trpcMutation("workspace.updateScreener", input),
+    },
     deleteScreener: {
-      mutate: (input: { screenerId: string }): Promise<any> => trpcMutation("workspace.deleteScreener", input),
+      mutate: (input: { screenerId: string }): Promise<{ success: true }> =>
+        trpcMutation("workspace.deleteScreener", input),
     },
     runSavedScreener: {
-      mutate: (input: { screenerId: string }): Promise<{ runId: string }> => trpcMutation("workspace.runSavedScreener", input),
+      mutate: (input: { screenerId: string }): Promise<never> =>
+        trpcMutation("workspace.runSavedScreener", input),
     },
     listRecentRuns: {
-      query: (): Promise<any[]> => trpcQuery("workspace.listRecentRuns"),
+      query: (input?: { limit?: number }): Promise<WorkspaceSavedScreenerRun[]> =>
+        trpcQuery("workspace.listRecentRuns", input),
     },
   },
   alertsEngine: {
