@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { trpc } from "@/lib/trpc";
 import { MarketHeatmap } from "@/components/trading/market-heatmap";
 import { BreadthGauge } from "@/components/trading/breadth-gauge";
-import { Loadable, ChartSkeleton, Skel } from "@/components/trading/skeleton";
 import { CONTRACT_PANEL } from "@/components/common/contract-panel";
 
 export const Route = createFileRoute("/_app/heatmap")({
@@ -10,19 +11,32 @@ export const Route = createFileRoute("/_app/heatmap")({
 });
 
 function Heatmap() {
+  const { data: overview } = useQuery({
+    queryKey: ["marketBreadth", "overview", "ALL_NSE"],
+    queryFn: () => trpc.marketBreadth.getOverview.query({ universe: "ALL_NSE" }),
+    refetchInterval: 30_000,
+  });
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="border-b border-border px-5 py-3">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-semibold">Market Heatmap</h1>
-            <p className="text-sm text-muted-foreground">NIFTY 50 — weighted by market cap</p>
+            <h1 className="text-lg font-semibold">NSE Verified Market Heatmap</h1>
+            <p className="text-sm text-muted-foreground">
+              Universe: ALL_NSE — weighted by verified market capitalization
+            </p>
           </div>
-          <div className="flex gap-1 text-xs">
-            <button className="rounded px-2.5 py-1 bg-accent text-foreground">NIFTY 50</button>
-            <button className="rounded px-2.5 py-1 text-muted-foreground hover:text-foreground">BANK NIFTY</button>
-            <button className="rounded px-2.5 py-1 text-muted-foreground hover:text-foreground">NSE 200</button>
+          <div className="flex items-center gap-2 text-xs">
+            <span className="rounded bg-primary/15 px-2.5 py-1 font-mono text-[11px] uppercase text-primary">
+              ALL_NSE Verified
+            </span>
+            {overview?.asOf && (
+              <span className="font-mono text-[11px] text-muted-foreground hidden sm:inline">
+                As of: {new Date(overview.asOf).toLocaleDateString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -33,7 +47,7 @@ function Heatmap() {
           {/* Main heatmap */}
           <div className="rounded-xl border border-border bg-panel p-3">
             <div className="mb-2 flex items-center justify-between px-1 text-xs uppercase tracking-wider text-muted-foreground">
-              <span>NIFTY 50 · weighted by market cap</span>
+              <span>ALL_NSE · Proportional to Market Cap</span>
               <span className="flex items-center gap-2">
                 <span className="flex items-center gap-1">
                   <span className="h-2 w-3 rounded-sm bg-bear/80" /> -3%
@@ -43,48 +57,31 @@ function Heatmap() {
                 </span>
               </span>
             </div>
-            <Loadable delay={700} skeleton={<ChartSkeleton height={500} />}>
-              <MarketHeatmap height={500} />
-            </Loadable>
+            <MarketHeatmap height={520} />
           </div>
 
           {/* Side panel */}
           <div className="space-y-4">
-            <Loadable
-              delay={900}
-              skeleton={
-                <div className="rounded-lg border border-border bg-panel p-5 space-y-3">
-                  <Skel w={140} h={10} />
-                  <Skel w="100%" h={120} />
-                  <Skel w="100%" h={6} />
-                  <div className="flex justify-between">
-                    <Skel w={50} h={10} />
-                    <Skel w={50} h={10} />
-                  </div>
-                </div>
-              }
-            >
-              <BreadthGauge />
-            </Loadable>
+            <BreadthGauge />
 
             <div className="rounded-lg border border-border bg-panel p-4">
               <div className="text-sm font-medium mb-3">Heatmap Legend</div>
               <div className="space-y-2 text-xs text-muted-foreground">
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-8 rounded bg-bull" />
-                  <span>Strong positive performance</span>
+                  <span>Strong advance (&gt; +3%)</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-8 rounded bg-bull/50" />
-                  <span>Moderate positive</span>
+                  <span>Moderate advance (0% to +3%)</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-8 rounded bg-bear/50" />
-                  <span>Moderate negative</span>
+                  <span>Moderate decline (0% to -3%)</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-8 rounded bg-bear" />
-                  <span>Strong negative</span>
+                  <span>Strong decline (&lt; -3%)</span>
                 </div>
               </div>
             </div>
@@ -94,7 +91,7 @@ function Heatmap() {
 
       {/* Bottom panel */}
       <div className="border-t border-border bg-panel p-3 text-center text-xs text-muted-foreground">
-        <CONTRACT_PANEL message="Market heatmap uses delayed Yahoo Finance quotes — box size proportional to market cap" />
+        <CONTRACT_PANEL message="Verified NSE market breadth & heatmap — cell area proportional to verified market capitalization" />
       </div>
     </div>
   );

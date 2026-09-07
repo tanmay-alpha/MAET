@@ -22,7 +22,14 @@ import type {
 import type {
   BreadthOverview,
   HeatmapResult,
+  HeatmapCell,
 } from "../../server/modules/market-breadth/service";
+
+export type {
+  BreadthOverview,
+  HeatmapResult,
+  HeatmapCell,
+};
 
 export class AuthenticationError extends Error {
   constructor(message = "AUTHENTICATION_REQUIRED") {

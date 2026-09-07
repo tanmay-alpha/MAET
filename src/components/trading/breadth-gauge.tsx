@@ -1,26 +1,51 @@
-import { useMarketQuotes } from "@/hooks/use-market-quotes";
-import { WATCHLIST } from "@/lib/market-catalog";
+import { useQuery } from "@tanstack/react-query";
+import { trpc } from "@/lib/trpc";
 
 export function BreadthGauge() {
-  const { quoteMap } = useMarketQuotes(WATCHLIST.map((item) => item.symbol));
-  const changes = [...quoteMap.values()].map((quote) => quote.changePct).filter((value) => value !== undefined);
-  const adv = changes.filter((value) => value > 0).length;
-  const dec = changes.filter((value) => value < 0).length;
-  const unc = changes.filter((value) => value === 0).length;
-  const total = adv + dec + unc;
-  const advPct = total ? (adv / total) * 100 : 0;
-  const decPct = total ? (dec / total) * 100 : 0;
-  const ratio = adv / Math.max(1, dec);
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["marketBreadth", "overview", "ALL_NSE"],
+    queryFn: () => trpc.marketBreadth.getOverview.query({ universe: "ALL_NSE" }),
+    refetchInterval: 30_000,
+  });
 
-  // gauge angle: -90 (full bear) to +90 (full bull)
-  const norm = Math.max(-1, Math.min(1, (adv - dec) / Math.max(1, adv + dec)));
+  if (isLoading) {
+    return (
+      <div className="rounded-lg border border-border bg-panel p-5 text-center text-xs text-muted-foreground">
+        Loading verified market breadth…
+      </div>
+    );
+  }
+
+  if (isError || !data?.available) {
+    return (
+      <div className="rounded-lg border border-border bg-panel p-5 text-center text-xs text-muted-foreground">
+        {data?.reason || "Market breadth temporarily unavailable"}
+      </div>
+    );
+  }
+
+  const adv = data.advances ?? 0;
+  const dec = data.declines ?? 0;
+  const unc = data.unchanged ?? 0;
+  const total = adv + dec + unc;
+  const advPct = total > 0 ? (adv / total) * 100 : 0;
+  const decPct = total > 0 ? (dec / total) * 100 : 0;
+
+  // Gauge angle: -80 (full bear) to +80 (full bull)
+  const norm = (adv + dec > 0) ? Math.max(-1, Math.min(1, (adv - dec) / (adv + dec))) : 0;
   const angle = norm * 80;
+
+  const ratioDisplay = data.advanceDeclineRatio !== null && data.advanceDeclineRatio !== undefined
+    ? data.advanceDeclineRatio.toFixed(2)
+    : "—";
 
   return (
     <div className="rounded-lg border border-border bg-panel p-5">
       <div className="flex items-center justify-between">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Watchlist breadth · NSE</div>
-        <div className="font-mono tabular text-[10px] text-muted-foreground">{total}/{WATCHLIST.length} quotes</div>
+        <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Market Breadth · ALL NSE</div>
+        <div className="font-mono tabular text-[10px] text-muted-foreground">
+          {data.companiesWithUsableQuote}/{data.eligibleCompanies} verified ({((data.quoteCoverage ?? 0) * 100).toFixed(0)}%)
+        </div>
       </div>
 
       <div className="relative mx-auto mt-3 h-[120px] w-[220px]">
@@ -50,8 +75,8 @@ export function BreadthGauge() {
           </g>
         </svg>
         <div className="absolute inset-x-0 bottom-0 text-center">
-          <div className="font-mono tabular text-2xl font-semibold">{total ? ratio.toFixed(2) : "—"}</div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Adv / Dec</div>
+          <div className="font-mono tabular text-2xl font-semibold">{ratioDisplay}</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Adv / Dec Ratio</div>
         </div>
       </div>
 
@@ -61,8 +86,27 @@ export function BreadthGauge() {
       </div>
       <div className="mt-2 flex items-center justify-between text-[11px]">
         <span className="font-mono tabular text-bull">▲ {adv.toLocaleString("en-IN")}</span>
-        <span className="font-mono tabular text-muted-foreground">— {unc}</span>
+        <span className="font-mono tabular text-muted-foreground">— {unc.toLocaleString("en-IN")}</span>
         <span className="font-mono tabular text-bear">▼ {dec.toLocaleString("en-IN")}</span>
+      </div>
+
+      {/* SMA Breadth Indicators */}
+      <div className="mt-4 pt-3 border-t border-border grid grid-cols-3 gap-2 text-center text-[10px]">
+        <div className="rounded bg-background p-1.5">
+          <div className="text-muted-foreground">&gt; 20 SMA</div>
+          <div className="font-mono font-semibold text-foreground mt-0.5">{data.pctAboveSma20}%</div>
+          <div className="text-[9px] text-muted-foreground/70">{data.aboveSma20}/{data.sma20Eligible}</div>
+        </div>
+        <div className="rounded bg-background p-1.5">
+          <div className="text-muted-foreground">&gt; 50 SMA</div>
+          <div className="font-mono font-semibold text-foreground mt-0.5">{data.pctAboveSma50}%</div>
+          <div className="text-[9px] text-muted-foreground/70">{data.aboveSma50}/{data.sma50Eligible}</div>
+        </div>
+        <div className="rounded bg-background p-1.5">
+          <div className="text-muted-foreground">&gt; 200 SMA</div>
+          <div className="font-mono font-semibold text-foreground mt-0.5">{data.pctAboveSma200}%</div>
+          <div className="text-[9px] text-muted-foreground/70">{data.aboveSma200}/{data.sma200Eligible}</div>
+        </div>
       </div>
     </div>
   );
