@@ -19,6 +19,10 @@ import type {
   PeerComparisonRequest,
   PeerComparisonResult,
 } from "../../server/modules/peers/contracts";
+import type {
+  BreadthOverview,
+  HeatmapResult,
+} from "../../server/modules/market-breadth/service";
 
 export class AuthenticationError extends Error {
   constructor(message = "AUTHENTICATION_REQUIRED") {
@@ -313,10 +317,12 @@ export const trpc = {
   },
   marketBreadth: {
     getOverview: {
-      query: (): Promise<any> => trpcQuery("marketBreadth.getOverview"),
+      query: (input?: { universe?: string }): Promise<BreadthOverview> =>
+        trpcQuery<BreadthOverview>("marketBreadth.getOverview", input),
     },
     getHeatmapCells: {
-      query: (input?: { universe?: string }): Promise<any> => trpcQuery("marketBreadth.getHeatmapCells", input),
+      query: (input?: { universe?: string }): Promise<HeatmapResult> =>
+        trpcQuery<HeatmapResult>("marketBreadth.getHeatmapCells", input),
     },
   },
   screenerDsl: {

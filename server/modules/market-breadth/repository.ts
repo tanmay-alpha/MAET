@@ -1,6 +1,6 @@
 import { db } from "../../data/drizzle/client";
-import { companies, quoteSnapshots, fundamentals, candles } from "../../db/schema";
-import { eq, desc, and, sql, inArray } from "drizzle-orm";
+import { companies, quoteSnapshots, candles } from "../../db/schema";
+import { eq, desc, and, ne, inArray } from "drizzle-orm";
 
 export interface VerifiedQuoteData {
   symbol: string;
@@ -22,134 +22,237 @@ export interface FetchQuotesResult {
   available: boolean;
   reason?: string;
   data: VerifiedQuoteData[];
+  eligibleCompanies: number;
+  companiesWithUsableQuote: number;
+  quoteCoverage: number;
+  totalEligibleMarketCap: number;
+  totalUsableMarketCap: number;
   excludedCount: number;
   dataCoverage: number;
+  eligible20dSessions: number;
+  sma20Eligible: number;
+  sma50Eligible: number;
+  sma200Eligible: number;
 }
 
 export async function fetchMarketQuotesWithFundamentals(universe = "ALL_NSE"): Promise<FetchQuotesResult> {
-  // Index membership check
-  if (universe !== "ALL_NSE") {
-    // Check if membership exists for specific Nifty index
-    const [indexCheck] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(companies)
-      .where(sql`metadata->>'indexMembership' LIKE ${`%${universe}%`}`);
+  const normalizedUniverse = (universe || "ALL_NSE").trim().toUpperCase();
 
-    const count = Number(indexCheck?.count ?? 0);
-    if (count === 0) {
-      return {
-        available: false,
-        reason: `Verified index membership unavailable for ${universe}`,
-        data: [],
-        excludedCount: 0,
-        dataCoverage: 0,
-      };
-    }
+  // Only ALL_NSE is verified and supported
+  if (normalizedUniverse !== "ALL_NSE") {
+    return {
+      available: false,
+      reason: `Verified index membership unavailable for ${universe}. Only ALL_NSE is supported.`,
+      data: [],
+      eligibleCompanies: 0,
+      companiesWithUsableQuote: 0,
+      quoteCoverage: 0,
+      totalEligibleMarketCap: 0,
+      totalUsableMarketCap: 0,
+      excludedCount: 0,
+      dataCoverage: 0,
+      eligible20dSessions: 0,
+      sma20Eligible: 0,
+      sma50Eligible: 0,
+      sma200Eligible: 0,
+    };
   }
 
-  // Single-pass CTE joining latest quote and latest fundamentals for each company
-  const rows = await db.execute(sql`
-    WITH LatestQuotes AS (
-      SELECT DISTINCT ON (company_id)
-        company_id, price, change_pct, source, as_of
-      FROM public.quote_snapshots
-      WHERE as_of >= NOW() - INTERVAL '7 days'
-      ORDER BY company_id, as_of DESC
-    ),
-    LatestFundamentals AS (
-      SELECT DISTINCT ON (company_id)
-        company_id, fifty_two_week_high, fifty_two_week_low
-      FROM public.fundamentals
-      ORDER BY company_id, period_date DESC
-    )
-    SELECT
-      c.symbol,
-      c.name,
-      c.sector,
-      c.market_cap as "marketCap",
-      q.price,
-      q.change_pct as "changePct",
-      q.source,
-      q.as_of as "asOf",
-      f.fifty_two_week_high as "high20d",
-      f.fifty_two_week_low as "low20d"
-    FROM public.companies c
-    INNER JOIN LatestQuotes q ON q.company_id = c.id
-    LEFT JOIN LatestFundamentals f ON f.company_id = c.id
-    LIMIT 500;
-  `);
+  // 1. Fetch all active NSE companies
+  const eligibleCompanyRows = await db
+    .select({
+      id: companies.id,
+      symbol: companies.symbol,
+      name: companies.name,
+      sector: companies.sector,
+      marketCap: companies.marketCap,
+    })
+    .from(companies)
+    .where(
+      and(
+        eq(companies.exchange, "NSE"),
+        ne(companies.isActive, false),
+      )
+    );
 
-  const rawList = (rows as any).rows ?? rows ?? [];
+  const eligibleCompanies = eligibleCompanyRows.length;
+  if (eligibleCompanies === 0) {
+    return {
+      available: true,
+      data: [],
+      eligibleCompanies: 0,
+      companiesWithUsableQuote: 0,
+      quoteCoverage: 0,
+      totalEligibleMarketCap: 0,
+      totalUsableMarketCap: 0,
+      excludedCount: 0,
+      dataCoverage: 0,
+      eligible20dSessions: 0,
+      sma20Eligible: 0,
+      sma50Eligible: 0,
+      sma200Eligible: 0,
+    };
+  }
 
-  // Exclude companies without verified quotes
-  const verifiedList: VerifiedQuoteData[] = [];
+  const companyIds = eligibleCompanyRows.map((c) => c.id);
+
+  // 2. Fetch latest quote snapshot per company using DISTINCT ON
+  const quoteRows = await db
+    .selectDistinctOn([quoteSnapshots.companyId])
+    .from(quoteSnapshots)
+    .where(inArray(quoteSnapshots.companyId, companyIds))
+    .orderBy(quoteSnapshots.companyId, desc(quoteSnapshots.asOf));
+
+  const quoteMap = new Map<string, (typeof quoteRows)[number]>();
+  for (const q of quoteRows) {
+    quoteMap.set(q.companyId, q);
+  }
+
+  // 3. Filter for companies with usable quotes
+  const usableCompanies: Array<{
+    company: (typeof eligibleCompanyRows)[number];
+    quote: (typeof quoteRows)[number];
+  }> = [];
+
   let excludedCount = 0;
+  let totalEligibleMarketCap = 0;
+  let totalUsableMarketCap = 0;
 
-  // Batch calculate real SMA 20/50/200 from candles
-  const symbols = rawList.map((r: any) => r.symbol);
-  const candleMap: Record<string, { sma20?: number; sma50?: number; sma200?: number }> = {};
+  for (const comp of eligibleCompanyRows) {
+    const rawMc = comp.marketCap ? Number(comp.marketCap) : 0;
+    if (rawMc > 0) totalEligibleMarketCap += rawMc;
 
-  if (symbols.length > 0) {
-    const candleRows = await db
-      .select({
-        symbol: candles.symbol,
-        close: candles.close,
-        ts: candles.ts,
-      })
-      .from(candles)
-      .where(and(inArray(candles.symbol, symbols), eq(candles.timeframe, "1d")))
-      .orderBy(desc(candles.ts));
-
-    const candleBySymbol: Record<string, number[]> = {};
-    for (const row of candleRows) {
-      if (!candleBySymbol[row.symbol]) candleBySymbol[row.symbol] = [];
-      if (candleBySymbol[row.symbol].length < 200) {
-        candleBySymbol[row.symbol].push(Number(row.close));
-      }
-    }
-
-    for (const [sym, closes] of Object.entries(candleBySymbol)) {
-      if (closes.length >= 20) {
-        const slice20 = closes.slice(0, 20);
-        const sma20 = slice20.reduce((a, b) => a + b, 0) / 20;
-        const sma50 = closes.length >= 50 ? closes.slice(0, 50).reduce((a, b) => a + b, 0) / 50 : undefined;
-        const sma200 = closes.length >= 200 ? closes.slice(0, 200).reduce((a, b) => a + b, 0) / 200 : undefined;
-        candleMap[sym] = { sma20, sma50, sma200 };
-      }
+    const q = quoteMap.get(comp.id);
+    if (
+      q &&
+      q.price !== null &&
+      q.price !== undefined &&
+      !isNaN(Number(q.price)) &&
+      q.changePct !== null &&
+      q.changePct !== undefined &&
+      !isNaN(Number(q.changePct))
+    ) {
+      usableCompanies.push({ company: comp, quote: q });
+      if (rawMc > 0) totalUsableMarketCap += rawMc;
+    } else {
+      excludedCount++;
     }
   }
 
-  for (const r of rawList) {
-    if (r.price === null || r.price === undefined || r.changePct === null || r.changePct === undefined) {
-      excludedCount++;
-      continue;
+  const companiesWithUsableQuote = usableCompanies.length;
+  const quoteCoverage = eligibleCompanies > 0
+    ? Number((companiesWithUsableQuote / eligibleCompanies).toFixed(4))
+    : 0;
+
+  // 4. Batch fetch daily candles for usable symbols to calculate true 20d high/low and SMAs
+  const usableSymbols = usableCompanies.map((u) => u.company.symbol);
+  const candleRows = usableSymbols.length > 0
+    ? await db
+        .select({
+          symbol: candles.symbol,
+          high: candles.high,
+          low: candles.low,
+          close: candles.close,
+          ts: candles.ts,
+        })
+        .from(candles)
+        .where(
+          and(
+            inArray(candles.symbol, usableSymbols),
+            eq(candles.timeframe, "1d")
+          )
+        )
+        .orderBy(desc(candles.ts))
+    : [];
+
+  const candlesBySymbol = new Map<string, Array<{ high: number; low: number; close: number }>>();
+  for (const c of candleRows) {
+    let arr = candlesBySymbol.get(c.symbol);
+    if (!arr) {
+      arr = [];
+      candlesBySymbol.set(c.symbol, arr);
+    }
+    if (arr.length < 200) {
+      arr.push({
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close),
+      });
+    }
+  }
+
+  let eligible20dSessions = 0;
+  let sma20Eligible = 0;
+  let sma50Eligible = 0;
+  let sma200Eligible = 0;
+
+  const verifiedList: VerifiedQuoteData[] = [];
+
+  for (const { company, quote } of usableCompanies) {
+    const symCandles = candlesBySymbol.get(company.symbol) ?? [];
+    let high20d: number | undefined;
+    let low20d: number | undefined;
+    let sma20: number | undefined;
+    let sma50: number | undefined;
+    let sma200: number | undefined;
+
+    // True trailing 20 daily sessions
+    if (symCandles.length >= 20) {
+      eligible20dSessions++;
+      const first20 = symCandles.slice(0, 20);
+      high20d = Math.max(...first20.map((c) => c.high));
+      low20d = Math.min(...first20.map((c) => c.low));
+
+      sma20Eligible++;
+      sma20 = first20.reduce((sum, c) => sum + c.close, 0) / 20;
     }
 
-    const cData = candleMap[r.symbol];
+    if (symCandles.length >= 50) {
+      sma50Eligible++;
+      sma50 = symCandles.slice(0, 50).reduce((sum, c) => sum + c.close, 0) / 50;
+    }
+
+    if (symCandles.length >= 200) {
+      sma200Eligible++;
+      sma200 = symCandles.slice(0, 200).reduce((sum, c) => sum + c.close, 0) / 200;
+    }
+
+    const mCap = company.marketCap ? Number(company.marketCap) : undefined;
+
     verifiedList.push({
-      symbol: r.symbol,
-      name: r.name,
-      sector: r.sector ?? "Other",
-      marketCap: r.marketCap ? Number(r.marketCap) : undefined,
-      price: Number(r.price),
-      changePct: Number(r.changePct),
-      sma20: cData?.sma20,
-      sma50: cData?.sma50,
-      sma200: cData?.sma200,
-      high20d: r.high20d ? Number(r.high20d) : undefined,
-      low20d: r.low20d ? Number(r.low20d) : undefined,
-      asOf: r.asOf ? new Date(r.asOf).toISOString() : new Date().toISOString(),
-      source: r.source ?? "verified_quote",
+      symbol: company.symbol,
+      name: company.name,
+      sector: company.sector ?? "Other",
+      marketCap: mCap && !isNaN(mCap) && mCap > 0 ? mCap : undefined,
+      price: Number(quote.price),
+      changePct: Number(quote.changePct),
+      sma20: sma20 !== undefined ? Number(sma20.toFixed(4)) : undefined,
+      sma50: sma50 !== undefined ? Number(sma50.toFixed(4)) : undefined,
+      sma200: sma200 !== undefined ? Number(sma200.toFixed(4)) : undefined,
+      high20d: high20d !== undefined ? Number(high20d.toFixed(4)) : undefined,
+      low20d: low20d !== undefined ? Number(low20d.toFixed(4)) : undefined,
+      asOf: quote.asOf ? new Date(quote.asOf).toISOString() : new Date().toISOString(),
+      source: quote.source ?? "verified_quote",
     });
   }
 
-  const total = rawList.length;
-  const dataCoverage = total > 0 ? Math.round((verifiedList.length / total) * 100) / 100 : 0;
+  const dataCoverage = eligibleCompanies > 0
+    ? Number((verifiedList.length / eligibleCompanies).toFixed(4))
+    : 0;
 
   return {
     available: true,
     data: verifiedList,
+    eligibleCompanies,
+    companiesWithUsableQuote,
+    quoteCoverage,
+    totalEligibleMarketCap,
+    totalUsableMarketCap,
     excludedCount,
     dataCoverage,
+    eligible20dSessions,
+    sma20Eligible,
+    sma50Eligible,
+    sma200Eligible,
   };
 }
