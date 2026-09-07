@@ -1,23 +1,22 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { trpc } from "@/lib/trpc";
+import {
+  trpc,
+  type AlertView,
+  type AlertTriggerView,
+  type AlertNotificationView,
+  type CreateAlertInput,
+  type CreatableAlertType,
+  type AlertMode,
+} from "@/lib/trpc";
 
-export type AlertType = "price_above" | "price_below" | "volume_spike" | "indicator" | string;
-export type AlertCondition = "above" | "below" | "crosses_above" | "crosses_below";
-
-export interface Alert {
-  id: string;
-  symbol: string;
-  type: AlertType;
-  condition: AlertCondition;
-  value: number;
-  indicator?: string;
-  indicatorValue?: number;
-  triggered: boolean;
-  triggeredAt?: string;
-  createdAt: string;
-  enabled: boolean;
-  repeat: boolean;
-}
+export type {
+  AlertView,
+  AlertTriggerView,
+  AlertNotificationView,
+  CreateAlertInput,
+  CreatableAlertType,
+  AlertMode,
+};
 
 export function useAlerts() {
   const queryClient = useQueryClient();
@@ -29,26 +28,16 @@ export function useAlerts() {
 
   const historyQuery = useQuery({
     queryKey: ["alertsEngine", "listTriggerHistory"],
-    queryFn: () => trpc.alertsEngine.listTriggerHistory.query(),
+    queryFn: () => trpc.alertsEngine.listTriggerHistory.query({ limit: 50 }),
   });
 
   const notificationsQuery = useQuery({
     queryKey: ["alertsEngine", "listNotifications"],
-    queryFn: () => trpc.alertsEngine.listNotifications.query(),
+    queryFn: () => trpc.alertsEngine.listNotifications.query({ limit: 50 }),
   });
 
   const createAlertMutation = useMutation({
-    mutationFn: (input: {
-      symbol: string;
-      config: {
-        type: any;
-        threshold?: number;
-        cooldownMinutes?: number;
-        mode?: "one_time" | "repeating";
-      };
-      enabled?: boolean;
-      label?: string;
-    }) => trpc.alertsEngine.createAlert.mutate(input),
+    mutationFn: (input: CreateAlertInput) => trpc.alertsEngine.createAlert.mutate(input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["alertsEngine"] });
     },
@@ -62,6 +51,14 @@ export function useAlerts() {
     },
   });
 
+  const rearmAlertMutation = useMutation({
+    mutationFn: (input: { alertId: string }) =>
+      trpc.alertsEngine.rearmAlert.mutate(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alertsEngine"] });
+    },
+  });
+
   const deleteAlertMutation = useMutation({
     mutationFn: (alertId: string) => trpc.alertsEngine.deleteAlert.mutate({ alertId }),
     onSuccess: () => {
@@ -69,43 +66,39 @@ export function useAlerts() {
     },
   });
 
-  const rawAlerts = alertsQuery.data?.items ?? [];
-  const alerts: Alert[] = rawAlerts.map((a: any) => ({
-    id: a.id,
-    symbol: a.symbol,
-    type: a.type ?? "price_above",
-    condition: a.condition ?? "above",
-    value: Number(a.target ?? 0),
-    triggered: Boolean(a.triggered),
-    triggeredAt: a.triggeredAt ? new Date(a.triggeredAt).toISOString() : undefined,
-    createdAt: a.createdAt ? new Date(a.createdAt).toISOString() : new Date().toISOString(),
-    enabled: Boolean(a.enabled),
-    repeat: a.mode === "REPEATING",
-  }));
+  const markNotificationReadMutation = useMutation({
+    mutationFn: (notificationId: string) =>
+      trpc.alertsEngine.markNotificationRead.mutate({ notificationId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alertsEngine", "listNotifications"] });
+    },
+  });
 
-  const activeAlerts = alerts.filter((a) => a.enabled && !a.triggered);
-  const triggeredAlerts = alerts.filter((a) => a.triggered);
+  const dismissNotificationMutation = useMutation({
+    mutationFn: (notificationId: string) =>
+      trpc.alertsEngine.dismissNotification.mutate({ notificationId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alertsEngine", "listNotifications"] });
+    },
+  });
 
-  const createAlert = async (input: {
-    symbol: string;
-    type: string;
-    condition?: string;
-    value: number;
-    repeat?: boolean;
-  }) => {
+  const alerts: AlertView[] = alertsQuery.data?.items ?? [];
+  const activeAlerts = alerts.filter((a) => a.enabled && a.supported);
+  const triggeredAlerts = alerts.filter((a) => a.triggered || a.triggerCount > 0);
+  const unsupportedAlerts = alerts.filter((a) => !a.supported);
+
+  const triggerHistory: AlertTriggerView[] = historyQuery.data?.items ?? [];
+  const notifications: AlertNotificationView[] = (notificationsQuery.data?.items ?? []).filter(
+    (n) => !n.dismissedAt
+  );
+
+  const createAlert = async (input: CreateAlertInput) => {
     try {
-      await createAlertMutation.mutateAsync({
-        symbol: input.symbol,
-        config: {
-          type: (input.type.toUpperCase() as any) ?? "PRICE_ABOVE",
-          threshold: input.value,
-          mode: input.repeat ? "repeating" : "one_time",
-        },
-        enabled: true,
-      });
+      await createAlertMutation.mutateAsync(input);
       return { ok: true, message: `Alert created for ${input.symbol}` };
-    } catch (err: any) {
-      return { ok: false, message: err.message ?? "Failed to create alert" };
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to create alert";
+      return { ok: false, error: errorMsg, message: errorMsg };
     }
   };
 
@@ -116,31 +109,36 @@ export function useAlerts() {
     }
   };
 
+  const rearmAlert = (id: string) => {
+    rearmAlertMutation.mutate({ alertId: id });
+  };
+
   const deleteAlert = (id: string) => {
     deleteAlertMutation.mutate(id);
   };
 
-  const resetAlert = (id: string) => {
-    toggleAlertMutation.mutate({ alertId: id, enabled: true });
+  const markNotificationRead = (id: string) => {
+    markNotificationReadMutation.mutate(id);
   };
 
-  const clearAllAlerts = () => {
-    for (const a of alerts) {
-      deleteAlertMutation.mutate(a.id);
-    }
+  const dismissNotification = (id: string) => {
+    dismissNotificationMutation.mutate(id);
   };
 
   return {
     alerts,
     activeAlerts,
     triggeredAlerts,
-    triggerHistory: historyQuery.data?.items ?? [],
-    notifications: notificationsQuery.data?.items ?? [],
+    unsupportedAlerts,
+    triggerHistory,
+    notifications,
     isLoading: alertsQuery.isLoading,
+    isError: alertsQuery.isError,
     createAlert,
     toggleAlert,
+    rearmAlert,
     deleteAlert,
-    resetAlert,
-    clearAllAlerts,
+    markNotificationRead,
+    dismissNotification,
   };
 }
