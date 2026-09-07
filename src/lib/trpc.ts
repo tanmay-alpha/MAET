@@ -24,11 +24,25 @@ import type {
   HeatmapResult,
   HeatmapCell,
 } from "../../server/modules/market-breadth/service";
+import type {
+  AlertView,
+  AlertTriggerView,
+  AlertNotificationView,
+  CreateAlertInput,
+  CreatableAlertType,
+  AlertMode,
+} from "../../server/modules/alerts/contracts";
 
 export type {
   BreadthOverview,
   HeatmapResult,
   HeatmapCell,
+  AlertView,
+  AlertTriggerView,
+  AlertNotificationView,
+  CreateAlertInput,
+  CreatableAlertType,
+  AlertMode,
 };
 
 export class AuthenticationError extends Error {
@@ -287,28 +301,39 @@ export const trpc = {
   },
   alertsEngine: {
     listAlerts: {
-      query: (): Promise<{ items: any[] }> => trpcQuery("alertsEngine.listAlerts"),
+      query: (): Promise<{ items: AlertView[] }> => trpcQuery("alertsEngine.listAlerts"),
     },
     listTriggerHistory: {
-      query: (input?: { limit?: number }): Promise<{ items: any[] }> => trpcQuery("alertsEngine.listTriggerHistory", input),
+      query: (input?: { limit?: number }): Promise<{ items: AlertTriggerView[] }> =>
+        trpcQuery("alertsEngine.listTriggerHistory", input),
     },
     listNotifications: {
-      query: (input?: { limit?: number }): Promise<{ items: any[] }> => trpcQuery("alertsEngine.listNotifications", input),
+      query: (input?: { limit?: number }): Promise<{ items: AlertNotificationView[] }> =>
+        trpcQuery("alertsEngine.listNotifications", input),
     },
     markNotificationRead: {
-      mutate: (input: { notificationId: string }): Promise<any> => trpcMutation("alertsEngine.markNotificationRead", input),
+      mutate: (input: { notificationId: string }): Promise<{ success: boolean }> =>
+        trpcMutation("alertsEngine.markNotificationRead", input),
     },
     dismissNotification: {
-      mutate: (input: { notificationId: string }): Promise<any> => trpcMutation("alertsEngine.dismissNotification", input),
+      mutate: (input: { notificationId: string }): Promise<{ success: boolean }> =>
+        trpcMutation("alertsEngine.dismissNotification", input),
     },
     createAlert: {
-      mutate: (input: any): Promise<any> => trpcMutation("alertsEngine.createAlert", input),
+      mutate: (input: CreateAlertInput): Promise<AlertView> =>
+        trpcMutation("alertsEngine.createAlert", input),
     },
     toggleAlert: {
-      mutate: (input: { alertId: string; enabled: boolean }): Promise<any> => trpcMutation("alertsEngine.toggleAlert", input),
+      mutate: (input: { alertId: string; enabled: boolean }): Promise<AlertView> =>
+        trpcMutation("alertsEngine.toggleAlert", input),
+    },
+    rearmAlert: {
+      mutate: (input: { alertId: string }): Promise<AlertView> =>
+        trpcMutation("alertsEngine.rearmAlert", input),
     },
     deleteAlert: {
-      mutate: (input: { alertId: string }): Promise<any> => trpcMutation("alertsEngine.deleteAlert", input),
+      mutate: (input: { alertId: string }): Promise<{ success: boolean }> =>
+        trpcMutation("alertsEngine.deleteAlert", input),
     },
   },
   analysis: {
