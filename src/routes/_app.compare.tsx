@@ -15,6 +15,7 @@ import {
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { fetchMarketCandles } from "@/lib/market-api";
 import { trpc } from "@/lib/trpc";
+import type { PeerComparisonEntry, PeerMetric } from "../../server/modules/peers/contracts";
 
 export const Route = createFileRoute("/_app/compare")({
   head: () => ({ meta: [{ title: "Compare — MAET" }] }),
@@ -35,7 +36,7 @@ function Compare() {
 
   const peerQuery = useQuery({
     queryKey: ["peerComparison", primarySymbol],
-    queryFn: () => trpc.companies.getPeerComparison.query({ symbol: primarySymbol }),
+    queryFn: () => trpc.companies.getPeerComparison.query({ symbol: primarySymbol, limit: 5 }),
   });
 
   const candleQueries = useQueries({
@@ -79,9 +80,26 @@ function Compare() {
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-panel px-4 py-2">
         <span className="mr-1 font-semibold">Compare</span>
-        <span className="rounded bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-primary">
-          Verified Sector
-        </span>
+        {peerData?.selectionBasis === "industry" && (
+          <span className="rounded bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-primary">
+            Industry Peers ({peerData.selectionLabel})
+          </span>
+        )}
+        {peerData?.selectionBasis === "sector" && (
+          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-amber-500">
+            Sector Fallback ({peerData.selectionLabel})
+          </span>
+        )}
+        {peerData?.selectionBasis === "none" && (
+          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
+            Selected Peers
+          </span>
+        )}
+        {!peerData && (
+          <span className="rounded bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-primary">
+            Verified Peers
+          </span>
+        )}
         {symbols.map((symbol, index) => (
           <div key={symbol} className="flex items-center gap-2 rounded border border-border bg-background px-2.5 py-1.5 text-xs">
             <span className="h-1.5 w-1.5 rounded-full" style={{ background: COLORS[index] }} />
@@ -156,9 +174,14 @@ function Compare() {
         </div>
       ) : (
         <div className="p-4 flex-1 overflow-auto">
-          <div className="mb-3 text-xs text-muted-foreground flex justify-between">
+          <div className="mb-3 text-xs text-muted-foreground flex flex-wrap items-center justify-between gap-2">
             <span>Comparing peers for <strong>{primarySymbol}</strong></span>
-            <span>As of: {peerData?.asOf ? new Date(peerData.asOf).toLocaleDateString() : "Live"}</span>
+            <div className="flex items-center gap-3 font-mono text-[11px]">
+              <span>As of: {peerData?.asOf ? new Date(peerData.asOf).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</span>
+              {peerData?.target?.latestFundamentalsAt && (
+                <span>Fundamentals: {new Date(peerData.target.latestFundamentalsAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
+              )}
+            </div>
           </div>
 
           <table className="w-full text-xs">
@@ -167,7 +190,7 @@ function Compare() {
                 <th className="px-4 py-2 text-left font-medium">Company</th>
                 <th className="px-4 py-2 text-right font-medium">Metric</th>
                 <th className="px-4 py-2 text-right font-medium">Peer Median</th>
-                <th className="px-4 py-2 text-right font-medium">Sector Median</th>
+                <th className="px-4 py-2 text-right font-medium">Comparison Median</th>
                 <th className="px-4 py-2 text-right font-medium">Percentile</th>
                 <th className="px-4 py-2 text-right font-medium">Rank</th>
                 <th className="px-4 py-2 text-right font-medium">Coverage</th>
@@ -179,18 +202,18 @@ function Compare() {
                   <td className="px-4 py-2 font-mono">{peerData.target.symbol} (Target)</td>
                   <td className="px-4 py-2 text-right">{getTabMetricValue(peerData.target, activeTab)}</td>
                   <td className="px-4 py-2 text-right">{getTabMetricValue({ metrics: peerData.medians }, activeTab)}</td>
-                  <td className="px-4 py-2 text-right">{getTabMetricValue({ metrics: peerData.sectorMedian }, activeTab)}</td>
+                  <td className="px-4 py-2 text-right">{getTabMetricValue({ metrics: peerData.comparisonMedian }, activeTab)}</td>
                   <td className="px-4 py-2 text-right">{peerData.target.percentile}%</td>
                   <td className="px-4 py-2 text-right">#{peerData.target.rank}</td>
                   <td className="px-4 py-2 text-right">{(peerData.target.dataCoverage * 100).toFixed(0)}%</td>
                 </tr>
               )}
-              {peerData?.peers?.map((peer: any) => (
+              {peerData?.peers?.map((peer: PeerComparisonEntry) => (
                 <tr key={peer.symbol} className="border-t border-border/70">
                   <td className="px-4 py-2 font-mono">{peer.symbol}</td>
                   <td className="px-4 py-2 text-right">{getTabMetricValue(peer, activeTab)}</td>
                   <td className="px-4 py-2 text-right">{getTabMetricValue({ metrics: peerData.medians }, activeTab)}</td>
-                  <td className="px-4 py-2 text-right">{getTabMetricValue({ metrics: peerData.sectorMedian }, activeTab)}</td>
+                  <td className="px-4 py-2 text-right">{getTabMetricValue({ metrics: peerData.comparisonMedian }, activeTab)}</td>
                   <td className="px-4 py-2 text-right">{peer.percentile}%</td>
                   <td className="px-4 py-2 text-right">#{peer.rank}</td>
                   <td className="px-4 py-2 text-right">{(peer.dataCoverage * 100).toFixed(0)}%</td>
@@ -242,7 +265,10 @@ function Compare() {
   );
 }
 
-function getTabMetricValue(entry: any, tab: TabType): string {
+export function getTabMetricValue(
+  entry?: { metrics?: Partial<PeerMetric> } | null,
+  tab: TabType = "Performance"
+): string {
   const m = entry?.metrics ?? {};
   switch (tab) {
     case "Valuation":

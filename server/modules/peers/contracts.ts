@@ -15,7 +15,7 @@ export const PeerComparisonRequestSchema = z.object({
   symbol: z.string().min(1).max(20),
   limit: z.number().int().positive().max(10).default(5),
 });
-export type PeerComparisonRequest = z.infer<typeof PeerComparisonRequestSchema>;
+export type PeerComparisonRequest = z.input<typeof PeerComparisonRequestSchema>;
 
 export const PeerMetricSchema = z.object({
   marketCap: z.number().optional(),

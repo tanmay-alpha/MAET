@@ -15,6 +15,10 @@ import type {
   ListPersistedOptionExpiriesInput,
   PersistedOptionExpiryView,
 } from "../../server/modules/options/contracts";
+import type {
+  PeerComparisonRequest,
+  PeerComparisonResult,
+} from "../../server/modules/peers/contracts";
 
 export class AuthenticationError extends Error {
   constructor(message = "AUTHENTICATION_REQUIRED") {
@@ -303,7 +307,8 @@ export const trpc = {
   },
   companies: {
     getPeerComparison: {
-      query: (input: { symbol: string }): Promise<any> => trpcQuery("companies.getPeerComparison", input),
+      query: (input: PeerComparisonRequest): Promise<PeerComparisonResult> =>
+        trpcQuery<PeerComparisonResult>("companies.getPeerComparison", input as Record<string, any>),
     },
   },
   marketBreadth: {
