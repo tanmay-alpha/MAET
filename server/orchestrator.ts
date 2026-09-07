@@ -15,6 +15,7 @@ import { hydrateAngelOneCompanyTokens } from "./data/sources/nse-company-master"
 import { marketDataMultiplexer } from "./domain/market/data-multiplexer";
 
 import { alertEvaluatorWorker } from "./workers/alert-evaluator";
+import { listActiveAlertSymbols } from "./modules/alerts/repository";
 
 const yahooPoller = new YahooPoller({ intervalMs: 60_000 });
 const angelOne = new AngelOneWorker();
@@ -23,11 +24,13 @@ const marketClock = new MarketClockWorker();
 const screenerRunner = new ScreenerRunner();
 const orderMatcher = new OrderMatcherWorker();
 const subscriptionRefs = new Map<string, number>();
+const alertSubscriptionSymbols = new Set<string>();
 let started = false;
 let angelRetryTimer: ReturnType<typeof setTimeout> | undefined;
 let angelReadyOff: (() => void) | undefined;
 let angelFailedOff: (() => void) | undefined;
 let quoteBusOff: (() => void) | undefined;
+let alertReconcileTimer: ReturnType<typeof setInterval> | undefined;
 const ANGEL_FEED_USER = "render-market-feed";
 
 function activeAngelTokens(): string[] {
@@ -105,6 +108,31 @@ function syncAngelSubscriptions(): void {
   angelOne.updateTokens(ANGEL_FEED_USER, activeAngelTokens());
 }
 
+export async function reconcileAlertSubscriptions(fetchActiveSymbols = listActiveAlertSymbols): Promise<void> {
+  try {
+    const activeSymbols = await fetchActiveSymbols();
+    const currentActive = new Set(activeSymbols.map((s) => s.toUpperCase()));
+
+    // 1. Subscribe newly active symbols
+    for (const s of currentActive) {
+      if (!alertSubscriptionSymbols.has(s)) {
+        subscribeSymbol(s);
+        alertSubscriptionSymbols.add(s);
+      }
+    }
+
+    // 2. Unsubscribe symbols no longer backed by active alerts
+    for (const s of alertSubscriptionSymbols) {
+      if (!currentActive.has(s)) {
+        unsubscribeSymbol(s);
+        alertSubscriptionSymbols.delete(s);
+      }
+    }
+  } catch (err) {
+    console.error("[Orchestrator] Alert subscription reconciliation failed:", err);
+  }
+}
+
 export function startOrchestrator(): void {
   if (started) return;
   started = true;
@@ -128,7 +156,8 @@ export function startOrchestrator(): void {
     void alertEvaluatorWorker.processQuote({
       symbol: tick.symbol,
       price: tick.price,
-      previousClose: tick.previousClose ?? tick.price,
+      previousClose: tick.previousClose,
+      changePct: tick.changePct,
       volume: tick.volume,
       quoteTimestamp: new Date(tick.ts).getTime(),
       source: tick.source,
@@ -137,6 +166,14 @@ export function startOrchestrator(): void {
   angelOne.start();
   void connectAngelOne();
   scheduleDailyProcessor();
+
+  // Reconcile alert symbol subscriptions immediately and periodically
+  void reconcileAlertSubscriptions();
+  if (!alertReconcileTimer) {
+    alertReconcileTimer = setInterval(() => {
+      void reconcileAlertSubscriptions();
+    }, 10_000);
+  }
 
   void (async () => {
     try {
@@ -153,10 +190,21 @@ export async function stopOrchestrator(): Promise<void> {
   started = false;
   if (angelRetryTimer) clearTimeout(angelRetryTimer);
   if (dailyProcessorTimer) clearInterval(dailyProcessorTimer);
+  if (alertReconcileTimer) {
+    clearInterval(alertReconcileTimer);
+    alertReconcileTimer = undefined;
+  }
   angelReadyOff?.();
   angelFailedOff?.();
   quoteBusOff?.();
   await alertEvaluatorWorker.stop();
+
+  // Release alert-owned subscription references
+  for (const s of alertSubscriptionSymbols) {
+    unsubscribeSymbol(s);
+  }
+  alertSubscriptionSymbols.clear();
+
   angelOne.stop();
   orderMatcher.stop();
   yahooPoller.stop();
@@ -197,4 +245,18 @@ export function subscribeMarketSymbols(symbols: string[]): () => void {
       unsubscribeSymbol(s);
     }
   };
+}
+
+// Test/inspection helpers
+export function getSubscriptionRefCount(symbol: string): number {
+  return subscriptionRefs.get(symbol.toUpperCase()) ?? 0;
+}
+
+export function getAlertSubscriptionSymbols(): string[] {
+  return Array.from(alertSubscriptionSymbols);
+}
+
+export function resetSubscriptionRefsForTesting(): void {
+  subscriptionRefs.clear();
+  alertSubscriptionSymbols.clear();
 }

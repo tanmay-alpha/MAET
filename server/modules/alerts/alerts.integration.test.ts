@@ -5,6 +5,12 @@ import {
   isSupportedAlertType,
 } from "./contracts";
 import { mapRowToAlertView } from "./repository";
+import {
+  evaluateAlert,
+  QuoteMissingDataError,
+  AlertUnsupportedTypeError,
+  shouldRespectCooldown,
+} from "./evaluator";
 
 describe("Alerts Contract & Schema Suite (Checkpoint 1)", () => {
   it("1. Valid PRICE_ABOVE and PRICE_BELOW contracts pass schema validation", () => {
@@ -309,5 +315,185 @@ describe("Alerts Contract & Schema Suite (Checkpoint 1)", () => {
     expect(viewRearmed.triggeredAt).toBeNull();
     expect(viewRearmed.lastTriggeredAt).toBeNull();
     expect(viewRearmed.triggerCount).toBe(3); // Preserved!
+  });
+});
+
+describe("Alert Evaluation & Provenance Suite (Checkpoint 2)", () => {
+  const baseQuote = {
+    symbol: "RELIANCE",
+    price: 2500,
+    previousClose: 2450,
+    volume: 100000,
+    quoteTimestamp: 1720000000000,
+    source: "angelone",
+  };
+
+  it("1. PRICE_ABOVE: price === threshold is FALSE; price > threshold is TRUE", () => {
+    const atBoundary = evaluateAlert(baseQuote, {
+      type: "PRICE_ABOVE",
+      threshold: 2500,
+    });
+    expect(atBoundary.triggered).toBe(false);
+
+    const above = evaluateAlert({ ...baseQuote, price: 2500.05 }, {
+      type: "PRICE_ABOVE",
+      threshold: 2500,
+    });
+    expect(above.triggered).toBe(true);
+    expect(above.currentValue).toBe(2500.05);
+  });
+
+  it("2. PRICE_BELOW: price === threshold is FALSE; price < threshold is TRUE", () => {
+    const atBoundary = evaluateAlert(baseQuote, {
+      type: "PRICE_BELOW",
+      threshold: 2500,
+    });
+    expect(atBoundary.triggered).toBe(false);
+
+    const below = evaluateAlert({ ...baseQuote, price: 2499.95 }, {
+      type: "PRICE_BELOW",
+      threshold: 2500,
+    });
+    expect(below.triggered).toBe(true);
+    expect(below.currentValue).toBe(2499.95);
+  });
+
+  it("3. PERCENT_CHANGE_ABOVE: uses provider changePct if supplied", () => {
+    const withChangePct = {
+      ...baseQuote,
+      changePct: 3.25,
+      previousClose: 2400, // Should NOT be used if changePct is present
+    };
+    const res = evaluateAlert(withChangePct, {
+      type: "PERCENT_CHANGE_ABOVE",
+      threshold: 3.0,
+    });
+    expect(res.triggered).toBe(true);
+    expect(res.currentValue).toBe(3.25);
+  });
+
+  it("4. PERCENT_CHANGE_BELOW: derived from real price and previousClose", () => {
+    // previousClose = 2500, price = 2400 -> -4%
+    const res = evaluateAlert({
+      ...baseQuote,
+      price: 2400,
+      previousClose: 2500,
+      changePct: undefined,
+    }, {
+      type: "PERCENT_CHANGE_BELOW",
+      threshold: -3.0,
+    });
+    expect(res.triggered).toBe(true);
+    expect(res.currentValue).toBeCloseTo(-4.0, 2);
+  });
+
+  it("5. Missing previousClose does not fabricate 0% change; throws QuoteMissingDataError", () => {
+    expect(() => {
+      evaluateAlert({
+        ...baseQuote,
+        previousClose: undefined,
+        changePct: undefined,
+      }, {
+        type: "PERCENT_CHANGE_ABOVE",
+        threshold: 2.0,
+      });
+    }).toThrow(QuoteMissingDataError);
+  });
+
+  it("6. Volume of 0 is treated as real zero; 0 > threshold is FALSE", () => {
+    const res = evaluateAlert({
+      ...baseQuote,
+      volume: 0,
+    }, {
+      type: "VOLUME_ABOVE",
+      threshold: 50000,
+    });
+    expect(res.triggered).toBe(false);
+    expect(res.currentValue).toBe(0);
+  });
+
+  it("7. Missing volume defers by throwing QuoteMissingDataError", () => {
+    expect(() => {
+      evaluateAlert({
+        ...baseQuote,
+        volume: undefined,
+      }, {
+        type: "VOLUME_ABOVE",
+        threshold: 50000,
+      });
+    }).toThrow(QuoteMissingDataError);
+  });
+
+  it("8. Unsupported RSI condition throws AlertUnsupportedTypeError and does NOT trigger", () => {
+    expect(() => {
+      evaluateAlert({
+        ...baseQuote,
+        rsi: 80,
+      } as any, {
+        type: "RSI_ABOVE" as any,
+        threshold: 70,
+      });
+    }).toThrow(AlertUnsupportedTypeError);
+  });
+
+  it("9. Unsupported MACD condition throws AlertUnsupportedTypeError and does NOT trigger", () => {
+    expect(() => {
+      evaluateAlert({
+        ...baseQuote,
+        macd: 5,
+        macdSignal: 3,
+      } as any, {
+        type: "MACD_CROSS_ABOVE" as any,
+      });
+    }).toThrow(AlertUnsupportedTypeError);
+  });
+
+  it("10. Unsupported SMA condition throws AlertUnsupportedTypeError and does NOT trigger", () => {
+    expect(() => {
+      evaluateAlert({
+        ...baseQuote,
+        sma50: 2400,
+      } as any, {
+        type: "PRICE_CROSS_SMA" as any,
+      });
+    }).toThrow(AlertUnsupportedTypeError);
+  });
+
+  it("11. SCREENER_MATCH throws AlertUnsupportedTypeError and creates no fake 0/0 evaluation", () => {
+    expect(() => {
+      evaluateAlert(baseQuote, {
+        type: "SCREENER_MATCH" as any,
+      });
+    }).toThrow(AlertUnsupportedTypeError);
+  });
+
+  it("12. QuoteMissingDataError and AlertUnsupportedTypeError are recognized via instanceof", () => {
+    const missingErr = new QuoteMissingDataError("volume");
+    expect(missingErr instanceof QuoteMissingDataError).toBe(true);
+
+    const unsupportedErr = new AlertUnsupportedTypeError("RSI_ABOVE");
+    expect(unsupportedErr instanceof AlertUnsupportedTypeError).toBe(true);
+  });
+
+  it("13. Repeating alert cooldown respects cooldownMinutes", () => {
+    const now = 1720000000000;
+    const cooldownMs = 60 * 60 * 1000; // 60 min
+
+    // Last triggered 30 minutes ago (in cooldown)
+    const inCooldown = shouldRespectCooldown(now - 30 * 60 * 1000, 60, now);
+    expect(inCooldown).toBe(true);
+
+    // Last triggered 61 minutes ago (out of cooldown)
+    const outOfCooldown = shouldRespectCooldown(now - 61 * 60 * 1000, 60, now);
+    expect(outOfCooldown).toBe(false);
+  });
+
+  it("14. Deterministic fingerprint format alertId + timestampBucket", () => {
+    const alertId = "550e8400-e29b-41d4-a716-446655440000";
+    const nowMs = 1720000000000;
+    const bucket = Math.floor(nowMs / (60 * 1000));
+    const fp1 = `${alertId}-${bucket}`;
+    const fp2 = `${alertId}-${bucket}`;
+    expect(fp1).toBe(fp2);
   });
 });

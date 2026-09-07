@@ -8,15 +8,10 @@ import type { AlertConfig, AlertEvaluation } from "./contracts";
 export interface QuoteSnapshot {
   symbol: string;
   price: number;
-  previousClose: number;
-  volume: number;
+  previousClose?: number;
+  changePct?: number;
+  volume?: number;
   averageVolume20d?: number;
-  rsi?: number;
-  macd?: number;
-  macdSignal?: number;
-  sma20?: number;
-  sma50?: number;
-  sma200?: number;
   quoteTimestamp: number;
   source: string;
 }
@@ -28,6 +23,13 @@ export class QuoteMissingDataError extends Error {
   }
 }
 
+export class AlertUnsupportedTypeError extends Error {
+  constructor(alertType: string) {
+    super(`Unsupported alert type for active evaluation: ${alertType}`);
+    this.name = "AlertUnsupportedTypeError";
+  }
+}
+
 export function evaluateAlert(quote: QuoteSnapshot, config: AlertConfig): AlertEvaluation {
   const base = {
     quoteSource: quote.source,
@@ -36,7 +38,12 @@ export function evaluateAlert(quote: QuoteSnapshot, config: AlertConfig): AlertE
 
   switch (config.type) {
     case "PRICE_ABOVE": {
-      if (config.threshold === undefined) throw new QuoteMissingDataError("threshold");
+      if (config.threshold === undefined || !Number.isFinite(config.threshold)) {
+        throw new QuoteMissingDataError("threshold");
+      }
+      if (quote.price === undefined || !Number.isFinite(quote.price) || quote.price <= 0) {
+        throw new QuoteMissingDataError("price");
+      }
       return {
         ...base,
         triggered: quote.price > config.threshold,
@@ -46,7 +53,12 @@ export function evaluateAlert(quote: QuoteSnapshot, config: AlertConfig): AlertE
       };
     }
     case "PRICE_BELOW": {
-      if (config.threshold === undefined) throw new QuoteMissingDataError("threshold");
+      if (config.threshold === undefined || !Number.isFinite(config.threshold)) {
+        throw new QuoteMissingDataError("threshold");
+      }
+      if (quote.price === undefined || !Number.isFinite(quote.price) || quote.price <= 0) {
+        throw new QuoteMissingDataError("price");
+      }
       return {
         ...base,
         triggered: quote.price < config.threshold,
@@ -56,9 +68,23 @@ export function evaluateAlert(quote: QuoteSnapshot, config: AlertConfig): AlertE
       };
     }
     case "PERCENT_CHANGE_ABOVE": {
-      if (config.threshold === undefined) throw new QuoteMissingDataError("threshold");
-      if (quote.previousClose === 0) throw new QuoteMissingDataError("previousClose");
-      const change = ((quote.price - quote.previousClose) / quote.previousClose) * 100;
+      if (config.threshold === undefined || !Number.isFinite(config.threshold)) {
+        throw new QuoteMissingDataError("threshold");
+      }
+      let change: number;
+      if (quote.changePct !== undefined && Number.isFinite(quote.changePct)) {
+        change = quote.changePct;
+      } else if (
+        quote.previousClose !== undefined &&
+        Number.isFinite(quote.previousClose) &&
+        quote.previousClose > 0 &&
+        quote.price !== undefined &&
+        Number.isFinite(quote.price)
+      ) {
+        change = ((quote.price - quote.previousClose) / quote.previousClose) * 100;
+      } else {
+        throw new QuoteMissingDataError("previousClose");
+      }
       return {
         ...base,
         triggered: change > config.threshold,
@@ -68,9 +94,23 @@ export function evaluateAlert(quote: QuoteSnapshot, config: AlertConfig): AlertE
       };
     }
     case "PERCENT_CHANGE_BELOW": {
-      if (config.threshold === undefined) throw new QuoteMissingDataError("threshold");
-      if (quote.previousClose === 0) throw new QuoteMissingDataError("previousClose");
-      const change = ((quote.price - quote.previousClose) / quote.previousClose) * 100;
+      if (config.threshold === undefined || !Number.isFinite(config.threshold)) {
+        throw new QuoteMissingDataError("threshold");
+      }
+      let change: number;
+      if (quote.changePct !== undefined && Number.isFinite(quote.changePct)) {
+        change = quote.changePct;
+      } else if (
+        quote.previousClose !== undefined &&
+        Number.isFinite(quote.previousClose) &&
+        quote.previousClose > 0 &&
+        quote.price !== undefined &&
+        Number.isFinite(quote.price)
+      ) {
+        change = ((quote.price - quote.previousClose) / quote.previousClose) * 100;
+      } else {
+        throw new QuoteMissingDataError("previousClose");
+      }
       return {
         ...base,
         triggered: change < config.threshold,
@@ -80,7 +120,12 @@ export function evaluateAlert(quote: QuoteSnapshot, config: AlertConfig): AlertE
       };
     }
     case "VOLUME_ABOVE": {
-      if (config.threshold === undefined) throw new QuoteMissingDataError("threshold");
+      if (config.threshold === undefined || !Number.isFinite(config.threshold)) {
+        throw new QuoteMissingDataError("threshold");
+      }
+      if (quote.volume === undefined || !Number.isFinite(quote.volume)) {
+        throw new QuoteMissingDataError("volume");
+      }
       return {
         ...base,
         triggered: quote.volume > config.threshold,
@@ -89,96 +134,8 @@ export function evaluateAlert(quote: QuoteSnapshot, config: AlertConfig): AlertE
         threshold: config.threshold,
       };
     }
-    case "RELATIVE_VOLUME_ABOVE": {
-      if (config.threshold === undefined) throw new QuoteMissingDataError("threshold");
-      if (quote.averageVolume20d === undefined || quote.averageVolume20d === 0) {
-        throw new QuoteMissingDataError("averageVolume20d");
-      }
-      const rvol = quote.volume / quote.averageVolume20d;
-      return {
-        ...base,
-        triggered: rvol > config.threshold,
-        reason: `RVol ${rvol.toFixed(2)} > ${config.threshold}`,
-        currentValue: rvol,
-        threshold: config.threshold,
-      };
-    }
-    case "RSI_ABOVE": {
-      if (config.threshold === undefined) throw new QuoteMissingDataError("threshold");
-      if (quote.rsi === undefined) throw new QuoteMissingDataError("rsi");
-      return {
-        ...base,
-        triggered: quote.rsi > config.threshold,
-        reason: `RSI ${quote.rsi.toFixed(2)} > ${config.threshold}`,
-        currentValue: quote.rsi,
-        threshold: config.threshold,
-        indicatorValue: quote.rsi,
-      };
-    }
-    case "RSI_BELOW": {
-      if (config.threshold === undefined) throw new QuoteMissingDataError("threshold");
-      if (quote.rsi === undefined) throw new QuoteMissingDataError("rsi");
-      return {
-        ...base,
-        triggered: quote.rsi < config.threshold,
-        reason: `RSI ${quote.rsi.toFixed(2)} < ${config.threshold}`,
-        currentValue: quote.rsi,
-        threshold: config.threshold,
-        indicatorValue: quote.rsi,
-      };
-    }
-    case "MACD_CROSS_ABOVE": {
-      if (quote.macd === undefined || quote.macdSignal === undefined) {
-        throw new QuoteMissingDataError("macd");
-      }
-      return {
-        ...base,
-        triggered: quote.macd > quote.macdSignal,
-        reason: `MACD ${quote.macd.toFixed(4)} crossed above signal ${quote.macdSignal.toFixed(4)}`,
-        currentValue: quote.macd,
-        threshold: quote.macdSignal,
-      };
-    }
-    case "MACD_CROSS_BELOW": {
-      if (quote.macd === undefined || quote.macdSignal === undefined) {
-        throw new QuoteMissingDataError("macd");
-      }
-      return {
-        ...base,
-        triggered: quote.macd < quote.macdSignal,
-        reason: `MACD ${quote.macd.toFixed(4)} crossed below signal ${quote.macdSignal.toFixed(4)}`,
-        currentValue: quote.macd,
-        threshold: quote.macdSignal,
-      };
-    }
-    case "PRICE_CROSS_SMA": {
-      const period = config.smaPeriod ?? config.period ?? 50;
-      const sma = period === 20 ? quote.sma20 : period === 50 ? quote.sma50 : period === 200 ? quote.sma200 : undefined;
-      if (sma === undefined) throw new QuoteMissingDataError(`sma${period}`);
-      return {
-        ...base,
-        triggered: quote.price > sma,
-        reason: `Price ${quote.price} above SMA(${period}) ${sma.toFixed(2)}`,
-        currentValue: quote.price,
-        threshold: sma,
-        indicatorValue: sma,
-      };
-    }
-    case "SCREENER_MATCH": {
-      // Screener match is evaluated separately by the screener engine.
-      // The alert layer simply requires a screenerId.
-      if (!config.screenerId) throw new QuoteMissingDataError("screenerId");
-      return {
-        ...base,
-        triggered: false, // Determined by screener result
-        reason: `Screener ${config.screenerId} result pending`,
-        currentValue: 0,
-        threshold: 0,
-      };
-    }
     default: {
-      const exhaustive: never = config.type;
-      throw new Error(`Unknown alert type: ${String(exhaustive)}`);
+      throw new AlertUnsupportedTypeError(config.type);
     }
   }
 }

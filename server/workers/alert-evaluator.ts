@@ -1,4 +1,10 @@
-import { evaluateAlert, shouldRespectCooldown, type QuoteSnapshot } from "../modules/alerts/evaluator";
+import {
+  evaluateAlert,
+  shouldRespectCooldown,
+  QuoteMissingDataError,
+  AlertUnsupportedTypeError,
+  type QuoteSnapshot,
+} from "../modules/alerts/evaluator";
 import { recordAlertTriggerTransaction, loadActiveAlertsForSymbol } from "../modules/alerts/repository";
 import type { AlertConfig } from "../modules/alerts/contracts";
 import { getLogger } from "../infra/logger";
@@ -47,79 +53,31 @@ export class AlertEvaluatorWorker {
       throw dbErr;
     }
 
-    const symbolAlerts = activeAlerts.filter((a) => a.enabled);
-    const nowMs = Date.now();
-    const triggeredResults = [];
-
-    for (const alert of symbolAlerts) {
-      // Cooldown check for repeating alerts
-      if (alert.lastTriggeredAt && alert.mode === "REPEATING") {
-        const inCooldown = shouldRespectCooldown(
-          alert.lastTriggeredAt.getTime(),
-          alert.cooldownMinutes ?? 60,
-          nowMs
-        );
-        if (inCooldown) continue;
-      }
-
-      // One-time alert already triggered
-      if (alert.lastTriggeredAt && alert.mode === "ONE_TIME") {
-        continue;
-      }
-
-      try {
-        const evaluation = evaluateAlert(quote, alert.config);
-        if (evaluation.triggered) {
-          const timestampBucket = Math.floor(nowMs / (60 * 1000));
-          const fingerprint = `${alert.id}-${timestampBucket}`;
-
-          const result = await recordAlertTriggerTransaction({
-            alertId: alert.id,
-            userId: alert.userId,
-            symbol: quote.symbol,
-            exchange: "NSE",
-            observedValue: evaluation.currentValue,
-            targetValue: evaluation.threshold,
-            conditionType: alert.config.type,
-            message: evaluation.reason,
-            provider: quote.source,
-            fingerprint,
-            isOneTime: alert.mode === "ONE_TIME",
-          });
-
-          if (result) {
-            triggeredResults.push(result);
-          }
-        }
-      } catch (err: any) {
-        if (err?.message?.includes("Missing required indicator")) {
-          logger.debug({ alertId: alert.id, symbol: quote.symbol }, "Deferred evaluation due to missing input");
-          continue;
-        }
-        logger.warn({ alertId: alert.id, symbol: quote.symbol, err }, "Unexpected error evaluating alert");
-      }
-    }
-
-    return triggeredResults;
+    return await processQuoteAlerts(quote, activeAlerts);
   }
 }
 
 export const alertEvaluatorWorker = new AlertEvaluatorWorker();
 
 export async function processQuoteAlerts(quote: QuoteSnapshot, activeAlerts: AlertRow[]) {
-  const symbolAlerts = activeAlerts.filter(a => a.symbol === quote.symbol && a.enabled);
+  const symbolAlerts = activeAlerts.filter((a) => a.symbol === quote.symbol && a.enabled);
   const nowMs = Date.now();
   const triggeredResults = [];
 
   for (const alert of symbolAlerts) {
-    if (alert.lastTriggeredAt) {
-      const isCooldown = shouldRespectCooldown(
+    // Cooldown check for repeating alerts
+    if (alert.lastTriggeredAt && alert.mode === "REPEATING") {
+      const inCooldown = shouldRespectCooldown(
         alert.lastTriggeredAt.getTime(),
         alert.cooldownMinutes ?? 60,
         nowMs
       );
-      if (isCooldown && alert.mode === "REPEATING") continue;
-      if (alert.mode === "ONE_TIME") continue;
+      if (inCooldown) continue;
+    }
+
+    // One-time alert already triggered
+    if (alert.lastTriggeredAt && alert.mode === "ONE_TIME") {
+      continue;
     }
 
     try {
@@ -138,6 +96,7 @@ export async function processQuoteAlerts(quote: QuoteSnapshot, activeAlerts: Ale
           conditionType: alert.config.type,
           message: evaluation.reason,
           provider: quote.source,
+          providerTimestamp: new Date(quote.quoteTimestamp),
           fingerprint,
           isOneTime: alert.mode === "ONE_TIME",
         });
@@ -146,8 +105,16 @@ export async function processQuoteAlerts(quote: QuoteSnapshot, activeAlerts: Ale
           triggeredResults.push(result);
         }
       }
-    } catch {
-      continue;
+    } catch (err: any) {
+      if (err instanceof QuoteMissingDataError) {
+        logger.debug({ alertId: alert.id, symbol: quote.symbol, missing: err.message }, "Deferred evaluation due to missing input");
+        continue;
+      }
+      if (err instanceof AlertUnsupportedTypeError) {
+        logger.debug({ alertId: alert.id, symbol: quote.symbol, type: alert.config.type }, "Skipped unsupported alert type");
+        continue;
+      }
+      logger.warn({ alertId: alert.id, symbol: quote.symbol, err }, "Unexpected error evaluating alert");
     }
   }
 
