@@ -9,6 +9,11 @@ import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { companies, fundamentals } from "../../../db/schema";
 import { desc, eq, ilike, and, sql, or } from "drizzle-orm";
+import {
+  PeerComparisonRequestSchema,
+  PeerComparisonResultSchema,
+} from "../../../modules/peers/contracts";
+import { getPeerComparison } from "../../../modules/peers/service";
 
 // FIX 4: Admin role check
 const ADMIN_USER_IDS = new Set(
@@ -309,5 +314,26 @@ export const companiesRouter = createRouter({
           sector: data.sector,
         },
       };
+    }),
+
+  getPeerComparison: protectedProcedure
+    .input(PeerComparisonRequestSchema)
+    .output(PeerComparisonResultSchema)
+    .query(async ({ input }) => {
+      const symbol = input.symbol.trim().toUpperCase();
+      try {
+        return await getPeerComparison(symbol, input.limit);
+      } catch (err: any) {
+        if (err.message && err.message.includes("Company not found")) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Company not found: ${symbol}`,
+          });
+        }
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: err.message || "Failed to load peer comparison",
+        });
+      }
     }),
 });

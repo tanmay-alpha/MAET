@@ -46,14 +46,20 @@ export const PeerComparisonEntrySchema = z.object({
   percentile: z.number(),
   metrics: PeerMetricSchema,
   dataCoverage: z.number(),
+  latestFundamentalsAt: z.string().nullable(),
+  latestQuoteAt: z.string().nullable(),
 });
 export type PeerComparisonEntry = z.infer<typeof PeerComparisonEntrySchema>;
 
 export const PeerComparisonResultSchema = z.object({
   target: PeerComparisonEntrySchema,
   peers: z.array(PeerComparisonEntrySchema),
-  medians: PeerMetricSchema,
-  sectorMedian: PeerMetricSchema.partial(),
-  asOf: z.string(),
+  medians: PeerMetricSchema.partial(),
+  comparisonMedian: PeerMetricSchema.partial(),
+  sectorMedian: PeerMetricSchema.partial().optional(),
+  selectionBasis: z.enum(["industry", "sector", "none"]),
+  selectionLabel: z.string(),
+  asOf: z.string().nullable(),
+  generatedAt: z.string(),
 });
 export type PeerComparisonResult = z.infer<typeof PeerComparisonResultSchema>;
