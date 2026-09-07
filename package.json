@@ -16,7 +16,7 @@
     "test:concurrency": "bun test server/modules/paper-trading/concurrency.integration.test.ts",
     "test:capabilities": "bun test server/modules/capabilities/capabilities.integration.test.ts",
     "test:workspace": "bun test server/modules/workspace/tenant-isolation.integration.test.ts",
-    "test:alerts": "bun test server/modules/alerts/alerts.integration.test.ts",
+    "test:alerts": "bun test server/modules/alerts/alerts.integration.test.ts server/workers/alert-subscriptions.test.ts server/api/trpc/routers/alerts-engine.test.ts",
     "test:scorecard": "bun test server/modules/analysis/scorecard.integration.test.ts",
     "test:peers": "bun test server/modules/peers/peers.integration.test.ts",
     "test:breadth": "bun test server/modules/market-breadth/breadth.integration.test.ts",

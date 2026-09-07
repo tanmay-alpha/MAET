@@ -497,3 +497,167 @@ describe("Alert Evaluation & Provenance Suite (Checkpoint 2)", () => {
     expect(fp1).toBe(fp2);
   });
 });
+
+describe("PostgreSQL Alert Lifecycle & Tenant Isolation Suite (Checkpoint 4)", () => {
+  it("executes full PostgreSQL lifecycle when TEST_DATABASE_URL is set, or prints explicit skip message", async () => {
+    const databaseUrl = process.env.TEST_DATABASE_URL;
+    if (!databaseUrl) {
+      console.log("  Skipping PostgreSQL alert integration: TEST_DATABASE_URL not set");
+      return;
+    }
+
+    const { getSqlClient } = await import("../../data/drizzle/client");
+    const {
+      createAlert,
+      listUserAlerts,
+      toggleAlert,
+      rearmAlert,
+      deleteAlert,
+      recordAlertTriggerTransaction,
+    } = await import("./repository");
+
+    const sql = getSqlClient();
+    const userA = crypto.randomUUID();
+    const userB = crypto.randomUUID();
+
+    try {
+      await sql`
+        INSERT INTO auth.users (id) VALUES (${userA}), (${userB})
+        ON CONFLICT DO NOTHING
+      `;
+      await sql`
+        INSERT INTO public.users (id, email)
+        VALUES
+          (${userA}, ${`alert-a-${userA}@example.com`}),
+          (${userB}, ${`alert-b-${userB}@example.com`})
+      `;
+
+      // 1. User A alert invisible to User B
+      const alertA = await createAlert(userA, {
+        symbol: "RELIANCE",
+        config: {
+          type: "PRICE_ABOVE",
+          threshold: 3000,
+          mode: "one_time",
+        },
+      });
+
+      const userBAlerts = await listUserAlerts(userB);
+      expect(userBAlerts.some((a) => a.id === alertA.id)).toBe(false);
+
+      // 2. User B cannot toggle User A alert
+      const toggleB = await toggleAlert(alertA.id, userB, false);
+      expect(toggleB).toBeNull();
+
+      // 3. User B cannot rearm User A alert
+      const rearmB = await rearmAlert(alertA.id, userB);
+      expect(rearmB).toBeNull();
+
+      // 4. User B cannot delete User A alert
+      await deleteAlert(alertA.id, userB);
+      const userAAlertsAfterDelete = await listUserAlerts(userA);
+      expect(userAAlertsAfterDelete.some((a) => a.id === alertA.id)).toBe(true);
+
+      // 5. One-time trigger transaction inserts exactly one event and one notification
+      const marketTimestamp = new Date("2026-07-31T10:00:00Z");
+      const triggerRes = await recordAlertTriggerTransaction({
+        alertId: alertA.id,
+        userId: userA,
+        symbol: "RELIANCE",
+        exchange: "NSE",
+        observedValue: 3050,
+        targetValue: 3000,
+        conditionType: "PRICE_ABOVE",
+        message: "Price 3050 > 3000",
+        provider: "angelone",
+        providerTimestamp: marketTimestamp,
+        fingerprint: `fp-${alertA.id}-1`,
+        isOneTime: true,
+      });
+
+      expect(triggerRes).not.toBeNull();
+      expect(triggerRes?.event).toBeDefined();
+      expect(triggerRes?.notification).toBeDefined();
+
+      // 6. One-time alert becomes disabled
+      // 7. TriggerCount increments
+      const userAAlertsAfterTrigger = await listUserAlerts(userA);
+      const updatedAlertA = userAAlertsAfterTrigger.find((a) => a.id === alertA.id)!;
+      expect(updatedAlertA.enabled).toBe(false);
+      expect(updatedAlertA.triggered).toBe(true);
+      expect(updatedAlertA.triggerCount).toBe(1);
+
+      // 8. Provider timestamp preserved
+      expect(triggerRes?.event.providerTimestamp?.toISOString()).toBe(marketTimestamp.toISOString());
+
+      // 9. Duplicate fingerprint creates no duplicate event/notification
+      const dupRes = await recordAlertTriggerTransaction({
+        alertId: alertA.id,
+        userId: userA,
+        symbol: "RELIANCE",
+        exchange: "NSE",
+        observedValue: 3055,
+        targetValue: 3000,
+        conditionType: "PRICE_ABOVE",
+        message: "Price 3055 > 3000",
+        provider: "angelone",
+        providerTimestamp: marketTimestamp,
+        fingerprint: `fp-${alertA.id}-1`,
+        isOneTime: true,
+      });
+      expect(dupRes).toBeNull();
+
+      // 10. Repeating trigger remains enabled
+      const repeatingAlert = await createAlert(userA, {
+        symbol: "TCS",
+        config: {
+          type: "PRICE_BELOW",
+          threshold: 3500,
+          mode: "repeating",
+          cooldownMinutes: 60,
+        },
+      });
+
+      const repeatingTriggerRes = await recordAlertTriggerTransaction({
+        alertId: repeatingAlert.id,
+        userId: userA,
+        symbol: "TCS",
+        exchange: "NSE",
+        observedValue: 3450,
+        targetValue: 3500,
+        conditionType: "PRICE_BELOW",
+        message: "Price 3450 < 3500",
+        provider: "angelone",
+        providerTimestamp: marketTimestamp,
+        fingerprint: `fp-${repeatingAlert.id}-1`,
+        isOneTime: false,
+      });
+      expect(repeatingTriggerRes).not.toBeNull();
+      const updatedRepeating = (await listUserAlerts(userA)).find((a) => a.id === repeatingAlert.id)!;
+      expect(updatedRepeating.enabled).toBe(true);
+
+      // 11. Rearm clears trigger state but preserves prior event rows and triggerCount
+      const rearmedA = await rearmAlert(alertA.id, userA);
+      expect(rearmedA?.enabled).toBe(true);
+      expect(rearmedA?.triggered).toBe(false);
+      expect(rearmedA?.triggeredAt).toBeNull();
+      expect(rearmedA?.lastTriggeredAt).toBeNull();
+      expect(rearmedA?.triggerCount).toBe(1);
+
+      // 12. Unsupported historical alert cannot be re-enabled
+      const [legacyRow] = await sql`
+        INSERT INTO alerts (user_id, symbol, exchange, type, condition, target, enabled, mode)
+        VALUES (${userA}, 'INFY', 'NSE', 'RSI_ABOVE', 'RSI_ABOVE', 70, false, 'ONE_TIME')
+        RETURNING id
+      `;
+      await expect(toggleAlert(legacyRow.id, userA, true)).rejects.toThrow("Cannot enable unsupported legacy alert type");
+      await expect(rearmAlert(legacyRow.id, userA)).rejects.toThrow("Cannot rearm unsupported legacy alert type");
+    } finally {
+      await sql`DELETE FROM user_notifications WHERE user_id IN (${userA}, ${userB})`;
+      await sql`DELETE FROM alert_events WHERE user_id IN (${userA}, ${userB})`;
+      await sql`DELETE FROM alerts WHERE user_id IN (${userA}, ${userB})`;
+      await sql`DELETE FROM public.users WHERE id IN (${userA}, ${userB})`;
+      await sql`DELETE FROM auth.users WHERE id IN (${userA}, ${userB})`;
+    }
+  });
+});
