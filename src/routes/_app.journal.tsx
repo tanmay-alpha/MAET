@@ -15,7 +15,7 @@ export const Route = createFileRoute("/_app/journal")({
 });
 
 function JournalPage() {
-  const [activeTab, setActiveTab] = useState<"THEASES" | "REVIEWS">("THEASES");
+  const [activeTab, setActiveTab] = useState<"THESES" | "REVIEWS">("THESES");
   const thesesQuery = trpc.tradeTheses.list.useQuery();
   const { positions } = usePaperAccount();
 
@@ -38,9 +38,9 @@ function JournalPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setActiveTab("THEASES")}
+            onClick={() => setActiveTab("THESES")}
             className={`rounded px-3 py-1.5 text-xs font-semibold transition ${
-              activeTab === "THEASES" ? "bg-primary text-primary-foreground" : "bg-panel border border-border text-muted-foreground hover:text-foreground"
+              activeTab === "THESES" ? "bg-primary text-primary-foreground" : "bg-panel border border-border text-muted-foreground hover:text-foreground"
             }`}
           >
             Trade Theses ({theses.length})
@@ -79,7 +79,7 @@ function JournalPage() {
       </div>
 
       {/* Main Content */}
-      {activeTab === "THEASES" ? (
+      {activeTab === "THESES" ? (
         <div className="space-y-3">
           <h2 className="text-sm font-bold">Recorded Trade Theses</h2>
           {theses.length === 0 ? (

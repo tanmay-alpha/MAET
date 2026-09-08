@@ -15,6 +15,9 @@ describe("tRPC authentication", () => {
 
     await expect(caller.market.getMarketClock()).resolves.toMatchObject({
       phase: expect.any(String),
+      marketStatus: expect.stringMatching(/^(Live|Delayed|Closed)$/),
+      ist: expect.any(String),
+      nseHolidays: expect.any(Array),
     });
   });
 });

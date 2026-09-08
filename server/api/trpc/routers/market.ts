@@ -1,6 +1,8 @@
 import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { computePhase } from "../../../domain/market/clock";
+import { getConfig } from "../../../config";
 
 // FIX 2: SSRF protection — strict symbol and range validation
 const VALID_SYMBOL = /^[A-Z][A-Z0-9\-\\.]{0,19}$/;
@@ -215,37 +217,22 @@ export const marketRouter = createRouter({
   getMarketClock: protectedProcedure
     .query(async () => {
       const now = new Date();
-      const istTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-      const hours = istTime.getHours();
-      const minutes = istTime.getMinutes();
-      const timeInMinutes = hours * 60 + minutes;
-
-      // NSE Market hours: 9:15 AM to 3:30 PM IST
-      const marketOpen = 9 * 60 + 15; // 9:15 AM
-      const marketClose = 15 * 60 + 30; // 3:30 PM
-
-      let phase: string;
-      let marketStatus: string;
-
-      if (timeInMinutes >= marketOpen && timeInMinutes < marketClose) {
-        phase = "OPEN";
-        marketStatus = "Live";
-      } else if (timeInMinutes >= marketClose && timeInMinutes < 16 * 60 + 30) {
-        phase = "AFTER_HOURS";
-        marketStatus = "Closed";
-      } else if (timeInMinutes < marketOpen && timeInMinutes >= 5 * 60) {
-        phase = "PRE_OPEN";
-        marketStatus = "Pre-Open";
-      } else {
-        phase = "CLOSED";
-        marketStatus = "Closed";
+      let holidays: Date[] = [];
+      try {
+        holidays = getConfig().nseHolidays ?? [];
+      } catch {
+        holidays = [];
       }
+
+      const phase = computePhase(now, holidays);
+      const istTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+      const marketStatus: "Live" | "Delayed" | "Closed" = phase === "OPEN" ? "Live" : "Closed";
 
       return {
         phase,
         ist: istTime.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }),
         marketStatus,
-        nseHolidays: [], // TODO: Load from NSE holiday list
+        nseHolidays: holidays.map((h) => h.toISOString().split("T")[0]),
       };
     }),
 });
