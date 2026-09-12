@@ -19,14 +19,25 @@ function isSameSymbol(left: string, right: string): boolean {
   return left.trim().toUpperCase() === right.trim().toUpperCase();
 }
 
-function calculateMarkedUnrealisedPnl(
-  position: PaperPosition,
+export function calculateMarkedUnrealisedPnl(
+  position: { quantity: number; averagePrice: number },
   quotePrice: number
 ): number {
   return position.quantity > 0
     ? position.quantity * (quotePrice - position.averagePrice)
     : Math.abs(position.quantity) *
         (position.averagePrice - quotePrice);
+}
+
+export function getPositionCloseSide(position: {
+  side?: "LONG" | "SHORT" | string | null;
+  totalShares?: number;
+  quantity?: number;
+}): "BUY" | "SELL" {
+  if (position.side === "SHORT") return "BUY";
+  if (position.quantity !== undefined && position.quantity < 0) return "BUY";
+  if (position.totalShares !== undefined && position.totalShares < 0) return "BUY";
+  return "SELL";
 }
 
 export function calculateAccountMargins(

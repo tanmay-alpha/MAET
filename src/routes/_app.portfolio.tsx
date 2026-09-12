@@ -9,6 +9,7 @@ import { EquityCurveChart } from "@/components/chart/equity-curve-chart";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
 import { PlusCircle } from "lucide-react";
 import type { PaperPositionRow } from "../../server/modules/paper-trading/contracts";
+import { calculateMarkedUnrealisedPnl, getPositionCloseSide } from "@shared/domain/paper-trading/margin";
 
 export const Route = createFileRoute("/_app/portfolio")({
   head: () => ({
@@ -213,13 +214,21 @@ function PortfolioPage() {
                     const avgPrice = Number(position.averageEntryPrice);
                     const ltp = quote?.price || avgPrice;
                     const changePct = quote?.changePct || 0;
-                    const totalVal = ltp * position.totalShares;
-                    const pnl = (ltp - avgPrice) * position.totalShares;
+                    const isShort = position.side === "SHORT" || Number(position.totalShares) < 0;
+                    const signedQty = isShort ? -Math.abs(position.totalShares) : Math.abs(position.totalShares);
+                    const totalVal = ltp * Math.abs(position.totalShares);
+                    const pnl = calculateMarkedUnrealisedPnl({ quantity: signedQty, averagePrice: avgPrice }, ltp);
+                    const closeSide = getPositionCloseSide(position);
 
                     return (
                       <div key={position.id} className="border border-border bg-panel rounded-lg p-4 hover:bg-accent/50 transition-colors">
                         <div className="flex items-center justify-between mb-2">
-                          <div className="font-semibold">{position.symbol}</div>
+                          <div className="flex items-center gap-1.5 font-semibold">
+                            <span>{position.symbol}</span>
+                            <span className={`text-[9px] px-1 py-0.2 rounded font-mono ${isShort ? "bg-bear/20 text-bear" : "bg-bull/20 text-bull"}`}>
+                              {isShort ? "SHORT" : "LONG"}
+                            </span>
+                          </div>
                           <div className={`text-sm font-medium ${pnl >= 0 ? "text-bull" : "text-bear"}`}>
                             {pnl >= 0 ? "+" : ""}₹{pnl.toFixed(2)}
                           </div>
@@ -227,7 +236,7 @@ function PortfolioPage() {
                         <div className="grid grid-cols-4 gap-2 text-xs">
                           <div>
                             <div className="text-muted-foreground">Qty</div>
-                            <div className="font-mono">{position.totalShares}</div>
+                            <div className="font-mono">{Math.abs(position.totalShares)}</div>
                           </div>
                           <div>
                             <div className="text-muted-foreground">Avg</div>
@@ -255,9 +264,9 @@ function PortfolioPage() {
                                 placeOrder({
                                   symbol: position.symbol,
                                   exchange: "NSE",
-                                  side: "SELL",
+                                  side: closeSide,
                                   type: "MARKET",
-                                  quantity: position.totalShares,
+                                  quantity: Math.abs(position.totalShares),
                                 });
                               }
                             }}

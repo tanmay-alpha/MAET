@@ -12,6 +12,7 @@ import { ShieldAlert, RefreshCw, Layers, ClipboardList, History } from "lucide-r
 import { useTerminalStore } from "@/store/useTerminalStore";
 import { DepthMeter } from "@/components/trading/depth-meter";
 import type { PaperOrderRow, PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
+import { calculateMarkedUnrealisedPnl, getPositionCloseSide } from "@shared/domain/paper-trading/margin";
 
 import { useActiveSymbol } from "@/hooks/use-active-symbol";
 import { Filter, Sparkles, X } from "lucide-react";
@@ -356,12 +357,20 @@ function Terminal() {
                       const quote = quoteMap.get(pos.symbol);
                       const avgPrice = Number(pos.averageEntryPrice);
                       const ltp = quote?.price ?? avgPrice;
-                      const pnl = pos.totalShares * (ltp - avgPrice);
+                      const isShort = pos.side === "SHORT" || Number(pos.totalShares) < 0;
+                      const signedQty = isShort ? -Math.abs(pos.totalShares) : Math.abs(pos.totalShares);
+                      const pnl = calculateMarkedUnrealisedPnl({ quantity: signedQty, averagePrice: avgPrice }, ltp);
+                      const closeSide = getPositionCloseSide(pos);
 
                       return (
                         <tr key={pos.id} className="border-b border-border hover:bg-accent/40 transition-colors">
-                          <td className="px-3 py-2 font-sans font-semibold text-foreground">{pos.symbol}</td>
-                          <td className="px-3 py-2 text-right">{pos.totalShares}</td>
+                          <td className="px-3 py-2 font-sans font-semibold text-foreground">
+                            {pos.symbol}
+                            <span className={`ml-1.5 inline-block text-[9px] px-1 py-0.2 rounded font-mono ${isShort ? "bg-bear/20 text-bear" : "bg-bull/20 text-bull"}`}>
+                              {isShort ? "SHORT" : "LONG"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right">{Math.abs(pos.totalShares)}</td>
                           <td className="px-3 py-2 text-right">₹{avgPrice.toFixed(2)}</td>
                           <td className="px-3 py-2 text-right">₹{ltp.toFixed(2)}</td>
                           <td className={`px-3 py-2 text-right font-bold ${pnl >= 0 ? "text-bull" : "text-bear"}`}>
@@ -374,9 +383,9 @@ function Terminal() {
                                 placeOrder({
                                   symbol: pos.symbol,
                                   exchange: "NSE",
-                                  side: "SELL",
+                                  side: closeSide,
                                   type: "MARKET",
-                                  quantity: pos.totalShares,
+                                  quantity: Math.abs(pos.totalShares),
                                 });
                               }}
                               disabled={!isTradingAvailable}

@@ -6,6 +6,7 @@ import { usePaperAccount } from "@/hooks/use-paper-account";
 import { INDICES } from "@/lib/market-catalog";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
 import type { PaperPositionRow, PaperOrderRow } from "../../server/modules/paper-trading/contracts";
+import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
 
 export const Route = createFileRoute("/_app/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — MAET" }] }),
@@ -73,17 +74,19 @@ function Dashboard() {
 
   const unrealizedPnl = positions.reduce((total, position: PaperPositionRow) => {
     const avgPrice = Number(position.averageEntryPrice);
-    const ltp = quoteMap.get(position.symbol)?.price;
-    return total + (ltp === undefined ? 0 : (ltp - avgPrice) * position.totalShares);
+    const ltp = quoteMap.get(position.symbol)?.price ?? avgPrice;
+    const isShort = position.side === "SHORT" || position.totalShares < 0;
+    const signedQty = isShort ? -Math.abs(position.totalShares) : Math.abs(position.totalShares);
+    return total + calculateMarkedUnrealisedPnl({ quantity: signedQty, averagePrice: avgPrice }, ltp);
   }, 0);
 
   const positionsValue = positions.reduce((total, position: PaperPositionRow) => {
     const avgPrice = Number(position.averageEntryPrice);
     const mark = quoteMap.get(position.symbol)?.price ?? avgPrice;
-    return total + mark * position.totalShares;
+    return total + mark * Math.abs(position.totalShares);
   }, 0);
 
-  const equity = cash + positionsValue;
+  const equity = cash + unrealizedPnl;
   const totalPnl = equity - initialCash;
   const filledOrders = orders.filter((o: PaperOrderRow) => o.status === "FILLED").length;
   const pendingOrders = orders.filter((o: PaperOrderRow) => o.status === "PENDING" || o.status === "TRIGGER_PENDING").length;
@@ -178,6 +181,7 @@ function Dashboard() {
               <thead>
                 <tr className="border-b border-border text-[10px] text-muted-foreground uppercase">
                   <th className="py-2">Symbol</th>
+                  <th className="py-2">Side</th>
                   <th className="py-2 text-right">Shares</th>
                   <th className="py-2 text-right">Avg Entry</th>
                   <th className="py-2 text-right">LTP</th>
@@ -188,11 +192,25 @@ function Dashboard() {
                 {positions.map((pos: PaperPositionRow) => {
                   const avgPrice = Number(pos.averageEntryPrice);
                   const ltp = quoteMap.get(pos.symbol)?.price ?? avgPrice;
-                  const pnl = (ltp - avgPrice) * pos.totalShares;
+                  const isShort = pos.side === "SHORT" || pos.totalShares < 0;
+                  const signedQty = isShort ? -Math.abs(pos.totalShares) : Math.abs(pos.totalShares);
+                  const pnl = calculateMarkedUnrealisedPnl(
+                    { quantity: signedQty, averagePrice: avgPrice },
+                    ltp
+                  );
                   return (
                     <tr key={pos.id} className="border-b border-border/50">
                       <td className="py-2 font-sans font-medium">{pos.symbol}</td>
-                      <td className="py-2 text-right">{pos.totalShares}</td>
+                      <td className="py-2">
+                        <span
+                          className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                            isShort ? "bg-bear/20 text-bear" : "bg-bull/20 text-bull"
+                          }`}
+                        >
+                          {isShort ? "SHORT" : "LONG"}
+                        </span>
+                      </td>
+                      <td className="py-2 text-right">{Math.abs(pos.totalShares)}</td>
                       <td className="py-2 text-right">₹{avgPrice.toFixed(2)}</td>
                       <td className="py-2 text-right">₹{ltp.toFixed(2)}</td>
                       <td className={`py-2 text-right font-bold ${pnl >= 0 ? "text-bull" : "text-bear"}`}>

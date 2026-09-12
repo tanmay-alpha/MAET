@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import type { PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
+import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
 
 export interface PerformanceMetrics {
   totalValue: number;
@@ -131,21 +132,29 @@ export function usePortfolioAnalytics() {
       const currentPrice = quote?.price || avgPrice;
       const prevPrice = quote?.previousClose;
 
-      const qty = position.totalShares;
-      positionsValue += currentPrice * qty;
-      positionsCost += avgPrice * qty;
-      unrealizedPnl += (currentPrice - avgPrice) * qty;
+      const isShort = position.side === "SHORT" || position.totalShares < 0;
+      const absQty = Math.abs(position.totalShares);
+      const signedQty = isShort ? -absQty : absQty;
+
+      positionsValue += currentPrice * absQty;
+      positionsCost += avgPrice * absQty;
+      unrealizedPnl += calculateMarkedUnrealisedPnl(
+        { quantity: signedQty, averagePrice: avgPrice },
+        currentPrice
+      );
 
       if (prevPrice && prevPrice > 0) {
-        dayPnl += (currentPrice - prevPrice) * qty;
+        dayPnl += isShort
+          ? (prevPrice - currentPrice) * absQty
+          : (currentPrice - prevPrice) * absQty;
       }
     });
 
-    const totalValue = cash + positionsValue;
-    const totalCost = initialCash - cash + positionsCost;
+    const totalValue = cash + unrealizedPnl;
+    const totalCost = initialCash;
     const totalPnl = unrealizedPnl + realisedPnl;
     const totalReturnPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
-    const dayPnlPct = positionsValue > 0 ? (dayPnl / positionsValue) * 100 : 0;
+    const dayPnlPct = totalValue > 0 ? (dayPnl / totalValue) * 100 : 0;
 
     const metrics: PerformanceMetrics = {
       totalValue,
@@ -202,7 +211,7 @@ export function usePortfolioAnalytics() {
     const history: PerformanceDataPoint[] = fills.length > 0
       ? [{
           date: new Date(fills[0].executedAt).toISOString().split("T")[0],
-          value: cash + positionsValue,
+          value: totalValue,
           pnl: totalPnl,
         }]
       : [{ date: new Date().toISOString().split("T")[0], value: cash, pnl: 0 }];
