@@ -35,6 +35,10 @@ export interface TradeRecord {
   exitPrice: number;
   side: "long" | "short";
   return: number;
+  /** Net monetary P&L for this trade (after fees and slippage). Used for profit factor
+   *  and expectancy when available — more accurate than percentage-based sums for
+   *  heterogeneous position sizes. */
+  netPnl?: number;
 }
 
 const TRADING_DAYS_PER_YEAR = 252;
@@ -88,6 +92,9 @@ export function computeMetrics(
   equityCurve: EquityPoint[],
   trades: TradeRecord[],
   benchmarkCurve?: EquityPoint[],
+  /** Days per observation period. Default 1 (daily). Use 1/252 for minute bars, etc.
+   *  Required for correct annualization when backtesting intraday timeframes. */
+  observationIntervalDays = 1,
 ): BacktestMetrics {
   const empty: BacktestMetrics = {
     totalReturn: 0, annualisedReturn: 0, benchmarkReturn: 0, alpha: 0,
@@ -109,8 +116,11 @@ export function computeMetrics(
   const annualisedReturn = years > 0 ? (1 + totalReturn) ** (1 / years) - 1 : 0;
 
   const returns = computeReturns(equityValues);
-  const vol = stddev(returns) * Math.sqrt(TRADING_DAYS_PER_YEAR);
-  const downside = downsideDeviation(returns) * Math.sqrt(TRADING_DAYS_PER_YEAR);
+  // P0-D fix: annualize using the actual observation interval, not always sqrt(252).
+  // periodsPerYear = 1 / observationIntervalDays for a 365-day year.
+  const periodsPerYear = 1 / (observationIntervalDays / 365);
+  const vol = stddev(returns) * Math.sqrt(periodsPerYear);
+  const downside = downsideDeviation(returns) * Math.sqrt(periodsPerYear);
   const sharpe = vol === 0 ? 0 : (annualisedReturn / vol);
   const sortino = downside === 0 ? 0 : annualisedReturn / downside;
 
@@ -119,22 +129,42 @@ export function computeMetrics(
 
   // Benchmark comparison
   let benchmarkReturn = 0;
+  let benchmarkAnnualisedReturn = 0;
   let alpha = 0;
   if (benchmarkCurve && benchmarkCurve.length >= 2) {
     const bInit = benchmarkCurve[0].benchmark ?? benchmarkCurve[0].equity;
     const bFinal = benchmarkCurve[benchmarkCurve.length - 1].benchmark ?? benchmarkCurve[benchmarkCurve.length - 1].equity;
-    if (bInit > 0) benchmarkReturn = (bFinal - bInit) / bInit;
-    alpha = annualisedReturn - benchmarkReturn;
+    if (bInit > 0) {
+      benchmarkReturn = (bFinal - bInit) / bInit;
+      // P0-D fix: annualize benchmark return using the same period as the strategy
+      // so alpha is dimensionally consistent (annualized - annualized).
+      // Previously alpha = annualisedReturn - totalBenchmarkReturn (wrong!).
+      const bDays = (benchmarkCurve[benchmarkCurve.length - 1].timestamp - benchmarkCurve[0].timestamp) / 86_400_000;
+      const bYears = bDays / 365;
+      benchmarkAnnualisedReturn = bYears > 0 ? (1 + benchmarkReturn) ** (1 / bYears) - 1 : 0;
+      alpha = annualisedReturn - benchmarkAnnualisedReturn;
+    }
   }
 
   // Trade stats
-  const wins = trades.filter((t) => t.return > 0);
-  const losses = trades.filter((t) => t.return <= 0);
+  const wins = trades.filter((t) => (t.netPnl !== undefined ? t.netPnl : t.return) > 0);
+  const losses = trades.filter((t) => (t.netPnl !== undefined ? t.netPnl : t.return) <= 0);
   const winRate = trades.length === 0 ? 0 : wins.length / trades.length;
-  const grossProfit = wins.reduce((s, t) => s + t.return, 0);
-  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.return, 0));
+
+  // P0-D fix: profit factor uses monetary P&L when available, not percentage returns.
+  // Percentage-based profit factor is wrong when position sizes differ across trades.
+  const hasPnl = trades.length > 0 && trades[0].netPnl !== undefined;
+  const grossProfit = hasPnl
+    ? wins.reduce((s, t) => s + (t.netPnl ?? 0), 0)
+    : wins.reduce((s, t) => s + t.return, 0);
+  const grossLoss = hasPnl
+    ? Math.abs(losses.reduce((s, t) => s + (t.netPnl ?? 0), 0))
+    : Math.abs(losses.reduce((s, t) => s + t.return, 0));
   const profitFactor = grossLoss === 0 ? (grossProfit > 0 ? Infinity : 0) : grossProfit / grossLoss;
-  const expectancy = trades.length === 0 ? 0 : trades.reduce((s, t) => s + t.return, 0) / trades.length;
+  const expectancy = trades.length === 0 ? 0
+    : hasPnl
+      ? trades.reduce((s, t) => s + (t.netPnl ?? 0), 0) / trades.length
+      : trades.reduce((s, t) => s + t.return, 0) / trades.length;
   const averageHoldingPeriod = trades.length === 0 ? 0 : trades.reduce((s, t) => s + (t.exitTimestamp - t.entryTimestamp), 0) / trades.length / 86_400_000;
   const exposure = trades.length === 0 ? 0 : Math.min(1, (trades.reduce((s, t) => s + (t.exitTimestamp - t.entryTimestamp), 0) / 86_400_000) / Math.max(1, days));
   const turnover = trades.length === 0 ? 0 : trades.length / Math.max(1, days / 365);

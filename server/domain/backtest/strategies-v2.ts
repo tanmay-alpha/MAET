@@ -1,5 +1,8 @@
 /**
- * Backtest Lab V2 — extended strategy set with risk-aware configuration.
+ * @deprecated LEGACY V2 strategy definitions.
+ * The production Backtest Lab UI now translates these presets into canonical V3 AST
+ * StrategyDefinitions using `preset-to-v3-adapter.ts` and executes via `runner-v3.ts`.
+ * Retained for legacy compatibility and unit tests. DO NOT use in new code.
  *
  * Strategies implemented:
  *  - SMA_CROSS
@@ -9,8 +12,6 @@
  *  - DONCHIAN_BREAKOUT
  *  - BOLLINGER_MEAN_REVERSION
  *  - COMBINED_RULES
- *
- * All strategies use next-bar execution. No future data. No look-ahead bias.
  */
 
 import type { Candle } from "@shared/types";

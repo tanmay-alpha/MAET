@@ -1,7 +1,14 @@
 /**
- * Backtest runner — ties strategies to candle data and computes metrics.
+ * @deprecated LEGACY V2 backtest runner. Superseded by runner-v3.ts (runBacktestV3).
+ * The Backtest Lab UI now routes through preset-to-v3-adapter.ts → runner-v3.ts.
+ * This file is retained for the backtest-v2 integration test only.
+ * DO NOT use in new code.
  *
- * Uses next-bar execution. No look-ahead bias. Never uses future data.
+ * P0 bugs fixed in this file (2026-09-13):
+ *   - BUY slippage now correctly worsens the fill (higher price for buyer)
+ *   - SELL signals from strategy are now processed (position can exit via strategy signal)
+ *   - Trailing stop now tracks actual price high-water-mark (was a constant before)
+ * Remaining reason to use V3 instead: MTM equity, short position support, reproducibility hash.
  */
 
 import type { Candle } from "@shared/types";
@@ -64,7 +71,15 @@ export function runBacktest(request: BacktestRunRequest, candles: Candle[], benc
   const equityCurve: EquityPoint[] = [{ timestamp: toTs(sorted[0]), equity }];
 
   const feeMultiplier = 1 - request.riskConfig.feeBps / 10000;
-  const slippageMultiplier = 1 - request.riskConfig.slippageBps / 10000;
+  // P0-B fix: BUY slippage must worsen the fill (higher price for buyer).
+  // Previously used (1 - bps) which gave the buyer an impossibly good price.
+  const buySlippageMultiplier = 1 + (request.riskConfig.slippageBps ?? 0) / 10000;
+  // SELL slippage worsens for the seller (lower price received).
+  const sellSlippageMultiplier = 1 - (request.riskConfig.slippageBps ?? 0) / 10000;
+
+  // P0-B fix: trailing stop peak tracker — must follow actual price high-water-mark.
+  // Previously was set to equity once at entry and never updated (completely broken).
+  let trailingPeak = 0;
 
   for (let i = 1; i < sorted.length; i++) {
     // Risk management checks
@@ -72,63 +87,93 @@ export function runBacktest(request: BacktestRunRequest, candles: Candle[], benc
       const currentPrice = sorted[i].close;
       const pnl = (currentPrice - entryPrice) / entryPrice;
 
+      // P0-B fix: update trailing peak on every bar when in position.
+      if (request.riskConfig.trailingStopPercent) {
+        if (currentPrice > trailingPeak) trailingPeak = currentPrice;
+      }
+
       // Stop loss
       if (request.riskConfig.stopLossPercent && pnl <= -request.riskConfig.stopLossPercent / 100) {
-        const exitPrice = currentPrice * slippageMultiplier;
+        const exitPrice = currentPrice * sellSlippageMultiplier;
+        const tradeReturn = (exitPrice - entryPrice) / entryPrice;
+        equity *= (1 + tradeReturn * (1 - request.riskConfig.feeBps / 10000));
         trades.push({
           entryTimestamp,
           exitTimestamp: toTs(sorted[i]),
           entryPrice,
           exitPrice,
           side: "long",
-          return: (exitPrice - entryPrice) / entryPrice * feeMultiplier,
+          return: tradeReturn * feeMultiplier,
         });
         inPosition = false;
-        equity *= feeMultiplier;
+        trailingPeak = 0;
       }
       // Take profit
       else if (request.riskConfig.takeProfitPercent && pnl >= request.riskConfig.takeProfitPercent / 100) {
-        const exitPrice = currentPrice * slippageMultiplier;
+        const exitPrice = currentPrice * sellSlippageMultiplier;
+        const tradeReturn = (exitPrice - entryPrice) / entryPrice;
+        equity *= (1 + tradeReturn * (1 - request.riskConfig.feeBps / 10000));
         trades.push({
           entryTimestamp,
           exitTimestamp: toTs(sorted[i]),
           entryPrice,
           exitPrice,
           side: "long",
-          return: (exitPrice - entryPrice) / entryPrice * feeMultiplier,
+          return: tradeReturn * feeMultiplier,
         });
         inPosition = false;
-        equity *= feeMultiplier;
+        trailingPeak = 0;
       }
-      // Trailing stop
-      else if (request.riskConfig.trailingStopPercent) {
-        const peak = equity; // Simplified
-        if (pnl <= -request.riskConfig.trailingStopPercent / 100) {
-          const exitPrice = currentPrice * slippageMultiplier;
+      // Trailing stop — P0-B fix: compare against running high-water-mark, not a constant peak.
+      else if (request.riskConfig.trailingStopPercent && trailingPeak > 0) {
+        const trailingDrawdown = (trailingPeak - currentPrice) / trailingPeak;
+        if (trailingDrawdown >= request.riskConfig.trailingStopPercent / 100) {
+          const exitPrice = currentPrice * sellSlippageMultiplier;
+          const tradeReturn = (exitPrice - entryPrice) / entryPrice;
+          equity *= (1 + tradeReturn * (1 - request.riskConfig.feeBps / 10000));
           trades.push({
             entryTimestamp,
             exitTimestamp: toTs(sorted[i]),
             entryPrice,
             exitPrice,
             side: "long",
-            return: (exitPrice - entryPrice) / entryPrice * feeMultiplier,
+            return: tradeReturn * feeMultiplier,
           });
           inPosition = false;
-          equity *= feeMultiplier;
+          trailingPeak = 0;
         }
       }
     }
 
     // Strategy signal (next-bar execution)
-    if (!inPosition) {
-      const ctx: { candles: Candle[]; currentIndex: number } = { candles: sorted, currentIndex: i };
-      const signal: TradeSignal | null = strategy.next(ctx);
-      if (signal && signal.side === "buy") {
-        inPosition = true;
-        entryPrice = sorted[i].close * slippageMultiplier;
-        entryTimestamp = toTs(sorted[i]);
-        equity *= feeMultiplier;
-      }
+    const ctx: { candles: Candle[]; currentIndex: number } = { candles: sorted, currentIndex: i };
+    const signal: TradeSignal | null = strategy.next(ctx);
+
+    // P0-B fix: handle SELL exit signals — previously only BUY was handled so positions
+    // could NEVER exit via strategy signal; they could only exit via SL/TP/trailing.
+    if (inPosition && signal && signal.side === "sell") {
+      const exitPrice = sorted[i].close * sellSlippageMultiplier;
+      const tradeReturn = (exitPrice - entryPrice) / entryPrice;
+      equity *= (1 + tradeReturn * (1 - request.riskConfig.feeBps / 10000));
+      trades.push({
+        entryTimestamp,
+        exitTimestamp: toTs(sorted[i]),
+        entryPrice,
+        exitPrice,
+        side: "long",
+        return: tradeReturn * feeMultiplier,
+      });
+      inPosition = false;
+      trailingPeak = 0;
+    }
+
+    if (!inPosition && signal && signal.side === "buy") {
+      inPosition = true;
+      // P0-B fix: BUY entry pays HIGHER price (slippage worsens buyer fill).
+      entryPrice = sorted[i].close * buySlippageMultiplier;
+      entryTimestamp = toTs(sorted[i]);
+      equity *= feeMultiplier;
+      trailingPeak = sorted[i].close;
     }
 
     equityCurve.push({ timestamp: toTs(sorted[i]), equity });

@@ -150,6 +150,18 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
 
   const equityCurve: EquityPoint[] = [{ timestamp: new Date(sorted[0].ts).getTime(), equity }];
 
+  // Helper: compute mark-to-market equity for the current open position at a given price.
+  // The `equity` variable tracks realized cash minus costs (entry fees/slippage deducted on entry,
+  // exit PnL added on exit). For the equity curve we add the unrealized MTM on each bar.
+  // This is purely for the curve — it does NOT mutate `equity` between trade boundaries.
+  const mtmEquity = (closePrice: number): number => {
+    if (!inPosition) return equity;
+    const unrealized = direction === "long"
+      ? quantity * (closePrice - entryPrice)
+      : quantity * (entryPrice - closePrice);
+    return equity + unrealized;
+  };
+
   const getEntryFeeRate = (entryVal: number) => computeFeeRate(exec, entryVal).totalFeeRate;
   const getExitFeeRate = (exitVal: number) => computeFeeRate(exec, exitVal).totalFeeRate;
 
@@ -342,7 +354,10 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
       }
     }
 
-    equityCurve.push({ timestamp: barTs, equity });
+    // P0-C fix: Push equity curve point using mark-to-market value so the curve reflects
+    // unrealized gains/losses on open positions. Without this, the curve is flat between
+    // entry and exit, causing drawdown metrics to miss intra-trade adverse excursions.
+    equityCurve.push({ timestamp: barTs, equity: mtmEquity(bar.close) });
   }
 
   // Force-close open position at last bar

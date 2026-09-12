@@ -4,7 +4,10 @@ import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { backtestRuns, backtestPresets, candles } from "../../../db/schema";
 import { eq, and, desc, sql } from "drizzle-orm";
-import { runBacktest, InsufficientHistoryError } from "../../../domain/backtest/runner";
+// P0-A fix: Route the Backtest Lab to the canonical V3 engine.
+// The legacy runBacktest (runner.ts / strategies-v2.ts) is deprecated.
+import { runBacktestV3, InsufficientHistoryV3Error } from "../../../domain/strategy/runner-v3";
+import { presetToV3Definition } from "../../../domain/backtest/preset-to-v3-adapter";
 import { StrategyTypeSchema } from "../../../modules/backtest/contracts";
 import type { Candle } from "@shared/types";
 
@@ -87,28 +90,25 @@ export const backtestV2Router = createRouter({
       }
 
       try {
-        const result = runBacktest({
+        // P0-A fix: translate preset params → V3 AST, then run through canonical V3 engine.
+        const definition = presetToV3Definition(input.strategy, input.risk);
+        const result = runBacktestV3({
+          strategyVersionId: `preset:${input.strategy.type}:${Date.now()}`,
+          definition,
           symbol,
-          from: input.from ?? candleList[0].ts,
-          to: input.to ?? candleList[candleList.length - 1].ts,
-          strategyType: input.strategy.type,
-          strategyParams: input.strategy,
-          riskConfig: input.risk,
-        }, candleList);
+          candles: candleList,
+        });
 
-        // Persist run in PostgreSQL with typed JSON result contract (no 'as any')
         const resultPayload: Record<string, unknown> = {
           runId: result.runId,
           symbol: result.symbol,
-          from: result.from,
-          to: result.to,
-          strategy: result.strategy,
           metrics: result.metrics,
           equityCurve: result.equityCurve,
-          benchmarkCurve: result.benchmarkCurve,
           trades: result.trades,
-          signalCount: result.signalCount,
-          insufficientHistory: result.insufficientHistory,
+          signalCount: result.trades.length,
+          insufficientHistory: false,
+          // Tag the engine version so stored runs are self-describing.
+          engineVersion: "v3",
         };
 
         const [saved] = await db
@@ -126,10 +126,19 @@ export const backtestV2Router = createRouter({
         return {
           runId: saved.id,
           status: "completed",
-          result,
+          result: {
+            ...result,
+            engineVersion: "v3" as const,
+          },
         };
       } catch (err: any) {
-        if (err instanceof InsufficientHistoryError) {
+        if (err instanceof InsufficientHistoryV3Error) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: err.message,
+          });
+        }
+        if (err instanceof Error && err.message.includes("cannot be automatically translated")) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: err.message,

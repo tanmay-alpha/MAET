@@ -1,3 +1,14 @@
+/**
+ * @deprecated LEGACY V2 backtest runner. Superseded by runner-v3.ts (runBacktestV3).
+ * The Backtest Lab UI now routes through preset-to-v3-adapter.ts → runner-v3.ts.
+ * This file is retained for the backtest-v2 integration test only and will be
+ * removed once all callers are migrated. DO NOT use in new code.
+ *
+ * Known fixed bugs in V3 that this file still had:
+ *   - Trailing stop peak was a constant (BROKEN)
+ *   - Strategy SELL signals were never processed (BROKEN)
+ *   - BUY slippage direction was inverted (rewarded buyer, not punished)
+ */
 import type { Candle } from "@shared/types";
 import type { Signal, Strategy } from "./strategies";
 
