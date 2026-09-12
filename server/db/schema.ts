@@ -474,6 +474,14 @@ export const paperPositions = pgTable("paper_positions", {
   lastQuoteQuality: text("last_quote_quality"),
   lastQuoteTimestamp: timestamp("last_quote_timestamp", { withTimezone: true }),
   version: bigint("version", { mode: "number" }).notNull().default(1),
+  // P0-E fix: canonical position direction — 'LONG' or 'SHORT'.
+  // total_shares is always stored as a positive integer (Math.abs applied on write).
+  // The `side` field is the single authoritative source of truth for direction.
+  // On load: signedQuantity = side === 'SHORT' ? -totalShares : +totalShares
+  // On save: side derived from sign(quantity), totalShares = Math.abs(quantity)
+  // Migration default 'LONG': any ambiguous pre-0020 rows are treated as long.
+  // Admins must audit and reset any pre-existing short positions created before this migration.
+  side: text("side").notNull().default("LONG"),
 }, (table) => [
   uniqueIndex("paper_positions_user_generation_symbol_exchange_unique").on(table.userId, table.generation, table.symbol, table.exchange),
   index("paper_positions_user_idx").on(table.userId),

@@ -66,6 +66,17 @@ export interface PaperTradingWriteRepository {
     reason: string;
   }): Promise<PaperOrderRow[]>;
 
+  /** P0-F: Cancel all sibling orders sharing the same parentOrderId, excluding the one that just filled.
+   *  Must be called within the same serializable transaction as the fill that triggered it.
+   */
+  cancelSiblingOrders(params: {
+    userId: string;
+    generation: number;
+    parentOrderId: string;
+    excludeOrderId: string;
+    reason: string;
+  }): Promise<PaperOrderRow[]>;
+
   upsertPosition(position: NewPaperPositionRow): Promise<PaperPositionRow>;
 
   deletePosition(params: {

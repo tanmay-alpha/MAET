@@ -214,6 +214,38 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
     return rows.map(mapPaperOrderRow);
   }
 
+  /** P0-F: Cancel OCO siblings in the same serializable transaction as the fill.
+   *  This prevents the scenario where both TP and SL fill on the same tick.
+   */
+  async cancelSiblingOrders(params: {
+    userId: string;
+    generation: number;
+    parentOrderId: string;
+    excludeOrderId: string;
+    reason: string;
+  }): Promise<PaperOrderRow[]> {
+    const rows = await this.tx
+      .update(paperOrders)
+      .set({
+        status: "CANCELLED",
+        rejectReason: params.reason,
+        cancelledAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(paperOrders.userId, params.userId),
+          eq(paperOrders.generation, params.generation),
+          eq(paperOrders.parentOrderId, params.parentOrderId),
+          inArray(paperOrders.status, ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"])
+        )
+      )
+      .returning();
+
+    // Filter out the order that just filled (it won't be in PENDING states, but be safe)
+    return rows.filter((r) => r.id !== params.excludeOrderId).map(mapPaperOrderRow);
+  }
+
   async upsertPosition(position: NewPaperPositionRow): Promise<PaperPositionRow> {
     const [upserted] = await this.tx
       .insert(paperPositions)

@@ -136,7 +136,9 @@ export class PaperTradingTickProcessor {
 
             const domainPositions = positionRows.map((pos) => ({
               symbol: pos.symbol,
-              quantity: pos.totalShares,
+              // P0-E fix: restore signed quantity from side + totalShares.
+              // side='SHORT' => negative quantity; side='LONG' => positive.
+              quantity: (pos.side === "SHORT" ? -1 : 1) * pos.totalShares,
               averagePrice: Number(pos.averageEntryPrice),
               marginLocked: Number(pos.marginLocked),
               realisedPnl: Number(pos.realizedPnl),
@@ -202,6 +204,14 @@ export class PaperTradingTickProcessor {
                 fillQuantity,
               });
             } catch (err) {
+              // P0-H fix: Log fill errors with context instead of silently returning null.
+              // Structured error allows observability without leaking sensitive data.
+              console.error(`[TickProcessor] Fill execution rejected for order ${candidate.id}`, {
+                orderId: candidate.id,
+                userId: candidate.user_id,
+                symbol,
+                reason: err instanceof Error ? err.message : String(err),
+              });
               return null;
             }
 
@@ -262,6 +272,8 @@ export class PaperTradingTickProcessor {
 
             const matchingPos = fillResult.account.positions.find((p: any) => p.symbol === symbol);
             if (matchingPos) {
+              // P0-E fix: derive side from signed quantity; always store totalShares as absolute.
+              const posSide = (matchingPos.quantity as number) < 0 ? "SHORT" : "LONG";
               await repos.write.upsertPosition({
                 id: crypto.randomUUID(),
                 userId: candidate.user_id,
@@ -269,6 +281,7 @@ export class PaperTradingTickProcessor {
                 symbol,
                 exchange,
                 totalShares: Math.abs(matchingPos.quantity),
+                side: posSide,
                 averageEntryPrice: String(matchingPos.averagePrice),
                 marginLocked: String(matchingPos.marginLocked),
                 realizedPnl: String(matchingPos.realisedPnl),
@@ -288,20 +301,56 @@ export class PaperTradingTickProcessor {
               });
             }
 
-            await repos.write.insertLedgerEntries([{
-              id: crypto.randomUUID(),
-              userId: candidate.user_id,
-              generation: orderRow.generation,
-              fillId: fillRow.id,
-              entryType: (fillPlan.realisedPnl ?? 0) >= 0 ? "TRADE_PROFIT" : "TRADE_LOSS",
-              amount: String(fillPlan.realisedPnl ?? 0),
-              balanceAfter: String(fillResult.account.cash),
-              currency: "INR",
-              sourceType: "FILL",
-              sourceId: fillRow.id,
-              metadata: { fillId: fillRow.id, orderId: orderRow.id, fee: fillPlan.fees, slippage: fillPlan.slippage },
-              createdAt: now,
-            }]);
+            await repos.write.insertLedgerEntries([
+              // Canonical TRADE_REALIZED_PNL entry (signed: positive = profit, negative = loss)
+              {
+                id: crypto.randomUUID(),
+                userId: candidate.user_id,
+                generation: orderRow.generation,
+                fillId: fillRow.id,
+                entryType: "TRADE_REALIZED_PNL",
+                amount: String(fillPlan.realisedPnl ?? 0),
+                balanceAfter: String(fillResult.account.cash),
+                currency: "INR",
+                sourceType: "FILL",
+                sourceId: fillRow.id,
+                metadata: { fillId: fillRow.id, orderId: orderRow.id, slippage: fillPlan.slippage },
+                createdAt: now,
+              },
+              // Separate EXECUTION_FEE entry so ledger items are individually classifiable
+              {
+                id: crypto.randomUUID(),
+                userId: candidate.user_id,
+                generation: orderRow.generation,
+                fillId: fillRow.id,
+                entryType: "EXECUTION_FEE",
+                amount: String(-(fillPlan.fees ?? 0)),
+                balanceAfter: String(fillResult.account.cash),
+                currency: "INR",
+                sourceType: "FILL",
+                sourceId: fillRow.id,
+                metadata: {
+                  fillId: fillRow.id,
+                  orderId: orderRow.id,
+                  feeRate: fillPlan.fees > 0 && fillPlan.fillPrice > 0
+                    ? fillPlan.fees / (fillPlan.fillPrice * fillQty)
+                    : 0,
+                },
+                createdAt: now,
+              },
+            ]);
+
+            // P0-F fix: If this was a bracket child (has parentOrderId) and it fully filled,
+            // cancel OCO sibling orders in the SAME transaction to prevent double-fill.
+            if (isFullyFilled && orderRow.parentOrderId) {
+              await repos.write.cancelSiblingOrders({
+                userId: candidate.user_id,
+                generation: orderRow.generation,
+                parentOrderId: orderRow.parentOrderId,
+                excludeOrderId: orderRow.id,
+                reason: "OCO bracket sibling filled",
+              });
+            }
 
             const outboxEvents = [
               isFullyFilled

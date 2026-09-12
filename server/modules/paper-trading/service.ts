@@ -195,14 +195,16 @@ export class PaperTradingService {
           realisedPnl: Number(accountRow.realisedPnl),
           status: accountRow.status as any,
           positions: currentPositions.map((p) => ({
-            symbol: p.symbol,
-            quantity: p.totalShares,
-            averagePrice: Number(p.averageEntryPrice),
-            marginLocked: Number(p.marginLocked),
-            realisedPnl: Number(p.realizedPnl),
-            unrealisedPnl: Number(p.unrealizedPnl || 0),
-            updatedAt: p.updatedAt.toISOString(),
-          })),
+              symbol: p.symbol,
+              // P0-E fix: restore signed quantity from side + totalShares.
+              // side='SHORT' => negative quantity; side='LONG' => positive.
+              quantity: (p.side === "SHORT" ? -1 : 1) * p.totalShares,
+              averagePrice: Number(p.averageEntryPrice),
+              marginLocked: Number(p.marginLocked),
+              realisedPnl: Number(p.realizedPnl),
+              unrealisedPnl: Number(p.unrealizedPnl || 0),
+              updatedAt: p.updatedAt.toISOString(),
+            })),
           orders: [],
           fills: [],
         };
@@ -279,6 +281,8 @@ export class PaperTradingService {
 
         if (existingPos) {
           if (updatedDomainPos && updatedDomainPos.quantity !== 0) {
+            // P0-E fix: derive side from signed quantity; always store totalShares as absolute.
+            const posSide = updatedDomainPos.quantity < 0 ? "SHORT" : "LONG";
             finalPositionRow = await repos.write.upsertPosition({
               id: existingPos.id,
               userId,
@@ -287,6 +291,7 @@ export class PaperTradingService {
               exchange,
               averageEntryPrice: String(updatedDomainPos.averagePrice),
               totalShares: Math.abs(updatedDomainPos.quantity),
+              side: posSide,
               realizedPnl: String(updatedDomainPos.realisedPnl),
               unrealizedPnl: String(updatedDomainPos.unrealisedPnl),
               marginLocked: String(updatedDomainPos.marginLocked),
@@ -302,6 +307,8 @@ export class PaperTradingService {
             });
           }
         } else if (updatedDomainPos && updatedDomainPos.quantity !== 0) {
+          // P0-E fix: derive side from signed quantity; always store totalShares as absolute.
+          const posSide = updatedDomainPos.quantity < 0 ? "SHORT" : "LONG";
           finalPositionRow = await repos.write.upsertPosition({
             id: this.createId(),
             userId,
@@ -310,6 +317,7 @@ export class PaperTradingService {
             exchange,
             averageEntryPrice: String(updatedDomainPos.averagePrice),
             totalShares: Math.abs(updatedDomainPos.quantity),
+            side: posSide,
             realizedPnl: String(updatedDomainPos.realisedPnl),
             unrealizedPnl: String(updatedDomainPos.unrealisedPnl),
             marginLocked: String(updatedDomainPos.marginLocked),
@@ -339,10 +347,60 @@ export class PaperTradingService {
             currency: "INR",
             sourceType: "FILL",
             sourceId: fillRowId,
-            metadata: { feeRate: 0.0000345 },
+            // P0-G fix: compute actual feeRate from fill data, not a hardcoded constant.
+            metadata: {
+              feeRate: fillResult.fill.fees > 0
+                ? fillResult.fill.fees / (fillResult.fill.fillPrice * command.qty)
+                : 0,
+              fillPrice: fillResult.fill.fillPrice,
+              qty: command.qty,
+            },
+            createdAt: this.now(),
+          },
+          // P0-G fix: separate ledger entry for realized P&L to make ledger reconcilable.
+          {
+            id: this.createId(),
+            userId,
+            generation: accountRow.generation,
+            fillId: fillRowId,
+            entryType: "TRADE_REALIZED_PNL",
+            amount: String(fillResult.fill.realisedPnl),
+            balanceAfter: String(fillResult.account.cash),
+            currency: "INR",
+            sourceType: "FILL",
+            sourceId: fillRowId,
+            metadata: { fillPrice: fillResult.fill.fillPrice, qty: command.qty, side: command.side },
             createdAt: this.now(),
           },
         ]);
+
+        // P0-F fix: Persist child bracket/OCO orders that were created in-memory by executePaperFill.
+        // Previously these orders only lived in the domain account object and were discarded
+        // when the transaction ended. They MUST be persisted for durable SL/TP behavior.
+        const childOrders = fillResult.account.orders.filter(
+          (o) => o.parentOrderId === orderId && o.status === "PENDING"
+        );
+        for (const child of childOrders) {
+          await repos.write.insertOrder({
+            id: child.id,
+            userId,
+            parentOrderId: orderId,
+            generation: accountRow.generation,
+            symbol,
+            exchange,
+            side: child.side,
+            type: child.type,
+            status: child.type === "STOP_LOSS_LIMIT" ? "TRIGGER_PENDING" : "PENDING",
+            qty: child.quantity,
+            limitPrice: child.limitPrice ? String(child.limitPrice) : null,
+            stopPrice: child.stopPrice ? String(child.stopPrice) : null,
+            stopLossPrice: child.stopPrice ? String(child.stopPrice) : null,
+            takeProfitPrice: child.limitPrice && child.type === "LIMIT" ? String(child.limitPrice) : null,
+            version: 1,
+            placedAt: this.now(),
+            updatedAt: this.now(),
+          });
+        }
 
         await repos.write.insertOutboxEvents([
           buildOrderAcceptedEvent({
