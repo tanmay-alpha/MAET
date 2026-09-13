@@ -1,6 +1,6 @@
 import { desc, eq, ne } from "drizzle-orm";
 import { db } from "../../data/drizzle/client";
-import { companies, fundamentals, quoteSnapshots } from "../../db/schema";
+import { companies, fundamentals, quoteSnapshots, technicalSnapshots } from "../../db/schema";
 import { getNseCompanyMaster, searchNseCompanyMaster } from "../../data/sources/nse-company-master";
 
 export type ScreenerBucket = "large" | "mid" | "small" | "micro" | "unknown";
@@ -51,6 +51,34 @@ export type CompanyScreenerRow = {
   fundamentalsSource?: string;
   staleFundamentals?: boolean;
   source: "database" | "nse";
+
+  // Technical Indicators (from canonical technical_snapshots)
+  rsi14?: number;
+  sma20?: number;
+  sma50?: number;
+  sma200?: number;
+  ema20?: number;
+  ema50?: number;
+  ema200?: number;
+  macd?: number;
+  macdSignal?: number;
+  macdHistogram?: number;
+  atr14?: number;
+  adx14?: number;
+  bbUpper?: number;
+  bbMiddle?: number;
+  bbLower?: number;
+  bbWidth?: number;
+  distanceFromSma20Pct?: number;
+  distanceFromSma50Pct?: number;
+  distanceFromSma200Pct?: number;
+  distanceFrom52WeekHighPct?: number;
+  distanceFrom52WeekLowPct?: number;
+  priceAboveSma20?: boolean;
+  priceAboveSma50?: boolean;
+  priceAboveSma200?: boolean;
+  technicalAsOf?: string;
+  technicalEngineVersion?: string;
 };
 
 export type FieldAvailability = Record<string, {
@@ -87,6 +115,13 @@ export type CompanyScreenerParams = {
   highBreakout: boolean;
   lowNear: boolean;
   refresh: boolean;
+
+  // Technical filters
+  priceAboveSma200: boolean;
+  priceAboveSma50: boolean;
+  goldenCross: boolean;
+  rsiOversold: boolean;
+  rsiOverbought: boolean;
 };
 
 const NUMERIC_PARAM_NAMES = [
@@ -94,6 +129,9 @@ const NUMERIC_PARAM_NAMES = [
   "rel_volume_min", "rel_volume_max", "market_cap_min", "market_cap_max", "pe_min", "pe_max",
   "pb_min", "pb_max", "roe_min", "roe_max", "roce_min", "roce_max", "dividend_yield_min",
   "dividend_yield_max", "debt_to_equity_max", "current_ratio_min", "sales_growth_min", "profit_growth_min",
+  // Technical numeric filters
+  "rsi_min", "rsi_max", "distance_sma200_min", "distance_sma200_max",
+  "distance_52w_high_min", "distance_52w_high_max", "atr_min", "atr_max",
 ] as const;
 
 const SORT_FIELDS: Record<string, keyof CompanyScreenerRow> = {
@@ -101,6 +139,10 @@ const SORT_FIELDS: Record<string, keyof CompanyScreenerRow> = {
   rel_volume: "relVolume", market_cap: "marketCap", pe: "pe", pb: "pb", roe: "roe", roce: "roce",
   dividend_yield: "dividendYield", debt_to_equity: "debtToEquity", current_ratio: "currentRatio",
   sales_growth: "salesGrowth", profit_growth: "profitGrowth", sector: "sector",
+  // Technical sort fields
+  rsi: "rsi14", sma20: "sma20", sma50: "sma50", sma200: "sma200",
+  distance_sma200: "distanceFromSma200Pct", distance_52w_high: "distanceFrom52WeekHighPct",
+  atr: "atr14", adx: "adx14",
 };
 
 export const CAP_BUCKET_METHODOLOGY =
@@ -148,6 +190,12 @@ export function parseCompanyScreenerParams(params: URLSearchParams): CompanyScre
     highBreakout: params.get("fifty_two_week_high_breakout") === "true",
     lowNear: params.get("fifty_two_week_low_near") === "true",
     refresh: params.get("refresh") === "1",
+    // Technical boolean params
+    priceAboveSma200: params.get("price_above_sma200") === "true",
+    priceAboveSma50: params.get("price_above_sma50") === "true",
+    goldenCross: params.get("golden_cross") === "true",
+    rsiOversold: params.get("rsi_oversold") === "true",
+    rsiOverbought: params.get("rsi_overbought") === "true",
   };
 }
 
@@ -192,6 +240,20 @@ export function matchesCompanyScreenerRow(row: CompanyScreenerRow, input: Compan
   if (input.industries.length > 0 && (!row.industry || !input.industries.some((industry) => industry.toLocaleLowerCase("en-IN") === row.industry!.toLocaleLowerCase("en-IN")))) return false;
   if (input.highBreakout && (row.price === undefined || row.fiftyTwoWeekHigh === undefined || row.price < row.fiftyTwoWeekHigh)) return false;
   if (input.lowNear && (row.price === undefined || row.fiftyTwoWeekLow === undefined || row.price > row.fiftyTwoWeekLow * 1.05)) return false;
+
+  // Technical Indicator filters
+  if (!inRange(row.rsi14, n.rsi_min, n.rsi_max)) return false;
+  if (!inRange(row.distanceFromSma200Pct, n.distance_sma200_min, n.distance_sma200_max)) return false;
+  if (!inRange(row.distanceFrom52WeekHighPct, n.distance_52w_high_min, n.distance_52w_high_max)) return false;
+  if (!inRange(row.atr14, n.atr_min, n.atr_max)) return false;
+
+  // Technical boolean condition filters
+  if (input.priceAboveSma200 && (row.priceAboveSma200 !== true)) return false;
+  if (input.priceAboveSma50 && (row.priceAboveSma50 !== true)) return false;
+  if (input.goldenCross && (row.sma50 === undefined || row.sma200 === undefined || row.sma50 <= row.sma200)) return false;
+  if (input.rsiOversold && (row.rsi14 === undefined || row.rsi14 > 30)) return false;
+  if (input.rsiOverbought && (row.rsi14 === undefined || row.rsi14 < 70)) return false;
+
   return true;
 }
 
@@ -234,6 +296,11 @@ function fieldAvailability(rows: CompanyScreenerRow[]): FieldAvailability {
     profitGrowth: make("profitGrowth", "Profit growth unavailable: comparable annual periods are missing"),
     fiftyTwoWeekHigh: make("fiftyTwoWeekHigh", "52-week high unavailable: insufficient stored daily history"),
     fiftyTwoWeekLow: make("fiftyTwoWeekLow", "52-week low unavailable: insufficient stored daily history"),
+    rsi: make("rsi14", "RSI(14) unavailable: insufficient daily candle history for 14-period warmup", "Canonical Indicator Engine (1.0.0)"),
+    sma200: make("sma200", "200 SMA unavailable: requires 200 daily bars", "Canonical Indicator Engine (1.0.0)"),
+    sma50: make("sma50", "50 SMA unavailable: requires 50 daily bars", "Canonical Indicator Engine (1.0.0)"),
+    macd: make("macd", "MACD unavailable: requires 35 daily bars", "Canonical Indicator Engine (1.0.0)"),
+    atr: make("atr14", "ATR unavailable: requires 14 daily bars", "Canonical Indicator Engine (1.0.0)"),
     financialStatements: { available: false, source: "Stored normalized statements", reason: "Availability is reported by the company detail endpoint" },
   };
 }
@@ -270,13 +337,29 @@ async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScree
         .where(eq(fundamentals.periodType, "market"))
         .orderBy(fundamentals.companyId, desc(fundamentals.periodDate))
     : [];
+
+  // Load precomputed canonical technical snapshots
+  let technicalRows: any[] = [];
+  try {
+    technicalRows = await db
+      .select()
+      .from(technicalSnapshots)
+      .where(eq(technicalSnapshots.timeframe, "1d"));
+  } catch (err) {
+    // If technical snapshots table is being migrated or empty, degrade gracefully
+    technicalRows = [];
+  }
+
   const quoteByCompany = new Map(latestQuotes.map((row) => [row.companyId, row]));
   const fundamentalsByCompany = new Map(latestFundamentals.map((row) => [row.companyId, row]));
   const marketMetricsByCompany = new Map(latestMarketMetrics.map((row) => [row.companyId, row]));
+  const technicalBySymbol = new Map(technicalRows.map((row) => [row.symbol, row]));
+
   const allRows: CompanyScreenerRow[] = companyRows.map((company) => {
     const quote = quoteByCompany.get(company.id);
     const fund = fundamentalsByCompany.get(company.id);
     const marketMetrics = marketMetricsByCompany.get(company.id);
+    const tech = technicalBySymbol.get(company.symbol);
     const fundamentalsAsOf = fund?.periodDate;
     const isStale = fund?.isStale ?? Boolean(fundamentalsAsOf && Date.now() - fundamentalsAsOf.getTime() > 120 * 86_400_000);
     return {
@@ -312,18 +395,46 @@ async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScree
       profitGrowth: numeric(fund?.netIncomeGrowth),
       operatingMargin: numeric(fund?.operatingMargin),
       netMargin: numeric(fund?.netMargin),
-      fiftyTwoWeekHigh: numeric(marketMetrics?.fiftyTwoWeekHigh ?? fund?.fiftyTwoWeekHigh),
-      fiftyTwoWeekLow: numeric(marketMetrics?.fiftyTwoWeekLow ?? fund?.fiftyTwoWeekLow),
-      average20DayVolume: marketMetrics?.average20DayVolume ?? fund?.average20DayVolume ?? undefined,
-      relVolume: numeric(marketMetrics?.relativeVolume ?? fund?.relativeVolume),
+      fiftyTwoWeekHigh: numeric(marketMetrics?.fiftyTwoWeekHigh ?? fund?.fiftyTwoWeekHigh ?? tech?.high52w),
+      fiftyTwoWeekLow: numeric(marketMetrics?.fiftyTwoWeekLow ?? fund?.fiftyTwoWeekLow ?? tech?.low52w),
+      average20DayVolume: marketMetrics?.average20DayVolume ?? fund?.average20DayVolume ?? tech?.averageVolume20 ?? undefined,
+      relVolume: numeric(marketMetrics?.relativeVolume ?? fund?.relativeVolume ?? tech?.relativeVolume20),
       revenue: numeric(fund?.revenue),
       netIncome: numeric(fund?.netIncome),
-      quoteAsOf: quote?.asOf.toISOString(),
+      quoteAsOf: quote?.asOf?.toISOString(),
       fundamentalsAsOf: fundamentalsAsOf?.toISOString(),
       quoteSource: quote?.source,
       fundamentalsSource: fund?.source ?? company.dataSource,
       staleFundamentals: isStale,
       source: "database",
+
+      // Technical Indicators
+      rsi14: numeric(tech?.rsi14),
+      sma20: numeric(tech?.sma20),
+      sma50: numeric(tech?.sma50),
+      sma200: numeric(tech?.sma200),
+      ema20: numeric(tech?.ema20),
+      ema50: numeric(tech?.ema50),
+      ema200: numeric(tech?.ema200),
+      macd: numeric(tech?.macd),
+      macdSignal: numeric(tech?.macdSignal),
+      macdHistogram: numeric(tech?.macdHistogram),
+      atr14: numeric(tech?.atr14),
+      adx14: numeric(tech?.adx14),
+      bbUpper: numeric(tech?.bbUpper),
+      bbMiddle: numeric(tech?.bbMiddle),
+      bbLower: numeric(tech?.bbLower),
+      bbWidth: numeric(tech?.bbWidth),
+      distanceFromSma20Pct: numeric(tech?.distanceFromSma20Pct),
+      distanceFromSma50Pct: numeric(tech?.distanceFromSma50Pct),
+      distanceFromSma200Pct: numeric(tech?.distanceFromSma200Pct),
+      distanceFrom52WeekHighPct: numeric(tech?.distanceFrom52WeekHighPct),
+      distanceFrom52WeekLowPct: numeric(tech?.distanceFrom52WeekLowPct),
+      priceAboveSma20: tech?.priceAboveSma20 ?? undefined,
+      priceAboveSma50: tech?.priceAboveSma50 ?? undefined,
+      priceAboveSma200: tech?.priceAboveSma200 ?? undefined,
+      technicalAsOf: tech?.asOf?.toISOString(),
+      technicalEngineVersion: tech?.indicatorEngineVersion ?? undefined,
     };
   });
   const filtered = allRows.filter((row) => matchesCompanyScreenerRow(row, input)).sort((a, b) => compareRows(a, b, input));

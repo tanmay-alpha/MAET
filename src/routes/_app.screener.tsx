@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3, BookmarkPlus, Building2, CandlestickChart, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink,
-  Eye, EyeOff, RefreshCw, Search, SlidersHorizontal, Trash2, X, Zap,
+  Eye, EyeOff, RefreshCw, Search, SlidersHorizontal, Trash2, TrendingUp, X, Zap,
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
@@ -61,6 +61,10 @@ const FILTER_AVAILABILITY_KEY: Record<string, string> = {
   dividend_yield_min: "dividendYield", dividend_yield_max: "dividendYield",
   debt_to_equity_max: "debtToEquity", current_ratio_min: "currentRatio",
   sales_growth_min: "salesGrowth", profit_growth_min: "profitGrowth",
+  rsi_min: "rsi", rsi_max: "rsi",
+  distance_sma200_min: "sma200", distance_sma200_max: "sma200",
+  distance_52w_high_min: "fiftyTwoWeekHigh", distance_52w_high_max: "fiftyTwoWeekHigh",
+  atr_min: "atr", atr_max: "atr",
 };
 const NUMERIC_FILTERS = [
   ["price_min", "Min price"], ["price_max", "Max price"], ["change_pct_min", "Min change %"], ["change_pct_max", "Max change %"],
@@ -71,6 +75,10 @@ const NUMERIC_FILTERS = [
   ["dividend_yield_min", "Min dividend yield"], ["dividend_yield_max", "Max dividend yield"],
   ["debt_to_equity_max", "Max debt / equity"], ["current_ratio_min", "Min current ratio"],
   ["sales_growth_min", "Min sales growth"], ["profit_growth_min", "Min profit growth"],
+  ["rsi_min", "Min RSI (14)"], ["rsi_max", "Max RSI (14)"],
+  ["distance_sma200_min", "Min % from SMA200"], ["distance_sma200_max", "Max % from SMA200"],
+  ["distance_52w_high_min", "Min % from 52W High"], ["distance_52w_high_max", "Max % from 52W High"],
+  ["atr_min", "Min ATR (14)"], ["atr_max", "Max ATR (14)"],
 ] as const;
 
 const TABS: Array<{ id: ViewId; label: string }> = [
@@ -246,10 +254,91 @@ function buildColumns(view: ViewId): Column[] {
       { id: "low52", label: "52W low", align: "right", render: (c) => <DataCell value={c.fiftyTwoWeekLow} reason="52-week low unavailable: insufficient stored daily history" mode="money" /> },
       { id: "low52Distance", label: "% from low", align: "right", render: (c, q) => { const p = quoteFor(c, q)?.price ?? c.price; return p === undefined || !c.fiftyTwoWeekLow ? <Missing reason="52-week low distance unavailable: price or stored 52-week low missing" /> : <span>{(((p / c.fiftyTwoWeekLow) - 1) * 100).toFixed(2)}%</span>; } },
     ],
-    technicals: [...base, price, relVolume,
-      { id: "avg20", label: "Avg 20D volume", align: "right", render: (c) => <DataCell value={c.average20DayVolume} reason="20-day average volume has not been computed" /> },
-      { id: "trend", label: "52W state", render: (c, q) => { const p = quoteFor(c, q)?.price ?? c.price; if (p === undefined || c.fiftyTwoWeekHigh === undefined) return <Missing reason="Breakout state unavailable: price or 52-week range missing" />; return p >= c.fiftyTwoWeekHigh ? <span className="text-bull">Breakout</span> : <span className="text-muted-foreground">Inside range</span>; } },
-      { id: "rsi", label: "RSI", align: "right", render: () => <Missing reason="RSI is calculated on the chart; no current RSI snapshot is persisted for screener sorting" /> },
+    technicals: [
+      ...base,
+      price,
+      {
+        id: "rsi",
+        label: "RSI (14)",
+        align: "right",
+        sortBy: "rsi",
+        render: (c) => {
+          if (c.rsi14 === undefined) return <Missing reason="RSI(14) unavailable: awaiting daily snapshot calculation" />;
+          const rsi = c.rsi14;
+          const colorClass = rsi <= 30 ? "text-bull font-semibold" : rsi >= 70 ? "text-amber-400 font-semibold" : "text-foreground";
+          return <span className={colorClass}>{rsi.toFixed(1)}</span>;
+        },
+      },
+      {
+        id: "sma20",
+        label: "SMA 20",
+        align: "right",
+        sortBy: "sma20",
+        render: (c) => <DataCell value={c.sma20} reason="20 SMA unavailable" mode="money" />,
+      },
+      {
+        id: "sma50",
+        label: "SMA 50",
+        align: "right",
+        sortBy: "sma50",
+        render: (c) => <DataCell value={c.sma50} reason="50 SMA unavailable" mode="money" />,
+      },
+      {
+        id: "sma200",
+        label: "SMA 200",
+        align: "right",
+        sortBy: "sma200",
+        render: (c) => <DataCell value={c.sma200} reason="200 SMA unavailable" mode="money" />,
+      },
+      {
+        id: "distanceSma200",
+        label: "% from 200 SMA",
+        align: "right",
+        sortBy: "distance_sma200",
+        render: (c) => {
+          if (c.distanceFromSma200Pct === undefined) return <Missing reason="Distance from 200 SMA unavailable" />;
+          const val = c.distanceFromSma200Pct;
+          return <span className={val >= 0 ? "text-bull" : "text-bear"}>{val >= 0 ? "+" : ""}{val.toFixed(2)}%</span>;
+        },
+      },
+      {
+        id: "distance52wHigh",
+        label: "% from 52W High",
+        align: "right",
+        sortBy: "distance_52w_high",
+        render: (c) => {
+          if (c.distanceFrom52WeekHighPct === undefined) return <Missing reason="Distance from 52W High unavailable" />;
+          const val = c.distanceFrom52WeekHighPct;
+          return <span className={val >= 0 ? "text-bull" : "text-bear"}>{val >= 0 ? "+" : ""}{val.toFixed(2)}%</span>;
+        },
+      },
+      {
+        id: "macdHist",
+        label: "MACD Hist",
+        align: "right",
+        render: (c) => {
+          if (c.macdHistogram === undefined) return <Missing reason="MACD histogram unavailable" />;
+          const val = c.macdHistogram;
+          return <span className={val >= 0 ? "text-bull" : "text-bear"}>{val >= 0 ? "+" : ""}{val.toFixed(2)}</span>;
+        },
+      },
+      {
+        id: "atr",
+        label: "ATR (14)",
+        align: "right",
+        sortBy: "atr",
+        render: (c) => <DataCell value={c.atr14} reason="ATR unavailable" mode="money" />,
+      },
+      relVolume,
+      {
+        id: "trend",
+        label: "52W state",
+        render: (c, q) => {
+          const p = quoteFor(c, q)?.price ?? c.price;
+          if (p === undefined || c.fiftyTwoWeekHigh === undefined) return <Missing reason="Breakout state unavailable: price or 52-week range missing" />;
+          return p >= c.fiftyTwoWeekHigh ? <span className="text-bull font-semibold">Breakout</span> : <span className="text-muted-foreground">Inside range</span>;
+        },
+      },
     ],
     valuation: [...base, price, marketCap,
       { id: "pe", label: "P/E", align: "right", sortBy: "pe", render: (c) => <DataCell value={c.pe} reason={reasonFor(c, "pe", "P/E unavailable: missing verified positive EPS")} /> },
@@ -403,6 +492,10 @@ function Screener() {
     if (id === "value") { next.pe_max = "20"; next.pb_max = "3"; }
     if (id === "roe") next.roe_min = "15";
     if (id === "dividend") next.dividend_yield_min = "0.01";
+    if (id === "oversold") next.rsi_max = "30";
+    if (id === "overbought") next.rsi_min = "70";
+    if (id === "above-200sma") next.price_above_sma200 = "true";
+    if (id === "golden-cross") next.golden_cross = "true";
     setFilters(next);
   }
   function changeSort(column: Column) {
@@ -524,6 +617,8 @@ function Screener() {
   const presets = [
     ["all", "All stocks", true], ["gainers", "Gainers", true], ["losers", "Losers", true], ["high-volume", "High volume", true],
     ["price-1000", "Price above 1000", true], ["active", "Active movers", true],
+    ["oversold", "RSI Oversold", true], ["overbought", "RSI Overbought", true],
+    ["above-200sma", "Above 200 SMA", true], ["golden-cross", "Golden Cross", true],
     ["large", "Large cap", Boolean(availability.marketCap?.available)], ["mid", "Mid cap", Boolean(availability.marketCap?.available)], ["small", "Small cap", Boolean(availability.marketCap?.available)],
     ["value", "Deep value", Boolean(availability.pe?.available && availability.pb?.available)], ["roe", "High ROE", Boolean(availability.roe?.available)],
     ["dividend", "High dividend", Boolean(availability.dividendYield?.available)],
@@ -536,6 +631,10 @@ function Screener() {
     "high-volume": "Stocks with volume above 10 lakh shares today",
     "price-1000": "Stocks trading above ₹1,000 — premium segment",
     "active": "Stocks gaining more than 1% in the latest verified quote snapshot",
+    "oversold": "Wilder's RSI(14) <= 30 — potentially oversold momentum candidates",
+    "overbought": "Wilder's RSI(14) >= 70 — strong momentum / overbought candidates",
+    "above-200sma": "Current price trading above the 200-day simple moving average",
+    "golden-cross": "50-day moving average trading above the 200-day moving average",
     "large": "Market cap bucket: Large cap (top ~100 NSE companies by market cap)",
     "mid": "Market cap bucket: Mid cap (ranks 101–250 by verified market cap)",
     "small": "Market cap bucket: Small cap (rank 251+ among companies with verified market cap)",
@@ -561,6 +660,10 @@ function Screener() {
     if (f.volume_min === "1000000" && Object.keys(f).length === 1) return "high-volume";
     if (f.price_min === "1000" && Object.keys(f).length === 1) return "price-1000";
     if (f.change_pct_min === "1" && Object.keys(f).length === 1) return "active";
+    if (f.rsi_max === "30" && Object.keys(f).length === 1) return "oversold";
+    if (f.rsi_min === "70" && Object.keys(f).length === 1) return "overbought";
+    if (f.price_above_sma200 === "true" && Object.keys(f).length === 1) return "above-200sma";
+    if (f.golden_cross === "true" && Object.keys(f).length === 1) return "golden-cross";
     if (f.bucket_in === "large" && Object.keys(f).length === 1) return "large";
     if (f.bucket_in === "mid" && Object.keys(f).length === 1) return "mid";
     if (f.bucket_in === "small" && Object.keys(f).length === 1) return "small";
@@ -573,7 +676,8 @@ function Screener() {
     ["Price & Volume", NUMERIC_FILTERS.slice(0, 8)],
     ["Valuation", NUMERIC_FILTERS.slice(8, 14)],
     ["Profitability", NUMERIC_FILTERS.slice(14, 20)],
-    ["Balance Sheet & Growth", NUMERIC_FILTERS.slice(20)],
+    ["Balance Sheet & Growth", NUMERIC_FILTERS.slice(20, 24)],
+    ["Technicals", NUMERIC_FILTERS.slice(24)],
   ];
 
   return (
@@ -678,6 +782,10 @@ function Screener() {
           <label className={`text-xs text-muted-foreground ${availability.industry?.available ? "" : "opacity-45"}`} title={availability.industry?.reason}>Industry <input value={filters.industry_in ?? ""} disabled={!availability.industry?.available} onChange={(event) => updateFilter("industry_in", event.target.value)} placeholder="e.g. Software" className="ml-2 rounded border border-border bg-panel px-2 py-1.5 text-foreground outline-none disabled:cursor-not-allowed" /></label>
           <label className={`inline-flex items-center gap-1.5 text-xs text-muted-foreground ${availability.fiftyTwoWeekHigh?.available ? "" : "opacity-45"}`} title={availability.fiftyTwoWeekHigh?.reason}><input type="checkbox" disabled={!availability.fiftyTwoWeekHigh?.available} checked={filters.fifty_two_week_high_breakout === "true"} onChange={(event) => updateFilter("fifty_two_week_high_breakout", event.target.checked ? "true" : "")} />52W breakout</label>
           <label className={`inline-flex items-center gap-1.5 text-xs text-muted-foreground ${availability.fiftyTwoWeekLow?.available ? "" : "opacity-45"}`} title={availability.fiftyTwoWeekLow?.reason}><input type="checkbox" disabled={!availability.fiftyTwoWeekLow?.available} checked={filters.fifty_two_week_low_near === "true"} onChange={(event) => updateFilter("fifty_two_week_low_near", event.target.checked ? "true" : "")} />Near 52W low</label>
+          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><input type="checkbox" checked={filters.price_above_sma200 === "true"} onChange={(event) => updateFilter("price_above_sma200", event.target.checked ? "true" : "")} />&gt; 200 SMA</label>
+          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><input type="checkbox" checked={filters.golden_cross === "true"} onChange={(event) => updateFilter("golden_cross", event.target.checked ? "true" : "")} />Golden Cross</label>
+          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><input type="checkbox" checked={filters.rsi_oversold === "true"} onChange={(event) => updateFilter("rsi_oversold", event.target.checked ? "true" : "")} />RSI &le; 30</label>
+          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><input type="checkbox" checked={filters.rsi_overbought === "true"} onChange={(event) => updateFilter("rsi_overbought", event.target.checked ? "true" : "")} />RSI &ge; 70</label>
           <button type="button" onClick={() => setFilters({})} className="ml-auto rounded px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent">Reset all</button></div>
       </div>}
 
@@ -820,7 +928,7 @@ function Screener() {
           <thead className="sticky top-0 z-20 bg-background/95 backdrop-blur"><tr>{columns.map((column) => <th key={column.id} className={`border-b border-border px-3 py-2.5 font-medium text-muted-foreground ${column.align === "right" ? "text-right" : "text-left"}`}><button type="button" disabled={!column.sortBy} onClick={() => changeSort(column)} className="inline-flex items-center gap-1 disabled:cursor-default">{column.label}{column.sortBy && <ChevronDown className={`h-3 w-3 ${sortBy === column.sortBy ? "text-primary" : "opacity-30"} ${sortBy === column.sortBy && sortDir === "asc" ? "rotate-180" : ""}`} />}</button></th>)}<th className="border-b border-border px-3 py-2.5 text-right text-muted-foreground">Actions</th></tr></thead>
           <tbody>{visibleCompanies.map((company, index) => <tr key={company.symbol} className="group border-b border-border/50 hover:bg-accent/35">
             {columns.map((column) => <td key={column.id} className={`border-b border-border/40 px-3 py-2.5 font-mono tabular-nums ${column.align === "right" ? "text-right" : "text-left"}`}>{column.id === "rank" ? <span className="text-muted-foreground">{(page - 1) * PAGE_SIZE + index + 1}</span> : column.id === "company" ? <button type="button" onClick={() => navigate({ to: `/stock/${company.symbol}` })} className="flex min-w-[240px] items-center gap-2 text-left"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 font-semibold text-primary">{company.symbol[0]}</span><span><span className="block font-semibold text-primary">{company.symbol}</span><span className="block max-w-[210px] truncate font-sans text-[11px] text-foreground/80">{company.name}</span></span>{company.marketCapBucket !== "unknown" && <span className="rounded bg-accent px-1 py-0.5 text-[9px] uppercase text-muted-foreground">{company.marketCapBucket}</span>}</button> : column.render(company, quotes.quoteMap)}</td>)}
-            <td className="border-b border-border/40 px-3 py-2.5"><div className="flex justify-end gap-1 opacity-80 group-hover:opacity-100"><button type="button" onClick={() => void navigate({ to: "/terminal", search: { symbol: company.symbol, exchange: company.exchange || "NSE", companyId: company.symbol, sourceContext: "screener", screenerRunId: activePreset || "custom" } })} className="rounded bg-primary/10 hover:bg-primary/20 text-primary px-2 py-1 text-[10px] font-semibold transition flex items-center gap-1" title="Open stock in Terminal workstation"><CandlestickChart className="h-3 w-3" />Terminal</button><button type="button" onClick={() => void navigate({ to: "/terminal", search: { symbol: company.symbol, exchange: company.exchange || "NSE", sourceContext: "screener" } })} className="rounded border border-bull/30 bg-bull/10 hover:bg-bull/20 text-bull px-2 py-1 text-[10px] font-semibold transition flex items-center gap-1" title="Create Paper Trade"><Zap className="h-3 w-3" />Trade</button><button type="button" onClick={() => navigate({ to: `/stock/${company.symbol}` })} className="rounded p-1.5 hover:bg-accent" title="Open company detail"><Building2 className="h-3.5 w-3.5" /></button><a href={getTradingViewUrl(company.symbol)} target="_blank" rel="noreferrer" className="rounded p-1.5 hover:bg-accent" title="Open TradingView"><ExternalLink className="h-3.5 w-3.5" /></a><button type="button" onClick={() => void navigator.clipboard.writeText(company.symbol)} className="rounded p-1.5 hover:bg-accent" title="Copy symbol"><Copy className="h-3.5 w-3.5" /></button></div></td>
+            <td className="border-b border-border/40 px-3 py-2.5"><div className="flex justify-end gap-1 opacity-80 group-hover:opacity-100"><button type="button" onClick={() => void navigate({ to: `/chart/${company.symbol}` as any, search: { exchange: company.exchange || "NSE", sourceContext: "screener" } as any })} className="rounded bg-accent hover:bg-accent/80 text-foreground px-2 py-1 text-[10px] font-semibold transition flex items-center gap-1" title="Open stock in Chart"><TrendingUp className="h-3 w-3" />Chart</button><button type="button" onClick={() => void navigate({ to: "/terminal", search: { symbol: company.symbol, exchange: company.exchange || "NSE", companyId: company.symbol, sourceContext: "screener", screenerRunId: activePreset || "custom" } })} className="rounded bg-primary/10 hover:bg-primary/20 text-primary px-2 py-1 text-[10px] font-semibold transition flex items-center gap-1" title="Open stock in Terminal workstation"><CandlestickChart className="h-3 w-3" />Terminal</button><button type="button" onClick={() => void navigate({ to: "/terminal", search: { symbol: company.symbol, exchange: company.exchange || "NSE", sourceContext: "screener" } })} className="rounded border border-bull/30 bg-bull/10 hover:bg-bull/20 text-bull px-2 py-1 text-[10px] font-semibold transition flex items-center gap-1" title="Create Paper Trade"><Zap className="h-3 w-3" />Trade</button><button type="button" onClick={() => navigate({ to: `/stock/${company.symbol}` })} className="rounded p-1.5 hover:bg-accent" title="Open company detail"><Building2 className="h-3.5 w-3.5" /></button><a href={getTradingViewUrl(company.symbol)} target="_blank" rel="noreferrer" className="rounded p-1.5 hover:bg-accent" title="Open TradingView"><ExternalLink className="h-3.5 w-3.5" /></a><button type="button" onClick={() => void navigator.clipboard.writeText(company.symbol)} className="rounded p-1.5 hover:bg-accent" title="Copy symbol"><Copy className="h-3.5 w-3.5" /></button></div></td>
           </tr>)}
             {companiesQuery.isFetching && companies.length === 0 && Array.from({ length: 8 }, (_, index) => <tr key={index}>{columns.map((column) => <td key={column.id} className="border-b border-border/40 px-3 py-3"><div className="h-4 animate-pulse rounded bg-accent" /></td>)}<td /></tr>)}
             {!companiesQuery.isFetching && visibleCompanies.length === 0 && (

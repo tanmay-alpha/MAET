@@ -8,8 +8,8 @@ import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
-import { candles, companies, screenerRuns, users } from "../../../db/schema";
-import { desc, sql, and, or, gte, lte, eq, gt, lt, ilike, like } from "drizzle-orm";
+import { candles, companies, screenerRuns, technicalSnapshots, users } from "../../../db/schema";
+import { desc, sql, and, or, gte, lte, eq, gt, lt, ilike, like, inArray } from "drizzle-orm";
 import { calculateAllIndicators } from "../../../domain/technical/indicators";
 import type { AllIndicators } from "../../../domain/technical/indicators";
 import { getCandles } from "../../../data/sources/yahoo";
@@ -197,6 +197,16 @@ function applyTechnicalFilters(
  * Queries pre-computed indicator values, applies filter conditions,
  * and returns matching symbols with their indicator data.
  */
+const TECHNICAL_SNAPSHOT_COL_MAP: Record<string, any> = {
+  sma_20: technicalSnapshots.sma20,
+  ema_20: technicalSnapshots.ema20,
+  rsi_14: technicalSnapshots.rsi14,
+  macd_value: technicalSnapshots.macd,
+  bollinger_width: technicalSnapshots.bbWidth,
+  atr_14: technicalSnapshots.atr14,
+  adx_14: technicalSnapshots.adx14,
+};
+
 async function runTechnicalScreen(params: {
   symbols: string[];
   filters: Array<{
@@ -221,62 +231,88 @@ async function runTechnicalScreen(params: {
   if (params.symbols.length === 0) return [];
   if (params.filters.length === 0) return [];
 
-  // Group filters by indicator_name for a single efficient query
-  // For each filter, resolve the indicator_name from the map
-  const indicatorFilters: Array<{
-    indicatorName: string;
-    operator: string;
-    value: number;
-  }> = [];
-
-  for (const f of params.filters) {
-    const indicatorName = INDICATOR_NAME_MAP[f.field];
-    if (!indicatorName) continue;
-    indicatorFilters.push({
-      indicatorName,
-      operator: f.operator,
-      value: f.value,
-    });
-  }
-
-  if (indicatorFilters.length === 0) return [];
-
   try {
-    // Get the most recent date available in calculation_results for any of our symbols
-    const latestDateRow = await db.execute(sql`
-      SELECT MAX(date) as max_date
-      FROM calculation_results
-      WHERE symbol = ANY(${params.symbols}::text[])
-    `);
-    const latestDate = (latestDateRow as any[])[0]?.max_date;
-    if (!latestDate) return [];
+    // 1. Check technical_snapshots first (precomputed canonical indicators)
+    const techConditions: any[] = [
+      inArray(technicalSnapshots.symbol, params.symbols),
+      eq(technicalSnapshots.timeframe, "1d"),
+    ];
 
-    // Fetch indicator values for the latest date across all requested symbols
-    // We build one query per indicator filter (separate WHERE conditions for each indicator_name)
-    // Get symbols that match ALL filter conditions using INTERSECT of symbol sets
-    let matchingSymbols: string[] = params.symbols;
+    let hasSupportedSnapshotFilter = false;
+    for (const f of params.filters) {
+      const col = TECHNICAL_SNAPSHOT_COL_MAP[f.field];
+      if (!col) continue;
+      hasSupportedSnapshotFilter = true;
+      if (f.operator === "gt") techConditions.push(gt(col, String(f.value)));
+      else if (f.operator === "gte") techConditions.push(gte(col, String(f.value)));
+      else if (f.operator === "lt") techConditions.push(lt(col, String(f.value)));
+      else if (f.operator === "lte") techConditions.push(lte(col, String(f.value)));
+      else if (f.operator === "eq") techConditions.push(eq(col, String(f.value)));
+    }
 
-    for (const f of indicatorFilters) {
-      const symbolRows = await db.execute(sql`
-        SELECT DISTINCT symbol
+    let matchingSymbols: string[] = [];
+    if (hasSupportedSnapshotFilter) {
+      const matchingTechRows = await db
+        .select({ symbol: technicalSnapshots.symbol })
+        .from(technicalSnapshots)
+        .where(and(...techConditions));
+
+      if (matchingTechRows.length > 0) {
+        matchingSymbols = matchingTechRows.map((r) => r.symbol);
+      }
+    }
+
+    // 2. Fallback to calculation_results if no snapshots matched or table empty
+    if (matchingSymbols.length === 0) {
+      const indicatorFilters: Array<{
+        indicatorName: string;
+        operator: string;
+        value: number;
+      }> = [];
+
+      for (const f of params.filters) {
+        const indicatorName = INDICATOR_NAME_MAP[f.field];
+        if (!indicatorName) continue;
+        indicatorFilters.push({
+          indicatorName,
+          operator: f.operator,
+          value: f.value,
+        });
+      }
+
+      if (indicatorFilters.length === 0) return [];
+
+      const latestDateRow = await db.execute(sql`
+        SELECT MAX(date) as max_date
         FROM calculation_results
         WHERE symbol = ANY(${params.symbols}::text[])
-          AND indicator_name = ${f.indicatorName}
-          AND date = ${latestDate}::date
-          AND indicator_value IS NOT NULL
-          ${f.operator === "gt" ? sql`AND indicator_value > ${f.value}::numeric` : ""}
-          ${f.operator === "gte" ? sql`AND indicator_value >= ${f.value}::numeric` : ""}
-          ${f.operator === "lt" ? sql`AND indicator_value < ${f.value}::numeric` : ""}
-          ${f.operator === "lte" ? sql`AND indicator_value <= ${f.value}::numeric` : ""}
-          ${f.operator === "eq" ? sql`AND ABS(indicator_value - ${f.value}::numeric) < 0.01` : ""}
       `);
+      const latestDate = (latestDateRow as any[])[0]?.max_date;
+      if (!latestDate) return [];
 
-      const filteredSymbols = (symbolRows as any[]).map((r) => r.symbol);
-      // Intersect: keep only symbols that pass this filter
-      matchingSymbols = matchingSymbols.filter((s) => filteredSymbols.includes(s));
+      matchingSymbols = params.symbols;
+      for (const f of indicatorFilters) {
+        const symbolRows = await db.execute(sql`
+          SELECT DISTINCT symbol
+          FROM calculation_results
+          WHERE symbol = ANY(${params.symbols}::text[])
+            AND indicator_name = ${f.indicatorName}
+            AND date = ${latestDate}::date
+            AND indicator_value IS NOT NULL
+            ${f.operator === "gt" ? sql`AND indicator_value > ${f.value}::numeric` : ""}
+            ${f.operator === "gte" ? sql`AND indicator_value >= ${f.value}::numeric` : ""}
+            ${f.operator === "lt" ? sql`AND indicator_value < ${f.value}::numeric` : ""}
+            ${f.operator === "lte" ? sql`AND indicator_value <= ${f.value}::numeric` : ""}
+            ${f.operator === "eq" ? sql`AND ABS(indicator_value - ${f.value}::numeric) < 0.01` : ""}
+        `);
 
-      if (matchingSymbols.length === 0) return [];
+        const filteredSymbols = (symbolRows as any[]).map((r) => r.symbol);
+        matchingSymbols = matchingSymbols.filter((s) => filteredSymbols.includes(s));
+        if (matchingSymbols.length === 0) return [];
+      }
     }
+
+    if (matchingSymbols.length === 0) return [];
 
     // Fetch candle data for matching symbols (most recent candle per symbol)
     const candleRows = await db.execute(sql`

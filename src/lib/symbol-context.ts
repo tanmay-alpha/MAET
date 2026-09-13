@@ -2,8 +2,10 @@ export interface SymbolContext {
   symbol: string;
   exchange: "NSE" | "BSE";
   companyId?: string;
-  sourceContext?: "screener" | "watchlist" | "search" | "terminal" | "portfolio";
+  sourceContext?: "screener" | "watchlist" | "search" | "terminal" | "portfolio" | "backtest" | "chart";
   screenerRunId?: string;
+  backtestRunId?: string;
+  strategyId?: string;
 }
 
 export const DEFAULT_SYMBOL_CONTEXT: SymbolContext = {
@@ -23,7 +25,7 @@ export function parseSymbolContext(raw: Record<string, unknown>): SymbolContext 
     ? raw.companyId.trim()
     : undefined;
 
-  const validSources = ["screener", "watchlist", "search", "terminal", "portfolio"] as const;
+  const validSources = ["screener", "watchlist", "search", "terminal", "portfolio", "backtest", "chart"] as const;
   const sourceContext = typeof raw.sourceContext === "string" && (validSources as readonly string[]).includes(raw.sourceContext)
     ? (raw.sourceContext as SymbolContext["sourceContext"])
     : undefined;
@@ -32,12 +34,22 @@ export function parseSymbolContext(raw: Record<string, unknown>): SymbolContext 
     ? raw.screenerRunId.trim()
     : undefined;
 
+  const backtestRunId = typeof raw.backtestRunId === "string" && raw.backtestRunId.trim()
+    ? raw.backtestRunId.trim()
+    : undefined;
+
+  const strategyId = typeof raw.strategyId === "string" && raw.strategyId.trim()
+    ? raw.strategyId.trim()
+    : undefined;
+
   return {
     symbol,
     exchange,
     companyId,
     sourceContext,
     screenerRunId,
+    backtestRunId,
+    strategyId,
   };
 }
 

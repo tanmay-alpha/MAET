@@ -35,18 +35,13 @@ function getString(ctx: EvalCtx, c: { field: string }): string | undefined {
   return undefined;
 }
 
+import { computeRSI } from "@shared/indicators";
+
 function rsi(closes: number[], period: number): number | undefined {
-  if (closes.length < period + 1) return undefined;
-  let gain = 0;
-  let loss = 0;
-  for (let i = closes.length - period; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    if (diff > 0) gain += diff;
-    else loss += -diff;
-  }
-  if (loss === 0) return 100;
-  const rs = gain / loss;
-  return 100 - 100 / (1 + rs);
+  if (closes.length <= period) return undefined;
+  const series = computeRSI(closes, period);
+  const latest = series[series.length - 1];
+  return latest === null ? undefined : latest;
 }
 
 function cmp(a: number, op: "eq" | "gt" | "lt" | "gte" | "lte", b: number): boolean {

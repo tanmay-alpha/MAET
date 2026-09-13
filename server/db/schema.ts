@@ -1404,3 +1404,71 @@ export const strategyReplaySessions = pgTable("strategy_replay_sessions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ============================================================
+// Technical Snapshots Pipeline (P1-B Migration 0021)
+// ============================================================
+
+export const technicalSnapshots = pgTable("technical_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  symbol: text("symbol").notNull(),
+  exchange: text("exchange").notNull().default("NSE"),
+  timeframe: text("timeframe").notNull().default("1d"),
+  asOf: timestamp("as_of", { withTimezone: true }).notNull(),
+  close: numeric("close", { precision: 18, scale: 4 }).notNull(),
+
+  // Moving averages
+  sma20: numeric("sma20", { precision: 18, scale: 4 }),
+  sma50: numeric("sma50", { precision: 18, scale: 4 }),
+  sma200: numeric("sma200", { precision: 18, scale: 4 }),
+  ema20: numeric("ema20", { precision: 18, scale: 4 }),
+  ema50: numeric("ema50", { precision: 18, scale: 4 }),
+  ema200: numeric("ema200", { precision: 18, scale: 4 }),
+
+  // Momentum & Trend
+  rsi14: numeric("rsi14", { precision: 8, scale: 4 }),
+  macd: numeric("macd", { precision: 18, scale: 4 }),
+  macdSignal: numeric("macd_signal", { precision: 18, scale: 4 }),
+  macdHistogram: numeric("macd_histogram", { precision: 18, scale: 4 }),
+
+  // Volatility
+  atr14: numeric("atr14", { precision: 18, scale: 4 }),
+  adx14: numeric("adx14", { precision: 8, scale: 4 }),
+  bbUpper: numeric("bb_upper", { precision: 18, scale: 4 }),
+  bbMiddle: numeric("bb_middle", { precision: 18, scale: 4 }),
+  bbLower: numeric("bb_lower", { precision: 18, scale: 4 }),
+  bbWidth: numeric("bb_width", { precision: 10, scale: 4 }),
+
+  // Volume
+  volume: bigint("volume", { mode: "number" }).default(0),
+  averageVolume20: bigint("average_volume20", { mode: "number" }),
+  relativeVolume20: numeric("relative_volume20", { precision: 10, scale: 4 }),
+
+  // Extremes & Distances
+  high20: numeric("high20", { precision: 18, scale: 4 }),
+  low20: numeric("low20", { precision: 18, scale: 4 }),
+  high52w: numeric("high52w", { precision: 18, scale: 4 }),
+  low52w: numeric("low52w", { precision: 18, scale: 4 }),
+  distanceFromSma20Pct: numeric("distance_from_sma20_pct", { precision: 10, scale: 4 }),
+  distanceFromSma50Pct: numeric("distance_from_sma50_pct", { precision: 10, scale: 4 }),
+  distanceFromSma200Pct: numeric("distance_from_sma200_pct", { precision: 10, scale: 4 }),
+  distanceFrom52WeekHighPct: numeric("distance_from_52week_high_pct", { precision: 10, scale: 4 }),
+  distanceFrom52WeekLowPct: numeric("distance_from_52week_low_pct", { precision: 10, scale: 4 }),
+
+  // Boolean state flags
+  priceAboveSma20: boolean("price_above_sma20"),
+  priceAboveSma50: boolean("price_above_sma50"),
+  priceAboveSma200: boolean("price_above_sma200"),
+
+  // Engine metadata & versioning
+  indicatorEngineVersion: text("indicator_engine_version").notNull().default("1.0.0"),
+  sourceTimestamp: timestamp("source_timestamp", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("idx_technical_snapshots_identity_unique").on(table.symbol, table.exchange, table.timeframe),
+  index("idx_technical_snapshots_symbol_tf").on(table.symbol, table.timeframe),
+  index("idx_technical_snapshots_rsi14").on(table.rsi14),
+  index("idx_technical_snapshots_rel_volume").on(table.relativeVolume20),
+  index("idx_technical_snapshots_updated_at").on(table.updatedAt),
+]);
+
