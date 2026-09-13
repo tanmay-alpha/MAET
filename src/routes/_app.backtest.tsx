@@ -1,9 +1,19 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useId, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { TrendingUp, Zap, BarChart3 } from "lucide-react";
+
+export interface BacktestSearch {
+  symbol?: string;
+  sourceContext?: string;
+}
 
 export const Route = createFileRoute("/_app/backtest")({
+  validateSearch: (search: Record<string, unknown>): BacktestSearch => ({
+    symbol: typeof search.symbol === "string" ? search.symbol : undefined,
+    sourceContext: typeof search.sourceContext === "string" ? search.sourceContext : undefined,
+  }),
   head: () => ({ meta: [{ title: "Backtest Lab V2 — MAET" }] }),
   component: Backtest,
 });
@@ -35,8 +45,10 @@ function Curve({ data }: { data: Array<{ timestamp: number; equity: number }> })
 }
 
 function Backtest() {
+  const navigate = useNavigate();
+  const search = Route.useSearch();
   const queryClient = useQueryClient();
-  const [symbol, setSymbol] = useState("RELIANCE");
+  const [symbol, setSymbol] = useState(search.symbol || "RELIANCE");
   const [strategy, setStrategy] = useState("SMA_CROSS");
   const [timeframe, setTimeframe] = useState("1d");
   const [fast, setFast] = useState(20);
@@ -133,7 +145,42 @@ function Backtest() {
       {result && <>
         <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
           <div className="rounded-lg border border-border bg-panel">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3 text-sm"><span className="font-medium">Equity Curve</span><span className="text-xs text-muted-foreground">{result.equityCurve?.length ?? 0} points · {result.symbol}</span></div>
+            <div className="flex items-center justify-between border-b border-border px-4 py-3 text-sm">
+              <span className="font-medium">Equity Curve</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void navigate({
+                    to: `/chart/${result.symbol}` as any,
+                    search: {
+                      backtestRunId: mutation.data?.runId || result.runId,
+                      sourceContext: "backtest",
+                    } as any,
+                  })}
+                  className="flex items-center gap-1.5 rounded bg-primary/15 hover:bg-primary/25 text-primary border border-primary/30 px-2.5 py-1 text-xs font-semibold transition"
+                  title="View execution fills and trade markers directly on TradingView chart"
+                >
+                  <TrendingUp className="h-3.5 w-3.5" />
+                  View Trades on Chart
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void navigate({
+                    to: "/terminal" as any,
+                    search: {
+                      symbol: result.symbol,
+                      sourceContext: "backtest",
+                    } as any,
+                  })}
+                  className="flex items-center gap-1.5 rounded bg-bull/15 hover:bg-bull/25 text-bull border border-bull/30 px-2.5 py-1 text-xs font-semibold transition"
+                  title="Deploy or trade in Paper Terminal"
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  Terminal
+                </button>
+                <span className="text-xs text-muted-foreground ml-1">{result.equityCurve?.length ?? 0} points · {result.symbol}</span>
+              </div>
+            </div>
             <div className="h-80 p-2"><Curve data={result.equityCurve ?? []} /></div>
           </div>
           <div className="rounded-lg border border-border bg-panel">
@@ -159,7 +206,39 @@ function Backtest() {
                   <span className="ml-2 text-muted-foreground">({runItem.strategy} • {runItem.timeframe})</span>
                   <p className="text-muted-foreground text-[10px]">{new Date(runItem.createdAt).toLocaleString()}</p>
                 </div>
-                <span className="font-mono text-xs">ID: {runItem.id.slice(0, 8)}</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void navigate({
+                      to: `/chart/${runItem.symbol}` as any,
+                      search: {
+                        backtestRunId: runItem.id,
+                        sourceContext: "backtest",
+                      } as any,
+                    })}
+                    className="flex items-center gap-1 rounded border border-border bg-panel px-2 py-1 text-[11px] font-medium hover:bg-accent hover:text-foreground transition"
+                    title="Open full chart with trade markers for this run"
+                  >
+                    <TrendingUp className="h-3 w-3 text-primary" />
+                    Chart
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void navigate({
+                      to: "/terminal" as any,
+                      search: {
+                        symbol: runItem.symbol,
+                        sourceContext: "backtest",
+                      } as any,
+                    })}
+                    className="flex items-center gap-1 rounded border border-border bg-panel px-2 py-1 text-[11px] font-medium hover:bg-accent hover:text-foreground transition"
+                    title="Open symbol in Terminal"
+                  >
+                    <Zap className="h-3 w-3 text-bull" />
+                    Terminal
+                  </button>
+                  <span className="font-mono text-xs">ID: {runItem.id.slice(0, 8)}</span>
+                </div>
               </div>
             ))
           )}

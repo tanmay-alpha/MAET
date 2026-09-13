@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { CandlestickChart } from "@/components/trading/candlestick-chart";
 import { OrderPanel } from "@/components/trading/order-panel";
@@ -8,11 +8,13 @@ import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import type { MarketCandle } from "@/lib/market-api";
 import { WATCHLIST } from "@/lib/market-catalog";
-import { ShieldAlert, RefreshCw, Layers, ClipboardList, History } from "lucide-react";
+import { ShieldAlert, RefreshCw, Layers, ClipboardList, History, TrendingUp, BarChart3 } from "lucide-react";
 import { useTerminalStore } from "@/store/useTerminalStore";
 import { DepthMeter } from "@/components/trading/depth-meter";
 import type { PaperOrderRow, PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl, getPositionCloseSide } from "@shared/domain/paper-trading/margin";
+import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
+import { mapFillsToTradeMarkers } from "@/components/trading/chart-trade-markers";
 
 import { useActiveSymbol } from "@/hooks/use-active-symbol";
 import { Filter, Sparkles, X } from "lucide-react";
@@ -34,6 +36,7 @@ const INTERVAL_CONFIG: Record<string, { timeframe: MarketCandle["tf"]; range: st
 const WATCHLIST_SYMBOLS = WATCHLIST.map((item) => item.symbol);
 
 function Terminal() {
+  const navigate = useNavigate();
   const { activeSymbol: active, context, setSymbolContext } = useActiveSymbol();
   const [interval, setInterval] = useState("5m");
   const [activeTab, setActiveTab] = useState<"positions" | "orders" | "history">("positions");
@@ -91,6 +94,16 @@ function Terminal() {
       marginUsagePercent: Math.max(0, Math.min(100, usage)),
     };
   }, [positions, account, quoteMap]);
+
+  const paperOverlay = useMemo(
+    () => extractPaperOverlay(active, positions, orders),
+    [active, positions, orders]
+  );
+
+  const tradeMarkers = useMemo(
+    () => mapFillsToTradeMarkers(fills, active),
+    [fills, active]
+  );
 
   const [chartType, setChartType] = useState<"candle" | "line">(() => {
     if (typeof window === "undefined") return "candle";
@@ -275,6 +288,28 @@ function Terminal() {
                   </button>
                 ))}
               </div>
+
+              {/* Navigation Actions */}
+              <div className="flex items-center gap-1 border-l border-border pl-2 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => void navigate({ to: `/chart/${active}` as any, search: { exchange: "NSE", sourceContext: "terminal" } as any })}
+                  className="flex items-center gap-1 rounded px-2 py-0.5 font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition"
+                  title="Open full TradingView-style chart with drawings & indicators"
+                >
+                  <TrendingUp className="h-3 w-3 text-primary" />
+                  Full Chart
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void navigate({ to: "/backtest" as any, search: { symbol: active, sourceContext: "terminal" } as any })}
+                  className="flex items-center gap-1 rounded px-2 py-0.5 font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition"
+                  title="Test strategies on this symbol"
+                >
+                  <BarChart3 className="h-3 w-3 text-bull" />
+                  Backtest
+                </button>
+              </div>
             </div>
           </div>
 
@@ -284,10 +319,13 @@ function Terminal() {
               <CandlestickChart
                 data={candles}
                 height={350}
+                seriesType={chartType === "line" ? "line" : "candlestick"}
                 indicators={indicators}
                 chartState={{ zoom: 1, panOffset: 0, drawings: [] }}
                 onChartStateChange={() => {}}
                 drawingTool={null}
+                trades={tradeMarkers}
+                paperOverlay={paperOverlay}
               />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">

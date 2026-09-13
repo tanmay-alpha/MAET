@@ -1,8 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, BarChart3, Layers, LineChart, Download, Upload, Settings, TrendingDown, TrendingUp, ExternalLink } from "lucide-react";
+import { ArrowLeft, BarChart3, Layers, LineChart, Download, Upload, Settings, TrendingDown, TrendingUp, ExternalLink, Zap, Building2, Sparkles, X } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { trpc } from "@/lib/trpc";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { usePaperAccount } from "@/hooks/use-paper-account";
+import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
+import { mapBacktestTradesToMarkers } from "@/components/trading/chart-trade-markers";
 import { useChartLayout, useChartShortcuts, useFullscreen } from "@/hooks/use-chart-layout";
 import { TiltCard } from "@/components/trading/tilt-card";
 import { ContractPanel } from "@/components/common/contract-panel";
@@ -13,7 +18,20 @@ import type { MarketCandle } from "@/lib/market-api";
 import type { ChartState } from "@/components/trading/candlestick-chart";
 import type { ChartLayout } from "@/hooks/use-chart-layout";
 
+export interface ChartSearch {
+  exchange?: "NSE" | "BSE";
+  sourceContext?: string;
+  backtestRunId?: string;
+  strategyId?: string;
+}
+
 export const Route = createFileRoute("/_app/chart/$symbol")({
+  validateSearch: (search: Record<string, unknown>): ChartSearch => ({
+    exchange: search.exchange === "BSE" ? "BSE" : "NSE",
+    sourceContext: typeof search.sourceContext === "string" ? search.sourceContext : undefined,
+    backtestRunId: typeof search.backtestRunId === "string" ? search.backtestRunId : undefined,
+    strategyId: typeof search.strategyId === "string" ? search.strategyId : undefined,
+  }),
   head: () => ({
     meta: [{ title: "Chart — MAET" }]
   }),
@@ -53,7 +71,37 @@ function IndicatorCard({ name, enabled, onChange, disabled = false, reason }: { 
 
 function ChartPage() {
   const { symbol } = Route.useParams();
+  const search = Route.useSearch();
   const navigate = useNavigate();
+  const [activeBacktestRunId, setActiveBacktestRunId] = useState<string | undefined>(search.backtestRunId);
+
+  useEffect(() => {
+    setActiveBacktestRunId(search.backtestRunId);
+  }, [search.backtestRunId]);
+
+  // Backtest run trade retrieval
+  const backtestRunQuery = useQuery({
+    queryKey: ["backtestV2", "getRun", activeBacktestRunId],
+    queryFn: () => trpc.backtestV2.getRun.query({ runId: activeBacktestRunId! }),
+    enabled: Boolean(activeBacktestRunId),
+  });
+
+  // Map backtest trades to markers
+  const tradeMarkers = useMemo(() => {
+    const run = backtestRunQuery.data?.run || backtestRunQuery.data;
+    const runResult = run?.result;
+    const trades = runResult?.trades || [];
+    if (!trades || trades.length === 0) return [];
+    return mapBacktestTradesToMarkers(trades, symbol);
+  }, [backtestRunQuery.data, symbol]);
+
+  // Paper trading positions & orders overlay
+  const { positions, orders } = usePaperAccount();
+  const paperOverlay = useMemo(
+    () => extractPaperOverlay(symbol, positions, orders),
+    [symbol, positions, orders]
+  );
+
   const [selectedTF, setSelectedTF] = useState<keyof typeof TIMEFRAMES>("5m");
   const [showVolume, setShowVolume] = useState(true);
   const [showMA, setShowMA] = useState(false);
@@ -242,14 +290,47 @@ function ChartPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="font-mono text-xl font-semibold">
-              {currentPrice?.toFixed(2) || "—"}
+            <div className="font-mono text-xl font-semibold mr-2">
+              {currentPrice ? `₹${currentPrice.toFixed(2)}` : "—"}
             </div>
+
+            {/* Quick Navigation: Terminal / Paper */}
+            <button
+              type="button"
+              onClick={() => void navigate({ to: "/terminal" as any, search: { symbol, exchange: search.exchange || "NSE", sourceContext: "chart" } as any })}
+              className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition"
+              title="Trade this symbol in Paper Terminal"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              Terminal
+            </button>
+
+            {/* Quick Navigation: Backtest */}
+            <button
+              type="button"
+              onClick={() => void navigate({ to: "/backtest" as any, search: { symbol, sourceContext: "chart" } as any })}
+              className="flex items-center gap-1.5 rounded-lg border border-bull/30 bg-bull/10 px-3 py-1.5 text-xs font-semibold text-bull hover:bg-bull/20 transition"
+              title="Backtest strategies for this symbol"
+            >
+              <BarChart3 className="h-3.5 w-3.5" />
+              Backtest
+            </button>
+
+            {/* Quick Navigation: Stock Detail */}
+            <button
+              type="button"
+              onClick={() => void navigate({ to: `/stock/${symbol}` as any })}
+              className="rounded-lg border border-border bg-panel p-2 hover:bg-accent text-muted-foreground hover:text-foreground transition"
+              title="Company Financials & Overview"
+            >
+              <Building2 className="h-4 w-4" />
+            </button>
+
             <a
               href={getTradingViewUrl(symbol)}
               target="_blank"
               rel="noreferrer"
-              className="rounded-lg border border-border bg-panel p-2 hover:bg-accent"
+              className="rounded-lg border border-border bg-panel p-2 hover:bg-accent text-muted-foreground hover:text-foreground transition"
               title="Open TradingView"
             >
               <ExternalLink className="h-4 w-4" />
@@ -257,6 +338,28 @@ function ChartPage() {
           </div>
         </div>
       </div>
+
+      {/* Backtest Run Trade Markers Banner */}
+      {activeBacktestRunId && (
+        <div className="flex items-center justify-between border-b border-primary/20 bg-primary/10 px-6 py-2 text-xs text-primary">
+          <div className="flex items-center gap-2 font-medium">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <span>
+              Overlaying <strong>{tradeMarkers.length}</strong> strategy trade markers from Backtest Run{" "}
+              <code className="rounded bg-primary/20 px-1 py-0.5 font-mono text-[11px]">{activeBacktestRunId.slice(0, 8)}</code>
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveBacktestRunId(undefined)}
+            className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] hover:bg-primary/20 font-medium"
+            title="Clear trade markers overlay"
+          >
+            <X className="h-3.5 w-3.5" />
+            Hide Markers
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Time Period Selector */}
@@ -410,10 +513,13 @@ function ChartPage() {
                     <CandlestickChart
                       data={candles}
                       height={420}
+                      seriesType={selectedChartType === "candles" ? "candlestick" : selectedChartType}
                       chartState={chartState}
                       onChartStateChange={setChartState}
                       drawingTool={selectedTool}
                       indicators={{ sma: showMA, ema: showMA, rsi: showRSI, macd: showMACD, volume: showVolume }}
+                      trades={tradeMarkers}
+                      paperOverlay={paperOverlay}
                     />
                   </div>
                 )}

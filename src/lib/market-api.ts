@@ -83,6 +83,34 @@ export type MarketCompany = {
   fundamentalsSource?: string;
   staleFundamentals?: boolean;
   source: "database" | "nse";
+
+  // Technical Indicators & Snapshots
+  rsi14?: number;
+  sma20?: number;
+  sma50?: number;
+  sma200?: number;
+  ema20?: number;
+  ema50?: number;
+  ema200?: number;
+  macd?: number;
+  macdSignal?: number;
+  macdHistogram?: number;
+  atr14?: number;
+  adx14?: number;
+  bbUpper?: number;
+  bbMiddle?: number;
+  bbLower?: number;
+  bbWidth?: number;
+  distanceFromSma20Pct?: number;
+  distanceFromSma50Pct?: number;
+  distanceFromSma200Pct?: number;
+  distanceFrom52WeekHighPct?: number;
+  distanceFrom52WeekLowPct?: number;
+  priceAboveSma20?: boolean;
+  priceAboveSma50?: boolean;
+  priceAboveSma200?: boolean;
+  technicalAsOf?: string;
+  technicalEngineVersion?: string;
 };
 
 export type MarketFieldAvailability = Record<string, {
