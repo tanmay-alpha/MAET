@@ -87,8 +87,18 @@ export interface AllIndicators {
 }
 
 // ============================================================================
-// Moving Averages
-// ============================================================================
+import {
+  computeSMA as canonicalSMA,
+  computeEMA as canonicalEMA,
+  computeRSI as canonicalRSI,
+  computeMACD as canonicalMACD,
+  computeBollingerBands as canonicalBollinger,
+  computeATR as canonicalATR,
+} from "@shared/indicators";
+
+// ============================================================
+// Moving Averages (delegated to canonical indicator engine)
+// ============================================================
 
 /**
  * Simple Moving Average (SMA)
@@ -96,19 +106,7 @@ export interface AllIndicators {
  * @param period - Number of periods (typically 20, 50, 200)
  */
 export function calculateSMA(data: number[], period: number): number[] {
-  const result: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      result.push(NaN);
-      continue;
-    }
-    let sum = 0;
-    for (let j = 0; j < period; j++) {
-      sum += data[i - j];
-    }
-    result.push(sum / period);
-  }
-  return result;
+  return canonicalSMA(data, period).map((v) => (v === null ? NaN : v));
 }
 
 /**
@@ -117,29 +115,7 @@ export function calculateSMA(data: number[], period: number): number[] {
  * @param period - Number of periods (typically 12, 26)
  */
 export function calculateEMA(data: number[], period: number): number[] {
-  const result: number[] = [];
-  const multiplier = 2 / (period + 1);
-  let ema = NaN;
-
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      result.push(NaN);
-      continue;
-    }
-
-    if (isNaN(ema)) {
-      let sum = 0;
-      for (let j = 0; j < period; j++) {
-        sum += data[i - j];
-      }
-      ema = sum / period;
-    } else {
-      ema = (data[i] - ema) * multiplier + ema;
-    }
-
-    result.push(ema);
-  }
-  return result;
+  return canonicalEMA(data, period).map((v) => (v === null ? NaN : v));
 }
 
 /**
@@ -191,81 +167,37 @@ export function calculateHMA(data: number[], period: number): number[] {
 }
 
 // ============================================================================
-// Trend Indicators
+// Trend Indicators (delegated to canonical indicator engine)
 // ============================================================================
 
 /**
  * MACD (Moving Average Convergence Divergence)
  */
 export function calculateMACD(
-  candles: OHLCV[],
+  candles: OHLCV[] | number[],
   fastPeriod: number = 12,
   slowPeriod: number = 26,
   signalPeriod: number = 9
 ): MACDResult {
-  const closes = candles.map(c => c.close);
-  const fastEMA = calculateEMA(closes, fastPeriod);
-  const slowEMA = calculateEMA(closes, slowPeriod);
-
-  const macd = fastEMA.map((fast, i) => {
-    if (isNaN(fast) || isNaN(slowEMA[i])) return NaN;
-    return fast - slowEMA[i];
-  });
-
-  const validMACD = macd.filter(v => !isNaN(v));
-  const signalEMA = calculateEMA(validMACD, signalPeriod);
-
-  let signalIdx = 0;
-  const signal = macd.map(v => {
-    if (isNaN(v)) return NaN;
-    return signalEMA[signalIdx++] ?? NaN;
-  });
-
-  const histogram = macd.map((m, i) => {
-    if (isNaN(m) || isNaN(signal[i])) return NaN;
-    return m - signal[i];
-  });
-
-  return { macd, signal, histogram };
+  const closes = Array.isArray(candles) && typeof candles[0] === "number"
+    ? (candles as number[])
+    : (candles as OHLCV[]).map((c) => c.close);
+  const res = canonicalMACD(closes, fastPeriod, slowPeriod, signalPeriod);
+  return {
+    macd: res.macd.map((v) => (v === null ? NaN : v)),
+    signal: res.signal.map((v) => (v === null ? NaN : v)),
+    histogram: res.histogram.map((v) => (v === null ? NaN : v)),
+  };
 }
 
 /**
- * RSI (Relative Strength Index)
+ * RSI (Relative Strength Index) - Canonical Wilder's Smoothing
  */
-export function calculateRSI(candles: OHLCV[], period: number = 14): number[] {
-  const result: number[] = [];
-  const closes = candles.map(c => c.close);
-
-  for (let i = 0; i < closes.length; i++) {
-    if (i < period) {
-      result.push(NaN);
-      continue;
-    }
-
-    let gains = 0;
-    let losses = 0;
-
-    for (let j = i - period + 1; j <= i; j++) {
-      const change = closes[j] - closes[j - 1];
-      if (change > 0) {
-        gains += change;
-      } else {
-        losses -= change;
-      }
-    }
-
-    const avgGain = gains / period;
-    const avgLoss = losses / period;
-
-    if (avgLoss === 0) {
-      result.push(100);
-    } else {
-      const rs = avgGain / avgLoss;
-      result.push(100 - (100 / (1 + rs)));
-    }
-  }
-
-  return result;
+export function calculateRSI(candles: OHLCV[] | number[], period: number = 14): number[] {
+  const closes = Array.isArray(candles) && typeof candles[0] === "number"
+    ? (candles as number[])
+    : (candles as OHLCV[]).map((c) => c.close);
+  return canonicalRSI(closes, period).map((v) => (v === null ? NaN : v));
 }
 
 /**
@@ -596,72 +528,26 @@ export function calculateMFI(candles: OHLCV[], period: number = 14): number[] {
  * Bollinger Bands
  */
 export function calculateBollingerBands(
-  candles: OHLCV[],
+  candles: OHLCV[] | number[],
   period: number = 20,
   stdDev: number = 2
 ): BollingerBandsResult {
-  const closes = candles.map(c => c.close);
-  const middle = calculateSMA(closes, period);
-
-  const upper: number[] = [];
-  const lower: number[] = [];
-
-  for (let i = 0; i < closes.length; i++) {
-    if (i < period - 1) {
-      upper.push(NaN);
-      lower.push(NaN);
-      continue;
-    }
-
-    let sum = 0;
-    for (let j = 0; j < period; j++) {
-      const diff = closes[i - j] - middle[i];
-      sum += diff * diff;
-    }
-    const std = Math.sqrt(sum / period);
-
-    upper.push(middle[i] + stdDev * std);
-    lower.push(middle[i] - stdDev * std);
-  }
-
-  return { upper, middle, lower };
+  const closes = Array.isArray(candles) && typeof candles[0] === "number"
+    ? (candles as number[])
+    : (candles as OHLCV[]).map((c) => c.close);
+  const res = canonicalBollinger(closes, period, stdDev);
+  return {
+    upper: res.upper.map((v) => (v === null ? NaN : v)),
+    middle: res.middle.map((v) => (v === null ? NaN : v)),
+    lower: res.lower.map((v) => (v === null ? NaN : v)),
+  };
 }
 
 /**
  * ATR (Average True Range)
  */
 export function calculateATR(candles: OHLCV[], period: number = 14): number[] {
-  const tr: number[] = [0];
-
-  for (let i = 1; i < candles.length; i++) {
-    const high = candles[i].high;
-    const low = candles[i].low;
-    const prevClose = candles[i - 1].close;
-
-    const tr1 = high - low;
-    const tr2 = Math.abs(high - prevClose);
-    const tr3 = Math.abs(low - prevClose);
-    tr.push(Math.max(tr1, tr2, tr3));
-  }
-
-  // Wilder's smoothing
-  const result: number[] = [];
-  let atr = 0;
-
-  for (let i = 0; i < tr.length; i++) {
-    if (i < period) {
-      atr += tr[i];
-      result.push(NaN);
-    } else if (i === period) {
-      atr = atr / period;
-      result.push(atr);
-    } else {
-      atr = (atr * (period - 1) + tr[i]) / period;
-      result.push(atr);
-    }
-  }
-
-  return result;
+  return canonicalATR(candles, period).map((v) => (v === null ? NaN : v));
 }
 
 /**

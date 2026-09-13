@@ -24,62 +24,34 @@ export interface IndicatorState {
   getValue(barIndex: number, lag?: number): number | null;
 }
 
+import {
+  computeSMA as canonicalSMA,
+  computeEMA as canonicalEMA,
+  computeRSI as canonicalRSI,
+  computeMACD as canonicalMACD,
+  computeBollingerBands as canonicalBollinger,
+  computeATR as canonicalATR,
+  computeVWAP as canonicalVWAP,
+} from "../../../shared/indicators";
+
 // ============================================================
-// Internal math helpers (incremental where possible)
+// Internal math helpers (delegated to canonical engine)
 // ============================================================
 
+function toNumericArray(arr: (number | null)[]): number[] {
+  return arr.map((v) => (v === null ? NaN : v));
+}
+
 function computeSma(closes: number[], period: number): number[] {
-  const result = new Array<number>(closes.length).fill(NaN);
-  if (period <= 0 || period > closes.length) return result;
-  let sum = 0;
-  for (let i = 0; i < period; i++) sum += closes[i];
-  result[period - 1] = sum / period;
-  for (let i = period; i < closes.length; i++) {
-    sum += closes[i] - closes[i - period];
-    result[i] = sum / period;
-  }
-  return result;
+  return toNumericArray(canonicalSMA(closes, period));
 }
 
 function computeEma(closes: number[], period: number): number[] {
-  const result = new Array<number>(closes.length).fill(NaN);
-  if (period <= 0 || closes.length === 0) return result;
-  const k = 2 / (period + 1);
-  // Seed with SMA of first `period` bars
-  if (closes.length < period) return result;
-  let sum = 0;
-  for (let i = 0; i < period; i++) sum += closes[i];
-  let prev = sum / period;
-  result[period - 1] = prev;
-  for (let i = period; i < closes.length; i++) {
-    prev = closes[i] * k + prev * (1 - k);
-    result[i] = prev;
-  }
-  return result;
+  return toNumericArray(canonicalEMA(closes, period));
 }
 
 function computeRsi(closes: number[], period: number): number[] {
-  const result = new Array<number>(closes.length).fill(NaN);
-  if (closes.length < period + 1) return result;
-  let avgGain = 0;
-  let avgLoss = 0;
-  for (let i = 1; i <= period; i++) {
-    const change = closes[i] - closes[i - 1];
-    if (change > 0) avgGain += change;
-    else avgLoss += Math.abs(change);
-  }
-  avgGain /= period;
-  avgLoss /= period;
-  result[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
-  for (let i = period + 1; i < closes.length; i++) {
-    const change = closes[i] - closes[i - 1];
-    const gain = change > 0 ? change : 0;
-    const loss = change < 0 ? -change : 0;
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
-    result[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
-  }
-  return result;
+  return toNumericArray(canonicalRSI(closes, period));
 }
 
 function computeMacd(
@@ -88,18 +60,12 @@ function computeMacd(
   slow: number,
   signal: number,
 ): { macdLine: number[]; signalLine: number[]; histogram: number[] } {
-  const emaFast = computeEma(closes, fast);
-  const emaSlow = computeEma(closes, slow);
-  const macdLine = closes.map((_, i) =>
-    isNaN(emaFast[i]) || isNaN(emaSlow[i]) ? NaN : emaFast[i] - emaSlow[i],
-  );
-  // Only seed signal EMA from valid MACD values
-  const macdValues = [...macdLine];
-  const signalLine = computeEma(macdValues, signal);
-  const histogram = macdLine.map((m, i) =>
-    isNaN(m) || isNaN(signalLine[i]) ? NaN : m - signalLine[i],
-  );
-  return { macdLine, signalLine, histogram };
+  const res = canonicalMACD(closes, fast, slow, signal);
+  return {
+    macdLine: toNumericArray(res.macd),
+    signalLine: toNumericArray(res.signal),
+    histogram: toNumericArray(res.histogram),
+  };
 }
 
 function computeBollinger(
@@ -107,55 +73,20 @@ function computeBollinger(
   period: number,
   stdDev: number,
 ): { upper: number[]; middle: number[]; lower: number[] } {
-  const middle = computeSma(closes, period);
-  const upper = new Array<number>(closes.length).fill(NaN);
-  const lower = new Array<number>(closes.length).fill(NaN);
-  for (let i = period - 1; i < closes.length; i++) {
-    let sumSq = 0;
-    for (let j = i - period + 1; j <= i; j++) {
-      sumSq += (closes[j] - middle[i]) ** 2;
-    }
-    const sd = Math.sqrt(sumSq / period);
-    upper[i] = middle[i] + sd * stdDev;
-    lower[i] = middle[i] - sd * stdDev;
-  }
-  return { upper, middle, lower };
+  const res = canonicalBollinger(closes, period, stdDev);
+  return {
+    upper: toNumericArray(res.upper),
+    middle: toNumericArray(res.middle),
+    lower: toNumericArray(res.lower),
+  };
 }
 
 function computeAtr(candles: Candle[], period: number): number[] {
-  const result = new Array<number>(candles.length).fill(NaN);
-  if (candles.length < 2) return result;
-  const trValues: number[] = [candles[0].high - candles[0].low];
-  for (let i = 1; i < candles.length; i++) {
-    const prevClose = candles[i - 1].close;
-    const tr = Math.max(
-      candles[i].high - candles[i].low,
-      Math.abs(candles[i].high - prevClose),
-      Math.abs(candles[i].low - prevClose),
-    );
-    trValues.push(tr);
-  }
-  // Wilder smoothing
-  let atr = trValues.slice(0, period).reduce((s, v) => s + v, 0) / period;
-  result[period - 1] = atr;
-  for (let i = period; i < candles.length; i++) {
-    atr = (atr * (period - 1) + trValues[i]) / period;
-    result[i] = atr;
-  }
-  return result;
+  return toNumericArray(canonicalATR(candles, period));
 }
 
 function computeVwap(candles: Candle[]): number[] {
-  const result = new Array<number>(candles.length).fill(NaN);
-  let cumPV = 0;
-  let cumVol = 0;
-  for (let i = 0; i < candles.length; i++) {
-    const typicalPrice = (candles[i].high + candles[i].low + candles[i].close) / 3;
-    cumPV += typicalPrice * (candles[i].volume ?? 0);
-    cumVol += candles[i].volume ?? 0;
-    result[i] = cumVol > 0 ? cumPV / cumVol : candles[i].close;
-  }
-  return result;
+  return toNumericArray(canonicalVWAP(candles));
 }
 
 function computeObv(candles: Candle[]): number[] {
