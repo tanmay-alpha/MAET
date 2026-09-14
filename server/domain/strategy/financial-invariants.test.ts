@@ -79,6 +79,12 @@ function makeFixedSignalDefinition(buyBar: number, sellBar: number): StrategyDef
         right: { kind: "INDICATOR", indicator: "SMA", params: { period: 3 }, lag: 0 },
       }],
     },
+    risk: {
+      sizingMethod: "PERCENT_OF_EQUITY",
+      sizeValue: 100,
+      maximumOpenPositions: 1,
+      allowPyramiding: false,
+    },
     execution: {
       fillPolicy: "NEXT_BAR_OPEN",
       intrabarPolicy: "CONSERVATIVE",
@@ -111,6 +117,12 @@ const ZERO_COST_LONG_DEFINITION: StrategyDefinition = {
       operator: "CROSS_BELOW",
       right: { kind: "INDICATOR", indicator: "SMA", params: { period: 3 }, lag: 0 },
     }],
+  },
+  risk: {
+    sizingMethod: "PERCENT_OF_EQUITY",
+    sizeValue: 100,
+    maximumOpenPositions: 1,
+    allowPyramiding: false,
   },
   execution: {
     fillPolicy: "NEXT_BAR_OPEN",
@@ -550,5 +562,218 @@ describe("Financial Invariants — Golden Scenarios", () => {
       // Fees must reduce final equity
       expect(finalWithFee).toBeLessThan(finalNoFee);
     }
+  });
+
+  it("Reconciliation Invariant: final equity - initial capital == sum(trade.netPnl)", () => {
+    const candles = makePriceSequence([100, 100, 100, 115, 120, 125, 90, 85, 80, 80]);
+    const defWithCosts: StrategyDefinition = {
+      ...ZERO_COST_LONG_DEFINITION,
+      execution: {
+        ...ZERO_COST_LONG_DEFINITION.execution!,
+        feeModel: "FIXED_BPS",
+        feeBps: 15,
+        slippageBps: 10,
+        initialCapital: 100_000,
+      },
+    };
+
+    const result = runBacktestV3({
+      strategyVersionId: "reconciliation-test",
+      definition: defWithCosts,
+      symbol: "TEST",
+      candles,
+    });
+
+    const initial = 100_000;
+    const finalEquity = result.equityCurve[result.equityCurve.length - 1].equity;
+    const sumNetPnl = result.trades.reduce((s, t) => s + t.netPnl, 0);
+
+    // Exact financial invariant: final equity - initial == sum of all trade netPnl
+    expect(Math.abs((finalEquity - initial) - sumNetPnl)).toBeLessThan(0.01);
+  });
+
+  it("Fee Reconciliation Invariant: feesPaid == sum(trade.totalFees)", () => {
+    const candles = makePriceSequence([100, 100, 100, 115, 120, 125, 90, 85, 80, 80]);
+    const defWithCosts: StrategyDefinition = {
+      ...ZERO_COST_LONG_DEFINITION,
+      execution: {
+        ...ZERO_COST_LONG_DEFINITION.execution!,
+        feeModel: "FIXED_BPS",
+        feeBps: 20,
+        slippageBps: 10,
+      },
+    };
+
+    const result = runBacktestV3({
+      strategyVersionId: "fee-reconciliation-test",
+      definition: defWithCosts,
+      symbol: "TEST",
+      candles,
+    });
+
+    const sumTotalFees = result.trades.reduce((s, t) => s + t.totalFees, 0);
+    const sumTradeFees = result.trades.reduce((s, t) => s + t.fees, 0);
+
+    expect(result.feesPaid).toBeCloseTo(sumTotalFees, 4);
+    expect(result.feesPaid).toBeCloseTo(sumTradeFees, 4);
+  });
+
+  it("Slippage Reconciliation Invariant: slippageCost == sum(trade.totalSlippage)", () => {
+    const candles = makePriceSequence([100, 100, 100, 115, 120, 125, 90, 85, 80, 80]);
+    const defWithCosts: StrategyDefinition = {
+      ...ZERO_COST_LONG_DEFINITION,
+      execution: {
+        ...ZERO_COST_LONG_DEFINITION.execution!,
+        feeModel: "FIXED_BPS",
+        feeBps: 20,
+        slippageBps: 15,
+      },
+    };
+
+    const result = runBacktestV3({
+      strategyVersionId: "slippage-reconciliation-test",
+      definition: defWithCosts,
+      symbol: "TEST",
+      candles,
+    });
+
+    const sumTotalSlippage = result.trades.reduce((s, t) => s + t.totalSlippage, 0);
+    const sumTradeSlippage = result.trades.reduce((s, t) => s + t.slippage, 0);
+
+    expect(result.slippageCost).toBeCloseTo(sumTotalSlippage, 4);
+    expect(result.slippageCost).toBeCloseTo(sumTradeSlippage, 4);
+  });
+
+  it("Trade cost breakdown invariant: netPnl == grossPnl - totalFees - totalSlippage", () => {
+    const candles = makePriceSequence([100, 100, 100, 115, 120, 125, 90, 85, 80, 80]);
+    const defWithCosts: StrategyDefinition = {
+      ...ZERO_COST_LONG_DEFINITION,
+      execution: {
+        ...ZERO_COST_LONG_DEFINITION.execution!,
+        feeModel: "FIXED_BPS",
+        feeBps: 25,
+        slippageBps: 10,
+      },
+    };
+
+    const result = runBacktestV3({
+      strategyVersionId: "trade-cost-breakdown-test",
+      definition: defWithCosts,
+      symbol: "TEST",
+      candles,
+    });
+
+    for (const trade of result.trades) {
+      expect(trade.totalFees).toBeCloseTo(trade.entryFees + trade.exitFees, 4);
+      expect(trade.totalSlippage).toBeCloseTo(trade.entrySlippage + trade.exitSlippage, 4);
+      expect(trade.netPnl).toBeCloseTo(trade.grossPnl - trade.totalFees - trade.totalSlippage, 4);
+      expect(trade.grossReturn).toBeCloseTo(trade.grossPnl / (trade.entryPrice * trade.quantity), 4);
+      expect(trade.netReturn).toBeCloseTo(trade.netPnl / (trade.entryPrice * trade.quantity), 4);
+    }
+  });
+
+  it("Short Trade: Falling price generates positive short PnL", () => {
+    // Falling price sequence: enters short, price drops -> profit!
+    const candles = makePriceSequence([100, 100, 100, 90, 85, 80, 75, 110, 110, 110]);
+    const shortDef: StrategyDefinition = {
+      name: "ShortCross",
+      direction: "SHORT_ONLY",
+      entry: {
+        kind: "GROUP", id: "entry", combinator: "AND",
+        children: [{
+          kind: "CONDITION", id: "e1",
+          left: { kind: "INDICATOR", indicator: "SMA", params: { period: 2 }, lag: 0 },
+          operator: "CROSS_BELOW",
+          right: { kind: "INDICATOR", indicator: "SMA", params: { period: 3 }, lag: 0 },
+        }],
+      },
+      exit: {
+        kind: "GROUP", id: "exit", combinator: "AND",
+        children: [{
+          kind: "CONDITION", id: "x1",
+          left: { kind: "INDICATOR", indicator: "SMA", params: { period: 2 }, lag: 0 },
+          operator: "CROSS_ABOVE",
+          right: { kind: "INDICATOR", indicator: "SMA", params: { period: 3 }, lag: 0 },
+        }],
+      },
+      execution: {
+        fillPolicy: "NEXT_BAR_OPEN",
+        intrabarPolicy: "CONSERVATIVE",
+        feeModel: "NONE",
+        feeBps: 0,
+        slippageBps: 0,
+        initialCapital: 100_000,
+      },
+    };
+
+    const result = runBacktestV3({
+      strategyVersionId: "short-profit-test",
+      definition: shortDef,
+      symbol: "TEST",
+      candles,
+    });
+
+    if (result.trades.length > 0) {
+      for (const t of result.trades) {
+        expect(t.direction).toBe("short");
+        // For short, if exitPrice < entryPrice, grossPnl > 0
+        if (t.exitPrice < t.entryPrice) {
+          expect(t.grossPnl).toBeGreaterThan(0);
+          expect(t.netPnl).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
+
+  it("End-of-period forced exit with non-zero costs produces lower net PnL than zero-cost exit", () => {
+    // Sequence where position enters and remains open until end of period
+    const candles = makePriceSequence([100, 100, 100, 100, 100, 110, 115, 120, 125, 130]);
+    const zeroCostDef: StrategyDefinition = {
+      ...ZERO_COST_LONG_DEFINITION,
+      exit: { kind: "GROUP", id: "exit", combinator: "OR", children: [] }, // Never exits via rule, forces close at end_of_period
+      execution: {
+        ...ZERO_COST_LONG_DEFINITION.execution!,
+        feeModel: "NONE",
+        feeBps: 0,
+        slippageBps: 0,
+      },
+    };
+    const withCostDef: StrategyDefinition = {
+      ...zeroCostDef,
+      execution: {
+        ...zeroCostDef.execution!,
+        feeModel: "FIXED_BPS",
+        feeBps: 20,
+        slippageBps: 10,
+      },
+    };
+
+    const zeroCostRun = runBacktestV3({
+      strategyVersionId: "zero-cost-end-of-period",
+      definition: zeroCostDef,
+      symbol: "TEST",
+      candles,
+    });
+
+    const withCostRun = runBacktestV3({
+      strategyVersionId: "with-cost-end-of-period",
+      definition: withCostDef,
+      symbol: "TEST",
+      candles,
+    });
+
+    expect(zeroCostRun.trades.length).toBeGreaterThan(0);
+    expect(withCostRun.trades.length).toBeGreaterThan(0);
+
+    const zeroTrade = zeroCostRun.trades[zeroCostRun.trades.length - 1];
+    const costTrade = withCostRun.trades[withCostRun.trades.length - 1];
+
+    expect(zeroTrade.exitReason).toBe("end_of_period");
+    expect(costTrade.exitReason).toBe("end_of_period");
+
+    // Proves forced liquidation incurs fees and slippage, resulting in strictly lower net PnL
+    expect(costTrade.totalFees).toBeGreaterThan(0);
+    expect(costTrade.totalSlippage).toBeGreaterThan(0);
+    expect(costTrade.netPnl).toBeLessThan(zeroTrade.netPnl);
   });
 });

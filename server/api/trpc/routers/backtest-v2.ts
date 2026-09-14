@@ -3,13 +3,15 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { backtestRuns, backtestPresets, candles } from "../../../db/schema";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, asc, gte, lte, sql } from "drizzle-orm";
 // P0-A fix: Route the Backtest Lab to the canonical V3 engine.
 // The legacy runBacktest (runner.ts / strategies-v2.ts) is deprecated.
 import { runBacktestV3, InsufficientHistoryV3Error } from "../../../domain/strategy/runner-v3";
 import { presetToV3Definition } from "../../../domain/backtest/preset-to-v3-adapter";
 import { StrategyTypeSchema } from "../../../modules/backtest/contracts";
 import type { Candle } from "@shared/types";
+
+export const MAX_BACKTEST_CANDLES = parseInt(process.env.MAX_BACKTEST_CANDLES || "50000", 10);
 
 const StrictRiskSchema = z.object({
   initialCapital: z.number().positive().default(100000),
@@ -59,13 +61,72 @@ export const backtestV2Router = createRouter({
     .mutation(async ({ ctx, input }) => {
       const symbol = input.symbol.toUpperCase();
 
-      // Fetch candles from DB
+      // Validate maximumOpenPositions for single-symbol engine
+      if (input.risk.maximumOpenPositions > 1) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Single-symbol backtest engine supports maximumOpenPositions = 1 (got ${input.risk.maximumOpenPositions}). For concurrent multi-position execution across multiple symbols, use portfolio backtesting.`,
+        });
+      }
+
+      // Validate date bounds if provided
+      let fromDate: Date | undefined;
+      let toDate: Date | undefined;
+
+      if (input.from) {
+        fromDate = new Date(input.from);
+        if (isNaN(fromDate.getTime())) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Invalid 'from' date format: ${input.from}. Expected a valid ISO-8601 or YYYY-MM-DD date string.`,
+          });
+        }
+      }
+
+      if (input.to) {
+        toDate = new Date(input.to);
+        if (isNaN(toDate.getTime())) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Invalid 'to' date format: ${input.to}. Expected a valid ISO-8601 or YYYY-MM-DD date string.`,
+          });
+        }
+      }
+
+      if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `'from' date (${input.from}) must be earlier than or equal to 'to' date (${input.to}).`,
+        });
+      }
+
+      // Build database query filters
+      const conditions = [
+        eq(candles.symbol, symbol),
+        eq(candles.timeframe, input.timeframe),
+      ];
+
+      if (fromDate) {
+        conditions.push(gte(candles.ts, fromDate));
+      }
+      if (toDate) {
+        conditions.push(lte(candles.ts, toDate));
+      }
+
+      // Fetch candles in chronological order with upper safety bound
       const dbCandles = await db
         .select()
         .from(candles)
-        .where(and(eq(candles.symbol, symbol), eq(candles.timeframe, input.timeframe)))
-        .orderBy(desc(candles.ts))
-        .limit(500);
+        .where(and(...conditions))
+        .orderBy(asc(candles.ts))
+        .limit(MAX_BACKTEST_CANDLES + 1);
+
+      if (dbCandles.length > MAX_BACKTEST_CANDLES) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Backtest interval contains too many candles (exceeds safety limit of ${MAX_BACKTEST_CANDLES}). Please narrow your date range or select a higher timeframe.`,
+        });
+      }
 
       const candleList: Candle[] = dbCandles.map((c) => ({
         symbol: c.symbol,
@@ -97,11 +158,20 @@ export const backtestV2Router = createRouter({
           definition,
           symbol,
           candles: candleList,
+          timeframe: input.timeframe,
         });
+
+        const effectivePeriod = {
+          from: candleList[0].ts,
+          to: candleList[candleList.length - 1].ts,
+        };
 
         const resultPayload: Record<string, unknown> = {
           runId: result.runId,
           symbol: result.symbol,
+          from: effectivePeriod.from,
+          to: effectivePeriod.to,
+          effectivePeriod,
           metrics: result.metrics,
           equityCurve: result.equityCurve,
           trades: result.trades,
@@ -118,7 +188,13 @@ export const backtestV2Router = createRouter({
             symbol,
             timeframe: input.timeframe,
             strategy: input.strategy.type,
-            parameters: input.strategy,
+            parameters: {
+              ...input.strategy,
+              risk: input.risk,
+              from: input.from,
+              to: input.to,
+              effectivePeriod,
+            },
             result: resultPayload,
           })
           .returning();
@@ -126,8 +202,11 @@ export const backtestV2Router = createRouter({
         return {
           runId: saved.id,
           status: "completed",
+          effectivePeriod,
           result: {
             ...result,
+            from: effectivePeriod.from,
+            to: effectivePeriod.to,
             engineVersion: "v3" as const,
           },
         };
@@ -138,7 +217,7 @@ export const backtestV2Router = createRouter({
             message: err.message,
           });
         }
-        if (err instanceof Error && err.message.includes("cannot be automatically translated")) {
+        if (err instanceof Error && (err.message.includes("cannot be automatically translated") || err.message.includes("Single-symbol strategy execution requires maximumOpenPositions = 1"))) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: err.message,
@@ -154,13 +233,14 @@ export const backtestV2Router = createRouter({
 
   listRuns: protectedProcedure
     .input(z.object({ limit: z.number().int().positive().max(50).default(20) }).optional())
-    .query(async ({ ctx }) => {
+    .query(async ({ ctx, input }) => {
+      const limit = input?.limit ?? 20;
       const rows = await db
         .select()
         .from(backtestRuns)
         .where(eq(backtestRuns.userId, ctx.userId!))
         .orderBy(desc(backtestRuns.createdAt))
-        .limit(20);
+        .limit(limit);
       return { runs: rows };
     }),
 
