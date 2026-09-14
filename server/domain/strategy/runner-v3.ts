@@ -35,6 +35,7 @@ export interface V3BacktestRunRequest {
   candles: Candle[];
   benchmarkCandles?: Candle[];
   overrideCapital?: number;
+  timeframe?: string;
 }
 
 export interface V3TradeRecord extends TradeRecord {
@@ -52,6 +53,15 @@ export interface V3TradeRecord extends TradeRecord {
   mae: number;
   holdingBars: number;
   entrySignalTimestamp: number;
+  entryFees: number;
+  exitFees: number;
+  totalFees: number;
+  entrySlippage: number;
+  exitSlippage: number;
+  totalSlippage: number;
+  grossReturn: number;
+  netReturn: number;
+  quantity: number;
 }
 
 export interface V3BacktestRunResult {
@@ -120,7 +130,13 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     : `run-${Date.now().toString(36)}-${(++_runCounter).toString(36)}`;
   const dataHash = computeDataHash(sorted);
 
-  const risk: StrategyRiskConfig = definition.risk ?? ({} as any);
+  const risk: StrategyRiskConfig = {
+    sizingMethod: "PERCENT_OF_EQUITY",
+    sizeValue: 100,
+    maximumOpenPositions: 1,
+    allowPyramiding: false,
+    ...(definition.risk ?? {}),
+  };
   const exec: StrategyExecutionConfig = definition.execution ?? ({ initialCapital: 100000 } as any);
   const initialCapital = request.overrideCapital ?? exec.initialCapital;
 
@@ -145,8 +161,12 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
   let mae = 0;
   let entryReason = "";
   let equity = initialCapital;
+  let currentEntryFees = 0;
+  let currentEntrySlippage = 0;
   let cooldownBarsRemaining = 0;
   const cooldown = risk.cooldownBars ?? 0;
+  const slippageBps = exec.slippageBps ?? 5;
+  const slippageRate = slippageBps / 10000;
 
   const equityCurve: EquityPoint[] = [{ timestamp: new Date(sorted[0].ts).getTime(), equity }];
 
@@ -162,8 +182,7 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     return equity + unrealized;
   };
 
-  const getEntryFeeRate = (entryVal: number) => computeFeeRate(exec, entryVal).totalFeeRate;
-  const getExitFeeRate = (exitVal: number) => computeFeeRate(exec, exitVal).totalFeeRate;
+  const getFeeRate = (val: number) => computeFeeRate(exec, val).feeRate;
 
   for (let i = 1; i < sorted.length; i++) {
     const bar = sorted[i];
@@ -205,61 +224,53 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
       const trailingPct = risk.trailingStopPercent;
 
       if (direction === "long") {
-        const stopLevel = stopPct ? entryPrice * (1 - stopPct / 100) : null;
-        const targetLevel = targetPct ? entryPrice * (1 + targetPct / 100) : null;
-
-        // Trailing stop: track peak
-        if (trailingPct) {
-          peakPrice = Math.max(peakPrice, currHigh);
-          const trailLevel = peakPrice * (1 - trailingPct / 100);
-          if (currLow <= trailLevel) {
-            exitPrice = Math.min(trailLevel, currLow);
+        if (trailingPct && peakPrice > 0) {
+          const trailStop = peakPrice * (1 - trailingPct / 100);
+          if (currLow <= trailStop) {
             exitReason = `trailing_stop:${trailingPct}%`;
+            exitPrice = bar.close;
           }
         }
-
-        // CONSERVATIVE: stop first
-        if (!exitReason && stopLevel && currLow <= stopLevel) {
-          exitPrice = Math.min(stopLevel, currLow); // gapped-through stop
-          exitReason = `stop_loss:${stopPct}%`;
+        if (!exitReason && stopPct) {
+          const stopPrice = entryPrice * (1 - stopPct / 100);
+          if (currLow <= stopPrice) {
+            exitReason = `stop_loss:${stopPct}%`;
+            exitPrice = bar.close;
+          }
         }
-
-        // Target
-        if (!exitReason && targetLevel && currHigh >= targetLevel) {
-          exitPrice = Math.max(targetLevel, currHigh < targetLevel ? currHigh : targetLevel);
-          exitReason = `take_profit:${targetPct}%`;
+        if (!exitReason && targetPct) {
+          const targetPrice = entryPrice * (1 + targetPct / 100);
+          if (currHigh >= targetPrice) {
+            exitReason = `take_profit:${targetPct}%`;
+            exitPrice = bar.close;
+          }
         }
-
-        // AST exit rule (evaluated at i-1, fills on bar i open)
         if (!exitReason && prevExitEval.matched) {
           exitPrice = bar.open;
           exitReason = "exit_rule";
         }
-
       } else {
-        // Short position
-        const stopLevel = stopPct ? entryPrice * (1 + stopPct / 100) : null;
-        const targetLevel = targetPct ? entryPrice * (1 - targetPct / 100) : null;
-
-        if (trailingPct) {
-          troughPrice = Math.min(troughPrice, currLow);
-          const trailLevel = troughPrice * (1 + trailingPct / 100);
-          if (currHigh >= trailLevel) {
-            exitPrice = Math.max(trailLevel, currHigh);
+        if (trailingPct && troughPrice < Infinity) {
+          const trailStop = troughPrice * (1 + trailingPct / 100);
+          if (currHigh >= trailStop) {
             exitReason = `trailing_stop:${trailingPct}%`;
+            exitPrice = bar.close;
           }
         }
-
-        if (!exitReason && stopLevel && currHigh >= stopLevel) {
-          exitPrice = Math.max(stopLevel, currHigh);
-          exitReason = `stop_loss:${stopPct}%`;
+        if (!exitReason && stopPct) {
+          const stopPrice = entryPrice * (1 + stopPct / 100);
+          if (currHigh >= stopPrice) {
+            exitReason = `stop_loss:${stopPct}%`;
+            exitPrice = bar.close;
+          }
         }
-
-        if (!exitReason && targetLevel && currLow <= targetLevel) {
-          exitPrice = Math.min(targetLevel, currLow < targetLevel ? currLow : targetLevel);
-          exitReason = `take_profit:${targetPct}%`;
+        if (!exitReason && targetPct) {
+          const targetPrice = entryPrice * (1 - targetPct / 100);
+          if (currLow <= targetPrice) {
+            exitReason = `take_profit:${targetPct}%`;
+            exitPrice = bar.close;
+          }
         }
-
         if (!exitReason && prevExitEval.matched) {
           exitPrice = bar.open;
           exitReason = "exit_rule";
@@ -268,10 +279,13 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
 
       // Execute exit
       if (exitReason && exitPrice > 0) {
-        const exitVal = quantity * exitPrice;
-        const exitFeeRate = getExitFeeRate(exitVal);
-        const exitFees = exitVal * exitFeeRate;
-        const slippageAmount = exitVal * ((exec.slippageBps ?? 5) / 10000);
+        const exitNotional = quantity * exitPrice;
+        const exitFeeRate = getFeeRate(exitNotional);
+        const exitFees = exitNotional * exitFeeRate;
+        const exitSlippage = exitNotional * slippageRate;
+
+        const totalFees = currentEntryFees + exitFees;
+        const totalSlippage = currentEntrySlippage + exitSlippage;
 
         let grossPnl: number;
         if (direction === "long") {
@@ -279,9 +293,14 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
         } else {
           grossPnl = quantity * (entryPrice - exitPrice);
         }
-        const netPnl = grossPnl - exitFees - slippageAmount;
+        const entryNotional = quantity * entryPrice;
+        const grossReturn = entryNotional > 0 ? grossPnl / entryNotional : 0;
+        const netPnl = grossPnl - totalFees - totalSlippage;
+        const netReturn = entryNotional > 0 ? netPnl / entryNotional : 0;
 
-        equity += netPnl;
+        // Cash adjustment: entry costs were deducted on entry. On exit, add grossPnl - exit costs.
+        // Total change in equity for this trade is: - (entryFees + entrySlippage) + (grossPnl - exitFees - exitSlippage) = netPnl.
+        equity += grossPnl - exitFees - exitSlippage;
 
         trades.push({
           direction,
@@ -293,13 +312,22 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
           exitTimestamp: barTs,
           entryPrice,
           exitPrice,
+          quantity,
           side: direction === "long" ? "long" : "short",
-          return: grossPnl / (entryPrice * quantity),
+          return: netReturn,
+          grossReturn,
+          netReturn,
           entryReason,
           exitReason,
           grossPnl,
-          fees: exitFees,
-          slippage: slippageAmount,
+          entryFees: currentEntryFees,
+          exitFees,
+          totalFees,
+          fees: totalFees,
+          entrySlippage: currentEntrySlippage,
+          exitSlippage,
+          totalSlippage,
+          slippage: totalSlippage,
           netPnl,
           mfe,
           mae,
@@ -307,6 +335,8 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
         });
 
         inPosition = false;
+        currentEntryFees = 0;
+        currentEntrySlippage = 0;
         cooldownBarsRemaining = cooldown;
         peakPrice = 0;
         troughPrice = Infinity;
@@ -323,7 +353,6 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
       if (prevEntryEval.matched) {
         // Fill on this bar's open (NEXT_BAR_OPEN: signal was on prev bar i-1)
         const fillPrice = bar.open;
-        const entryVal = fillPrice;
 
         const sizing = calculatePositionSize(risk, {
           currentEquity: equity,
@@ -333,11 +362,14 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
         });
 
         if (sizing.quantity > 0 && sizing.capitalRequired <= equity) {
-          const entryFeeRate = getEntryFeeRate(sizing.capitalRequired);
-          const entryFees = sizing.capitalRequired * entryFeeRate;
-          const slippageAmt = sizing.capitalRequired * ((exec.slippageBps ?? 5) / 10000);
+          const entryNotional = sizing.quantity * fillPrice;
+          const entryFeeRate = getFeeRate(entryNotional);
+          const entryFees = entryNotional * entryFeeRate;
+          const entrySlippage = entryNotional * slippageRate;
 
-          equity -= entryFees + slippageAmt;
+          equity -= entryFees + entrySlippage;
+          currentEntryFees = entryFees;
+          currentEntrySlippage = entrySlippage;
           inPosition = true;
           direction = definition.direction === "SHORT_ONLY" ? "short" : "long";
           entrySignalBar = i - 1;
@@ -360,19 +392,28 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     equityCurve.push({ timestamp: barTs, equity: mtmEquity(bar.close) });
   }
 
-  // Force-close open position at last bar
+  // Force-close open position at last bar with full fee and slippage model applied
   if (inPosition) {
     const last = sorted[sorted.length - 1];
     const exitPrice = last.close;
     const lastTs = new Date(last.ts).getTime();
-    const exitVal = quantity * exitPrice;
-    const exitFeeRate = getExitFeeRate(exitVal);
-    const exitFees = exitVal * exitFeeRate;
+    const exitNotional = quantity * exitPrice;
+    const exitFeeRate = getFeeRate(exitNotional);
+    const exitFees = exitNotional * exitFeeRate;
+    const exitSlippage = exitNotional * slippageRate;
+
+    const totalFees = currentEntryFees + exitFees;
+    const totalSlippage = currentEntrySlippage + exitSlippage;
+
     let grossPnl = direction === "long"
       ? quantity * (exitPrice - entryPrice)
       : quantity * (entryPrice - exitPrice);
-    const netPnl = grossPnl - exitFees;
-    equity += netPnl;
+    const entryNotional = quantity * entryPrice;
+    const grossReturn = entryNotional > 0 ? grossPnl / entryNotional : 0;
+    const netPnl = grossPnl - totalFees - totalSlippage;
+    const netReturn = entryNotional > 0 ? netPnl / entryNotional : 0;
+
+    equity += grossPnl - exitFees - exitSlippage;
 
     trades.push({
       direction,
@@ -384,13 +425,22 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
       exitTimestamp: lastTs,
       entryPrice,
       exitPrice,
+      quantity,
       side: direction === "long" ? "long" : "short",
-      return: grossPnl / (entryPrice * quantity),
+      return: netReturn,
+      grossReturn,
+      netReturn,
       entryReason,
       exitReason: "end_of_period",
       grossPnl,
-      fees: exitFees,
-      slippage: 0,
+      entryFees: currentEntryFees,
+      exitFees,
+      totalFees,
+      fees: totalFees,
+      entrySlippage: currentEntrySlippage,
+      exitSlippage,
+      totalSlippage,
+      slippage: totalSlippage,
       netPnl,
       mfe,
       mae,
@@ -416,9 +466,9 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     }
   }
 
-  const metrics = computeMetrics(equityCurve, trades, benchmarkCurve);
-  const feesPaid = trades.reduce((s, t) => s + t.fees, 0);
-  const slippageCost = trades.reduce((s, t) => s + t.slippage, 0);
+  const metrics = computeMetrics(equityCurve, trades, benchmarkCurve, initialCapital);
+  const feesPaid = trades.reduce((s, t) => s + t.totalFees, 0);
+  const slippageCost = trades.reduce((s, t) => s + t.totalSlippage, 0);
 
   return {
     runId,
