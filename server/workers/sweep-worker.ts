@@ -194,6 +194,7 @@ export async function processSweep(sweep: any): Promise<void> {
       definition: modifiedDef,
       symbol,
       candles: candleData,
+      timeframe,
     });
 
     const m = backtestRes.metrics;

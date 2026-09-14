@@ -150,6 +150,7 @@ export const backtestV2Router = createRouter({
           definition,
           symbol,
           candles: candleList,
+          timeframe: input.timeframe,
         });
 
         const effectivePeriod = {

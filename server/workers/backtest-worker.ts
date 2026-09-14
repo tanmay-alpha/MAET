@@ -122,6 +122,7 @@ async function processJob(job: Awaited<ReturnType<typeof jobs.claimNextJob>>): P
       symbol,
       candles: candleData,
       overrideCapital: job.initialCapital ? Number(job.initialCapital) : undefined,
+      timeframe: job.timeframe,
     });
 
     await jobs.updateProgress(job.id, 70);

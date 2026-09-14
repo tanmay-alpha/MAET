@@ -39,9 +39,57 @@ export interface TradeRecord {
    *  and expectancy when available — more accurate than percentage-based sums for
    *  heterogeneous position sizes. */
   netPnl?: number;
+  /** Executed share/contract quantity. */
+  quantity?: number;
+  /** Total traded notional value (sum of entry and exit notional). */
+  notional?: number;
 }
 
-const TRADING_DAYS_PER_YEAR = 252;
+export const TRADING_DAYS_PER_YEAR = 252;
+export const MINUTES_PER_SESSION = 375; // 9:15 AM to 3:30 PM IST = 6h 15m
+
+/**
+ * Returns the number of observation periods per year based on Indian equity market trading sessions:
+ * - 252 trading sessions / year
+ * - Regular equity trading hours: 9:15 AM to 3:30 PM = 375 minutes / session
+ */
+export function getPeriodsPerYear(timeframe?: string | number): number {
+  if (typeof timeframe === "number") {
+    // Backward compatibility for observationIntervalDays
+    if (timeframe === 1) return TRADING_DAYS_PER_YEAR;
+    if (timeframe > 0) return Math.round(TRADING_DAYS_PER_YEAR / timeframe);
+    return TRADING_DAYS_PER_YEAR;
+  }
+
+  if (!timeframe) return TRADING_DAYS_PER_YEAR;
+
+  const tf = timeframe.trim().toLowerCase();
+  switch (tf) {
+    case "1m":
+      return TRADING_DAYS_PER_YEAR * MINUTES_PER_SESSION; // 94,500
+    case "3m":
+      return TRADING_DAYS_PER_YEAR * (MINUTES_PER_SESSION / 3); // 31,500
+    case "5m":
+      return TRADING_DAYS_PER_YEAR * (MINUTES_PER_SESSION / 5); // 18,900
+    case "15m":
+      return TRADING_DAYS_PER_YEAR * (MINUTES_PER_SESSION / 15); // 6,300
+    case "30m":
+      return TRADING_DAYS_PER_YEAR * (MINUTES_PER_SESSION / 30); // 3,150
+    case "1h":
+    case "60m":
+      return TRADING_DAYS_PER_YEAR * (MINUTES_PER_SESSION / 60); // 1,575
+    case "1d":
+      return TRADING_DAYS_PER_YEAR; // 252
+    case "1wk":
+    case "1w":
+      return 52;
+    case "1mo":
+    case "1m_month":
+      return 12;
+    default:
+      return TRADING_DAYS_PER_YEAR;
+  }
+}
 
 export function computeReturns(points: number[]): number[] {
   const returns: number[] = [];
@@ -92,9 +140,7 @@ export function computeMetrics(
   equityCurve: EquityPoint[],
   trades: TradeRecord[],
   benchmarkCurve?: EquityPoint[],
-  /** Days per observation period. Default 1 (daily). Use 1/252 for minute bars, etc.
-   *  Required for correct annualization when backtesting intraday timeframes. */
-  observationIntervalDays = 1,
+  timeframe: string | number = "1d",
 ): BacktestMetrics {
   const empty: BacktestMetrics = {
     totalReturn: 0, annualisedReturn: 0, benchmarkReturn: 0, alpha: 0,
@@ -111,21 +157,21 @@ export function computeMetrics(
   if (initial <= 0) return empty;
   const totalReturn = (final - initial) / initial;
 
-  const days = (equityCurve[equityCurve.length - 1].timestamp - equityCurve[0].timestamp) / 86_400_000;
-  const years = days / 365;
-  const annualisedReturn = years > 0 ? (1 + totalReturn) ** (1 / years) - 1 : 0;
+  const totalBars = equityCurve.length - 1;
+  const periodsPerYear = getPeriodsPerYear(timeframe);
+  const years = periodsPerYear > 0 ? totalBars / periodsPerYear : 0;
+  const annualisedReturn = years > 0 && totalReturn > -1
+    ? (1 + totalReturn) ** (1 / years) - 1
+    : (totalReturn <= -1 ? -1 : 0);
 
   const returns = computeReturns(equityValues);
-  // P0-D fix: annualize using the actual observation interval, not always sqrt(252).
-  // periodsPerYear = 1 / observationIntervalDays for a 365-day year.
-  const periodsPerYear = 1 / (observationIntervalDays / 365);
-  const vol = stddev(returns) * Math.sqrt(periodsPerYear);
-  const downside = downsideDeviation(returns) * Math.sqrt(periodsPerYear);
-  const sharpe = vol === 0 ? 0 : (annualisedReturn / vol);
-  const sortino = downside === 0 ? 0 : annualisedReturn / downside;
+  const vol = returns.length >= 2 ? stddev(returns) * Math.sqrt(periodsPerYear) : 0;
+  const downside = returns.length >= 2 ? downsideDeviation(returns, 0) * Math.sqrt(periodsPerYear) : 0;
+  const sharpe = vol > 0 ? annualisedReturn / vol : 0;
+  const sortino = downside > 0 ? annualisedReturn / downside : 0;
 
   const mdd = computeMaxDrawdown(equityValues);
-  const calmar = mdd === 0 ? 0 : annualisedReturn / mdd;
+  const calmar = mdd > 0 ? annualisedReturn / mdd : 0;
 
   // Benchmark comparison
   let benchmarkReturn = 0;
@@ -136,12 +182,11 @@ export function computeMetrics(
     const bFinal = benchmarkCurve[benchmarkCurve.length - 1].benchmark ?? benchmarkCurve[benchmarkCurve.length - 1].equity;
     if (bInit > 0) {
       benchmarkReturn = (bFinal - bInit) / bInit;
-      // P0-D fix: annualize benchmark return using the same period as the strategy
-      // so alpha is dimensionally consistent (annualized - annualized).
-      // Previously alpha = annualisedReturn - totalBenchmarkReturn (wrong!).
-      const bDays = (benchmarkCurve[benchmarkCurve.length - 1].timestamp - benchmarkCurve[0].timestamp) / 86_400_000;
-      const bYears = bDays / 365;
-      benchmarkAnnualisedReturn = bYears > 0 ? (1 + benchmarkReturn) ** (1 / bYears) - 1 : 0;
+      const bBars = benchmarkCurve.length - 1;
+      const bYears = periodsPerYear > 0 ? bBars / periodsPerYear : 0;
+      benchmarkAnnualisedReturn = bYears > 0 && benchmarkReturn > -1
+        ? (1 + benchmarkReturn) ** (1 / bYears) - 1
+        : (benchmarkReturn <= -1 ? -1 : 0);
       alpha = annualisedReturn - benchmarkAnnualisedReturn;
     }
   }
@@ -151,8 +196,6 @@ export function computeMetrics(
   const losses = trades.filter((t) => (t.netPnl !== undefined ? t.netPnl : t.return) <= 0);
   const winRate = trades.length === 0 ? 0 : wins.length / trades.length;
 
-  // P0-D fix: profit factor uses monetary P&L when available, not percentage returns.
-  // Percentage-based profit factor is wrong when position sizes differ across trades.
   const hasPnl = trades.length > 0 && trades[0].netPnl !== undefined;
   const grossProfit = hasPnl
     ? wins.reduce((s, t) => s + (t.netPnl ?? 0), 0)
@@ -165,9 +208,23 @@ export function computeMetrics(
     : hasPnl
       ? trades.reduce((s, t) => s + (t.netPnl ?? 0), 0) / trades.length
       : trades.reduce((s, t) => s + t.return, 0) / trades.length;
-  const averageHoldingPeriod = trades.length === 0 ? 0 : trades.reduce((s, t) => s + (t.exitTimestamp - t.entryTimestamp), 0) / trades.length / 86_400_000;
-  const exposure = trades.length === 0 ? 0 : Math.min(1, (trades.reduce((s, t) => s + (t.exitTimestamp - t.entryTimestamp), 0) / 86_400_000) / Math.max(1, days));
-  const turnover = trades.length === 0 ? 0 : trades.length / Math.max(1, days / 365);
+
+  const totalDurationMs = equityCurve[equityCurve.length - 1].timestamp - equityCurve[0].timestamp;
+  const totalDurationDays = totalDurationMs / 86_400_000;
+  const averageHoldingPeriod = trades.length === 0 ? 0
+    : (trades.reduce((s, t) => s + (t.exitTimestamp - t.entryTimestamp), 0) / trades.length) / 86_400_000;
+
+  const totalHoldingMs = trades.reduce((s, t) => s + (t.exitTimestamp - t.entryTimestamp), 0);
+  const exposure = totalDurationMs > 0 ? Math.min(1, totalHoldingMs / totalDurationMs) : 0;
+
+  // Portfolio Turnover = total traded notional / average portfolio equity
+  const avgEquity = equityValues.length > 0 ? mean(equityValues) : initial;
+  const totalTradedNotional = trades.reduce((acc, t) => {
+    if (t.notional !== undefined && t.notional > 0) return acc + t.notional;
+    if (t.quantity !== undefined && t.quantity > 0) return acc + t.quantity * (t.entryPrice + t.exitPrice);
+    return acc + (t.entryPrice + t.exitPrice);
+  }, 0);
+  const turnover = avgEquity > 0 && trades.length > 0 ? totalTradedNotional / avgEquity : 0;
 
   return {
     totalReturn,

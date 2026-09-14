@@ -163,7 +163,7 @@ export async function processWalkForward(run: any): Promise<void> {
     if (trainCandles.length >= 30) {
       for (const combo of combinations) {
         const modDef = injectParametersIntoAST(baseDef, combo);
-        const res = runBacktestV3({ strategyVersionId: versionId, definition: modDef, symbol, candles: trainCandles });
+        const res = runBacktestV3({ strategyVersionId: versionId, definition: modDef, symbol, candles: trainCandles, timeframe });
         if (res.metrics.sharpe > bestTrainSharpe) {
           bestTrainSharpe = res.metrics.sharpe;
           bestTrainCombo = combo;
@@ -180,7 +180,7 @@ export async function processWalkForward(run: any): Promise<void> {
 
     if (valCandles.length >= 10) {
       const selectedDef = injectParametersIntoAST(baseDef, bestTrainCombo);
-      const valRes = runBacktestV3({ strategyVersionId: versionId, definition: selectedDef, symbol, candles: valCandles });
+      const valRes = runBacktestV3({ strategyVersionId: versionId, definition: selectedDef, symbol, candles: valCandles, timeframe });
       valReturn = valRes.metrics.totalReturn;
       valSharpe = valRes.metrics.sharpe;
       valDrawdown = valRes.metrics.maxDrawdown;

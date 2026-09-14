@@ -508,7 +508,8 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     }
   }
 
-  const metrics = computeMetrics(equityCurve, trades, benchmarkCurve, initialCapital);
+  const timeframe = request.timeframe ?? (sorted[0].tf as string) ?? definition.timeframe ?? "1d";
+  const metrics = computeMetrics(equityCurve, trades, benchmarkCurve, timeframe);
   const feesPaid = trades.reduce((s, t) => s + t.totalFees, 0);
   const slippageCost = trades.reduce((s, t) => s + t.totalSlippage, 0);
 
