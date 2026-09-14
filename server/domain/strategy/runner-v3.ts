@@ -224,53 +224,95 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
       const trailingPct = risk.trailingStopPercent;
 
       if (direction === "long") {
-        if (trailingPct && peakPrice > 0) {
-          const trailStop = peakPrice * (1 - trailingPct / 100);
-          if (currLow <= trailStop) {
+        const stopLevel = stopPct ? entryPrice * (1 - stopPct / 100) : null;
+        const targetLevel = targetPct ? entryPrice * (1 + targetPct / 100) : null;
+
+        // Trailing stop: conservative gap-aware check
+        if (trailingPct) {
+          const priorTrailLevel = peakPrice > 0 ? peakPrice * (1 - trailingPct / 100) : null;
+          peakPrice = Math.max(peakPrice, currHigh);
+          const effectiveTrailLevel = priorTrailLevel ?? (peakPrice * (1 - trailingPct / 100));
+
+          if (bar.open <= effectiveTrailLevel) {
+            exitPrice = bar.open; // gapped down through trailing stop
             exitReason = `trailing_stop:${trailingPct}%`;
-            exitPrice = bar.close;
+          } else if (currLow <= effectiveTrailLevel) {
+            exitPrice = effectiveTrailLevel; // intrabar hit
+            exitReason = `trailing_stop:${trailingPct}%`;
           }
         }
-        if (!exitReason && stopPct) {
-          const stopPrice = entryPrice * (1 - stopPct / 100);
-          if (currLow <= stopPrice) {
+
+        // CONSERVATIVE: stop loss checked first
+        if (!exitReason && stopLevel) {
+          if (bar.open <= stopLevel) {
+            exitPrice = bar.open; // gapped down through stop
             exitReason = `stop_loss:${stopPct}%`;
-            exitPrice = bar.close;
+          } else if (currLow <= stopLevel) {
+            exitPrice = stopLevel; // intrabar hit (fills at stopLevel, NOT currLow!)
+            exitReason = `stop_loss:${stopPct}%`;
           }
         }
-        if (!exitReason && targetPct) {
-          const targetPrice = entryPrice * (1 + targetPct / 100);
-          if (currHigh >= targetPrice) {
+
+        // Target checked next
+        if (!exitReason && targetLevel) {
+          if (bar.open >= targetLevel) {
+            exitPrice = bar.open; // gapped up above target
             exitReason = `take_profit:${targetPct}%`;
-            exitPrice = bar.close;
+          } else if (currHigh >= targetLevel) {
+            exitPrice = targetLevel; // intrabar hit
+            exitReason = `take_profit:${targetPct}%`;
           }
         }
+
+        // AST exit rule (evaluated at i-1, fills on bar i open)
         if (!exitReason && prevExitEval.matched) {
           exitPrice = bar.open;
           exitReason = "exit_rule";
         }
+
       } else {
-        if (trailingPct && troughPrice < Infinity) {
-          const trailStop = troughPrice * (1 + trailingPct / 100);
-          if (currHigh >= trailStop) {
+        // Short position
+        const stopLevel = stopPct ? entryPrice * (1 + stopPct / 100) : null;
+        const targetLevel = targetPct ? entryPrice * (1 - targetPct / 100) : null;
+
+        // Trailing stop for short
+        if (trailingPct) {
+          const priorTrailLevel = troughPrice < Infinity ? troughPrice * (1 + trailingPct / 100) : null;
+          troughPrice = Math.min(troughPrice, currLow);
+          const effectiveTrailLevel = priorTrailLevel ?? (troughPrice * (1 + trailingPct / 100));
+
+          if (bar.open >= effectiveTrailLevel) {
+            exitPrice = bar.open; // gapped up through trailing stop
             exitReason = `trailing_stop:${trailingPct}%`;
-            exitPrice = bar.close;
+          } else if (currHigh >= effectiveTrailLevel) {
+            exitPrice = effectiveTrailLevel; // intrabar hit
+            exitReason = `trailing_stop:${trailingPct}%`;
           }
         }
-        if (!exitReason && stopPct) {
-          const stopPrice = entryPrice * (1 + stopPct / 100);
-          if (currHigh >= stopPrice) {
+
+        // CONSERVATIVE: stop loss checked first
+        if (!exitReason && stopLevel) {
+          if (bar.open >= stopLevel) {
+            exitPrice = bar.open; // gapped up through stop
             exitReason = `stop_loss:${stopPct}%`;
-            exitPrice = bar.close;
+          } else if (currHigh >= stopLevel) {
+            exitPrice = stopLevel; // intrabar hit (fills at stopLevel, NOT currHigh!)
+            exitReason = `stop_loss:${stopPct}%`;
           }
         }
-        if (!exitReason && targetPct) {
-          const targetPrice = entryPrice * (1 - targetPct / 100);
-          if (currLow <= targetPrice) {
+
+        // Target checked next
+        if (!exitReason && targetLevel) {
+          if (bar.open <= targetLevel) {
+            exitPrice = bar.open; // gapped down below target
             exitReason = `take_profit:${targetPct}%`;
-            exitPrice = bar.close;
+          } else if (currLow <= targetLevel) {
+            exitPrice = targetLevel; // intrabar hit
+            exitReason = `take_profit:${targetPct}%`;
           }
         }
+
+        // AST exit rule (evaluated at i-1, fills on bar i open)
         if (!exitReason && prevExitEval.matched) {
           exitPrice = bar.open;
           exitReason = "exit_rule";
