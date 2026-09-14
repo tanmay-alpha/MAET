@@ -251,28 +251,44 @@ function buildExecution(risk: RiskConfig): StrategyDefinition["execution"] {
 /**
  * Translate a Backtest Lab V2 preset into a canonical V3 StrategyDefinition.
  *
+ * NOTE ON MAXIMUM OPEN POSITIONS:
+ * Single-symbol V3 execution fundamentally supports exactly one position at a time (maximumOpenPositions = 1).
+ * Concurrent multi-position strategies are supported in the portfolio runner (portfolio-runner.ts).
+ *
  * @param params  - The strategy parameters from the Backtest Lab UI
  * @param risk    - The risk/execution configuration
  * @returns StrategyDefinition suitable for runBacktestV3()
- * @throws Error if the strategy type is unknown or unsupported
+ * @throws Error if the strategy type is unknown, unsupported, or if maximumOpenPositions > 1
  */
 export function presetToV3Definition(
   params: StrategyParams,
   risk: RiskConfig,
 ): StrategyDefinition {
+  if (risk.maximumOpenPositions != null && risk.maximumOpenPositions > 1) {
+    throw new Error(
+      `Single-symbol strategy execution requires maximumOpenPositions = 1 (got ${risk.maximumOpenPositions}). ` +
+      "For concurrent multi-position execution across multiple symbols, use the portfolio backtest runner."
+    );
+  }
+
+  const normalizedRisk: RiskConfig = {
+    ...risk,
+    maximumOpenPositions: 1,
+  };
+
   switch (params.type) {
     case "SMA_CROSS":
-      return buildSmaCrossDefinition(params, risk);
+      return buildSmaCrossDefinition(params, normalizedRisk);
     case "EMA_CROSS":
-      return buildEmaCrossDefinition(params, risk);
+      return buildEmaCrossDefinition(params, normalizedRisk);
     case "RSI_REVERSAL":
-      return buildRsiReversalDefinition(params, risk);
+      return buildRsiReversalDefinition(params, normalizedRisk);
     case "MACD_CROSS":
-      return buildMacdCrossDefinition(params, risk);
+      return buildMacdCrossDefinition(params, normalizedRisk);
     case "DONCHIAN_BREAKOUT":
-      return buildDonchianBreakoutDefinition(params, risk);
+      return buildDonchianBreakoutDefinition(params, normalizedRisk);
     case "BOLLINGER_MEAN_REVERSION":
-      return buildBollingerMeanReversionDefinition(params, risk);
+      return buildBollingerMeanReversionDefinition(params, normalizedRisk);
     case "COMBINED_RULES":
       // COMBINED_RULES does not map cleanly to AST — it uses a freeform rule structure.
       // For now: return a passthrough definition that produces no signals (safe default).

@@ -61,6 +61,14 @@ export const backtestV2Router = createRouter({
     .mutation(async ({ ctx, input }) => {
       const symbol = input.symbol.toUpperCase();
 
+      // Validate maximumOpenPositions for single-symbol engine
+      if (input.risk.maximumOpenPositions > 1) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Single-symbol backtest engine supports maximumOpenPositions = 1 (got ${input.risk.maximumOpenPositions}). For concurrent multi-position execution across multiple symbols, use portfolio backtesting.`,
+        });
+      }
+
       // Validate date bounds if provided
       let fromDate: Date | undefined;
       let toDate: Date | undefined;
@@ -209,7 +217,7 @@ export const backtestV2Router = createRouter({
             message: err.message,
           });
         }
-        if (err instanceof Error && err.message.includes("cannot be automatically translated")) {
+        if (err instanceof Error && (err.message.includes("cannot be automatically translated") || err.message.includes("Single-symbol strategy execution requires maximumOpenPositions = 1"))) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: err.message,
@@ -225,13 +233,14 @@ export const backtestV2Router = createRouter({
 
   listRuns: protectedProcedure
     .input(z.object({ limit: z.number().int().positive().max(50).default(20) }).optional())
-    .query(async ({ ctx }) => {
+    .query(async ({ ctx, input }) => {
+      const limit = input?.limit ?? 20;
       const rows = await db
         .select()
         .from(backtestRuns)
         .where(eq(backtestRuns.userId, ctx.userId!))
         .orderBy(desc(backtestRuns.createdAt))
-        .limit(20);
+        .limit(limit);
       return { runs: rows };
     }),
 
