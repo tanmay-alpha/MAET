@@ -20,7 +20,7 @@ import {
   strategyPerformanceSnapshots,
   candles,
 } from "../db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, asc, gte, lte } from "drizzle-orm";
 import * as jobs from "../modules/strategy-jobs/repository";
 import { runBacktestV3, InsufficientHistoryV3Error } from "../domain/strategy/runner-v3";
 import type { Candle } from "@shared/types";
@@ -38,22 +38,27 @@ async function fetchCandles(symbol: string, timeframe: string, from: Date, to: D
   const rows = await db
     .select()
     .from(candles)
-    .where(and(eq(candles.symbol, symbol), eq(candles.timeframe, timeframe)))
-    .orderBy(desc(candles.ts));
+    .where(
+      and(
+        eq(candles.symbol, symbol),
+        eq(candles.timeframe, timeframe),
+        gte(candles.ts, from),
+        lte(candles.ts, to),
+      ),
+    )
+    .orderBy(asc(candles.ts));
 
-  return rows
-    .filter((r) => r.ts >= from && r.ts <= to)
-    .map((r) => ({
-      symbol: r.symbol,
-      tf: r.timeframe as any,
-      ts: r.ts.toISOString(),
-      open: Number(r.open),
-      high: Number(r.high),
-      low: Number(r.low),
-      close: Number(r.close),
-      volume: r.volume ?? 0,
-      source: r.source,
-    }));
+  return rows.map((r) => ({
+    symbol: r.symbol,
+    tf: r.timeframe as any,
+    ts: r.ts.toISOString(),
+    open: Number(r.open),
+    high: Number(r.high),
+    low: Number(r.low),
+    close: Number(r.close),
+    volume: r.volume ?? 0,
+    source: r.source,
+  }));
 }
 
 // ============================================================
