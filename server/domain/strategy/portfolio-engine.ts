@@ -571,7 +571,7 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
     initialCapital: capital,
     finalEquity,
     totalReturn: metrics.totalReturn,
-    cagr: metrics.cagr,
+    cagr: metrics.annualisedReturn,
     sharpe: metrics.sharpe,
     sortino: metrics.sortino,
     maxDrawdown: metrics.maxDrawdown,
