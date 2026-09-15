@@ -425,7 +425,7 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
 
       // C. Allocate capital and execute entries for top candidates respecting portfolio constraints
       for (const cand of ranked) {
-        const { totalEquity } = calculateCurrentEquity();
+        const { totalEquity, grossExposure } = calculateCurrentEquity();
 
         // 1. Max open positions cap
         const maxPos = constraints.maximumOpenPositions ?? 5;
@@ -453,6 +453,14 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
 
         const capitalForTrade = Math.min(maxAllocatableCapital, availableCashForTrade);
         if (capitalForTrade <= 100) {
+          excludedSignalsCount++;
+          continue;
+        }
+
+        // Gross exposure check
+        const maxGrossExpPct = constraints.maximumGrossExposurePercent ?? 100;
+        const projectedGrossExposure = grossExposure + capitalForTrade;
+        if (totalEquity > 0 && (projectedGrossExposure / totalEquity) * 100 > maxGrossExpPct) {
           excludedSignalsCount++;
           continue;
         }
