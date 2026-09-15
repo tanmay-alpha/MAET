@@ -292,10 +292,15 @@ export const fundamentals = pgTable("fundamentals", {
   source: text("source").notNull().default("nse"),
   sourceFlags: jsonb("source_flags"),
   isStale: boolean("is_stale").notNull().default(false),
+  filingDate: timestamp("filing_date", { withTimezone: true }),
+  availableFrom: timestamp("available_from", { withTimezone: true }),
+  revision: integer("revision").notNull().default(1),
+  ingestedAt: timestamp("ingested_at", { withTimezone: true }).defaultNow(),
   raw: jsonb("raw"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => [
   index("fundamentals_company_idx").on(table.companyId, table.periodDate),
+  index("fundamentals_company_pit_idx").on(table.companyId, table.availableFrom, table.revision),
 ]);
 
 export const marketCapClassifications = pgTable("market_cap_classifications", {
@@ -570,8 +575,23 @@ export const paperOutboxEvents = pgTable("paper_outbox_events", {
 // Schema Expansion: Corporate Actions, Shareholding Patterns, Institutional Deals, Index Valuations
 // ---------------------------------------------------------------------------
 
+export const universeMembership = pgTable("universe_membership", {
+  id: text("id").primaryKey().default(sql`gen_random_uuid()::text`),
+  universe: text("universe").notNull(),
+  symbol: text("symbol").notNull(),
+  companyId: text("company_id").references(() => companies.id, { onDelete: "cascade" }),
+  validFrom: timestamp("valid_from", { withTimezone: true }).notNull(),
+  validTo: timestamp("valid_to", { withTimezone: true }),
+  source: text("source").notNull().default("nse"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("universe_membership_uni_date_idx").on(table.universe, table.validFrom, table.validTo),
+  index("universe_membership_symbol_idx").on(table.symbol),
+]);
+
 export const corporateActions = pgTable("corporate_actions", {
   id: text("id").primaryKey().default(sql`gen_random_uuid()::text`),
+  companyId: text("company_id").references(() => companies.id, { onDelete: "cascade" }),
   symbol: text("symbol").notNull(),
   actionType: text("action_type").notNull(), // 'DIVIDEND', 'SPLIT', 'BONUS', 'RIGHTS', 'BOARD_MEETING'
   announcementDate: timestamp("announcement_date", { withTimezone: true }),
@@ -581,6 +601,10 @@ export const corporateActions = pgTable("corporate_actions", {
   ratioNumerator: integer("ratio_numerator"),
   ratioDenominator: integer("ratio_denominator"),
   amount: numeric("amount", { precision: 12, scale: 4 }),
+  currency: text("currency").notNull().default("INR"),
+  source: text("source").notNull().default("nse"),
+  sourceReference: text("source_reference"),
+  ingestedAt: timestamp("ingested_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("corp_actions_symbol_ex_date_idx").on(table.symbol, table.exDate),
@@ -1168,6 +1192,9 @@ export const strategyBacktestJobs = pgTable("strategy_backtest_jobs", {
   workerId: text("worker_id"),
   heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
   runId: uuid("run_id"),
+  executionModelConfig: jsonb("execution_model_config"),
+  reproducibilityMetadata: jsonb("reproducibility_metadata"),
+  warnings: jsonb("warnings"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -1284,6 +1311,9 @@ export const strategyWalkForwardWindows = pgTable("strategy_walk_forward_windows
   selectedParameters: jsonb("selected_parameters"),
   trainingMetrics: jsonb("training_metrics"),
   validationMetrics: jsonb("validation_metrics"),
+  testFrom: timestamp("test_from", { withTimezone: true }),
+  testTo: timestamp("test_to", { withTimezone: true }),
+  testMetrics: jsonb("test_metrics"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("idx_wf_windows_run_id").on(table.runId, table.windowIndex),

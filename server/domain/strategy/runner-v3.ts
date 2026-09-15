@@ -24,6 +24,12 @@ import { computeMetrics } from "../backtest/risk-metrics";
 import type { EquityPoint, TradeRecord } from "../backtest/risk-metrics";
 import { STRATEGY_ENGINE_VERSION, INDICATOR_ENGINE_VERSION, FEE_MODEL_VERSION } from "../../../shared/strategy/version";
 
+import {
+  adjustCandles,
+  type CorporateAction,
+  type PriceAdjustmentSeries,
+} from "../data/corporate-actions";
+
 // ============================================================
 // Types
 // ============================================================
@@ -36,6 +42,8 @@ export interface V3BacktestRunRequest {
   benchmarkCandles?: Candle[];
   overrideCapital?: number;
   timeframe?: string;
+  corporateActions?: CorporateAction[];
+  priceSeries?: PriceAdjustmentSeries;
 }
 
 export interface V3TradeRecord extends TradeRecord {
@@ -62,6 +70,9 @@ export interface V3TradeRecord extends TradeRecord {
   grossReturn: number;
   netReturn: number;
   quantity: number;
+  spreadCost?: number;
+  marketImpactCost?: number;
+  totalTransactionCost?: number;
 }
 
 export interface V3BacktestRunResult {
@@ -79,6 +90,14 @@ export interface V3BacktestRunResult {
   shortTradeCount: number;
   feesPaid: number;
   slippageCost: number;
+  spreadCost?: number;
+  marketImpactCost?: number;
+  totalTransactionCost?: number;
+  grossPnl?: number;
+  netPnl?: number;
+  costDragPercent?: number;
+  priceSeries?: PriceAdjustmentSeries;
+  corporateActionCount?: number;
   insufficientHistory: boolean;
   dataHash: string;
   engineVersion: string;
@@ -115,8 +134,12 @@ function computeDataHash(candles: Candle[]): string {
 // ============================================================
 
 export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResult {
-  const { definition, candles } = request;
-  const sorted = [...candles].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+  const { definition } = request;
+  const priceSeries = request.priceSeries ?? "SPLIT_ADJUSTED";
+  const processedCandles = request.corporateActions?.length
+    ? adjustCandles(request.candles, request.corporateActions, priceSeries)
+    : request.candles;
+  const sorted = [...processedCandles].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
   const warnings: string[] = [];
 
   // Minimum candle requirement
@@ -512,6 +535,15 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
   const metrics = computeMetrics(equityCurve, trades, benchmarkCurve, timeframe);
   const feesPaid = trades.reduce((s, t) => s + t.totalFees, 0);
   const slippageCost = trades.reduce((s, t) => s + t.totalSlippage, 0);
+  const spreadCost = trades.reduce((s, t) => s + (t.spreadCost ?? 0), 0);
+  const marketImpactCost = trades.reduce((s, t) => s + (t.marketImpactCost ?? 0), 0);
+  const totalTransactionCost = trades.reduce(
+    (s, t) => s + (t.totalTransactionCost ?? (t.totalFees + t.totalSlippage)),
+    0,
+  );
+  const grossPnl = trades.reduce((s, t) => s + t.grossPnl, 0);
+  const netPnl = trades.reduce((s, t) => s + t.netPnl, 0);
+  const costDragPercent = grossPnl > 0 ? (totalTransactionCost / grossPnl) * 100 : 0;
 
   return {
     runId,
@@ -528,6 +560,14 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     shortTradeCount: trades.filter((t) => t.direction === "short").length,
     feesPaid,
     slippageCost,
+    spreadCost,
+    marketImpactCost,
+    totalTransactionCost,
+    grossPnl,
+    netPnl,
+    costDragPercent,
+    priceSeries,
+    corporateActionCount: request.corporateActions?.length ?? 0,
     insufficientHistory: false,
     dataHash,
     engineVersion: STRATEGY_ENGINE_VERSION,

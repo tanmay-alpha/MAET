@@ -169,6 +169,13 @@ export const StrategyExecutionConfigSchema = z.object({
   slippageBps: z.number().min(0).max(500).optional(),
   initialCapital: z.number().positive().finite().max(1_000_000_000),
   benchmarkSymbol: z.string().optional(),
+  spreadModel: z.enum(["NONE", "FIXED_BPS", "VOLATILITY_BASED", "LIQUIDITY_BASED"]).optional(),
+  baseSpreadBps: z.number().min(0).max(1000).optional(),
+  marketImpactModel: z.enum(["NONE", "SQUARE_ROOT"]).optional(),
+  impactCoefficient: z.number().min(0).max(100).optional(),
+  maxImpactBps: z.number().min(0).max(2000).optional(),
+  maxParticipationRate: z.number().min(0.001).max(1).optional(),
+  timeInForce: z.enum(["DAY", "GTC", "IOC"]).optional(),
 });
 
 // ============================================================

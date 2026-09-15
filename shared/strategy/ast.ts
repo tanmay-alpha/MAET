@@ -201,6 +201,15 @@ export interface StrategyExecutionConfig {
   slippageBps?: number;
   initialCapital: number;         // > 0
   benchmarkSymbol?: string;
+
+  // P2 realistic execution additions
+  spreadModel?: "NONE" | "FIXED_BPS" | "VOLATILITY_BASED" | "LIQUIDITY_BASED";
+  baseSpreadBps?: number;
+  marketImpactModel?: "NONE" | "SQUARE_ROOT";
+  impactCoefficient?: number;
+  maxImpactBps?: number;
+  maxParticipationRate?: number;
+  timeInForce?: "DAY" | "GTC" | "IOC";
 }
 
 // ============================================================
