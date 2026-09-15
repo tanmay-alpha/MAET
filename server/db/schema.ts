@@ -1192,6 +1192,9 @@ export const strategyBacktestJobs = pgTable("strategy_backtest_jobs", {
   workerId: text("worker_id"),
   heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
   runId: uuid("run_id"),
+  executionModelConfig: jsonb("execution_model_config"),
+  reproducibilityMetadata: jsonb("reproducibility_metadata"),
+  warnings: jsonb("warnings"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -1308,6 +1311,9 @@ export const strategyWalkForwardWindows = pgTable("strategy_walk_forward_windows
   selectedParameters: jsonb("selected_parameters"),
   trainingMetrics: jsonb("training_metrics"),
   validationMetrics: jsonb("validation_metrics"),
+  testFrom: timestamp("test_from", { withTimezone: true }),
+  testTo: timestamp("test_to", { withTimezone: true }),
+  testMetrics: jsonb("test_metrics"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("idx_wf_windows_run_id").on(table.runId, table.windowIndex),

@@ -35,3 +35,16 @@ ALTER TABLE public.fundamentals
 
 CREATE INDEX IF NOT EXISTS fundamentals_company_pit_idx
   ON public.fundamentals(company_id, available_from, revision);
+
+-- Expand strategy_backtest_jobs table with execution model, reproducibility metadata, and warnings
+ALTER TABLE public.strategy_backtest_jobs
+  ADD COLUMN IF NOT EXISTS execution_model_config JSONB,
+  ADD COLUMN IF NOT EXISTS reproducibility_metadata JSONB,
+  ADD COLUMN IF NOT EXISTS warnings JSONB;
+
+-- Expand strategy_walk_forward_windows table with out-of-sample test window tracking
+ALTER TABLE public.strategy_walk_forward_windows
+  ADD COLUMN IF NOT EXISTS test_from TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS test_to TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS test_metrics JSONB;
+
