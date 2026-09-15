@@ -62,6 +62,9 @@ export interface V3TradeRecord extends TradeRecord {
   grossReturn: number;
   netReturn: number;
   quantity: number;
+  spreadCost?: number;
+  marketImpactCost?: number;
+  totalTransactionCost?: number;
 }
 
 export interface V3BacktestRunResult {
@@ -79,6 +82,12 @@ export interface V3BacktestRunResult {
   shortTradeCount: number;
   feesPaid: number;
   slippageCost: number;
+  spreadCost?: number;
+  marketImpactCost?: number;
+  totalTransactionCost?: number;
+  grossPnl?: number;
+  netPnl?: number;
+  costDragPercent?: number;
   insufficientHistory: boolean;
   dataHash: string;
   engineVersion: string;
@@ -512,6 +521,15 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
   const metrics = computeMetrics(equityCurve, trades, benchmarkCurve, timeframe);
   const feesPaid = trades.reduce((s, t) => s + t.totalFees, 0);
   const slippageCost = trades.reduce((s, t) => s + t.totalSlippage, 0);
+  const spreadCost = trades.reduce((s, t) => s + (t.spreadCost ?? 0), 0);
+  const marketImpactCost = trades.reduce((s, t) => s + (t.marketImpactCost ?? 0), 0);
+  const totalTransactionCost = trades.reduce(
+    (s, t) => s + (t.totalTransactionCost ?? (t.totalFees + t.totalSlippage)),
+    0,
+  );
+  const grossPnl = trades.reduce((s, t) => s + t.grossPnl, 0);
+  const netPnl = trades.reduce((s, t) => s + t.netPnl, 0);
+  const costDragPercent = grossPnl > 0 ? (totalTransactionCost / grossPnl) * 100 : 0;
 
   return {
     runId,
@@ -528,6 +546,12 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     shortTradeCount: trades.filter((t) => t.direction === "short").length,
     feesPaid,
     slippageCost,
+    spreadCost,
+    marketImpactCost,
+    totalTransactionCost,
+    grossPnl,
+    netPnl,
+    costDragPercent,
     insufficientHistory: false,
     dataHash,
     engineVersion: STRATEGY_ENGINE_VERSION,
