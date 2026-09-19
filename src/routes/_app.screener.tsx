@@ -210,9 +210,8 @@ function money(value: number | undefined): string {
 }
 
 function percent(value: number | undefined): string {
-  if (value === undefined) return "—";
-  const normalized = Math.abs(value) <= 1 ? value * 100 : value;
-  return `${normalized.toFixed(2)}%`;
+  if (value === undefined || !Number.isFinite(value)) return "—";
+  return `${(value * 100).toFixed(2)}%`;
 }
 
 function Missing({ reason }: { reason: string }) {

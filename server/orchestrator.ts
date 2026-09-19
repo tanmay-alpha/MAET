@@ -188,8 +188,14 @@ export function startOrchestrator(): void {
 export async function stopOrchestrator(): Promise<void> {
   if (!started) return;
   started = false;
-  if (angelRetryTimer) clearTimeout(angelRetryTimer);
-  if (dailyProcessorTimer) clearInterval(dailyProcessorTimer);
+  if (angelRetryTimer) {
+    clearTimeout(angelRetryTimer);
+    angelRetryTimer = undefined;
+  }
+  if (dailyProcessorTimer) {
+    clearInterval(dailyProcessorTimer);
+    dailyProcessorTimer = undefined;
+  }
   if (alertReconcileTimer) {
     clearInterval(alertReconcileTimer);
     alertReconcileTimer = undefined;

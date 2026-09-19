@@ -101,8 +101,9 @@ export function tokenize(input: string): Token[] {
     // Operator (longest match first)
     const sortedOps = [...OPERATOR_WORDS].sort((a, b) => b.length - a.length);
     for (const op of sortedOps) {
-      if (text.slice(pos, pos + op.length) === op) {
-        tokens.push({ kind: TokenKind.Operator, value: op, raw: op, start: pos, end: pos + op.length });
+      if (text.slice(pos, pos + op.length) === op && (pos + op.length >= text.length || /\s/.test(text[pos + op.length]))) {
+        const canonicalOp = op.replace(/\s+/g, "_");
+        tokens.push({ kind: TokenKind.Operator, value: canonicalOp, raw: op, start: pos, end: pos + op.length });
         pos += op.length;
         matched = true;
         break;
@@ -130,10 +131,15 @@ export function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Boolean connector
+    // Boolean connector (and, or, &, |)
     for (const bool of BOOLEAN_WORDS) {
-      if (text.slice(pos, pos + bool.length) === bool && (pos + bool.length >= text.length || /\s/.test(text[pos + bool.length]))) {
-        tokens.push({ kind: TokenKind.BooleanOp, value: bool, raw: bool, start: pos, end: pos + bool.length });
+      const isSymbol = bool === "&" || bool === "|";
+      if (
+        text.slice(pos, pos + bool.length) === bool &&
+        (isSymbol || pos + bool.length >= text.length || /\s/.test(text[pos + bool.length]))
+      ) {
+        const canonicalBool = bool === "&" ? "and" : bool === "|" ? "or" : bool;
+        tokens.push({ kind: TokenKind.BooleanOp, value: canonicalBool, raw: bool, start: pos, end: pos + bool.length });
         pos += bool.length;
         matched = true;
         break;

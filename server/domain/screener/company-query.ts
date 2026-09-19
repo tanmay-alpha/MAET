@@ -187,8 +187,8 @@ export function parseCompanyScreenerParams(params: URLSearchParams): CompanyScre
     buckets,
     sectors: listParam(params, "sector_in"),
     industries: listParam(params, "industry_in"),
-    highBreakout: params.get("fifty_two_week_high_breakout") === "true",
-    lowNear: params.get("fifty_two_week_low_near") === "true",
+    highBreakout: params.get("fifty_two_week_high_breakout") === "true" || params.get("high_breakout") === "true",
+    lowNear: params.get("fifty_two_week_low_near") === "true" || params.get("low_near") === "true",
     refresh: params.get("refresh") === "1",
     // Technical boolean params
     priceAboveSma200: params.get("price_above_sma200") === "true",
@@ -206,15 +206,19 @@ function numeric(value: string | number | null | undefined): number | undefined 
 }
 
 function inRange(value: number | undefined, min: number | undefined, max: number | undefined): boolean {
-  if (min !== undefined && (value === undefined || value < min)) return false;
-  if (max !== undefined && (value === undefined || value > max)) return false;
+  if (value === undefined || Number.isNaN(value)) return min === undefined && max === undefined;
+  if (min !== undefined && value < min) return false;
+  if (max !== undefined && value > max) return false;
   return true;
 }
 
-function percentInRange(value: number | undefined, min: number | undefined, max: number | undefined): boolean {
-  const normalize = (bound: number | undefined) =>
-    value !== undefined && Math.abs(value) <= 1 && bound !== undefined && Math.abs(bound) >= 1 ? bound / 100 : bound;
-  return inRange(value, normalize(min), normalize(max));
+export function percentInRange(value: number | undefined, min: number | undefined, max: number | undefined): boolean {
+  // Stored ratio values are decimal fractions (e.g. 0.20 for 20%, 1.20 for 120%, -0.15 for -15%).
+  // User filter boundaries (min, max) are in percentage points (e.g. 15 for 15%).
+  // Convert filter boundaries to decimal fractions by dividing by 100 without magnitude heuristics.
+  const minDecimal = min !== undefined ? min / 100 : undefined;
+  const maxDecimal = max !== undefined ? max / 100 : undefined;
+  return inRange(value, minDecimal, maxDecimal);
 }
 
 export function matchesCompanyScreenerRow(row: CompanyScreenerRow, input: CompanyScreenerParams): boolean {
@@ -313,7 +317,9 @@ async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScree
     "sales_growth_min", "profit_growth_min",
   ];
   const needsQuotes = quoteFields.some((field) => input.numbers[field] !== undefined) ||
-    ["price", "change_pct", "volume"].includes(input.sortBy);
+    ["price", "change_pct", "volume"].includes(input.sortBy) ||
+    input.highBreakout || input.lowNear ||
+    input.priceAboveSma200 || input.priceAboveSma50;
   const needsDetailedFundamentals = detailedFundamentalFields.some((field) => input.numbers[field] !== undefined) ||
     ["rel_volume", "roce", "current_ratio", "sales_growth", "profit_growth"].includes(input.sortBy);
   const needsMarketMetrics = input.highBreakout || input.lowNear ||
@@ -460,6 +466,7 @@ async function queryNseFallback(input: CompanyScreenerParams): Promise<CompanySc
   const all = await getNseCompanyMaster(input.refresh);
   const requiresStoredData = Object.values(input.numbers).some((value) => value !== undefined) ||
     input.sectors.length > 0 || input.industries.length > 0 || input.highBreakout || input.lowNear ||
+    input.priceAboveSma200 || input.priceAboveSma50 || input.goldenCross || input.rsiOversold || input.rsiOverbought ||
     input.buckets.some((bucket) => bucket !== "unknown");
   const filtered = requiresStoredData ? [] : searchNseCompanyMaster(all, input.q).filter(() =>
     input.buckets.length === 0 || input.buckets.includes("unknown")
@@ -476,7 +483,9 @@ async function queryNseFallback(input: CompanyScreenerParams): Promise<CompanySc
     asOf: generatedAt,
     generatedAt,
     source: "nse-fallback",
-    sourceSummary: ["NSE official company master", "Database unavailable: enriched filters are disabled"],
+    sourceSummary: requiresStoredData
+      ? ["NSE official company master", "Database unavailable: enriched technical and fundamental predicates cannot be evaluated"]
+      : ["NSE official company master", "Database unavailable: enriched filters are disabled"],
     total: rows.length,
     universeTotal: all.length,
     page: input.page,

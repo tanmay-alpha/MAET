@@ -1,6 +1,6 @@
 import { db } from "../../data/drizzle/client";
 import { sourceAudit, anomalyFlags, ingestionRuns, quoteSnapshots, fundamentals } from "../../db/schema";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, sql, and, notInArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 export function assertAdmin(ctx: { userId?: string | null; role?: "user" | "admin" }) {
@@ -42,14 +42,14 @@ export async function listAnomalies(limit = 20) {
   return { items };
 }
 
-export async function resolveAnomaly(anomalyId: string, resolutionNote?: string) {
+export async function resolveAnomaly(anomalyId: string, resolvedBy: string, resolutionNote?: string) {
   const [updated] = await db
     .update(anomalyFlags)
     .set({
       isResolved: true,
       resolvedAt: new Date(),
-      resolvedBy: "admin",
-      resolutionNote: resolutionNote ?? "Resolved by admin",
+      resolvedBy,
+      resolutionNote: resolutionNote ?? `Resolved by ${resolvedBy || "admin"}`,
     })
     .where(eq(anomalyFlags.id, anomalyId))
     .returning();
@@ -88,25 +88,34 @@ export async function retryBatch(batchId: string) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Batch run not found" });
   }
 
-  // Prevent duplicate concurrent retry jobs for the same batch
-  if (batch.status === "running" || batch.status === "retry_pending") {
+  const jobId = crypto.randomUUID();
+  const retryTimestamp = new Date();
+
+  // Atomic state claim: only claim if not already running or retry_pending
+  const [claimed] = await db
+    .update(ingestionRuns)
+    .set({
+      status: "retry_pending",
+      metadata: sql`jsonb_set(
+        coalesce(${ingestionRuns.metadata}, '{}'::jsonb),
+        '{lastRetryJobId}',
+        to_jsonb(${jobId}::text)
+      )`,
+    })
+    .where(
+      and(
+        eq(ingestionRuns.id, batch.id),
+        notInArray(ingestionRuns.status, ["running", "retry_pending"])
+      )
+    )
+    .returning();
+
+  if (!claimed) {
     throw new TRPCError({
       code: "CONFLICT",
       message: `Retry job already active for batch ${batchId} (status: ${batch.status})`,
     });
   }
-
-  const jobId = crypto.randomUUID();
-  const retryTimestamp = new Date();
-
-  // State Transition 1: failed -> retry_pending -> running
-  await db
-    .update(ingestionRuns)
-    .set({
-      status: "retry_pending",
-      metadata: { ...((batch.metadata as object) ?? {}), lastRetryJobId: jobId, retryRequestedAt: retryTimestamp.toISOString() },
-    })
-    .where(eq(ingestionRuns.id, batch.id));
 
   await db
     .update(ingestionRuns)
@@ -120,9 +129,19 @@ export async function retryBatch(batchId: string) {
   let errorSummary: string | null = null;
 
   try {
-    // Synchronous bounded retry: execute ingestion pipeline step
+    // Synchronous bounded retry: execute ingestion pipeline step preserving target scope if specified
     const { runDailyProcessor } = await import("../../workers/daily-processor");
-    await runDailyProcessor();
+    const targetSymbols = (batch.metadata as any)?.symbols as string[] | undefined;
+    const stats = await runDailyProcessor(targetSymbols ? { symbols: targetSymbols } : undefined);
+    if (stats.errors && stats.errors.length > 0) {
+      if (stats.symbolsProcessed === 0 && stats.candlesWritten === 0 && stats.fundamentalsSynced === 0) {
+        finalStatus = "failed";
+        errorSummary = stats.errors.join("; ").slice(0, 500);
+      } else {
+        finalStatus = "partial";
+        errorSummary = `Completed with ${stats.errors.length} error(s): ${stats.errors.slice(0, 3).join("; ")}`.slice(0, 500);
+      }
+    }
   } catch (err: any) {
     finalStatus = "failed";
     errorSummary = err?.message ?? "Ingestion pipeline retry failed";

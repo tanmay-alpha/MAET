@@ -65,7 +65,9 @@ export async function verifyJwt(token: string): Promise<AuthContext | null> {
     if (typeof payload.sub !== "string" || payload.sub.length === 0) {
       return null;
     }
-    const appRole = (payload.app_metadata as Record<string, unknown> | undefined)?.role ?? (payload.user_metadata as Record<string, unknown> | undefined)?.role;
+    // Role selection uses server-controlled app_metadata only. User-editable
+    // user_metadata must NEVER grant administrative access.
+    const appRole = (payload.app_metadata as Record<string, unknown> | undefined)?.role;
     const role: "user" | "admin" = appRole === "admin" ? "admin" : "user";
     return {
       userId: payload.sub,

@@ -29,8 +29,10 @@ const NL_TO_SCREENER_OP: Record<string, CriterionLeaf["op"]> = {
   above: "gt",
   below: "lt",
   between: "between",
-  crosses_above: "gte",
-  crosses_below: "lte",
+  crosses_above: "gt",
+  crosses_below: "lt",
+  "crosses above": "gt",
+  "crosses below": "lt",
   within: "lte",
 };
 
@@ -52,10 +54,27 @@ export class ScreenerCompiler {
     if (node.kind === "literal") {
       const mapping = FIELD_MAPPINGS.find((m: FieldMapping) => m.nlField === node.field);
       if (!mapping) {
-        throw new Error(`Unsupported field: ${node.field}`);
+        throw new Error(`Unsupported field: '${node.field}'`);
       }
-      const op = NL_TO_SCREENER_OP[node.op] ?? "gt";
-      const value = typeof node.value === "string" ? this.parseValue(node.value, mapping) : node.value;
+      const op = NL_TO_SCREENER_OP[node.op];
+      if (!op) {
+        throw new Error(`Unsupported or unknown operator: '${node.op}'`);
+      }
+
+      let value: number | string | [number, number];
+      if (Array.isArray(node.value)) {
+        const [v1, v2] = node.value;
+        const n1 = typeof v1 === "string" ? Number(v1) : v1;
+        const n2 = typeof v2 === "string" ? Number(v2) : v2;
+        value = mapping.unit === "%" ? [n1 / 100, n2 / 100] : [n1, n2];
+      } else if (typeof node.value === "string") {
+        value = this.parseValue(node.value, mapping);
+      } else if (typeof node.value === "number") {
+        value = mapping.unit === "%" ? node.value / 100 : node.value;
+      } else {
+        value = node.value;
+      }
+
       const leaf: CriterionLeaf = {
         field: mapping.screenerField as CriterionLeaf["field"],
         op: op as CriterionLeaf["op"],
