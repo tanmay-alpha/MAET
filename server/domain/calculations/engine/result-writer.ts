@@ -3,7 +3,7 @@
  */
 
 import { getLogger } from "../../../infra/logger";
-import { coordinateIndicatorWrite } from "../../../workers/ingestion-engine/writers/write-coordinator";
+import { coordinateIndicatorWrite, type CoordinatorResult } from "../../../workers/ingestion-engine/writers/write-coordinator";
 import type { CalculatorOutput } from "./calculator-registry";
 import type { BatchRunResult } from "./batch-runner";
 
@@ -13,7 +13,7 @@ export async function writeResults(
   batchResults: BatchRunResult[],
   date: string,
   pipeline = "daily"
-): Promise<void> {
+): Promise<CoordinatorResult> {
   const indicatorRows = batchResults
     .filter((r) => !r.error && r.outputs.length > 0)
     .flatMap((r) =>
@@ -31,7 +31,11 @@ export async function writeResults(
 
   if (indicatorRows.length === 0) {
     logger.info("No indicator rows to write");
-    return;
+    return {
+      supabase: { inserted: 0, failed: 0, durationMs: 0 },
+      bigquery: { rowsStreamed: 0, failed: 0, durationMs: 0 },
+      totalDurationMs: 0,
+    };
   }
 
   const result = await coordinateIndicatorWrite(indicatorRows, "calculation-engine", pipeline);
@@ -45,4 +49,6 @@ export async function writeResults(
     },
     "Results written"
   );
+
+  return result;
 }

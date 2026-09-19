@@ -29,8 +29,8 @@ export const dataQualityRouter = createRouter({
 
   resolveAnomaly: adminProcedure
     .input(z.object({ anomalyId: z.string().uuid(), resolutionNote: z.string().optional() }).strict())
-    .mutation(async ({ input }) => {
-      return await resolveAnomaly(input.anomalyId, input.resolutionNote);
+    .mutation(async ({ input, ctx }) => {
+      return await resolveAnomaly(input.anomalyId, ctx.userId, input.resolutionNote);
     }),
 
   suppressAnomaly: adminProcedure

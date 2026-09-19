@@ -138,15 +138,9 @@ export const ingestionRouter = createRouter({
   /**
    * Get dead letter queue entries
    */
-  getDLQ: protectedProcedure
+  getDLQ: adminProcedure
     .input(z.object({ source: z.string().optional() }).optional())
-    .query(async ({ input, ctx }) => {
-      if (!isAdmin(ctx.userId)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Admin access required",
-        });
-      }
+    .query(async ({ input }) => {
       const pending = await getPendingRetries(input?.source);
       return { pending, count: pending.length };
     }),
@@ -176,18 +170,12 @@ export const ingestionRouter = createRouter({
    * Trigger a manual ingestion run for specific symbols (admin only)
    * FIX 3: Wrapped in try/catch with concurrency guard and proper error reporting.
    */
-  triggerRun: protectedProcedure
+  triggerRun: adminProcedure
     .input(z.object({
       source: z.enum(["yahoo-history", "nse-equities"]),
       symbols: z.array(z.string().min(1)).min(1).max(50),
     }))
-    .mutation(async ({ input, ctx }) => {
-      if (!isAdmin(ctx.userId)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Admin access required",
-        });
-      }
+    .mutation(async ({ input }) => {
 
       // Concurrency guard: reject if a pipeline for the same source is already running
       const slot = acquirePipelineSlot(input.source);

@@ -46,7 +46,7 @@ export interface NlLiteralNode {
   kind: "literal";
   field: NlField;
   op: NlOperator;
-  value: number | string;
+  value: number | string | [number, number];
 }
 
 export interface NlCompositeNode {
@@ -84,7 +84,7 @@ export const NlLiteralNodeSchema: z.ZodType<NlLiteralNode> = z.lazy(() =>
     kind: z.literal("literal"),
     field: NlFieldSchema,
     op: NlOperatorSchema,
-    value: z.union([z.number(), z.string()]),
+    value: z.union([z.number(), z.string(), z.tuple([z.number(), z.number()])]),
   })
 );
 

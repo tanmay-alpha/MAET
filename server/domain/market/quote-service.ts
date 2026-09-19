@@ -44,7 +44,10 @@ export async function loadQuote(symbol: string, force = false): Promise<Tick> {
       return tick;
     })
     .catch((error) => {
-      if (cached) return cached.tick;
+      if (cached) {
+        const isStale = Date.now() - cached.fetchedAt >= ttl;
+        return isStale ? { ...cached.tick, quality: "stale" as const } : cached.tick;
+      }
       throw error;
     })
     .finally(() => {

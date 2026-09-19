@@ -92,25 +92,40 @@ export class ScreenerDslParser {
     const fieldToken = this.consume(TokenKind.Field, "field name");
     const op = this.consume(TokenKind.Operator, "operator");
 
-    let value: number | string;
+    let value: number | string | [number, number];
     if (op.value === "between") {
       const v1 = this.parseNumberOrString();
-      this.consume(TokenKind.String, "'and'");
+      const andToken = this.peek();
+      if (
+        (andToken.kind === TokenKind.BooleanOp && andToken.value === "and") ||
+        (andToken.kind === TokenKind.String && andToken.value === "and")
+      ) {
+        this.advance();
+      } else {
+        throw new ParseError("Expected 'and' between range bounds", andToken.start);
+      }
       const v2 = this.parseNumberOrString();
-      value = [v1, v2] as unknown as number;
+      const n1 = typeof v1 === "number" ? v1 : Number(v1);
+      const n2 = typeof v2 === "number" ? v2 : Number(v2);
+      if (!Number.isFinite(n1) || !Number.isFinite(n2)) {
+        throw new ParseError("Range bounds must be valid finite numbers", andToken.start);
+      }
+      value = [n1, n2];
     } else {
       value = this.parseNumberOrString();
     }
 
-    // If cap keyword was present, wrap into a composite node
+    // If cap keyword was present, wrap into a composite node with market_cap predicate
     if (capKeyword) {
-      const sectorValue = this.parseSectorFromRest() as string;
-      const sectorNode: NlNode = {
-        kind: "literal",
-        field: "sector",
-        op: "above",
-        value: sectorValue,
-      };
+      const normCap = capKeyword.replace(/\s+/g, "").toLowerCase();
+      let capNode: NlNode;
+      if (normCap === "largecap") {
+        capNode = { kind: "literal", field: "market_cap", op: "above", value: 50000 };
+      } else if (normCap === "midcap") {
+        capNode = { kind: "literal", field: "market_cap", op: "between", value: [15000, 50000] };
+      } else {
+        capNode = { kind: "literal", field: "market_cap", op: "below", value: 15000 };
+      }
       const filtered: NlNode = {
         kind: "literal",
         field: fieldToken.value as NlField,
@@ -120,7 +135,7 @@ export class ScreenerDslParser {
       return {
         kind: "composite",
         op: "and",
-        children: [sectorNode, filtered],
+        children: [capNode, filtered],
       };
     }
 

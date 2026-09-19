@@ -12,6 +12,7 @@ import {
   getCalculatorsByCategory,
   getRegistryStats,
   type CalculatorInput,
+  type CalculatorEntry,
 } from "./calculator-registry";
 import { runBatch, runSingle } from "./batch-runner";
 import { writeResults } from "./result-writer";
@@ -37,8 +38,9 @@ export interface EngineRunResult {
 
 /**
  * Load OHLCV data for a symbol from the Supabase candles table.
+ * Retrieves the latest 500 trading bars at or before asOfDate in chronological order.
  */
-async function loadPriceData(symbol: string): Promise<{
+async function loadPriceData(symbol: string, asOfDate?: string): Promise<{
   closes: number[];
   opens: number[];
   highs: number[];
@@ -46,21 +48,29 @@ async function loadPriceData(symbol: string): Promise<{
   volumes: number[];
   dates: string[];
 }> {
+  const asOfIso = asOfDate
+    ? (asOfDate.includes("T") ? asOfDate : `${asOfDate}T23:59:59.999Z`)
+    : new Date().toISOString();
+
   const rows = await db.execute(sql`
     SELECT ts, open, high, low, close, volume
-    FROM candles
-    WHERE symbol = ${symbol} AND timeframe = '1d'
+    FROM (
+      SELECT ts, open, high, low, close, volume
+      FROM candles
+      WHERE symbol = ${symbol} AND timeframe = '1d' AND ts <= ${asOfIso}::timestamptz
+      ORDER BY ts DESC
+      LIMIT 500
+    ) sub
     ORDER BY ts ASC
-    LIMIT 500
   `);
 
-  const data = rows as any[];
+  const data = (rows as any[]) || [];
   return {
     closes: data.map((r) => parseFloat(r.close)),
     opens: data.map((r) => parseFloat(r.open)),
     highs: data.map((r) => parseFloat(r.high)),
     lows: data.map((r) => parseFloat(r.low)),
-    volumes: data.map((r) => parseInt(r.volume)),
+    volumes: data.map((r) => parseInt(r.volume, 10)),
     dates: data.map((r) => new Date(r.ts).toISOString().split("T")[0]),
   };
 }
@@ -68,7 +78,11 @@ async function loadPriceData(symbol: string): Promise<{
 /**
  * Load fundamental data for a symbol from the Supabase fundamentals table.
  */
-async function loadFundamentalData(symbol: string): Promise<Record<string, number | null>> {
+async function loadFundamentalData(symbol: string, asOfDate?: string): Promise<Record<string, number | null>> {
+  const asOfIso = asOfDate
+    ? (asOfDate.includes("T") ? asOfDate : `${asOfDate}T23:59:59.999Z`)
+    : new Date().toISOString();
+
   const rows = await db.execute(sql`
     SELECT
       f.pe_ratio, f.pb_ratio, f.roe, f.market_cap, f.dividend_yield, f.eps,
@@ -87,7 +101,9 @@ async function loadFundamentalData(symbol: string): Promise<Record<string, numbe
     FROM fundamentals f
     LEFT JOIN financial_statements fs ON fs.company_id = f.company_id
       AND fs.period_type = 'annual'
+      AND fs.period_date <= ${asOfIso}::timestamptz
     WHERE f.company_id = ${symbol}
+      AND f.period_date <= ${asOfIso}::timestamptz
     ORDER BY f.period_date DESC, fs.period_date DESC
     LIMIT 1
   `);
@@ -126,11 +142,13 @@ async function loadFundamentalData(symbol: string): Promise<Record<string, numbe
 /**
  * Build a CalculatorInput for a given symbol.
  */
-async function buildInput(symbol: string): Promise<CalculatorInput> {
+async function buildInput(symbol: string, asOfDate?: string): Promise<CalculatorInput> {
   const [price, fundamentals] = await Promise.all([
-    loadPriceData(symbol),
-    loadFundamentalData(symbol),
+    loadPriceData(symbol, asOfDate),
+    loadFundamentalData(symbol, asOfDate),
   ]);
+
+  const dateStr = asOfDate ?? new Date().toISOString().split("T")[0];
 
   return {
     symbol,
@@ -145,7 +163,7 @@ async function buildInput(symbol: string): Promise<CalculatorInput> {
       price: price.closes[price.closes.length - 1] ?? null,
       marketCap: fundamentals.marketCap ?? null,
     },
-    period: new Date().toISOString().split("T")[0],
+    period: dateStr,
   };
 }
 
@@ -171,9 +189,14 @@ export async function runCalculationEngine(opts: EngineRunOptions = {}): Promise
   logger.info({ opts, registryStats: getRegistryStats() }, "Calculation engine starting");
 
   // Determine which calculators to run
-  const calculators = opts.frequency
+  let calculators = opts.frequency
     ? getCalculatorsByFrequency(opts.frequency)
     : getAllCalculators();
+
+  if (opts.categories && opts.categories.length > 0) {
+    const categorySet = new Set(opts.categories);
+    calculators = calculators.filter((c) => categorySet.has(c.meta.category));
+  }
 
   if (calculators.length === 0) {
     logger.warn("No calculators found for specified criteria");
@@ -191,7 +214,7 @@ export async function runCalculationEngine(opts: EngineRunOptions = {}): Promise
   const { results, summary } = await runBatch(
     symbols,
     calculators,
-    buildInput,
+    (sym) => buildInput(sym, date),
     {
       concurrency: opts.concurrency ?? 50,
       timeoutMs: 30_000,
@@ -204,34 +227,36 @@ export async function runCalculationEngine(opts: EngineRunOptions = {}): Promise
   );
 
   // Write results
+  let resultsWritten = 0;
+  let writeErrors = 0;
   if (!opts.dryRun) {
-    await writeResults(results, date);
+    const outcome = await writeResults(results, date);
+    resultsWritten = outcome.supabase.inserted;
+    writeErrors = outcome.supabase.failed;
   }
 
   const totalDurationMs = Date.now() - startTime;
-  logger.info({ ...summary, durationMs: totalDurationMs }, "Calculation engine complete");
+  logger.info({ ...summary, durationMs: totalDurationMs, resultsWritten, writeErrors }, "Calculation engine complete");
 
   return {
     symbolsProcessed: summary.totalSymbols,
     calculationsRun: summary.totalOutputs,
-    resultsWritten: opts.dryRun ? 0 : summary.totalOutputs,
+    resultsWritten: opts.dryRun ? 0 : resultsWritten,
     durationMs: totalDurationMs,
-    errors: summary.failed,
+    errors: summary.failed + writeErrors,
   };
 }
 
 /**
  * On-demand single-symbol calculation (for API cache miss scenarios).
  */
-export async function runOnDemand(symbol: string, indicatorNames?: string[]): Promise<Record<string, number | null>> {
-  const calculators = indicatorNames
-    ? indicatorNames.map((n) => {
-        const { getCalculator } = require("./calculator-registry");
-        return getCalculator(n);
-      }).filter(Boolean)
+export async function runOnDemand(symbol: string, indicatorNames?: string[], asOfDate?: string): Promise<Record<string, number | null>> {
+  const { getCalculator } = await import("./calculator-registry");
+  const calculators: CalculatorEntry[] = indicatorNames
+    ? indicatorNames.map((n) => getCalculator(n)).filter((c): c is CalculatorEntry => Boolean(c))
     : getAllCalculators();
 
-  const input = await buildInput(symbol);
+  const input = await buildInput(symbol, asOfDate);
   const outputs = await runSingle(symbol, calculators, input);
 
   const result: Record<string, number | null> = {};
