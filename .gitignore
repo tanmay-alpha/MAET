@@ -49,10 +49,9 @@ dist-ssr
 .playwright-mcp/
 .codex-tmp/
 
-# Temporary files left behind by FUSE/overlay filesystem operations.
+# Temporary files left behind by FUSE/overlay filesystem operations or scratch directories.
 .fuse_hidden*
-
-.vercel
+scratch/
 
 # Local AI / helper markdown files
 CLAUDE.md

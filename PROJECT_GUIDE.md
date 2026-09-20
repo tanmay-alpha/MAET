@@ -99,7 +99,6 @@ Use this order when you want to understand the code without getting lost:
 | `PROJECT_GUIDE.md` | This beginner and interview guide. |
 | `package.json` | Main Bun workspace configuration and project-wide commands. |
 | `bun.lock` | Records the exact Bun package versions installed for reproducible builds. |
-| `package-lock.json` | npm lockfile retained by the repository. Bun is the primary command runner. |
 | `tsconfig.json` | Shared TypeScript compiler settings. |
 | `.env.example` | Safe list of environment-variable names needed for local configuration. Never put real secrets in Git. |
 | `.env.test` | Test-only environment settings. |
