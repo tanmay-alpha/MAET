@@ -52,6 +52,11 @@ dist-ssr
 # Temporary files left behind by FUSE/overlay filesystem operations or scratch directories.
 .fuse_hidden*
 scratch/
+tmp/
+.tmp/
+*.tsbuildinfo
+.eslintcache
+.turbo/
 
 # Local AI / helper markdown files
 CLAUDE.md

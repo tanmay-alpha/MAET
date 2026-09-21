@@ -13,6 +13,7 @@ export default tseslint.config(
       "**/.vinxi/**",
       "**/.vercel/**",
       "**/.tanstack/**",
+      "**/.nitro/**",
       "**/node_modules/**",
     ],
   },
