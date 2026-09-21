@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build": "bun run --cwd src build",
+    "lint": "bun run --cwd src lint",
     "dev": "bun run server/orchestrator.ts",
     "test": "bun run test:phase1",
     "test:unit": "bun test server/data server/domain server/hooks server/infra shared src tests/canonical-indicators.test.ts",

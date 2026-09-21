@@ -21,12 +21,7 @@ import {
   type SeriesMarker,
   type Time,
 } from "lightweight-charts";
-import {
-  computeSMA,
-  computeEMA,
-  computeRSI,
-  computeMACD,
-} from "@shared/indicators";
+import { computeSMA, computeEMA, computeRSI, computeMACD } from "@shared/indicators";
 
 export interface ChartCandle {
   t: number;
@@ -413,14 +408,14 @@ export function LightweightChart({
           high: c.high,
           low: c.low,
           close: c.close,
-        }))
+        })),
       );
     } else {
       mainSeriesRef.current.setData(
         sanitizedCandles.map((c) => ({
           time: c.time,
           value: c.close,
-        }))
+        })),
       );
     }
 
@@ -431,11 +426,8 @@ export function LightweightChart({
           sanitizedCandles.map((c) => ({
             time: c.time,
             value: c.volume,
-            color:
-              c.close >= c.open
-                ? "rgba(34, 197, 94, 0.35)"
-                : "rgba(239, 68, 68, 0.35)",
-          }))
+            color: c.close >= c.open ? "rgba(34, 197, 94, 0.35)" : "rgba(239, 68, 68, 0.35)",
+          })),
         );
       } else {
         volumeSeriesRef.current.setData([]);
@@ -444,7 +436,12 @@ export function LightweightChart({
 
     // 3. Calculate canonical SMAs and EMAs
     if (sanitizedCandles.length > 0) {
-      if (indicators.sma && sma20SeriesRef.current && sma50SeriesRef.current && sma200SeriesRef.current) {
+      if (
+        indicators.sma &&
+        sma20SeriesRef.current &&
+        sma50SeriesRef.current &&
+        sma200SeriesRef.current
+      ) {
         const sma20 = computeSMA(sanitizedCandles, 20);
         const sma50 = computeSMA(sanitizedCandles, 50);
         const sma200 = computeSMA(sanitizedCandles, 200);
@@ -452,17 +449,17 @@ export function LightweightChart({
         sma20SeriesRef.current.setData(
           sanitizedCandles
             .map((c, i) => ({ time: c.time, value: sma20[i] }))
-            .filter((p): p is { time: Time; value: number } => p.value !== null)
+            .filter((p): p is { time: Time; value: number } => p.value !== null),
         );
         sma50SeriesRef.current.setData(
           sanitizedCandles
             .map((c, i) => ({ time: c.time, value: sma50[i] }))
-            .filter((p): p is { time: Time; value: number } => p.value !== null)
+            .filter((p): p is { time: Time; value: number } => p.value !== null),
         );
         sma200SeriesRef.current.setData(
           sanitizedCandles
             .map((c, i) => ({ time: c.time, value: sma200[i] }))
-            .filter((p): p is { time: Time; value: number } => p.value !== null)
+            .filter((p): p is { time: Time; value: number } => p.value !== null),
         );
       } else {
         sma20SeriesRef.current?.setData([]);
@@ -477,12 +474,12 @@ export function LightweightChart({
         ema20SeriesRef.current.setData(
           sanitizedCandles
             .map((c, i) => ({ time: c.time, value: ema20[i] }))
-            .filter((p): p is { time: Time; value: number } => p.value !== null)
+            .filter((p): p is { time: Time; value: number } => p.value !== null),
         );
         ema50SeriesRef.current.setData(
           sanitizedCandles
             .map((c, i) => ({ time: c.time, value: ema50[i] }))
-            .filter((p): p is { time: Time; value: number } => p.value !== null)
+            .filter((p): p is { time: Time; value: number } => p.value !== null),
         );
       } else {
         ema20SeriesRef.current?.setData([]);
@@ -495,7 +492,7 @@ export function LightweightChart({
         rsiSeriesRef.current.setData(
           sanitizedCandles
             .map((c, i) => ({ time: c.time, value: rsi14[i] }))
-            .filter((p): p is { time: Time; value: number } => p.value !== null)
+            .filter((p): p is { time: Time; value: number } => p.value !== null),
         );
       }
     }
@@ -540,7 +537,11 @@ export function LightweightChart({
           position: "aboveBar",
           color: tr.pnl && tr.pnl >= 0 ? "#22c55e" : "#ef4444",
           shape: "circle",
-          text: tr.text || (tr.pnl !== undefined ? `EXIT (${tr.pnl >= 0 ? "+" : ""}${tr.pnl.toFixed(1)})` : "EXIT"),
+          text:
+            tr.text ||
+            (tr.pnl !== undefined
+              ? `EXIT (${tr.pnl >= 0 ? "+" : ""}${tr.pnl.toFixed(1)})`
+              : "EXIT"),
         };
       }
     });
@@ -561,7 +562,9 @@ export function LightweightChart({
     for (const line of paperLinesRef.current) {
       try {
         mainSeries.removePriceLine(line);
-      } catch {}
+      } catch {
+        // Price line already removed or detached
+      }
     }
     paperLinesRef.current = [];
 
@@ -620,7 +623,9 @@ export function LightweightChart({
     for (const line of drawingPriceLinesRef.current) {
       try {
         mainSeries.removePriceLine(line);
-      } catch {}
+      } catch {
+        // Price line already removed or detached
+      }
     }
     drawingPriceLinesRef.current = [];
 
@@ -646,7 +651,8 @@ export function LightweightChart({
   // Click on chart for drawing
   const handleChartClick = useCallback(
     (e: React.MouseEvent) => {
-      if (!drawingTool || !containerRef.current || !mainSeriesRef.current || !chartRef.current) return;
+      if (!drawingTool || !containerRef.current || !mainSeriesRef.current || !chartRef.current)
+        return;
 
       const rect = containerRef.current.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -672,11 +678,13 @@ export function LightweightChart({
         });
       }
     },
-    [drawingTool, chartState, onChartStateChange]
+    [drawingTool, chartState, onChartStateChange],
   );
 
   return (
-    <div className={`relative flex flex-col w-full bg-[#0d1117] rounded-lg overflow-hidden border border-border/60 ${className}`}>
+    <div
+      className={`relative flex flex-col w-full bg-[#0d1117] rounded-lg overflow-hidden border border-border/60 ${className}`}
+    >
       {/* Main Chart Container */}
       <div
         ref={containerRef}
@@ -713,10 +721,13 @@ export function LightweightChart({
         )}
         {paperOverlay?.averageEntryPrice && (
           <div className="flex items-center gap-1.5 bg-blue-500/10 border border-blue-500/30 text-blue-400 px-2 py-0.5 rounded text-[10px] font-semibold">
-            <span>POS: {paperOverlay.side} @ {formatInr(paperOverlay.averageEntryPrice)}</span>
+            <span>
+              POS: {paperOverlay.side} @ {formatInr(paperOverlay.averageEntryPrice)}
+            </span>
             {paperOverlay.unrealizedPnL !== undefined && (
               <span className={paperOverlay.unrealizedPnL >= 0 ? "text-bull" : "text-bear"}>
-                ({paperOverlay.unrealizedPnL >= 0 ? "+" : ""}{formatInr(paperOverlay.unrealizedPnL)})
+                ({paperOverlay.unrealizedPnL >= 0 ? "+" : ""}
+                {formatInr(paperOverlay.unrealizedPnL)})
               </span>
             )}
           </div>
