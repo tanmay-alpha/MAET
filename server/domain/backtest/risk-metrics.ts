@@ -20,6 +20,7 @@ export interface BacktestMetrics {
   averageHoldingPeriod: number;
   exposure: number;
   turnover: number;
+  ulcerIndex?: number;
 }
 
 export interface EquityPoint {
@@ -86,9 +87,61 @@ export function getPeriodsPerYear(timeframe?: string | number): number {
     case "1mo":
     case "1m_month":
       return 12;
-    default:
-      return TRADING_DAYS_PER_YEAR;
   }
+
+  // Dynamic regex fallback for custom minute, hour, day, week, and month intervals
+  const minuteMatch = tf.match(/^(\d+)\s*(?:m|min|mins|minute|minutes)$/);
+  if (minuteMatch) {
+    const mins = parseInt(minuteMatch[1], 10);
+    if (mins > 0) return TRADING_DAYS_PER_YEAR * (MINUTES_PER_SESSION / mins);
+  }
+
+  const hourMatch = tf.match(/^(\d+)\s*(?:h|hr|hrs|hour|hours)$/);
+  if (hourMatch) {
+    const hours = parseInt(hourMatch[1], 10);
+    if (hours > 0) return TRADING_DAYS_PER_YEAR * (MINUTES_PER_SESSION / (hours * 60));
+  }
+
+  const dayMatch = tf.match(/^(\d+)\s*(?:d|day|days)$/);
+  if (dayMatch) {
+    const days = parseInt(dayMatch[1], 10);
+    if (days > 0) return Math.max(1, Math.round(TRADING_DAYS_PER_YEAR / days));
+  }
+
+  const weekMatch = tf.match(/^(\d+)\s*(?:w|wk|wks|week|weeks)$/);
+  if (weekMatch) {
+    const weeks = parseInt(weekMatch[1], 10);
+    if (weeks > 0) return Math.max(1, Math.round(52 / weeks));
+  }
+
+  const monthMatch = tf.match(/^(\d+)\s*(?:mo|mos|month|months)$/);
+  if (monthMatch) {
+    const months = parseInt(monthMatch[1], 10);
+    if (months > 0) return Math.max(1, Math.round(12 / months));
+  }
+
+  return TRADING_DAYS_PER_YEAR;
+}
+
+/**
+ * Ulcer Index measures downside risk and drawdown depth/duration.
+ * UI = sqrt( (1/N) * sum( (drawdown_pct_from_peak)^2 ) )
+ */
+export function computeUlcerIndex(equity: number[]): number {
+  if (equity.length < 2) return 0;
+  let peak = equity[0];
+  let sumSq = 0;
+  for (let i = 0; i < equity.length; i++) {
+    const val = equity[i];
+    if (val > peak) {
+      peak = val;
+    }
+    if (peak > 0) {
+      const ddPct = ((peak - val) / peak) * 100;
+      sumSq += ddPct * ddPct;
+    }
+  }
+  return Math.sqrt(sumSq / equity.length);
 }
 
 export function computeReturns(points: number[]): number[] {
@@ -146,7 +199,7 @@ export function computeMetrics(
     totalReturn: 0, annualisedReturn: 0, benchmarkReturn: 0, alpha: 0,
     volatility: 0, sharpe: 0, sortino: 0, maxDrawdown: 0, calmar: 0,
     winRate: 0, profitFactor: 0, expectancy: 0, averageHoldingPeriod: 0,
-    exposure: 0, turnover: 0,
+    exposure: 0, turnover: 0, ulcerIndex: 0,
   };
 
   if (equityCurve.length < 2) return empty;
@@ -242,5 +295,6 @@ export function computeMetrics(
     averageHoldingPeriod,
     exposure,
     turnover,
+    ulcerIndex: computeUlcerIndex(equityValues),
   };
 }

@@ -11,6 +11,7 @@
 import { describe, it, expect } from "bun:test";
 import {
   computeMetrics,
+  computeUlcerIndex,
   getPeriodsPerYear,
   TRADING_DAYS_PER_YEAR,
   MINUTES_PER_SESSION,
@@ -38,6 +39,23 @@ describe("Risk Metrics — Timeframe Model", () => {
     expect(getPeriodsPerYear("")).toBe(252);
     expect(getPeriodsPerYear(undefined)).toBe(252);
     expect(getPeriodsPerYear(1)).toBe(252); // numeric legacy argument
+  });
+
+  it("dynamically resolves custom Indian session intraday and multi-day intervals", () => {
+    // 75m bars (5 bars per 375m trading session)
+    expect(getPeriodsPerYear("75m")).toBe(252 * 5); // 1,260
+    // 125m bars (3 bars per 375m trading session)
+    expect(getPeriodsPerYear("125m")).toBe(252 * 3); // 756
+    // 2h bars (120 minutes)
+    expect(getPeriodsPerYear("2h")).toBe(252 * (375 / 120)); // 787.5
+    // 4h bars (240 minutes)
+    expect(getPeriodsPerYear("4h")).toBe(252 * (375 / 240)); // 393.75
+    // 2-day bars
+    expect(getPeriodsPerYear("2d")).toBe(Math.round(252 / 2)); // 126
+    // 2-week bars
+    expect(getPeriodsPerYear("2w")).toBe(Math.round(52 / 2)); // 26
+    // 3-month bars (quarterly)
+    expect(getPeriodsPerYear("3mo")).toBe(Math.round(12 / 3)); // 4
   });
 });
 
@@ -198,5 +216,34 @@ describe("Risk Metrics — Expectancy & Profit Factor", () => {
     expect(metrics.profitFactor).toBeCloseTo(2.0, 4);
     // Expectancy = net total (8,000 - 4,000) / 2 = 2,000
     expect(metrics.expectancy).toBeCloseTo(2000, 4);
+  });
+});
+
+describe("Risk Metrics — Ulcer Index", () => {
+  it("computes 0 ulcer index for monotonic non-decreasing equity", () => {
+    const equity = [100, 105, 110, 115, 120];
+    expect(computeUlcerIndex(equity)).toBe(0);
+  });
+
+  it("computes exact quadratic drawdown penalty for dipping equity", () => {
+    // Peak is 100, drops to 90 (-10%), drops to 80 (-20%), recovers to 100 (0%)
+    // DD percentages: [0, 10, 20, 0]
+    // sumSq = 0 + 100 + 400 + 0 = 500
+    // meanSq = 500 / 4 = 125
+    // UI = sqrt(125) =~ 11.1803
+    const equity = [100, 90, 80, 100];
+    const ui = computeUlcerIndex(equity);
+    expect(ui).toBeCloseTo(Math.sqrt(125), 4);
+  });
+
+  it("is integrated into computeMetrics output", () => {
+    const equityCurve: EquityPoint[] = [
+      { timestamp: 1700000000000, equity: 100_000 },
+      { timestamp: 1700000000000 + 86400000, equity: 95_000 },
+      { timestamp: 1700000000000 + 172800000, equity: 105_000 },
+    ];
+    const metrics = computeMetrics(equityCurve, [], undefined, "1d");
+    expect(metrics.ulcerIndex).toBeDefined();
+    expect(metrics.ulcerIndex).toBeGreaterThan(0);
   });
 });
