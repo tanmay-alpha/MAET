@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { trpc } from "@/lib/trpc";
-import { BookOpen, Award, AlertTriangle, CheckCircle2, FileText, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { BookOpen, Award, AlertTriangle, CheckCircle2, FileText, ArrowUpRight, ArrowDownRight, X, Check } from "lucide-react";
 
 export const Route = createFileRoute("/_app/journal")({
   head: () => ({
@@ -21,6 +21,13 @@ function JournalPage() {
 
   const theses = thesesQuery.data || [];
   const closedPositions = positions.filter((position) => position.totalShares === 0);
+
+  const [reviewModalPos, setReviewModalPos] = useState<any | null>(null);
+  const [reviewOutcome, setReviewOutcome] = useState("AS_PLANNED");
+  const [reviewDiscipline, setReviewDiscipline] = useState("DISCIPLINED");
+  const [reviewNotes, setReviewNotes] = useState("");
+  const [reviewedSymbols, setReviewedSymbols] = useState<Record<string, { outcome: string; discipline: string; notes: string }>>({});
+  const [savedToast, setSavedToast] = useState<string | null>(null);
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground overflow-y-auto p-6 space-y-6">
@@ -117,28 +124,170 @@ function JournalPage() {
           )}
         </div>
       ) : (
-        <div className="space-y-3">
-          <h2 className="text-sm font-bold">Closed Positions & Trade Performance</h2>
-          {closedPositions.length === 0 ? (
-            <div className="rounded-lg border border-border bg-panel p-12 text-center text-muted-foreground space-y-2">
-              <Award className="h-8 w-8 mx-auto opacity-30" />
-              <p className="text-sm">No closed paper trading positions to review.</p>
+          <div className="space-y-3">
+            {savedToast && (
+              <div className="rounded-lg border border-bull/30 bg-bull/10 p-3 text-xs text-bull flex items-center justify-between">
+                <span>{savedToast}</span>
+                <button
+                  type="button"
+                  onClick={() => setSavedToast(null)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+            {closedPositions.length === 0 ? (
+              <div className="rounded-lg border border-border bg-panel p-12 text-center text-muted-foreground space-y-2">
+                <Award className="h-8 w-8 mx-auto opacity-30" />
+                <p className="text-sm">No closed paper trading positions to review.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {closedPositions.map((pos: any) => {
+                  const existingReview = reviewedSymbols[pos.symbol];
+                  return (
+                    <div key={pos.symbol} className="rounded-lg border border-border bg-panel p-4 flex items-center justify-between text-xs">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm">{pos.symbol}</span>
+                          {existingReview && (
+                            <span className="inline-flex items-center gap-1 rounded bg-bull/15 px-2 py-0.5 text-[10px] font-semibold text-bull">
+                              <Check className="h-3 w-3" /> Reviewed
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          Realized P&L:{" "}
+                          <span className={pos.realizedPnl >= 0 ? "text-bull font-bold" : "text-bear font-bold"}>
+                            ₹{pos.realizedPnl.toFixed(2)}
+                          </span>
+                        </div>
+                        {existingReview?.notes && (
+                          <p className="text-[11px] text-muted-foreground italic line-clamp-1">
+                            "{existingReview.notes}"
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReviewModalPos(pos);
+                          setReviewOutcome(existingReview?.outcome || "AS_PLANNED");
+                          setReviewDiscipline(existingReview?.discipline || "DISCIPLINED");
+                          setReviewNotes(existingReview?.notes || "");
+                        }}
+                        className="rounded bg-primary px-3 py-1.5 font-semibold text-primary-foreground text-xs hover:bg-primary/90 transition"
+                      >
+                        {existingReview ? "Edit Review" : "Write Review"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+      {/* Structured Trade Review Modal */}
+      {reviewModalPos && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md rounded-lg border border-border bg-panel p-6 shadow-xl space-y-4 text-xs">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-foreground">Post-Trade Review: {reviewModalPos.symbol}</h3>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Realized P&L:{" "}
+                  <span className={reviewModalPos.realizedPnl >= 0 ? "text-bull font-semibold" : "text-bear font-semibold"}>
+                    ₹{reviewModalPos.realizedPnl.toFixed(2)}
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReviewModalPos(null)}
+                className="text-muted-foreground hover:text-foreground rounded p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
-          ) : (
+
             <div className="space-y-3">
-              {closedPositions.map((pos: any) => (
-                <div key={pos.symbol} className="rounded-lg border border-border bg-panel p-4 flex items-center justify-between text-xs">
-                  <div>
-                    <div className="font-bold text-sm">{pos.symbol}</div>
-                    <div className="text-[10px] text-muted-foreground">Realized P&L: <span className={pos.realizedPnl >= 0 ? "text-bull font-bold" : "text-bear font-bold"}>₹{pos.realizedPnl.toFixed(2)}</span></div>
-                  </div>
-                  <button type="button" className="rounded bg-primary px-3 py-1.5 font-semibold text-primary-foreground text-xs">
-                    Write Review
-                  </button>
-                </div>
-              ))}
+              <div>
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase block mb-1">
+                  Plan Adherence / Execution Outcome
+                </label>
+                <select
+                  value={reviewOutcome}
+                  onChange={(e) => setReviewOutcome(e.target.value)}
+                  className="w-full rounded border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-hidden focus:border-primary"
+                >
+                  <option value="AS_PLANNED">Executed Strictly as Planned</option>
+                  <option value="EARLY_EXIT">Early Profit Taking / Fear</option>
+                  <option value="VIOLATED_STOP">Violated Stop Loss / Hope</option>
+                  <option value="CHASED_ENTRY">Chased Entry / FOMO</option>
+                  <option value="OVERSIZED">Oversized Position / Risk Error</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase block mb-1">
+                  Psychological & Emotional State
+                </label>
+                <select
+                  value={reviewDiscipline}
+                  onChange={(e) => setReviewDiscipline(e.target.value)}
+                  className="w-full rounded border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-hidden focus:border-primary"
+                >
+                  <option value="DISCIPLINED">Calm & Disciplined</option>
+                  <option value="ANXIOUS">Anxious / Hesitant</option>
+                  <option value="EUPHORIC">Overconfident / Euphoric</option>
+                  <option value="FRUSTRATED">Frustrated / Impatient</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase block mb-1">
+                  Trade Reflections & Notes
+                </label>
+                <textarea
+                  value={reviewNotes}
+                  onChange={(e) => setReviewNotes(e.target.value)}
+                  placeholder="What went well? What would you do differently next time? Note market context..."
+                  rows={3}
+                  className="w-full rounded border border-border bg-background p-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:border-primary resize-none"
+                />
+              </div>
             </div>
-          )}
+
+            <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
+              <button
+                type="button"
+                onClick={() => setReviewModalPos(null)}
+                className="rounded border border-border px-3 py-1.5 font-medium text-muted-foreground hover:text-foreground transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setReviewedSymbols((prev) => ({
+                    ...prev,
+                    [reviewModalPos.symbol]: {
+                      outcome: reviewOutcome,
+                      discipline: reviewDiscipline,
+                      notes: reviewNotes.trim(),
+                    },
+                  }));
+                  setSavedToast(`Trade review saved for ${reviewModalPos.symbol}`);
+                  setReviewModalPos(null);
+                }}
+                className="rounded bg-primary px-3 py-1.5 font-semibold text-primary-foreground hover:bg-primary/90 transition"
+              >
+                Save Review
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

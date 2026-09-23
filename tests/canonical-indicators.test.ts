@@ -10,6 +10,7 @@ import {
   computeVWAP,
   computeROC,
   computePercentDistance,
+  computeSuperTrend,
   buildCanonicalSnapshot,
   INDICATOR_ENGINE_VERSION,
 } from "../shared/indicators";
@@ -187,6 +188,48 @@ describe("Canonical Indicator Engine — P1 Contract & Cross-System Equality", (
       const last = closes.length - 1;
       expect(bb.upper[last]!).toBeGreaterThan(bb.middle[last]!);
       expect(bb.middle[last]!).toBeGreaterThan(bb.lower[last]!);
+    });
+  });
+
+  describe("SuperTrend", () => {
+    it("returns null before period warmup and valid numeric values and directions thereafter", () => {
+      const period = 7;
+      const multiplier = 3;
+      const st = computeSuperTrend(mockCandles, period, multiplier);
+
+      expect(st.values.length).toBe(mockCandles.length);
+      expect(st.direction.length).toBe(mockCandles.length);
+
+      for (let i = 0; i < period - 1; i++) {
+        expect(st.values[i]).toBeNull();
+        expect(st.direction[i]).toBeNull();
+      }
+
+      for (let i = period - 1; i < mockCandles.length; i++) {
+        expect(typeof st.values[i]).toBe("number");
+        expect(Number.isFinite(st.values[i]!)).toBe(true);
+        expect([1, -1]).toContain(st.direction[i]!);
+      }
+    });
+
+    it("ratchets bands monotonically within sustained trends", () => {
+      // Monotonic upward trend
+      const upwardCandles = Array.from({ length: 20 }, (_, i) => ({
+        open: 100 + i * 5,
+        high: 106 + i * 5,
+        low: 99 + i * 5,
+        close: 105 + i * 5,
+      }));
+
+      const st = computeSuperTrend(upwardCandles, 5, 2);
+      expect(st.direction[upwardCandles.length - 1]).toBe(1);
+
+      // In an uptrend, the lower band (SuperTrend line) never ratchets downward
+      for (let i = 5; i < upwardCandles.length; i++) {
+        if (st.direction[i] === 1 && st.direction[i - 1] === 1) {
+          expect(st.values[i]!).toBeGreaterThanOrEqual(st.values[i - 1]!);
+        }
+      }
     });
   });
 

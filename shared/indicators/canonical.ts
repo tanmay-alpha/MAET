@@ -21,6 +21,7 @@ import type {
   DonchianResult,
   ADXResult,
   StochasticResult,
+  SuperTrendResult,
   CanonicalIndicatorsSnapshot,
 } from "./types";
 
@@ -596,7 +597,101 @@ export function computePercentDistance(
 }
 
 // ============================================================================
-// 14. Full Canonical Technical Snapshot for a Single Series
+// 14. SuperTrend
+// ============================================================================
+
+export function computeSuperTrend(
+  candles: (OHLCV | { high: number; low: number; close: number; h?: number; l?: number; c?: number })[],
+  period: number = 10,
+  multiplier: number = 3
+): SuperTrendResult {
+  const n = candles.length;
+  const values: (number | null)[] = new Array(n).fill(null);
+  const direction: (1 | -1 | null)[] = new Array(n).fill(null);
+
+  if (period <= 0 || n < period || multiplier <= 0) {
+    return { values, direction };
+  }
+
+  const getH = (c: any) => c.high ?? c.h;
+  const getL = (c: any) => c.low ?? c.l;
+  const getC = (c: any) => c.close ?? c.c;
+
+  const atrSeries = computeATR(candles, period);
+
+  let prevUpper = 0;
+  let prevLower = 0;
+  let prevSupertrend = 0;
+  let prevDir: 1 | -1 = 1;
+
+  for (let i = period - 1; i < n; i++) {
+    const h = getH(candles[i]);
+    const l = getL(candles[i]);
+    const c = getC(candles[i]);
+    const atr = atrSeries[i];
+
+    if (atr === null || !Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(c)) {
+      continue;
+    }
+
+    const hl2 = (h + l) / 2;
+    const basicUpper = hl2 + multiplier * atr;
+    const basicLower = hl2 - multiplier * atr;
+
+    if (i === period - 1) {
+      prevUpper = basicUpper;
+      prevLower = basicLower;
+      prevDir = c >= hl2 ? 1 : -1;
+      prevSupertrend = prevDir === 1 ? prevLower : prevUpper;
+      values[i] = prevSupertrend;
+      direction[i] = prevDir;
+      continue;
+    }
+
+    const prevClose = getC(candles[i - 1]);
+
+    // Ratchet upper band down (cannot move up while downtrend persists)
+    const finalUpper = basicUpper < prevUpper || prevClose > prevUpper ? basicUpper : prevUpper;
+    // Ratchet lower band up (cannot move down while uptrend persists)
+    const finalLower = basicLower > prevLower || prevClose < prevLower ? basicLower : prevLower;
+
+    let currentDir: 1 | -1 = prevDir;
+    let currentSupertrend: number;
+
+    if (prevSupertrend === prevUpper) {
+      // Was in downtrend
+      if (c > finalUpper) {
+        currentDir = 1;
+        currentSupertrend = finalLower;
+      } else {
+        currentDir = -1;
+        currentSupertrend = finalUpper;
+      }
+    } else {
+      // Was in uptrend
+      if (c < finalLower) {
+        currentDir = -1;
+        currentSupertrend = finalUpper;
+      } else {
+        currentDir = 1;
+        currentSupertrend = finalLower;
+      }
+    }
+
+    values[i] = currentSupertrend;
+    direction[i] = currentDir;
+
+    prevUpper = finalUpper;
+    prevLower = finalLower;
+    prevSupertrend = currentSupertrend;
+    prevDir = currentDir;
+  }
+
+  return { values, direction };
+}
+
+// ============================================================================
+// 15. Full Canonical Technical Snapshot for a Single Series
 // ============================================================================
 
 export function buildCanonicalSnapshot(
