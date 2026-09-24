@@ -15,8 +15,16 @@ import {
   INDICATOR_ENGINE_VERSION,
 } from "../shared/indicators";
 import { IndicatorStateCache } from "../server/domain/strategy/indicator-state";
-import { calculateRSI as serverCalculateRSI, calculateSMA as serverCalculateSMA } from "../server/domain/technical/indicators";
-import { calculateRSI as clientCalculateRSI, calculateSMA as clientCalculateSMA } from "../src/lib/technical-indicators";
+import {
+  calculateRSI as serverCalculateRSI,
+  calculateSMA as serverCalculateSMA,
+  calculateSuperTrend as serverCalculateSuperTrend,
+} from "../server/domain/technical/indicators";
+import {
+  calculateRSI as clientCalculateRSI,
+  calculateSMA as clientCalculateSMA,
+  calculateSuperTrend as clientCalculateSuperTrend,
+} from "../src/lib/technical-indicators";
 import type { Candle } from "@shared/types";
 
 describe("Canonical Indicator Engine — P1 Contract & Cross-System Equality", () => {
@@ -228,6 +236,36 @@ describe("Canonical Indicator Engine — P1 Contract & Cross-System Equality", (
       for (let i = 5; i < upwardCandles.length; i++) {
         if (st.direction[i] === 1 && st.direction[i - 1] === 1) {
           expect(st.values[i]!).toBeGreaterThanOrEqual(st.values[i - 1]!);
+        }
+      }
+    });
+
+    it("guarantees identical SuperTrend across canonical engine, server technical, client lib, and strategy cache", () => {
+      const period = 7;
+      const multiplier = 3;
+      const canonical = computeSuperTrend(mockCandles, period, multiplier);
+      const server = serverCalculateSuperTrend(mockCandles, period, multiplier);
+      const client = clientCalculateSuperTrend(
+        mockCandles.map((c) => ({ t: 0, o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume })),
+        period,
+        multiplier
+      );
+      const cache = new IndicatorStateCache(mockCandles);
+
+      for (let i = 0; i < mockCandles.length; i++) {
+        const cVal = canonical.values[i];
+        const sVal = isNaN(server.values[i]) ? null : server.values[i];
+        const clVal = isNaN(client.values[i]) ? null : client.values[i];
+        const stratVal = cache.resolve("SUPERTREND", { period, multiplier }, i);
+
+        if (cVal === null) {
+          expect(sVal).toBeNull();
+          expect(clVal).toBeNull();
+          expect(stratVal).toBeNull();
+        } else {
+          expect(sVal).toBeCloseTo(cVal, 6);
+          expect(clVal).toBeCloseTo(cVal, 6);
+          expect(stratVal).toBeCloseTo(cVal, 6);
         }
       }
     });

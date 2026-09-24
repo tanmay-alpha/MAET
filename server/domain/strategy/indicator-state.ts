@@ -32,6 +32,7 @@ import {
   computeBollingerBands as canonicalBollinger,
   computeATR as canonicalATR,
   computeVWAP as canonicalVWAP,
+  computeSuperTrend as canonicalSuperTrend,
 } from "../../../shared/indicators";
 
 // ============================================================
@@ -126,22 +127,7 @@ function computeSupertrend(
   period: number,
   multiplier: number,
 ): number[] {
-  const atr = computeAtr(candles, period);
-  const result = new Array<number>(candles.length).fill(NaN);
-  let upTrend = true;
-  let upperBand = NaN;
-  let lowerBand = NaN;
-  for (let i = period - 1; i < candles.length; i++) {
-    const hl2 = (candles[i].high + candles[i].low) / 2;
-    const newUpper = hl2 + multiplier * atr[i];
-    const newLower = hl2 - multiplier * atr[i];
-    upperBand = isNaN(upperBand) ? newUpper : Math.min(newUpper, upperBand);
-    lowerBand = isNaN(lowerBand) ? newLower : Math.max(newLower, lowerBand);
-    if (candles[i].close > upperBand) upTrend = true;
-    else if (candles[i].close < lowerBand) upTrend = false;
-    result[i] = upTrend ? lowerBand : upperBand;
-  }
-  return result;
+  return toNumericArray(canonicalSuperTrend(candles, period, multiplier).values);
 }
 
 // ============================================================

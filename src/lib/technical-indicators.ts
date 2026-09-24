@@ -10,6 +10,7 @@ import {
   computeRSI as canonicalRSI,
   computeMACD as canonicalMACD,
   computeBollingerBands as canonicalBollinger,
+  computeSuperTrend as canonicalSuperTrend,
 } from "@shared/indicators";
 
 export interface Candle {
@@ -34,6 +35,10 @@ export interface IndicatorData {
     upper: number[];
     middle: number[];
     lower: number[];
+  };
+  supertrend?: {
+    values: number[];
+    direction: (1 | -1 | 0)[];
   };
 }
 
@@ -105,6 +110,27 @@ export function calculateBollingerBands(
 }
 
 /**
+ * Calculate SuperTrend Indicator - Canonical Wilder's ATR ratcheting
+ */
+export function calculateSuperTrend(
+  candles: Candle[] | Array<{ open: number; high: number; low: number; close: number }>,
+  period: number = 10,
+  multiplier: number = 3
+): { values: number[]; direction: (1 | -1 | 0)[] } {
+  const normalized = candles.map((c: any) => ({
+    open: c.open ?? c.o,
+    high: c.high ?? c.h,
+    low: c.low ?? c.l,
+    close: c.close ?? c.c,
+  }));
+  const res = canonicalSuperTrend(normalized, period, multiplier);
+  return {
+    values: toNumbers(res.values),
+    direction: res.direction.map((d) => (d === null ? 0 : d)),
+  };
+}
+
+/**
  * Calculate all technical indicators for a chart
  */
 export function calculateAllIndicators(candles: Candle[]): IndicatorData {
@@ -116,5 +142,6 @@ export function calculateAllIndicators(candles: Candle[]): IndicatorData {
     rsi: calculateRSI(candles, 14),
     macd: calculateMACD(candles),
     bollinger: calculateBollingerBands(candles),
+    supertrend: calculateSuperTrend(candles, 10, 3),
   };
 }

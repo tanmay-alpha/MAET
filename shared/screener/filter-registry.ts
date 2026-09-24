@@ -177,6 +177,22 @@ export const SCREENER_FILTER_DEFINITIONS: FilterDefinition[] = [
     boolKey: "fifty_two_week_low_near",
     description: "Stocks trading within 5% of their 52-week low",
   },
+  {
+    id: "supertrend_bullish",
+    label: "SuperTrend Bullish (Price > ST)",
+    category: "technicals",
+    type: "boolean",
+    boolKey: "supertrend_bullish",
+    description: "Stocks where current price is trading above the canonical SuperTrend line",
+  },
+  {
+    id: "supertrend_bearish",
+    label: "SuperTrend Bearish (Price < ST)",
+    category: "technicals",
+    type: "boolean",
+    boolKey: "supertrend_bearish",
+    description: "Stocks where current price is trading below the canonical SuperTrend line",
+  },
 
   // Valuation
   {

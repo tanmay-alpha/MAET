@@ -94,6 +94,7 @@ import {
   computeMACD as canonicalMACD,
   computeBollingerBands as canonicalBollinger,
   computeATR as canonicalATR,
+  computeSuperTrend as canonicalSuperTrend,
 } from "@shared/indicators";
 
 // ============================================================
@@ -784,64 +785,18 @@ export function calculateAroon(candles: OHLCV[], period: number = 25): AroonResu
 }
 
 /**
- * SuperTrend Indicator
+ * SuperTrend Indicator (delegated to canonical engine)
  */
 export function calculateSuperTrend(
   candles: OHLCV[],
   period: number = 10,
   multiplier: number = 3
 ): SuperTrendResult {
-  const atr = calculateATR(candles, period);
-  const upperBand: number[] = [];
-  const lowerBand: number[] = [];
-  const superTrend: number[] = [];
-  const direction: number[] = [];
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i < period) {
-      upperBand.push(NaN);
-      lowerBand.push(NaN);
-      superTrend.push(NaN);
-      direction.push(0);
-      continue;
-    }
-
-    const hl2 = (candles[i].high + candles[i].low) / 2;
-    const atrVal = atr[i] * multiplier;
-
-    const upper = hl2 + atrVal;
-    const lower = hl2 - atrVal;
-
-    upperBand.push(upper);
-    lowerBand.push(lower);
-
-    if (i === period) {
-      superTrend.push(lower);
-      direction.push(1);
-    } else {
-      const prevST = superTrend[i - 1];
-      const prevDir = direction[i - 1];
-
-      let currentST: number;
-      let currentDir: number;
-
-      if (candles[i].close > prevST) {
-        currentST = lowerBand[i];
-        currentDir = 1;
-      } else if (candles[i].close < prevST) {
-        currentST = upperBand[i];
-        currentDir = -1;
-      } else {
-        currentST = prevST;
-        currentDir = prevDir;
-      }
-
-      superTrend.push(currentST);
-      direction.push(currentDir);
-    }
-  }
-
-  return { values: superTrend, direction };
+  const result = canonicalSuperTrend(candles as any, period, multiplier);
+  return {
+    values: result.values.map((v) => (v === null ? NaN : v)),
+    direction: result.direction.map((d) => (d === null ? 0 : d)),
+  };
 }
 
 /**
