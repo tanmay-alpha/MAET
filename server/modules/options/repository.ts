@@ -103,7 +103,7 @@ function canonicalStrike(strikePrice: number | string): string {
   const integer = match[1].replace(/^0+(?=\d)/u, "");
   const fraction = (match[2] ?? "").padEnd(4, "0");
   if (integer.length > 14) throw new Error("option strike exceeds numeric(18,4) precision");
-  if (BigInt(`${integer}${fraction}`) <= 0n) {
+  if (BigInt(`${integer}${fraction}`) <= BigInt(0)) {
     throw new Error("option strike must be positive at numeric(18,4) precision");
   }
   return `${integer}.${fraction}`;

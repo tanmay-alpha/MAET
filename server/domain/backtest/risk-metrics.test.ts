@@ -246,4 +246,78 @@ describe("Risk Metrics — Ulcer Index", () => {
     expect(metrics.ulcerIndex).toBeDefined();
     expect(metrics.ulcerIndex).toBeGreaterThan(0);
   });
+
+  it("computes ulcerPerformanceIndex (Martin ratio) as annualisedReturn / (ulcerIndex / 100)", () => {
+    // 252 daily bars, +20% annualised return
+    const length = 253;
+    const equityCurve: EquityPoint[] = Array.from({ length }, (_, i) => {
+      // Create a dip midway to produce positive Ulcer Index
+      const dip = i >= 50 && i <= 150 ? -5_000 : 0;
+      return {
+        timestamp: 1700000000000 + i * 86400000,
+        equity: 100_000 * (1 + (0.20 * i) / 252) + dip,
+      };
+    });
+
+    const metrics = computeMetrics(equityCurve, [], undefined, "1d");
+    expect(metrics.ulcerIndex).toBeGreaterThan(0);
+    expect(metrics.annualisedReturn).toBeGreaterThan(0);
+    const expectedUPI = metrics.annualisedReturn / (metrics.ulcerIndex! / 100);
+    expect(metrics.ulcerPerformanceIndex).toBeCloseTo(expectedUPI, 4);
+  });
+});
+
+describe("Risk Metrics — Payoff Ratio & Win/Loss Streaks", () => {
+  it("computes payoff ratio as avgWin / avgLoss", () => {
+    const equityCurve: EquityPoint[] = [
+      { timestamp: 1, equity: 100 },
+      { timestamp: 2, equity: 110 },
+    ];
+    // 2 winning trades: +12,000, +8,000 (avg = 10,000)
+    // 2 losing trades: -2,000, -3,000 (avg = 2,500)
+    // Expected payoff ratio = 10,000 / 2,500 = 4.0
+    const trades: TradeRecord[] = [
+      { entryTimestamp: 1, exitTimestamp: 2, entryPrice: 100, exitPrice: 112, side: "long", return: 0.12, netPnl: 12_000 },
+      { entryTimestamp: 3, exitTimestamp: 4, entryPrice: 100, exitPrice: 108, side: "long", return: 0.08, netPnl: 8_000 },
+      { entryTimestamp: 5, exitTimestamp: 6, entryPrice: 100, exitPrice: 98, side: "long", return: -0.02, netPnl: -2_000 },
+      { entryTimestamp: 7, exitTimestamp: 8, entryPrice: 100, exitPrice: 97, side: "long", return: -0.03, netPnl: -3_000 },
+    ];
+
+    const metrics = computeMetrics(equityCurve, trades, undefined, "1d");
+    expect(metrics.payoffRatio).toBeCloseTo(4.0, 4);
+  });
+
+  it("handles zero loss trades with Infinity payoff ratio", () => {
+    const equityCurve: EquityPoint[] = [
+      { timestamp: 1, equity: 100 },
+      { timestamp: 2, equity: 110 },
+    ];
+    const trades: TradeRecord[] = [
+      { entryTimestamp: 1, exitTimestamp: 2, entryPrice: 100, exitPrice: 110, side: "long", return: 0.10, netPnl: 5_000 },
+    ];
+    const metrics = computeMetrics(equityCurve, trades, undefined, "1d");
+    expect(metrics.payoffRatio).toBe(Infinity);
+  });
+
+  it("tracks maximum consecutive wins and losses streaks accurately", () => {
+    const equityCurve: EquityPoint[] = [
+      { timestamp: 1, equity: 100 },
+      { timestamp: 2, equity: 110 },
+    ];
+    // Trade sequence: W, W, W, L, L, W, L, L, L, L, W
+    // Max wins = 3, Max losses = 4
+    const returns = [0.05, 0.03, 0.02, -0.01, -0.04, 0.06, -0.02, -0.01, -0.03, -0.05, 0.01];
+    const trades: TradeRecord[] = returns.map((r, i) => ({
+      entryTimestamp: i * 2,
+      exitTimestamp: i * 2 + 1,
+      entryPrice: 100,
+      exitPrice: 100 * (1 + r),
+      side: "long",
+      return: r,
+    }));
+
+    const metrics = computeMetrics(equityCurve, trades, undefined, "1d");
+    expect(metrics.maxConsecutiveWins).toBe(3);
+    expect(metrics.maxConsecutiveLosses).toBe(4);
+  });
 });

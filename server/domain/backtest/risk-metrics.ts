@@ -21,6 +21,10 @@ export interface BacktestMetrics {
   exposure: number;
   turnover: number;
   ulcerIndex?: number;
+  ulcerPerformanceIndex?: number;
+  payoffRatio?: number;
+  maxConsecutiveWins?: number;
+  maxConsecutiveLosses?: number;
 }
 
 export interface EquityPoint {
@@ -199,7 +203,8 @@ export function computeMetrics(
     totalReturn: 0, annualisedReturn: 0, benchmarkReturn: 0, alpha: 0,
     volatility: 0, sharpe: 0, sortino: 0, maxDrawdown: 0, calmar: 0,
     winRate: 0, profitFactor: 0, expectancy: 0, averageHoldingPeriod: 0,
-    exposure: 0, turnover: 0, ulcerIndex: 0,
+    exposure: 0, turnover: 0, ulcerIndex: 0, ulcerPerformanceIndex: 0,
+    payoffRatio: 0, maxConsecutiveWins: 0, maxConsecutiveLosses: 0,
   };
 
   if (equityCurve.length < 2) return empty;
@@ -262,6 +267,37 @@ export function computeMetrics(
       ? trades.reduce((s, t) => s + (t.netPnl ?? 0), 0) / trades.length
       : trades.reduce((s, t) => s + t.return, 0) / trades.length;
 
+  const avgWin = wins.length > 0
+    ? (hasPnl
+        ? wins.reduce((s, t) => s + (t.netPnl ?? 0), 0) / wins.length
+        : wins.reduce((s, t) => s + t.return, 0) / wins.length)
+    : 0;
+  const avgLoss = losses.length > 0
+    ? Math.abs(
+        hasPnl
+          ? losses.reduce((s, t) => s + (t.netPnl ?? 0), 0) / losses.length
+          : losses.reduce((s, t) => s + t.return, 0) / losses.length
+      )
+    : 0;
+  const payoffRatio = avgLoss === 0 ? (avgWin > 0 ? Infinity : 0) : avgWin / avgLoss;
+
+  let curWins = 0;
+  let curLosses = 0;
+  let maxConsecutiveWins = 0;
+  let maxConsecutiveLosses = 0;
+  for (const t of trades) {
+    const val = t.netPnl !== undefined ? t.netPnl : t.return;
+    if (val > 0) {
+      curWins++;
+      curLosses = 0;
+      if (curWins > maxConsecutiveWins) maxConsecutiveWins = curWins;
+    } else {
+      curLosses++;
+      curWins = 0;
+      if (curLosses > maxConsecutiveLosses) maxConsecutiveLosses = curLosses;
+    }
+  }
+
   const totalDurationMs = equityCurve[equityCurve.length - 1].timestamp - equityCurve[0].timestamp;
   const totalDurationDays = totalDurationMs / 86_400_000;
   const averageHoldingPeriod = trades.length === 0 ? 0
@@ -279,6 +315,9 @@ export function computeMetrics(
   }, 0);
   const turnover = avgEquity > 0 && trades.length > 0 ? totalTradedNotional / avgEquity : 0;
 
+  const ulcerIndex = computeUlcerIndex(equityValues);
+  const ulcerPerformanceIndex = ulcerIndex > 0 ? annualisedReturn / (ulcerIndex / 100) : 0;
+
   return {
     totalReturn,
     annualisedReturn,
@@ -295,6 +334,10 @@ export function computeMetrics(
     averageHoldingPeriod,
     exposure,
     turnover,
-    ulcerIndex: computeUlcerIndex(equityValues),
+    ulcerIndex,
+    ulcerPerformanceIndex,
+    payoffRatio,
+    maxConsecutiveWins,
+    maxConsecutiveLosses,
   };
 }

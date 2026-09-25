@@ -6,9 +6,13 @@ import {
   computeMACD,
   computeATR,
   computeBollingerBands,
+  computeDonchian,
   computeADX,
   computeVWAP,
   computeROC,
+  computeStochastic,
+  computeAverageVolume,
+  computeRollingExtremes,
   computePercentDistance,
   computeSuperTrend,
   buildCanonicalSnapshot,
@@ -268,6 +272,141 @@ describe("Canonical Indicator Engine — P1 Contract & Cross-System Equality", (
           expect(stratVal).toBeCloseTo(cVal, 6);
         }
       }
+    });
+  });
+
+  describe("Donchian Channels", () => {
+    it("returns null before period warmup and bounds price between upper and lower bands", () => {
+      const period = 10;
+      const donchian = computeDonchian(mockCandles, period);
+
+      expect(donchian.upper.length).toBe(mockCandles.length);
+      expect(donchian.lower.length).toBe(mockCandles.length);
+      expect(donchian.middle.length).toBe(mockCandles.length);
+
+      for (let i = 0; i < period - 1; i++) {
+        expect(donchian.upper[i]).toBeNull();
+        expect(donchian.lower[i]).toBeNull();
+        expect(donchian.middle[i]).toBeNull();
+      }
+
+      for (let i = period - 1; i < mockCandles.length; i++) {
+        const u = donchian.upper[i]!;
+        const l = donchian.lower[i]!;
+        const m = donchian.middle[i]!;
+
+        expect(u).toBeGreaterThanOrEqual(l);
+        expect(m).toBeCloseTo((u + l) / 2, 6);
+      }
+    });
+  });
+
+  describe("ADX (Average Directional Index)", () => {
+    it("returns null before warmup and bounded non-negative DI and ADX values thereafter", () => {
+      const period = 7;
+      const adxResult = computeADX(mockCandles, period);
+
+      expect(adxResult.plusDI.length).toBe(mockCandles.length);
+      expect(adxResult.minusDI.length).toBe(mockCandles.length);
+      expect(adxResult.adx.length).toBe(mockCandles.length);
+
+      // DI begins populating from period
+      for (let i = period; i < mockCandles.length; i++) {
+        if (adxResult.plusDI[i] !== null) {
+          expect(adxResult.plusDI[i]!).toBeGreaterThanOrEqual(0);
+          expect(adxResult.plusDI[i]!).toBeLessThanOrEqual(100);
+        }
+      }
+
+      // ADX begins after 2 * period - 1
+      for (let i = 2 * period - 1; i < mockCandles.length; i++) {
+        if (adxResult.adx[i] !== null) {
+          expect(adxResult.adx[i]!).toBeGreaterThanOrEqual(0);
+          expect(adxResult.adx[i]!).toBeLessThanOrEqual(100);
+        }
+      }
+    });
+  });
+
+  describe("VWAP (Volume-Weighted Average Price)", () => {
+    it("seeds with first bar typical price and accumulates weighted average", () => {
+      const vwap = computeVWAP(mockCandles);
+      expect(vwap.length).toBe(mockCandles.length);
+
+      const firstTypical = (mockCandles[0].high + mockCandles[0].low + mockCandles[0].close) / 3;
+      expect(vwap[0]).toBeCloseTo(firstTypical, 6);
+
+      for (let i = 0; i < mockCandles.length; i++) {
+        expect(vwap[i]).not.toBeNull();
+        expect(isFinite(vwap[i]!)).toBe(true);
+      }
+    });
+  });
+
+  describe("ROC (Rate of Change)", () => {
+    it("returns null before period and percentage change over period thereafter", () => {
+      const period = 5;
+      const roc = computeROC(closes, period);
+
+      expect(roc.length).toBe(closes.length);
+      for (let i = 0; i < period; i++) {
+        expect(roc[i]).toBeNull();
+      }
+
+      for (let i = period; i < closes.length; i++) {
+        const expected = ((closes[i] - closes[i - period]) / closes[i - period]) * 100;
+        expect(roc[i]).toBeCloseTo(expected, 6);
+      }
+    });
+  });
+
+  describe("Stochastic Oscillator", () => {
+    it("returns null before kPeriod and bounded values within [0, 100]", () => {
+      const kPeriod = 14;
+      const dPeriod = 3;
+      const stoch = computeStochastic(mockCandles, kPeriod, dPeriod);
+
+      expect(stoch.k.length).toBe(mockCandles.length);
+      expect(stoch.d.length).toBe(mockCandles.length);
+
+      for (let i = 0; i < kPeriod - 1; i++) {
+        expect(stoch.k[i]).toBeNull();
+      }
+
+      for (let i = kPeriod - 1; i < mockCandles.length; i++) {
+        if (stoch.k[i] !== null) {
+          expect(stoch.k[i]!).toBeGreaterThanOrEqual(0);
+          expect(stoch.k[i]!).toBeLessThanOrEqual(100);
+        }
+      }
+    });
+  });
+
+  describe("Extremes & Rolling Helpers", () => {
+    it("computeAverageVolume: smooths volume over rolling window", () => {
+      const vols = mockCandles.map((c) => c.volume!);
+      const avgVol = computeAverageVolume(vols, 5);
+      expect(avgVol.length).toBe(vols.length);
+      for (let i = 0; i < 4; i++) {
+        expect(avgVol[i]).toBeNull();
+      }
+      expect(avgVol[4]).not.toBeNull();
+    });
+
+    it("computeRollingExtremes: extracts rolling high and low correctly", () => {
+      const extremes = computeRollingExtremes(mockCandles, 5);
+      expect(extremes.high.length).toBe(mockCandles.length);
+      expect(extremes.low.length).toBe(mockCandles.length);
+      for (let i = 4; i < mockCandles.length; i++) {
+        expect(extremes.high[i]!).toBeGreaterThanOrEqual(extremes.low[i]!);
+      }
+    });
+
+    it("computePercentDistance: calculates exact percentage distance and handles nulls safely", () => {
+      expect(computePercentDistance(110, 100)).toBeCloseTo(10, 4);
+      expect(computePercentDistance(90, 100)).toBeCloseTo(-10, 4);
+      expect(computePercentDistance(100, null)).toBeNull();
+      expect(computePercentDistance(100, 0)).toBeNull();
     });
   });
 

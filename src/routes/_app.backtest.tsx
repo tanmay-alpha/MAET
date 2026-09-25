@@ -89,10 +89,15 @@ function Backtest() {
 
   const metrics = result ? [
     { label: "Total Return", value: `${((result.metrics?.totalReturn ?? 0) * 100).toFixed(2)}%`, trend: result.metrics?.totalReturn ?? 0 },
+    { label: "CAGR", value: `${((result.metrics?.annualisedReturn ?? 0) * 100).toFixed(2)}%`, trend: result.metrics?.annualisedReturn ?? 0 },
     { label: "Sharpe Ratio", value: (result.metrics?.sharpe ?? 0).toFixed(2), trend: result.metrics?.sharpe ?? 0 },
     { label: "Sortino Ratio", value: (result.metrics?.sortino ?? 0).toFixed(2), trend: result.metrics?.sortino ?? 0 },
-    { label: "Max Drawdown", value: `${((result.metrics?.maxDrawdown ?? 0) * 100).toFixed(2)}%`, trend: result.metrics?.maxDrawdown ?? 0 },
+    { label: "Calmar Ratio", value: (result.metrics?.calmar ?? 0).toFixed(2), trend: result.metrics?.calmar ?? 0 },
+    { label: "Max Drawdown", value: `${((result.metrics?.maxDrawdown ?? 0) * 100).toFixed(2)}%`, trend: -(result.metrics?.maxDrawdown ?? 0) },
+    { label: "Ulcer Index", value: (result.metrics?.ulcerIndex ?? 0).toFixed(2), trend: -(result.metrics?.ulcerIndex ?? 0) },
     { label: "Win Rate", value: `${((result.metrics?.winRate ?? 0) * 100).toFixed(1)}%`, trend: (result.metrics?.winRate ?? 0) - 0.5 },
+    { label: "Profit Factor", value: result.metrics?.profitFactor === Infinity ? "∞" : (result.metrics?.profitFactor ?? 0).toFixed(2), trend: (result.metrics?.profitFactor ?? 0) - 1 },
+    { label: "Payoff Ratio", value: result.metrics?.payoffRatio === Infinity ? "∞" : (result.metrics?.payoffRatio ?? 0).toFixed(2), trend: (result.metrics?.payoffRatio ?? 0) - 1 },
     { label: "Trades Executed", value: String(result.signalCount ?? 0), trend: 0 },
   ] : [];
 
