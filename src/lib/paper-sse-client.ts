@@ -113,6 +113,12 @@ export async function connectPaperTradingStream(
       processLine(buffer);
       processLine("");
     }
+
+    // The server (or a proxy idle timeout) ended the stream. Report it so the caller
+    // reconnects instead of believing it is still subscribed.
+    if (!signal?.aborted) {
+      onError?.(new Error("SSE stream closed by server"));
+    }
   } catch (err) {
     if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
       return;

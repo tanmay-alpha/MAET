@@ -4,17 +4,24 @@ import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { WATCHLIST } from "@/lib/market-catalog";
 import { X, TrendingUp, TrendingDown } from "lucide-react";
 
-export function QuickTradeModal({
-  isOpen,
-  onClose,
-  initialSymbol = "",
-  initialSide = "BUY",
-}: {
+interface QuickTradeModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialSymbol?: string;
   initialSide?: "BUY" | "SELL";
-}) {
+}
+
+// The form is only mounted while open, so a closed modal holds no paper-account
+// stream subscription or quote polling.
+export function QuickTradeModal({ isOpen, ...props }: QuickTradeModalProps) {
+  return isOpen ? <QuickTradeForm {...props} /> : null;
+}
+
+function QuickTradeForm({
+  onClose,
+  initialSymbol = "",
+  initialSide = "BUY",
+}: Omit<QuickTradeModalProps, "isOpen">) {
   const { placeOrder, isTradingAvailable } = usePaperAccount();
   const [side, setSide] = useState<"BUY" | "SELL">(initialSide);
   const [symbol, setSymbol] = useState(initialSymbol || WATCHLIST[0].symbol);
@@ -29,7 +36,7 @@ export function QuickTradeModal({
     if (initialSymbol) setSymbol(initialSymbol);
     setSide(initialSide);
     setMessage(null);
-  }, [initialSymbol, initialSide, isOpen]);
+  }, [initialSymbol, initialSide]);
 
   useEffect(() => {
     return () => {
@@ -49,8 +56,6 @@ export function QuickTradeModal({
       setPrice(currentPrice.toFixed(2));
     }
   }, [currentPrice, type, price]);
-
-  if (!isOpen) return null;
 
   const notionalValue = qty * (type === "LIMIT" ? Number(price) || currentPrice : currentPrice);
   const marginEstimate = notionalValue / 5;
@@ -106,7 +111,6 @@ export function QuickTradeModal({
       timerRef.current = setTimeout(() => {
         timerRef.current = null;
         onClose();
-        setMessage(null);
       }, 1200);
     } catch (err: unknown) {
       const text = err instanceof Error ? err.message : "Failed to place order";

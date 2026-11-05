@@ -95,4 +95,24 @@ describe("Authenticated SSE Client", () => {
 
     expect(errorCalled).toBe(false);
   });
+
+  test("reports a server-closed stream so the caller can reconnect", async () => {
+    globalThis.fetch = mock(async () => {
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("event: CONNECTED\ndata: {}\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+
+    const errors: Error[] = [];
+    await connectPaperTradingStream({
+      accessToken: "sse-token-test",
+      onError: (error) => errors.push(error),
+    });
+
+    expect(errors).toHaveLength(1);
+  });
 });
