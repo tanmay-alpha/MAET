@@ -22,7 +22,7 @@ export const orderSide = pgEnum("order_side", ["BUY", "SELL"]);
 export const orderType = pgEnum("order_type", ["MARKET", "LIMIT", "SL", "SL-M"]);
 export const orderStatus = pgEnum("order_status", ["pending", "partial", "filled", "cancelled", "rejected"]);
 
-export const paperOrderType = pgEnum("paper_order_type", ["LIMIT", "MARKET", "STOP_LOSS_LIMIT"]);
+export const paperOrderType = pgEnum("paper_order_type", ["LIMIT", "MARKET", "STOP_LOSS_LIMIT", "STOP_LOSS_MARKET"]);
 export const paperOrderStatus = pgEnum("paper_order_status", ["TRIGGER_PENDING", "PENDING", "TRIGGERED", "PARTIALLY_FILLED", "FILLED", "REJECTED", "CANCELLED"]);
 export const paperExecutionType = pgEnum("paper_execution_type", ["IMMEDIATE_OR_CANCEL", "GOOD_TILL_CANCELLED"]);
 
@@ -456,8 +456,8 @@ export const paperOrders = pgTable("paper_orders", {
   index("paper_orders_symbol_idx").on(table.symbol),
   index("paper_orders_parent_idx").on(table.parentOrderId),
   index("paper_orders_status_idx").on(table.status),
-  // Partial unique index for idempotency (Phase 1)
-  uniqueIndex("paper_orders_user_idempotency_key_unique").on(table.userId, table.idempotencyKey).where(sql`${table.idempotencyKey} IS NOT NULL`),
+  // Idempotency keys are unique per account generation (0023b); a reset starts a fresh key space.
+  uniqueIndex("paper_orders_user_generation_idempotency_key_unique").on(table.userId, table.generation, table.idempotencyKey).where(sql`${table.idempotencyKey} IS NOT NULL`),
 ]);
 
 export const paperPositions = pgTable("paper_positions", {
