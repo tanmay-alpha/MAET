@@ -9,132 +9,52 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AppWorkspaceRouteImport } from './routes/_app.workspace'
-import { Route as AppWatchlistsRouteImport } from './routes/_app.watchlists'
-import { Route as AppUniverseRouteImport } from './routes/_app.universe'
-import { Route as AppTerminalRouteImport } from './routes/_app.terminal'
-import { Route as AppSettingsRouteImport } from './routes/_app.settings'
-import { Route as AppScreenerRouteImport } from './routes/_app.screener'
-import { Route as AppReplayRouteImport } from './routes/_app.replay'
-import { Route as AppPortfolioRouteImport } from './routes/_app.portfolio'
-import { Route as AppPerformanceRouteImport } from './routes/_app.performance'
-import { Route as AppOrdersRouteImport } from './routes/_app.orders'
-import { Route as AppNewsRouteImport } from './routes/_app.news'
-import { Route as AppJournalRouteImport } from './routes/_app.journal'
-import { Route as AppHeatmapRouteImport } from './routes/_app.heatmap'
-import { Route as AppFuturesRouteImport } from './routes/_app.futures'
-import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
-import { Route as AppCompareRouteImport } from './routes/_app.compare'
-import { Route as AppChartGridRouteImport } from './routes/_app.chart-grid'
-import { Route as AppBacktestRouteImport } from './routes/_app.backtest'
+import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppAlertsRouteImport } from './routes/_app.alerts'
-import { Route as AppStrategiesIndexRouteImport } from './routes/_app.strategies.index'
-import { Route as ApiMarketQuotesRouteImport } from './routes/api.market.quotes'
-import { Route as ApiMarketCompanyRouteImport } from './routes/api.market.company'
-import { Route as ApiMarketCompaniesRouteImport } from './routes/api.market.companies'
-import { Route as ApiMarketCandlesRouteImport } from './routes/api.market.candles'
-import { Route as AppStockSymbolRouteImport } from './routes/_app.stock.$symbol'
-import { Route as AppOptionsUnderlyingRouteImport } from './routes/_app.options.$underlying'
-import { Route as AppChartSymbolRouteImport } from './routes/_app.chart.$symbol'
+import { Route as AppBacktestRouteImport } from './routes/_app.backtest'
+import { Route as AppChartGridRouteImport } from './routes/_app.chart-grid'
+import { Route as AppCompareRouteImport } from './routes/_app.compare'
+import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
+import { Route as AppFuturesRouteImport } from './routes/_app.futures'
+import { Route as AppHeatmapRouteImport } from './routes/_app.heatmap'
+import { Route as AppJournalRouteImport } from './routes/_app.journal'
+import { Route as AppNewsRouteImport } from './routes/_app.news'
+import { Route as AppOrdersRouteImport } from './routes/_app.orders'
+import { Route as AppPerformanceRouteImport } from './routes/_app.performance'
+import { Route as AppPortfolioRouteImport } from './routes/_app.portfolio'
+import { Route as AppReplayRouteImport } from './routes/_app.replay'
+import { Route as AppScreenerRouteImport } from './routes/_app.screener'
+import { Route as AppSettingsRouteImport } from './routes/_app.settings'
+import { Route as AppTerminalRouteImport } from './routes/_app.terminal'
+import { Route as AppUniverseRouteImport } from './routes/_app.universe'
+import { Route as AppWatchlistsRouteImport } from './routes/_app.watchlists'
+import { Route as AppWorkspaceRouteImport } from './routes/_app.workspace'
 import { Route as AppAdminDataQualityRouteImport } from './routes/_app.admin.data-quality'
+import { Route as AppChartSymbolRouteImport } from './routes/_app.chart.$symbol'
+import { Route as AppOptionsUnderlyingRouteImport } from './routes/_app.options.$underlying'
+import { Route as AppStockSymbolRouteImport } from './routes/_app.stock.$symbol'
+import { Route as AppStrategiesIndexRouteImport } from './routes/_app.strategies.index'
+import { Route as ApiMarketCandlesRouteImport } from './routes/api.market.candles'
+import { Route as ApiMarketCompaniesRouteImport } from './routes/api.market.companies'
+import { Route as ApiMarketCompanyRouteImport } from './routes/api.market.company'
+import { Route as ApiMarketQuotesRouteImport } from './routes/api.market.quotes'
 import { Route as AppStrategiesStrategyIdIndexRouteImport } from './routes/_app.strategies.$strategyId.index'
-import { Route as AppStrategiesStrategyIdDeploymentsRouteImport } from './routes/_app.strategies.$strategyId.deployments'
 import { Route as AppStrategiesStrategyIdBacktestsRouteImport } from './routes/_app.strategies.$strategyId.backtests'
+import { Route as AppStrategiesStrategyIdDeploymentsRouteImport } from './routes/_app.strategies.$strategyId.deployments'
 
-const AppRoute = AppRouteImport.update({
-  id: '/_app',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppWorkspaceRoute = AppWorkspaceRouteImport.update({
-  id: '/workspace',
-  path: '/workspace',
-  getParentRoute: () => AppRoute,
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AppWatchlistsRoute = AppWatchlistsRouteImport.update({
-  id: '/watchlists',
-  path: '/watchlists',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppUniverseRoute = AppUniverseRouteImport.update({
-  id: '/universe',
-  path: '/universe',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppTerminalRoute = AppTerminalRouteImport.update({
-  id: '/terminal',
-  path: '/terminal',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppSettingsRoute = AppSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppScreenerRoute = AppScreenerRouteImport.update({
-  id: '/screener',
-  path: '/screener',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppReplayRoute = AppReplayRouteImport.update({
-  id: '/replay',
-  path: '/replay',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppPortfolioRoute = AppPortfolioRouteImport.update({
-  id: '/portfolio',
-  path: '/portfolio',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppPerformanceRoute = AppPerformanceRouteImport.update({
-  id: '/performance',
-  path: '/performance',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppOrdersRoute = AppOrdersRouteImport.update({
-  id: '/orders',
-  path: '/orders',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppNewsRoute = AppNewsRouteImport.update({
-  id: '/news',
-  path: '/news',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppJournalRoute = AppJournalRouteImport.update({
-  id: '/journal',
-  path: '/journal',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppHeatmapRoute = AppHeatmapRouteImport.update({
-  id: '/heatmap',
-  path: '/heatmap',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppFuturesRoute = AppFuturesRouteImport.update({
-  id: '/futures',
-  path: '/futures',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppDashboardRoute = AppDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppCompareRoute = AppCompareRouteImport.update({
-  id: '/compare',
-  path: '/compare',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppChartGridRoute = AppChartGridRouteImport.update({
-  id: '/chart-grid',
-  path: '/chart-grid',
+const AppAlertsRoute = AppAlertsRouteImport.update({
+  id: '/alerts',
+  path: '/alerts',
   getParentRoute: () => AppRoute,
 } as any)
 const AppBacktestRoute = AppBacktestRouteImport.update({
@@ -142,49 +62,89 @@ const AppBacktestRoute = AppBacktestRouteImport.update({
   path: '/backtest',
   getParentRoute: () => AppRoute,
 } as any)
-const AppAlertsRoute = AppAlertsRouteImport.update({
-  id: '/alerts',
-  path: '/alerts',
+const AppChartGridRoute = AppChartGridRouteImport.update({
+  id: '/chart-grid',
+  path: '/chart-grid',
   getParentRoute: () => AppRoute,
 } as any)
-const AppStrategiesIndexRoute = AppStrategiesIndexRouteImport.update({
-  id: '/strategies/',
-  path: '/strategies/',
+const AppCompareRoute = AppCompareRouteImport.update({
+  id: '/compare',
+  path: '/compare',
   getParentRoute: () => AppRoute,
 } as any)
-const ApiMarketQuotesRoute = ApiMarketQuotesRouteImport.update({
-  id: '/api/market/quotes',
-  path: '/api/market/quotes',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiMarketCompanyRoute = ApiMarketCompanyRouteImport.update({
-  id: '/api/market/company',
-  path: '/api/market/company',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiMarketCompaniesRoute = ApiMarketCompaniesRouteImport.update({
-  id: '/api/market/companies',
-  path: '/api/market/companies',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiMarketCandlesRoute = ApiMarketCandlesRouteImport.update({
-  id: '/api/market/candles',
-  path: '/api/market/candles',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AppStockSymbolRoute = AppStockSymbolRouteImport.update({
-  id: '/stock/$symbol',
-  path: '/stock/$symbol',
+const AppDashboardRoute = AppDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => AppRoute,
 } as any)
-const AppOptionsUnderlyingRoute = AppOptionsUnderlyingRouteImport.update({
-  id: '/options/$underlying',
-  path: '/options/$underlying',
+const AppFuturesRoute = AppFuturesRouteImport.update({
+  id: '/futures',
+  path: '/futures',
   getParentRoute: () => AppRoute,
 } as any)
-const AppChartSymbolRoute = AppChartSymbolRouteImport.update({
-  id: '/chart/$symbol',
-  path: '/chart/$symbol',
+const AppHeatmapRoute = AppHeatmapRouteImport.update({
+  id: '/heatmap',
+  path: '/heatmap',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppJournalRoute = AppJournalRouteImport.update({
+  id: '/journal',
+  path: '/journal',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppNewsRoute = AppNewsRouteImport.update({
+  id: '/news',
+  path: '/news',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOrdersRoute = AppOrdersRouteImport.update({
+  id: '/orders',
+  path: '/orders',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPerformanceRoute = AppPerformanceRouteImport.update({
+  id: '/performance',
+  path: '/performance',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPortfolioRoute = AppPortfolioRouteImport.update({
+  id: '/portfolio',
+  path: '/portfolio',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppReplayRoute = AppReplayRouteImport.update({
+  id: '/replay',
+  path: '/replay',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppScreenerRoute = AppScreenerRouteImport.update({
+  id: '/screener',
+  path: '/screener',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTerminalRoute = AppTerminalRouteImport.update({
+  id: '/terminal',
+  path: '/terminal',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppUniverseRoute = AppUniverseRouteImport.update({
+  id: '/universe',
+  path: '/universe',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppWatchlistsRoute = AppWatchlistsRouteImport.update({
+  id: '/watchlists',
+  path: '/watchlists',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppWorkspaceRoute = AppWorkspaceRouteImport.update({
+  id: '/workspace',
+  path: '/workspace',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAdminDataQualityRoute = AppAdminDataQualityRouteImport.update({
@@ -192,22 +152,62 @@ const AppAdminDataQualityRoute = AppAdminDataQualityRouteImport.update({
   path: '/admin/data-quality',
   getParentRoute: () => AppRoute,
 } as any)
+const AppChartSymbolRoute = AppChartSymbolRouteImport.update({
+  id: '/chart/$symbol',
+  path: '/chart/$symbol',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOptionsUnderlyingRoute = AppOptionsUnderlyingRouteImport.update({
+  id: '/options/$underlying',
+  path: '/options/$underlying',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStockSymbolRoute = AppStockSymbolRouteImport.update({
+  id: '/stock/$symbol',
+  path: '/stock/$symbol',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStrategiesIndexRoute = AppStrategiesIndexRouteImport.update({
+  id: '/strategies/',
+  path: '/strategies/',
+  getParentRoute: () => AppRoute,
+} as any)
+const ApiMarketCandlesRoute = ApiMarketCandlesRouteImport.update({
+  id: '/api/market/candles',
+  path: '/api/market/candles',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMarketCompaniesRoute = ApiMarketCompaniesRouteImport.update({
+  id: '/api/market/companies',
+  path: '/api/market/companies',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMarketCompanyRoute = ApiMarketCompanyRouteImport.update({
+  id: '/api/market/company',
+  path: '/api/market/company',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMarketQuotesRoute = ApiMarketQuotesRouteImport.update({
+  id: '/api/market/quotes',
+  path: '/api/market/quotes',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppStrategiesStrategyIdIndexRoute =
   AppStrategiesStrategyIdIndexRouteImport.update({
     id: '/strategies/$strategyId/',
     path: '/strategies/$strategyId/',
     getParentRoute: () => AppRoute,
   } as any)
-const AppStrategiesStrategyIdDeploymentsRoute =
-  AppStrategiesStrategyIdDeploymentsRouteImport.update({
-    id: '/strategies/$strategyId/deployments',
-    path: '/strategies/$strategyId/deployments',
-    getParentRoute: () => AppRoute,
-  } as any)
 const AppStrategiesStrategyIdBacktestsRoute =
   AppStrategiesStrategyIdBacktestsRouteImport.update({
     id: '/strategies/$strategyId/backtests',
     path: '/strategies/$strategyId/backtests',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppStrategiesStrategyIdDeploymentsRoute =
+  AppStrategiesStrategyIdDeploymentsRouteImport.update({
+    id: '/strategies/$strategyId/deployments',
+    path: '/strategies/$strategyId/deployments',
     getParentRoute: () => AppRoute,
   } as any)
 
@@ -432,13 +432,6 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/_app': {
-      id: '/_app'
-      path: ''
-      fullPath: '/'
-      preLoaderRoute: typeof AppRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/': {
       id: '/'
       path: '/'
@@ -446,123 +439,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/workspace': {
-      id: '/_app/workspace'
-      path: '/workspace'
-      fullPath: '/workspace'
-      preLoaderRoute: typeof AppWorkspaceRouteImport
-      parentRoute: typeof AppRoute
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_app/watchlists': {
-      id: '/_app/watchlists'
-      path: '/watchlists'
-      fullPath: '/watchlists'
-      preLoaderRoute: typeof AppWatchlistsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/universe': {
-      id: '/_app/universe'
-      path: '/universe'
-      fullPath: '/universe'
-      preLoaderRoute: typeof AppUniverseRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/terminal': {
-      id: '/_app/terminal'
-      path: '/terminal'
-      fullPath: '/terminal'
-      preLoaderRoute: typeof AppTerminalRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/settings': {
-      id: '/_app/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AppSettingsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/screener': {
-      id: '/_app/screener'
-      path: '/screener'
-      fullPath: '/screener'
-      preLoaderRoute: typeof AppScreenerRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/replay': {
-      id: '/_app/replay'
-      path: '/replay'
-      fullPath: '/replay'
-      preLoaderRoute: typeof AppReplayRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/portfolio': {
-      id: '/_app/portfolio'
-      path: '/portfolio'
-      fullPath: '/portfolio'
-      preLoaderRoute: typeof AppPortfolioRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/performance': {
-      id: '/_app/performance'
-      path: '/performance'
-      fullPath: '/performance'
-      preLoaderRoute: typeof AppPerformanceRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/orders': {
-      id: '/_app/orders'
-      path: '/orders'
-      fullPath: '/orders'
-      preLoaderRoute: typeof AppOrdersRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/news': {
-      id: '/_app/news'
-      path: '/news'
-      fullPath: '/news'
-      preLoaderRoute: typeof AppNewsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/journal': {
-      id: '/_app/journal'
-      path: '/journal'
-      fullPath: '/journal'
-      preLoaderRoute: typeof AppJournalRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/heatmap': {
-      id: '/_app/heatmap'
-      path: '/heatmap'
-      fullPath: '/heatmap'
-      preLoaderRoute: typeof AppHeatmapRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/futures': {
-      id: '/_app/futures'
-      path: '/futures'
-      fullPath: '/futures'
-      preLoaderRoute: typeof AppFuturesRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/dashboard': {
-      id: '/_app/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof AppDashboardRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/compare': {
-      id: '/_app/compare'
-      path: '/compare'
-      fullPath: '/compare'
-      preLoaderRoute: typeof AppCompareRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/chart-grid': {
-      id: '/_app/chart-grid'
-      path: '/chart-grid'
-      fullPath: '/chart-grid'
-      preLoaderRoute: typeof AppChartGridRouteImport
+    '/_app/alerts': {
+      id: '/_app/alerts'
+      path: '/alerts'
+      fullPath: '/alerts'
+      preLoaderRoute: typeof AppAlertsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/backtest': {
@@ -572,67 +460,123 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBacktestRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/alerts': {
-      id: '/_app/alerts'
-      path: '/alerts'
-      fullPath: '/alerts'
-      preLoaderRoute: typeof AppAlertsRouteImport
+    '/_app/chart-grid': {
+      id: '/_app/chart-grid'
+      path: '/chart-grid'
+      fullPath: '/chart-grid'
+      preLoaderRoute: typeof AppChartGridRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/strategies/': {
-      id: '/_app/strategies/'
-      path: '/strategies'
-      fullPath: '/strategies/'
-      preLoaderRoute: typeof AppStrategiesIndexRouteImport
+    '/_app/compare': {
+      id: '/_app/compare'
+      path: '/compare'
+      fullPath: '/compare'
+      preLoaderRoute: typeof AppCompareRouteImport
       parentRoute: typeof AppRoute
     }
-    '/api/market/quotes': {
-      id: '/api/market/quotes'
-      path: '/api/market/quotes'
-      fullPath: '/api/market/quotes'
-      preLoaderRoute: typeof ApiMarketQuotesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/market/company': {
-      id: '/api/market/company'
-      path: '/api/market/company'
-      fullPath: '/api/market/company'
-      preLoaderRoute: typeof ApiMarketCompanyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/market/companies': {
-      id: '/api/market/companies'
-      path: '/api/market/companies'
-      fullPath: '/api/market/companies'
-      preLoaderRoute: typeof ApiMarketCompaniesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/market/candles': {
-      id: '/api/market/candles'
-      path: '/api/market/candles'
-      fullPath: '/api/market/candles'
-      preLoaderRoute: typeof ApiMarketCandlesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_app/stock/$symbol': {
-      id: '/_app/stock/$symbol'
-      path: '/stock/$symbol'
-      fullPath: '/stock/$symbol'
-      preLoaderRoute: typeof AppStockSymbolRouteImport
+    '/_app/dashboard': {
+      id: '/_app/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AppDashboardRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/options/$underlying': {
-      id: '/_app/options/$underlying'
-      path: '/options/$underlying'
-      fullPath: '/options/$underlying'
-      preLoaderRoute: typeof AppOptionsUnderlyingRouteImport
+    '/_app/futures': {
+      id: '/_app/futures'
+      path: '/futures'
+      fullPath: '/futures'
+      preLoaderRoute: typeof AppFuturesRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/chart/$symbol': {
-      id: '/_app/chart/$symbol'
-      path: '/chart/$symbol'
-      fullPath: '/chart/$symbol'
-      preLoaderRoute: typeof AppChartSymbolRouteImport
+    '/_app/heatmap': {
+      id: '/_app/heatmap'
+      path: '/heatmap'
+      fullPath: '/heatmap'
+      preLoaderRoute: typeof AppHeatmapRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/journal': {
+      id: '/_app/journal'
+      path: '/journal'
+      fullPath: '/journal'
+      preLoaderRoute: typeof AppJournalRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/news': {
+      id: '/_app/news'
+      path: '/news'
+      fullPath: '/news'
+      preLoaderRoute: typeof AppNewsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/orders': {
+      id: '/_app/orders'
+      path: '/orders'
+      fullPath: '/orders'
+      preLoaderRoute: typeof AppOrdersRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/performance': {
+      id: '/_app/performance'
+      path: '/performance'
+      fullPath: '/performance'
+      preLoaderRoute: typeof AppPerformanceRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/portfolio': {
+      id: '/_app/portfolio'
+      path: '/portfolio'
+      fullPath: '/portfolio'
+      preLoaderRoute: typeof AppPortfolioRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/replay': {
+      id: '/_app/replay'
+      path: '/replay'
+      fullPath: '/replay'
+      preLoaderRoute: typeof AppReplayRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/screener': {
+      id: '/_app/screener'
+      path: '/screener'
+      fullPath: '/screener'
+      preLoaderRoute: typeof AppScreenerRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/terminal': {
+      id: '/_app/terminal'
+      path: '/terminal'
+      fullPath: '/terminal'
+      preLoaderRoute: typeof AppTerminalRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/universe': {
+      id: '/_app/universe'
+      path: '/universe'
+      fullPath: '/universe'
+      preLoaderRoute: typeof AppUniverseRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/watchlists': {
+      id: '/_app/watchlists'
+      path: '/watchlists'
+      fullPath: '/watchlists'
+      preLoaderRoute: typeof AppWatchlistsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/workspace': {
+      id: '/_app/workspace'
+      path: '/workspace'
+      fullPath: '/workspace'
+      preLoaderRoute: typeof AppWorkspaceRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/admin/data-quality': {
@@ -642,6 +586,62 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminDataQualityRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/chart/$symbol': {
+      id: '/_app/chart/$symbol'
+      path: '/chart/$symbol'
+      fullPath: '/chart/$symbol'
+      preLoaderRoute: typeof AppChartSymbolRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/options/$underlying': {
+      id: '/_app/options/$underlying'
+      path: '/options/$underlying'
+      fullPath: '/options/$underlying'
+      preLoaderRoute: typeof AppOptionsUnderlyingRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/stock/$symbol': {
+      id: '/_app/stock/$symbol'
+      path: '/stock/$symbol'
+      fullPath: '/stock/$symbol'
+      preLoaderRoute: typeof AppStockSymbolRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/strategies/': {
+      id: '/_app/strategies/'
+      path: '/strategies'
+      fullPath: '/strategies/'
+      preLoaderRoute: typeof AppStrategiesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/api/market/candles': {
+      id: '/api/market/candles'
+      path: '/api/market/candles'
+      fullPath: '/api/market/candles'
+      preLoaderRoute: typeof ApiMarketCandlesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/market/companies': {
+      id: '/api/market/companies'
+      path: '/api/market/companies'
+      fullPath: '/api/market/companies'
+      preLoaderRoute: typeof ApiMarketCompaniesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/market/company': {
+      id: '/api/market/company'
+      path: '/api/market/company'
+      fullPath: '/api/market/company'
+      preLoaderRoute: typeof ApiMarketCompanyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/market/quotes': {
+      id: '/api/market/quotes'
+      path: '/api/market/quotes'
+      fullPath: '/api/market/quotes'
+      preLoaderRoute: typeof ApiMarketQuotesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/strategies/$strategyId/': {
       id: '/_app/strategies/$strategyId/'
       path: '/strategies/$strategyId'
@@ -649,18 +649,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppStrategiesStrategyIdIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/strategies/$strategyId/deployments': {
-      id: '/_app/strategies/$strategyId/deployments'
-      path: '/strategies/$strategyId/deployments'
-      fullPath: '/strategies/$strategyId/deployments'
-      preLoaderRoute: typeof AppStrategiesStrategyIdDeploymentsRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/strategies/$strategyId/backtests': {
       id: '/_app/strategies/$strategyId/backtests'
       path: '/strategies/$strategyId/backtests'
       fullPath: '/strategies/$strategyId/backtests'
       preLoaderRoute: typeof AppStrategiesStrategyIdBacktestsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/strategies/$strategyId/deployments': {
+      id: '/_app/strategies/$strategyId/deployments'
+      path: '/strategies/$strategyId/deployments'
+      fullPath: '/strategies/$strategyId/deployments'
+      preLoaderRoute: typeof AppStrategiesStrategyIdDeploymentsRouteImport
       parentRoute: typeof AppRoute
     }
   }

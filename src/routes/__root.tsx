@@ -6,6 +6,7 @@ import {
   useRouter,
   HeadContent,
   Scripts,
+  type ErrorComponentProps,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 
@@ -31,7 +32,7 @@ function NotFoundComponent() {
   );
 }
 
-function ErrorComponent({ reset }: { error: Error; reset: () => void }) {
+function ErrorComponent({ reset }: ErrorComponentProps) {
   const router = useRouter();
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
