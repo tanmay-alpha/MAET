@@ -139,6 +139,7 @@ MAET includes a research and simulation toolkit built to avoid the pitfalls of n
 
 ### Paper Trading & Margin Safety
 - Realistic paper execution matching Market, Limit, Stop-Loss, and Stop-Loss-Limit orders.
+- Paper MARKET orders only fill while the NSE session is OPEN, against quotes no older than `PAPER_EXECUTION_MAX_QUOTE_AGE_MS` (delayed quotes are rejected unless `PAPER_EXECUTION_ALLOW_DELAYED=true`). The starting balance is `PAPER_INITIAL_CASH_INR`.
 - Formal protection against short-selling violations, TOCTOU order-placement races, and invalid margin states.
 - Server-Sent Events (SSE) streaming real-time trade fills, margin updates, and portfolio metrics.
 
@@ -250,6 +251,18 @@ ANGELONE_TOTP_SECRET=your-totp-secret
 BIGQUERY_PROJECT=your-gcp-project
 BIGQUERY_DATASET=maet_warehouse
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+
+# Paper trading execution
+PAPER_EXECUTION_MAX_QUOTE_AGE_MS=15000
+PAPER_EXECUTION_ALLOW_DELAYED=false
+PAPER_INITIAL_CASH_INR=1000000
+
+# API rate limiting (token buckets per client IP and per signed-in user)
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_IP_CAPACITY=300
+RATE_LIMIT_IP_REFILL_PER_SEC=5
+RATE_LIMIT_USER_CAPACITY=120
+RATE_LIMIT_USER_REFILL_PER_SEC=2
 
 # Frontend (Vite, inlined into the browser bundle: public values only)
 VITE_API_URL=http://localhost:3000
