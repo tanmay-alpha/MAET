@@ -43,7 +43,7 @@
     "test:strategy-engine": "bun test server/domain/strategy/ast-evaluator.test.ts server/domain/strategy/reproducibility.test.ts server/domain/strategy/look-ahead.test.ts",
     "test:phase1": "bun run test:unit && bun run test:integration && bun run test:concurrency",
     "test:ingestion": "bun test server/workers/ingestion-engine/ingestion-persistence.test.ts",
-    "test:db-migrate": "bun run server/scripts/apply-migrations.ts",
+    "test:db-migrate": "NODE_ENV=test bun run server/scripts/apply-migrations.ts",
     "test:advanced": "bun run test:db-migrate && bun run test:ingestion && bun run test:capabilities && bun run test:workspace && bun run test:alerts && bun run test:scorecard && bun run test:peers && bun run test:breadth && bun run test:screener-dsl && bun run test:backtest-v2 && bun run test:data-quality && bun run test:migration-0013 && bun run test:migration-0015 && bun run test:migration-0016 && bun run test:migration-0017 && bun run test:migration-0018 && bun run test:migration-0019 && bun run test:migration-0024 && bun run test:migration-runner && bun run test:options && bun run test:strategy-jobs && bun run test:strategy-jobs-postgres && bun run test:strategy-optimisation && bun run test:strategy-deployments && bun run test:strategy-replay",
     "test:all": "bun run test:unit && bun run test:integration && bun run test:concurrency && bun run test:advanced",
     "check:test-wiring": "bun run server/scripts/check-test-wiring.ts",

@@ -3,7 +3,22 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, getSqlClient } from "../data/drizzle/client";
-import { applyMigrations, findNonTransactionalStatements } from "./apply-migrations";
+import { applyMigrations, findNonTransactionalStatements, resolveMigrationDatabaseUrl } from "./apply-migrations";
+
+describe("resolveMigrationDatabaseUrl", () => {
+  it("never falls back to a default database", () => {
+    expect(() => resolveMigrationDatabaseUrl({})).toThrow(/MIGRATION_DATABASE_URL/u);
+    // TEST_DATABASE_URL alone is not a migration target outside test runs.
+    expect(() => resolveMigrationDatabaseUrl({ TEST_DATABASE_URL: "postgres://t/x", NODE_ENV: "production" })).toThrow();
+  });
+
+  it("prefers MIGRATION_DATABASE_URL and accepts TEST_DATABASE_URL only under NODE_ENV=test", () => {
+    expect(resolveMigrationDatabaseUrl({ MIGRATION_DATABASE_URL: "postgres://m/x", TEST_DATABASE_URL: "postgres://t/x" })).toBe(
+      "postgres://m/x",
+    );
+    expect(resolveMigrationDatabaseUrl({ TEST_DATABASE_URL: "postgres://t/x", NODE_ENV: "test" })).toBe("postgres://t/x");
+  });
+});
 
 const hasDatabase = Boolean(process.env.TEST_DATABASE_URL);
 const schema = `t_migrate_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;

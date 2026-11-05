@@ -287,7 +287,26 @@ bun run --cwd src dev
 
 The root `bun run dev` only loads the standalone orchestrator module; it does not start the API or the website.
 
-Apply database migrations with `bun run test:db-migrate` (uses `TEST_DATABASE_URL`) or `bun run server/scripts/apply-migrations.ts`.
+### 4. Database Migrations
+`server/scripts/apply-migrations.ts` never picks a database on its own. It migrates `MIGRATION_DATABASE_URL`, or `TEST_DATABASE_URL` only when `NODE_ENV=test`, and otherwise exits with an error. Each migration file and its `_applied_migrations` row commit in one transaction.
+
+```bash
+# Disposable local/CI test database
+TEST_DATABASE_URL=postgresql://postgres:<password>@127.0.0.1:5432/<your_test_db> bun run test:db-migrate
+```
+
+Tests never fall back to a default database either: with `NODE_ENV=test` the server's database client requires `TEST_DATABASE_URL`.
+
+### 5. Production Migrations
+Run from a trusted machine, never from CI:
+
+1. Check the target with `bun run verify:db` (read-only restore/connectivity check).
+2. Apply pending migrations against Supabase's **direct** connection (not the transaction pooler):
+   ```bash
+   MIGRATION_DATABASE_URL="<supabase direct connection url>" bun run server/scripts/apply-migrations.ts
+   ```
+
+Production may not have the `_applied_migrations` tracking table if earlier migrations were applied by hand. The runner would then create it and apply **every** file in one run, and not every historical migration is safe to re-run. Before the first run, create `public._applied_migrations (name text primary key, applied_at timestamptz not null default now())` and insert the names of the files production already has, so only genuinely new files run. On Supabase the runner leaves the existing `auth` schema, `auth.uid()` and roles untouched; it only creates stand-ins where they are missing.
 
 ---
 

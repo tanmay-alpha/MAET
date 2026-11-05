@@ -1,16 +1,27 @@
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
-import { closeDb, getSqlClient } from "../data/drizzle/client";
-
-if (!process.env.TEST_DATABASE_URL) {
-  process.env.TEST_DATABASE_URL = "postgresql://postgres:tanmay@127.0.0.1:5432/maet_test";
-}
+import postgres from "postgres";
+import { getSqlClient } from "../data/drizzle/client";
 
 export type ApplyMigrationsOptions = {
+  /** Target connection; defaults to the shared app/test pool (TEST_DATABASE_URL under test). */
+  sql?: postgres.Sql;
   migrationsDir?: string;
   /** Schema-qualified tracking table; overridable so tests can use an isolated schema. */
   trackingTable?: string;
 };
+
+/**
+ * The CLI never guesses a database: MIGRATION_DATABASE_URL names the target,
+ * and TEST_DATABASE_URL is accepted only for test runs (NODE_ENV=test).
+ */
+export function resolveMigrationDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.MIGRATION_DATABASE_URL) return env.MIGRATION_DATABASE_URL;
+  if (env.NODE_ENV === "test" && env.TEST_DATABASE_URL) return env.TEST_DATABASE_URL;
+  throw new Error(
+    "No migration target. Set MIGRATION_DATABASE_URL, or TEST_DATABASE_URL together with NODE_ENV=test.",
+  );
+}
 
 // Statements PostgreSQL refuses to run inside a transaction block (or, for
 // explicit transaction control, that would break the runner's own transaction).
@@ -31,11 +42,13 @@ export function findNonTransactionalStatements(sqlText: string): string[] {
 }
 
 export async function applyMigrations(options: ApplyMigrationsOptions = {}): Promise<void> {
-  const sql = getSqlClient();
+  const sql = options.sql ?? getSqlClient();
   const migrationsDir = options.migrationsDir ?? join(process.cwd(), "server/db/migrations");
   const trackingTable = sql(options.trackingTable ?? "public._applied_migrations");
 
-  // Setup mock auth schema, auth.uid() function, Supabase roles, and optional table stubs for non-Supabase Postgres environments
+  // Local/CI PostgreSQL lacks Supabase's auth schema and roles; create minimal
+  // stand-ins only where they are missing so Supabase's real auth.uid() is
+  // never replaced when this runs against production.
   await sql`CREATE SCHEMA IF NOT EXISTS auth;`;
   await sql`
     CREATE TABLE IF NOT EXISTS auth.users (
@@ -43,12 +56,16 @@ export async function applyMigrations(options: ApplyMigrationsOptions = {}): Pro
     );
   `;
   await sql`
-    CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $$
-      SELECT COALESCE(
-        NULLIF(current_setting('request.jwt.claim.sub', true), '')::uuid,
-        '00000000-0000-0000-0000-000000000000'::uuid
-      );
-    $$ LANGUAGE sql STABLE;
+    DO $do$ BEGIN
+      IF to_regprocedure('auth.uid()') IS NULL THEN
+        CREATE FUNCTION auth.uid() RETURNS UUID AS $fn$
+          SELECT COALESCE(
+            NULLIF(current_setting('request.jwt.claim.sub', true), '')::uuid,
+            '00000000-0000-0000-0000-000000000000'::uuid
+          );
+        $fn$ LANGUAGE sql STABLE;
+      END IF;
+    END $do$;
   `;
   await sql`
     DO $$ BEGIN
@@ -109,13 +126,15 @@ export async function applyMigrations(options: ApplyMigrationsOptions = {}): Pro
 }
 
 if (import.meta.main) {
-  applyMigrations()
-    .then(() => {
-      console.log("All migrations applied successfully.");
-    })
-    .catch((err) => {
-      console.error("Migration error:", err);
-      process.exitCode = 1;
-    })
-    .finally(() => closeDb());
+  let target: postgres.Sql | undefined;
+  try {
+    target = postgres(resolveMigrationDatabaseUrl(), { max: 1, prepare: false, onnotice: () => {} });
+    await applyMigrations({ sql: target });
+    console.log("All migrations applied successfully.");
+  } catch (err) {
+    console.error("Migration error:", err);
+    process.exitCode = 1;
+  } finally {
+    await target?.end({ timeout: 5 });
+  }
 }
