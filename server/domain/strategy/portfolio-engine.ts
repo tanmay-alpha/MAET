@@ -183,6 +183,8 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
   const warnings: string[] = [];
 
   const execModel = new ExecutionModel(execConfig);
+  // NEXT_BAR_OPEN acts at bar i's open on rules evaluated at bar i-1; ON_CLOSE at bar i's close on bar i.
+  const onClose = execConfig.fillPolicy === "ON_CLOSE";
 
   // 1. Prepare and adjust candles for each symbol
   const symbols = Object.keys(input.symbolCandles).sort();
@@ -377,6 +379,8 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
     const isLastBar = t === timeline.length - 1;
 
     // A. Update current price and check stop / target exits for active positions
+    // Symbols closed on this bar cannot reopen on it: under NEXT_BAR_OPEN the open has passed.
+    const closedThisBar = new Set<string>();
     for (const [sym, pos] of positions.entries()) {
       const candleInfo = candleByTsMap[sym]?.get(ts);
       if (!candleInfo) continue; // No tick on this bar for this symbol
@@ -384,20 +388,21 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
       const bar = candleInfo.candle;
       markToClose(pos, bar.close);
 
-      let exit = stopOrTargetExit(pos, bar);
-      if (!exit && isLastBar) {
-        exit = { price: bar.close, reason: "end_of_period" };
-      }
-      if (!exit && candleInfo.index >= 1) {
-        // AST exit rules evaluated on the previous bar fill at this bar's open
-        const exitGroup = definition.exit ?? (definition as any).exitRules;
-        if (evaluateRuleGroup(exitGroup, cacheMap[sym], candleInfo.index - 1).matched) {
-          exit = { price: bar.open, reason: "exit_rule" };
-        }
-      }
+      // Events in bar order: a NEXT_BAR_OPEN exit rule (decided on bar i-1) fills at the open,
+      // before stops and targets; an ON_CLOSE exit rule fills at the close, after them.
+      const signalIdx = onClose ? candleInfo.index : candleInfo.index - 1;
+      const exitGroup = definition.exit ?? (definition as any).exitRules;
+      const ruleExit = signalIdx >= 0 && evaluateRuleGroup(exitGroup, cacheMap[sym], signalIdx).matched
+        ? { price: onClose ? bar.close : bar.open, reason: "exit_rule" }
+        : null;
+      const exit = (!onClose && ruleExit)
+        || stopOrTargetExit(pos, bar)
+        || ruleExit
+        || (isLastBar ? { price: bar.close, reason: "end_of_period" } : null);
 
       if (exit && exit.price > 0) {
         closePosition(pos, bar, candleInfo.index, exit.price, exit.reason, ts);
+        closedThisBar.add(sym);
       }
     }
 
@@ -415,19 +420,20 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
       }> = [];
 
       for (const sym of symbols) {
-        if (positions.has(sym)) continue; // Already in position
+        if (positions.has(sym) || closedThisBar.has(sym)) continue;
 
         const candleInfo = candleByTsMap[sym]?.get(ts);
-        if (!candleInfo || candleInfo.index < 1) continue;
+        if (!candleInfo || (!onClose && candleInfo.index < 1)) continue;
 
         const cache = cacheMap[sym];
-        const signalIdx = candleInfo.index - 1;
+        const signalIdx = onClose ? candleInfo.index : candleInfo.index - 1;
         const entryGroup = definition.entry ?? (definition as any).entryRules;
         const evalRes = evaluateRuleGroup(entryGroup, cache, signalIdx);
 
         if (evalRes.matched) {
-          // The order fills at this bar's open, so ranking, sizing and liquidity inputs come from the
-          // signal bar (i-1): this bar's high, low, close and volume are not known yet.
+          // Ranking, sizing and liquidity inputs come from the signal bar: under NEXT_BAR_OPEN the
+          // order fills at bar i's open, before its high, low, close and volume are known (i-1);
+          // under ON_CLOSE it fills at bar i's close, when bar i is complete.
           const bar = candleInfo.candle;
           const signalBar = adjustedCandles[sym][signalIdx];
           const atr = cache.resolve("ATR", { period: 14 }, signalIdx) ?? undefined;
@@ -439,7 +445,7 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
             symbol: sym,
             bar,
             barIndex: candleInfo.index,
-            fillPrice: bar.open,
+            fillPrice: onClose ? bar.close : bar.open,
             score: signalBar.volume * momentum,
             volume: signalBar.volume,
             momentum,
@@ -560,8 +566,8 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
         };
         positions.set(cand.symbol, position);
 
-        // The rest of the entry bar trades after the open fill: stops and targets can trigger on it.
-        const sameBarExit = stopOrTargetExit(position, cand.bar);
+        // After an open fill the rest of the entry bar trades: stops and targets can trigger on it.
+        const sameBarExit = onClose ? null : stopOrTargetExit(position, cand.bar);
         if (sameBarExit) {
           closePosition(position, cand.bar, cand.barIndex, sameBarExit.price, sameBarExit.reason, ts);
         } else {

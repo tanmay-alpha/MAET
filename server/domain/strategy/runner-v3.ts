@@ -346,10 +346,13 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     const canEnter = !inPosition && cooldownBarsRemaining === 0;
 
     if (inPosition) {
-      let exit = protectiveExit(bar);
-      if (!exit && evaluateRuleGroup(exitGroup, cache, signalIdx).matched) {
-        exit = { price: fillPrice, reason: "exit_rule" };
-      }
+      // Events in bar order: a NEXT_BAR_OPEN exit rule (decided on bar i-1) fills at the open,
+      // before the stops and targets the rest of the bar could trigger; an ON_CLOSE exit rule
+      // fills at the close, after them.
+      const ruleExit = evaluateRuleGroup(exitGroup, cache, signalIdx).matched
+        ? { price: fillPrice, reason: "exit_rule" }
+        : null;
+      const exit = (!onClose && ruleExit) || protectiveExit(bar) || ruleExit;
       if (exit && exit.price > 0) {
         closeTrade(i, exit.price, exit.reason);
       }
