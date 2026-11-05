@@ -4,6 +4,11 @@ import {
   type ExecutionQuote,
 } from "../../types/market";
 import {
+  computeIndianEquityCharges,
+  type EquityChargeBreakdown,
+  type EquityExchange,
+} from "../costs/indian-equity-charges";
+import {
   calculateProjectedMarginAfterFill,
 } from "./margin";
 import {
@@ -21,7 +26,12 @@ import {
 } from "./types";
 
 const PAPER_LEVERAGE = 5;
-export const PAPER_TRANSACTION_FEE_RATE = 0.0000345;
+/**
+ * Paper orders carry no product (CNC/MIS) field, so every fill is charged as
+ * DELIVERY: the conservative schedule (STT on both legs, 0.015% stamp duty on
+ * buys). Brokerage is zero, matching discount-broker equity delivery.
+ */
+export const PAPER_CHARGE_PRODUCT = "DELIVERY" as const;
 
 export function calculateSlippage(price: number, quantity: number): number {
   if (price <= 0 || quantity <= 0) return 0;
@@ -40,6 +50,8 @@ export type PaperExecutionRequest = {
   fillQuantity: number;
   quote: ExecutionQuote;
   reason: PaperExecutionReason;
+  /** Exchange the order routes to; statutory charges depend on it. Defaults to the quote's exchange. */
+  exchange?: EquityExchange;
   policy?: {
     allowDelayed?: boolean;
     maxAgeMs?: number;
@@ -52,12 +64,14 @@ export type PaperExecutionPlan = {
   fillPrice: number;
   slippage: number;
   fees: number;
+  charges: EquityChargeBreakdown;
   fillQuantity: number;
 };
 
 export interface ExecuteFillResult {
   account: PaperAccount;
   fill: PaperFill;
+  charges: EquityChargeBreakdown;
 }
 
 export type PaperExecutionErrorCode =
@@ -212,16 +226,19 @@ function createExecutionPlanFromValidatedQuote(
     request.order.side === "BUY"
       ? Math.max(0, fillPrice - referencePrice)
       : Math.max(0, referencePrice - fillPrice);
-  const fees =
-    fillPrice *
-    request.fillQuantity *
-    PAPER_TRANSACTION_FEE_RATE;
+  const charges = computeIndianEquityCharges({
+    exchange: request.exchange ?? quote.exchange,
+    product: PAPER_CHARGE_PRODUCT,
+    side: request.order.side,
+    turnoverInr: fillPrice * request.fillQuantity,
+  });
 
   return {
     referencePrice,
     fillPrice,
     slippage: actualSlippage,
-    fees,
+    fees: charges.total,
+    charges,
     fillQuantity: request.fillQuantity,
   };
 }
@@ -376,7 +393,7 @@ export function executePaperFill(
     quoteSource: quote.source,
     quoteQuality: quote.quality,
     quoteTimestamp: quote.ts,
-    exchange: quote.exchange,
+    exchange: request.exchange ?? quote.exchange,
     reason: request.reason,
     executedAt: fillTime,
   };
@@ -493,6 +510,7 @@ export function executePaperFill(
   return {
     account: updatedAccount,
     fill,
+    charges: plan.charges,
   };
 }
 

@@ -24,10 +24,10 @@
 
 import { describe, expect, it } from "bun:test";
 import {
-  PAPER_TRANSACTION_FEE_RATE,
   executePaperFill,
   settlePaperAccount,
 } from "@shared/domain/paper-trading/execution";
+import { computeIndianEquityCharges } from "@shared/domain/costs/indian-equity-charges";
 import { reconcilePosition } from "@shared/domain/paper-trading/reconcile-position";
 import type {
   PaperAccount,
@@ -509,8 +509,12 @@ describe("Paper Trading Financial Invariants — Execution Accuracy & Reconcilia
       reason: "USER_ORDER",
     });
 
-    const expectedFees =
-      fillResult.fill.fillPrice * fillResult.fill.quantity * PAPER_TRANSACTION_FEE_RATE;
+    const expectedFees = computeIndianEquityCharges({
+      exchange: "NSE",
+      product: "DELIVERY",
+      side: "BUY",
+      turnoverInr: fillResult.fill.fillPrice * fillResult.fill.quantity,
+    }).total;
     expect(fillResult.fill.fees).toBe(expectedFees);
     // Cash must be decremented by exactly the fees:
     expect(fillResult.account.cash).toBe(initialCash - expectedFees);
