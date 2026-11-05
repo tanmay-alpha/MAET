@@ -22,7 +22,8 @@ function collectFilters(scriptName: string, seen = new Set<string>()): string[] 
   return command.split("&&").flatMap((segment) => {
     const [bin, sub, ...args] = segment.trim().split(/\s+/u);
     if (bin !== "bun") return [];
-    if (sub === "run") return collectFilters(args[0]!, seen);
+    // `bun run <file>` executes a file rather than another package script.
+    if (sub === "run") return args[0]! in scripts ? collectFilters(args[0]!, seen) : [];
     if (sub === "test") return args.filter((arg) => !arg.startsWith("-"));
     return [];
   });
