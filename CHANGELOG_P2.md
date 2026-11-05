@@ -1,5 +1,17 @@
 # MAET P2 — Research Engine Changelog
 
+## 2026-11-05 — Research correctness fixes
+
+- **Fees**: `VOLUME_AWARE` charges each leg from the shared statutory schedule (`computeIndianEquityCharges`), side-aware, with `exchange` (default NSE), `product` (default DELIVERY) and `brokerage` (INR per order). The per-component bps overrides (`stt`, `exchangeCharges`, `gst`, `sebiCharges`, `stampDuty`) and `timeInForce` are removed. `FEE_MODEL_VERSION` 2.0.0.
+- **Portfolio engine**: entries reserve notional + charges from cash (cash reserve and no-leverage limits now bind); spread/slippage/impact counted once; short stops/targets direction-aware with gap fills; entry-bar stops checked.
+- **Look-ahead**: sizing, ranking, impact and participation at a bar-i fill use bar i-1 data (`ExecutionContext.referenceVolume`).
+- **runner-v3**: `ON_CLOSE` honoured; stops/targets checked on the entry bar; `tradeFrom` warm-up bars.
+- **Metrics**: Sharpe = mean(r − rf_p)/std × √P; Sortino downside deviation over all N periods; optional annual `riskFreeRate`; profit factor / payoff ratio are `null` (not Infinity) without losing trades.
+- **Walk-forward**: rejected windows are not tested; errors surface as warnings; phases get indicator warm-up; WFE and retention are `null` with a reason when in-sample ≤ 0. The walk-forward worker now runs this engine.
+- **Sweeps**: parameters are applied at their `path`; previously every combination ran the unmodified strategy.
+- **Corporate actions**: applied oldest-first; BONUS a:b scales prices by b/(a+b).
+- **Removed**: `SimulatedOrder` (order-simulator), legacy `backtest/engine.ts`, `runner.ts`, `strategies.ts`, `strategies-v2.ts`, and the unauthenticated `/api/backtest/run` endpoint.
+
 ## [P2] 2026-09-16 — Professional-Grade Research & Simulation Engine
 
 ### New: Realistic Execution Model (`server/domain/strategy/execution-model.ts`)
