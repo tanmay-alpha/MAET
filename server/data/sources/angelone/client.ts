@@ -103,7 +103,53 @@ const OPTION_GREEK_URL =
 const INSTRUMENT_MASTER_URL =
   "https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json";
 
+const LOGIN_TIMEOUT_MS = 15_000;
+
 let activeMarketSession: AngelOneSession | undefined;
+
+/** Raised when Angel One rejects the session JWT; callers should log in again. */
+export class AngelOneAuthError extends Error {
+  override name = "AngelOneAuthError";
+}
+
+// SmartAPI token errors: AG8001 invalid, AG8002 expired, AG8003 missing.
+// HTTP 403 is not included: SmartAPI also uses it for rate limiting.
+const AUTH_ERROR_CODES: Record<string, true> = { AG8001: true, AG8002: true, AG8003: true };
+
+type SessionRejectedListener = (reason: string) => void;
+const sessionRejectedListeners = new Set<SessionRejectedListener>();
+
+export function onAngelOneSessionRejected(listener: SessionRejectedListener): () => void {
+  sessionRejectedListeners.add(listener);
+  return () => sessionRejectedListeners.delete(listener);
+}
+
+/**
+ * Clears the market session (only if it is still the one that was rejected,
+ * so a concurrent re-login is not undone) and tells listeners to re-login.
+ */
+function rejectSession(session: AngelOneSession, reason: string): never {
+  if (activeMarketSession === session) {
+    activeMarketSession = undefined;
+    for (const listener of sessionRejectedListeners) listener(reason);
+  }
+  throw new AngelOneAuthError(`angelone session rejected: ${reason}`);
+}
+
+function assertAuthorizedResponse(response: Response, session: AngelOneSession, operation: string): void {
+  if (response.status === 401) rejectSession(session, `${operation} HTTP 401`);
+}
+
+function assertAuthorizedPayload(payload: unknown, session: AngelOneSession, operation: string): void {
+  if (
+    isRecord(payload) &&
+    payload.status === false &&
+    typeof payload.errorcode === "string" &&
+    Object.hasOwn(AUTH_ERROR_CODES, payload.errorcode)
+  ) {
+    rejectSession(session, `${operation} ${payload.errorcode}`);
+  }
+}
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -224,16 +270,20 @@ export async function login(creds: AngelOneCreds): Promise<AngelOneSession> {
       "X-PrivateKey": creds.apiKey,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`angelone login failed: ${res.status}`);
   }
   const data = (await res.json()) as {
     status: boolean;
+    message?: string;
+    errorcode?: string;
     data?: { jwtToken: string; feedToken: string; refreshToken: string };
   };
   if (!data.status || !data.data) {
-    throw new Error("angelone login: bad response");
+    // Provider error code/message (e.g. "AB1050 Invalid totp") carry no credentials.
+    throw new Error(`angelone login rejected: ${data.errorcode ?? "no code"} ${data.message ?? ""}`.trim());
   }
   return {
     jwt: data.data.jwtToken,
@@ -294,8 +344,10 @@ export async function getAngelOneOptionGreeks(request: AngelOneOptionGreekReques
     body: JSON.stringify(request),
     signal: AbortSignal.timeout(10_000),
   });
+  assertAuthorizedResponse(response, session, "option greek");
   if (!response.ok) throw new Error(`angelone option greek failed: ${response.status}`);
   const payload = await response.json() as {
+    errorcode?: string;
     status?: boolean;
     message?: string;
     data?: Array<{
@@ -311,6 +363,7 @@ export async function getAngelOneOptionGreeks(request: AngelOneOptionGreekReques
       tradeVolume?: unknown;
     }>;
   };
+  assertAuthorizedPayload(payload, session, "option greek");
   if (!payload.status) {
     if (payload.message?.trim().toLowerCase() === "no data available") return [];
     throw new Error("angelone option greek returned an unsuccessful response");
@@ -497,6 +550,7 @@ export async function getAngelOneFullMarketQuotes(
     body: JSON.stringify({ mode: "FULL", exchangeTokens }),
     signal: AbortSignal.timeout(10_000),
   });
+  assertAuthorizedResponse(response, session, "full market quote");
   if (!response.ok) {
     throw new Error(`angelone full market quote failed: ${response.status}`);
   }
@@ -510,6 +564,7 @@ export async function getAngelOneFullMarketQuotes(
   if (!isRecord(payload)) {
     throw new Error("angelone full market quote returned a malformed response");
   }
+  assertAuthorizedPayload(payload, session, "full market quote");
   if (payload.status === false) {
     throw new Error("angelone full market quote returned an unsuccessful response");
   }
@@ -605,8 +660,10 @@ export async function getAngelOneMarketQuotes(requests: AngelOneQuoteRequest[]):
     body: JSON.stringify({ mode: "FULL", exchangeTokens: { NSE: requests.map((request) => request.token) } }),
     signal: AbortSignal.timeout(10_000),
   });
+  assertAuthorizedResponse(response, session, "market quote");
   if (!response.ok) throw new Error(`angelone market quote failed: ${response.status}`);
   const payload = await response.json() as {
+    errorcode?: string;
     status?: boolean;
     data?: { fetched?: Array<{
       symbolToken?: string;
@@ -618,6 +675,7 @@ export async function getAngelOneMarketQuotes(requests: AngelOneQuoteRequest[]):
       percentChange?: number;
     }> };
   };
+  assertAuthorizedPayload(payload, session, "market quote");
   if (!payload.status) throw new Error("angelone market quote returned an unsuccessful response");
   return (payload.data?.fetched ?? []).flatMap((quote) => {
     const symbol = quote.symbolToken ? tokenToSymbol.get(quote.symbolToken) : undefined;
