@@ -52,6 +52,83 @@ describe("AngelOneWorker", () => {
   });
 });
 
+describe("AngelOneWorker socket lifecycle", () => {
+  it("does not send on a socket that is still connecting and subscribes on open", () => {
+    const socket = makeWsLikeSocket();
+    const w = new AngelOneWorker({ createSocket: () => socket });
+    w.manageUser("u1", session, ["2885"]);
+    w.start();
+
+    expect(() => w.updateTokens("u1", ["2885", "11536"])).not.toThrow();
+    socket.__open();
+
+    expect(socket.sent).toHaveLength(1);
+    expect(JSON.parse(socket.sent[0]).params.tokenList[0].tokens).toEqual(["2885", "11536"]);
+    void w.stop();
+  });
+
+  it("ignores the late close of a replaced socket", async () => {
+    const sockets = [makeWsLikeSocket(), makeWsLikeSocket()];
+    let created = 0;
+    const w = new AngelOneWorker({ createSocket: () => sockets[created++] });
+    w.start();
+    w.manageUser("u1", session, ["2885"]);
+    sockets[0].__open();
+    // Re-login replaces the socket; ws delivers the old socket's close later.
+    w.manageUser("u1", { ...session, jwt: "JWT2" }, ["2885"]);
+    sockets[1].__open();
+    await sockets[0].__closed;
+
+    w.updateTokens("u1", ["2885", "11536"]);
+    expect(sockets[1].sent.map((frame) => JSON.parse(frame).action)).toEqual([1, 1]);
+    expect(created).toBe(2);
+    await w.stop();
+  });
+
+  it("does not treat a packet for a token containing 401 as an auth failure", async () => {
+    const socket = makeWsLikeSocket();
+    const w = new AngelOneWorker({ createSocket: () => socket });
+    const failures: string[] = [];
+    const off = bus.on("user:angelone:auth_failed", ({ reason }) => failures.push(reason));
+    w.manageUser("u1", session, ["2885"]);
+    w.start();
+    socket.__open();
+
+    socket.__push(makeQuotePacket("14010"));
+    w.updateTokens("u1", ["2885", "11536"]);
+
+    off();
+    expect(failures).toEqual([]);
+    expect(socket.sent).toHaveLength(2);
+    await w.stop();
+  });
+
+  it("reports a 401 handshake as an auth failure instead of reconnecting", async () => {
+    let created = 0;
+    const socket = makeWsLikeSocket();
+    const w = new AngelOneWorker({
+      createSocket: () => {
+        created++;
+        return socket;
+      },
+    });
+    const failures: string[] = [];
+    const off = bus.on("user:angelone:auth_failed", ({ reason }) => failures.push(reason));
+    w.manageUser("u1", session, ["2885"]);
+    w.start();
+
+    socket.__error(new Error("Unexpected server response: 401"));
+    socket.close();
+    await socket.__closed;
+
+    off();
+    expect(failures).toEqual(["handshake_unauthorized"]);
+    w.updateTokens("u1", ["11536"]);
+    expect(created).toBe(1);
+    await w.stop();
+  });
+});
+
 function makeFakeSocket() {
   const listeners: Record<string, ((...args: any[]) => void)[]> = {};
   const sock: any = {
@@ -72,19 +149,54 @@ function makeFakeSocket() {
       (listeners["message"] || []).forEach((cb) => cb(data));
     },
   };
-  // expose back to caller
-  (sock as any).__mark = true;
   return sock;
 }
 
-function makeQuotePacket(): Buffer {
+function makeQuotePacket(token = "2885"): Buffer {
   const packet = Buffer.alloc(123);
   packet.writeUInt8(2, 0);
   packet.writeUInt8(1, 1);
-  packet.write("2885", 2, "utf8");
+  packet.write(token, 2, "utf8");
   packet.writeBigUInt64LE(BigInt(Date.now()), 35);
   packet.writeBigInt64LE(130_800n, 43);
   packet.writeBigInt64LE(6_999_059n, 67);
   packet.writeBigInt64LE(129_390n, 115);
   return packet;
+}
+
+/** Models `ws`: send() throws unless OPEN, and close is delivered asynchronously. */
+function makeWsLikeSocket() {
+  const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+  const emit = (event: string, ...args: unknown[]) => (listeners[event] || []).forEach((cb) => cb(...args));
+  const closed = Promise.withResolvers<void>();
+  let state: "CONNECTING" | "OPEN" | "CLOSED" = "CONNECTING";
+  return {
+    sent: [] as string[],
+    __closed: closed.promise,
+    on(event: string, cb: (...args: unknown[]) => void) {
+      (listeners[event] ||= []).push(cb);
+    },
+    send(data: string) {
+      if (state !== "OPEN") throw new Error(`WebSocket is not open: readyState ${state}`);
+      this.sent.push(data);
+    },
+    close() {
+      if (state === "CLOSED") return;
+      state = "CLOSED";
+      queueMicrotask(() => {
+        emit("close");
+        closed.resolve();
+      });
+    },
+    __open() {
+      state = "OPEN";
+      emit("open");
+    },
+    __push(data: Buffer) {
+      emit("message", data);
+    },
+    __error(error: Error) {
+      emit("error", error);
+    },
+  };
 }
