@@ -238,46 +238,6 @@ export type MarketCandlesResponse = {
   candles: MarketCandle[];
 };
 
-export type BacktestRequest = {
-  symbol: string;
-  timeframe: "5m" | "15m" | "1h" | "1d" | "1wk";
-  range: "5d" | "1mo" | "3mo" | "1y" | "2y" | "5y";
-  strategy: "sma_cross" | "rsi";
-  initialCapital: number;
-  feeBps: number;
-  params: Record<string, number>;
-};
-
-export type BacktestResponse = {
-  asOf: string;
-  source: "yahoo";
-  delayed: true;
-  symbol: string;
-  timeframe: BacktestRequest["timeframe"];
-  range: BacktestRequest["range"];
-  candleCount: number;
-  strategy: { name: BacktestRequest["strategy"]; params: Record<string, number> };
-  initialCapital: number;
-  finalEquity: number;
-  totalReturnPct: number;
-  maxDrawdownPct: number;
-  sharpe: number;
-  winRatePct: number;
-  profitFactor: number | null;
-  avgTradePnl: number;
-  trades: Array<{
-    entryTs: string;
-    exitTs: string;
-    entryPrice: number;
-    exitPrice: number;
-    qty: number;
-    pnl: number;
-    returnPct: number;
-  }>;
-  equity: Array<{ ts: string; value: number }>;
-  monthlyReturns: Array<{ month: string; returnPct: number }>;
-};
-
 const configuredApiUrl = import.meta.env.VITE_API_URL as string | undefined;
 export const API_BASE_URL = (configuredApiUrl ?? "").replace(/\/$/, "");
 
@@ -370,27 +330,4 @@ export async function fetchMarketCandles(
   }
   if (!response.ok) throw new Error(`Candle service returned ${response.status}`);
   return response.json() as Promise<MarketCandlesResponse>;
-}
-
-export async function runMarketBacktest(
-  input: BacktestRequest,
-  signal?: AbortSignal
-): Promise<BacktestResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/backtest/run`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(input),
-    signal,
-  });
-  if (!response.ok) {
-    let message = `Backtest service returned ${response.status}`;
-    try {
-      const error = await response.json() as { statusMessage?: string; message?: string };
-      message = error.statusMessage ?? error.message ?? message;
-    } catch {
-      // Keep the HTTP status fallback.
-    }
-    throw new Error(message);
-  }
-  return response.json() as Promise<BacktestResponse>;
 }
