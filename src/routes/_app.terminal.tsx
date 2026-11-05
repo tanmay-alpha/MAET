@@ -540,7 +540,7 @@ function Terminal() {
 
         {/* Right Order Panel & Depth */}
         <div className="w-72 border-l border-border bg-panel flex flex-col">
-          <OrderPanel symbol={active} price={currentPrice} />
+          <OrderPanel symbol={active} exchange={context.exchange} price={currentPrice} />
           <div className="border-t border-border p-2">
             <DepthMeter />
           </div>
