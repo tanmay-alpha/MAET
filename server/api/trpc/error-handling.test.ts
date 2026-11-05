@@ -20,6 +20,10 @@ const router = createRouter({
   missingOrder: publicProcedure.query(() => {
     throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
   }),
+  // Mimics routers that rethrow `new TRPCError({ message: err.message })`.
+  copiedDbMessage: publicProcedure.query(() => {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: databaseFailure().message });
+  }),
 });
 
 type LogCall = { level: "error" | "debug"; payload: Record<string, unknown>; msg: string };
@@ -82,5 +86,12 @@ describe("tRPC error boundary", () => {
       { name: "Error", code: "42P01", message: 'relation "paper_accounts" does not exist' },
     ]);
     expect(JSON.stringify(payload)).not.toContain(SECRET_INPUT);
+  });
+
+  it("redacts bound parameters from messages that copied a Drizzle error's text", async () => {
+    const { logs } = await call("copiedDbMessage");
+    const [entry] = logs.filter((log) => log.level === "error");
+    expect(JSON.stringify(entry!.payload)).not.toContain(SECRET_INPUT);
+    expect(JSON.stringify(entry!.payload)).toContain("params: [redacted]");
   });
 });

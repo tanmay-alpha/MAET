@@ -28,6 +28,12 @@ const t = initTRPC.context<Context>().create({
 type ErrorChainEntry = { name: string; code?: string; message?: string; query?: string };
 type ErrorLog = { error(obj: object, msg: string): void; debug(obj: object, msg: string): void };
 
+// Drizzle formats query failures as "Failed query: <sql>\nparams: <values>";
+// wrappers that copy err.message carry the bound values (request input) along.
+export function redactQueryParams(message: string): string {
+  return message.replace(/\bparams:[\s\S]*$/u, "params: [redacted]");
+}
+
 function describeErrorChain(error: unknown): ErrorChainEntry[] {
   const chain: ErrorChainEntry[] = [];
   for (let current = error; current instanceof Error && chain.length < 5; current = current.cause) {
@@ -37,7 +43,9 @@ function describeErrorChain(error: unknown): ErrorChainEntry[] {
       ...("code" in current && typeof current.code === "string" ? { code: current.code } : {}),
       // DrizzleQueryError's message embeds the bound parameters (request input);
       // keep only the parameterised SQL text.
-      ...(current instanceof DrizzleQueryError ? { query: current.query } : { message: current.message }),
+      ...(current instanceof DrizzleQueryError
+        ? { query: current.query }
+        : { message: redactQueryParams(current.message) }),
     });
   }
   return chain;
@@ -54,7 +62,7 @@ export function reportTrpcError(
 ): void {
   const context = { path: path ?? "<no-path>", type, code: error.code };
   if (error.code !== "INTERNAL_SERVER_ERROR") {
-    log.debug({ ...context, message: error.message }, "tRPC request failed");
+    log.debug({ ...context, message: redactQueryParams(error.message) }, "tRPC request failed");
     return;
   }
   const origin = error.cause ?? error;
