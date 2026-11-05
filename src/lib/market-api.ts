@@ -3,6 +3,7 @@ import {
   ExecutionQuoteSchema,
   type ExecutionQuote,
 } from "@shared/types";
+import { API_BASE_URL } from "./api-url";
 
 export type MarketQuote = ExecutionQuote & {
   previousClose?: number;
@@ -237,9 +238,6 @@ export type MarketCandlesResponse = {
   asOf: string;
   candles: MarketCandle[];
 };
-
-const configuredApiUrl = import.meta.env.VITE_API_URL as string | undefined;
-export const API_BASE_URL = (configuredApiUrl ?? "").replace(/\/$/, "");
 
 async function fetchMarketEndpoint(path: string, signal?: AbortSignal): Promise<Response> {
   if (!API_BASE_URL) return fetch(path, { signal });

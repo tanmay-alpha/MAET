@@ -3,6 +3,8 @@
  * Replaces native EventSource to send Bearer token in Authorization headers.
  */
 
+import { apiUrl } from "./api-url";
+
 export interface SseEvent {
   type: string;
   data: unknown;
@@ -27,7 +29,7 @@ export async function connectPaperTradingStream(
   }
 
   try {
-    const res = await fetch("/api/paper/stream", {
+    const res = await fetch(apiUrl("/api/paper/stream"), {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: "text/event-stream",
