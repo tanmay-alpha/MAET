@@ -12,7 +12,7 @@
     "lint": "bun run --cwd src lint",
     "dev": "bun run server/orchestrator.ts",
     "test": "bun run test:phase1",
-    "test:unit": "bun test server/data server/domain server/hooks server/infra shared src tests/canonical-indicators.test.ts server/modules/paper-trading/financial-invariants.test.ts server/modules/paper-trading/stream-slots.test.ts server/api/paper/auth-boundary.test.ts",
+    "test:unit": "bun test server/data server/domain server/hooks server/infra shared src tests/canonical-indicators.test.ts server/modules/paper-trading/financial-invariants.test.ts server/modules/paper-trading/stream-slots.test.ts server/modules/paper-trading/execution-quote.test.ts server/modules/paper-trading/volume-tracker.test.ts server/api/paper/auth-boundary.test.ts",
     "test:canonical-indicators": "bun test tests/canonical-indicators.test.ts",
     "test:integration": "bun test server/modules/paper-trading/repository.integration.test.ts server/modules/paper-trading/service.integration.test.ts server/modules/paper-trading/engine-integrity.integration.test.ts server/modules/paper-trading/risk-liquidation.integration.test.ts server/db/migrations/0023-upgrade.integration.test.ts server/db/migrations/0023b-upgrade.integration.test.ts",
     "test:concurrency": "bun test server/modules/paper-trading/concurrency.integration.test.ts",
