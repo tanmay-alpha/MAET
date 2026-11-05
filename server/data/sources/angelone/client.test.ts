@@ -123,6 +123,14 @@ describe("angelone login", () => {
     expect(reasons).toHaveLength(1);
   });
 
+  it.each(["AB1010", "AB1011"])("treats session-expiry code %s as a rejected session", async (errorcode) => {
+    activateMarketSession();
+    globalThis.fetch = (async () => Response.json({ status: false, message: "Session expired", errorcode, data: null })) as unknown as typeof fetch;
+
+    await expect(getAngelOneMarketQuotes([{ symbol: "RELIANCE", token: "2885" }])).rejects.toBeInstanceOf(AngelOneAuthError);
+    expect(hasAngelOneMarketSession()).toBe(false);
+  });
+
   it("treats an Angel One token error code in a 200 response as a rejected session", async () => {
     activateMarketSession();
     let rejected = 0;

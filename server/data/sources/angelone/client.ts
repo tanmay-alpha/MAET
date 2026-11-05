@@ -112,9 +112,10 @@ export class AngelOneAuthError extends Error {
   override name = "AngelOneAuthError";
 }
 
-// SmartAPI token errors: AG8001 invalid, AG8002 expired, AG8003 missing.
+// SmartAPI error-code list: AG8001 invalid token, AG8002 token expired,
+// AG8003 token missing, AB1010 AMX session expired, AB1011 client not logged in.
 // HTTP 403 is not included: SmartAPI also uses it for rate limiting.
-const AUTH_ERROR_CODES: Record<string, true> = { AG8001: true, AG8002: true, AG8003: true };
+const AUTH_ERROR_CODES: Record<string, true> = { AG8001: true, AG8002: true, AG8003: true, AB1010: true, AB1011: true };
 
 type SessionRejectedListener = (reason: string) => void;
 const sessionRejectedListeners = new Set<SessionRejectedListener>();
