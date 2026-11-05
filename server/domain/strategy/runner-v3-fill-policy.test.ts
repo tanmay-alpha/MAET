@@ -74,3 +74,23 @@ describe("runBacktestV3 — fill policy and entry-bar risk checks", () => {
     expect(result.executionPolicy).toBe("ON_CLOSE");
   });
 });
+
+
+describe("runBacktestV3 — warm-up bars before tradeFrom", () => {
+  it("uses earlier bars for indicators but trades and reports only from tradeFrom", () => {
+    const candles = makeCandles();
+    const result = runBacktestV3({
+      strategyVersionId: "warm-up",
+      definition: definition("NEXT_BAR_OPEN"),
+      symbol: "TEST",
+      candles,
+      tradeFrom: candles[40].ts,
+    });
+
+    // The bar-30 breakout precedes tradeFrom, so it cannot be traded.
+    expect(result.trades).toHaveLength(0);
+    expect(result.from).toBe(candles[39].ts);
+    expect(result.equityCurve[0].timestamp).toBe(new Date(candles[39].ts).getTime());
+    expect(result.equityCurve).toHaveLength(candles.length - 39);
+  });
+});

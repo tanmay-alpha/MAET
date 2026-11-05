@@ -44,6 +44,11 @@ export interface V3BacktestRunRequest {
   timeframe?: string;
   corporateActions?: CorporateAction[];
   priceSeries?: PriceAdjustmentSeries;
+  /**
+   * Bars before this timestamp only warm up indicators: no signals act on them and they are not
+   * part of the equity curve or metrics. Default: trade from the second bar.
+   */
+  tradeFrom?: string | number;
 }
 
 export interface V3TradeRecord extends TradeRecord {
@@ -194,7 +199,17 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
   const slippageBps = exec.slippageBps ?? 5;
   const slippageRate = slippageBps / 10000;
 
-  const equityCurve: EquityPoint[] = [{ timestamp: new Date(sorted[0].ts).getTime(), equity }];
+  // First bar on which orders may fill; the bar before it is the equity curve's starting mark.
+  const tradeFromMs = request.tradeFrom === undefined ? null : new Date(request.tradeFrom).getTime();
+  const firstTradeBar = tradeFromMs === null
+    ? 1
+    : Math.max(1, sorted.findIndex((c) => new Date(c.ts).getTime() >= tradeFromMs));
+  if (tradeFromMs !== null && new Date(sorted[sorted.length - 1].ts).getTime() < tradeFromMs) {
+    throw new Error(`tradeFrom ${new Date(tradeFromMs).toISOString()} is after the last candle`);
+  }
+  const startBar = sorted[firstTradeBar - 1];
+
+  const equityCurve: EquityPoint[] = [{ timestamp: new Date(startBar.ts).getTime(), equity }];
 
   // Helper: compute mark-to-market equity for the current open position at a given price.
   // The `equity` variable tracks realized cash minus costs (entry fees/slippage deducted on entry,
@@ -319,7 +334,7 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     mae = 0;
   }
 
-  for (let i = 1; i < sorted.length; i++) {
+  for (let i = firstTradeBar; i < sorted.length; i++) {
     const bar = sorted[i];
     const barTs = new Date(bar.ts).getTime();
 
@@ -402,7 +417,7 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     const sortedBench = [...request.benchmarkCandles].sort(
       (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime(),
     );
-    const firstTs = new Date(sorted[0].ts).getTime();
+    const firstTs = new Date(startBar.ts).getTime();
     const lastTs = new Date(sorted[sorted.length - 1].ts).getTime();
     const benchStart = sortedBench.find((c) => new Date(c.ts).getTime() >= firstTs);
     if (benchStart) {
@@ -430,7 +445,7 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     runId,
     strategyVersionId: request.strategyVersionId,
     symbol: request.symbol,
-    from: sorted[0].ts,
+    from: startBar.ts,
     to: sorted[sorted.length - 1].ts,
     metrics,
     equityCurve,
