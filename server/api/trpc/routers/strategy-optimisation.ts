@@ -16,6 +16,7 @@ import {
 } from "../../../db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { CreateSweepInputSchema, CreateWalkForwardInputSchema } from "../../../../shared/strategy/contracts";
+import { insertWithinActiveJobCap } from "../../../modules/strategy-jobs/repository";
 
 const MAX_COMBINATIONS = 500;
 
@@ -41,7 +42,7 @@ export const strategyOptimisationRouter = createRouter({
         });
       }
 
-      const [sweep] = await db
+      const [sweep] = await insertWithinActiveJobCap(ctx.userId!, "sweep", (tx) => tx
         .insert(strategyParameterSweeps)
         .values({
           userId: ctx.userId!,
@@ -55,7 +56,7 @@ export const strategyOptimisationRouter = createRouter({
           status: "QUEUED",
           completedCount: 0,
         })
-        .returning();
+        .returning());
 
       return { sweep };
     }),
@@ -130,7 +131,7 @@ export const strategyOptimisationRouter = createRouter({
         });
       }
 
-      const [run] = await db
+      const [run] = await insertWithinActiveJobCap(ctx.userId!, "walk-forward", (tx) => tx
         .insert(strategyWalkForwardRuns)
         .values({
           userId: ctx.userId!,
@@ -146,7 +147,7 @@ export const strategyOptimisationRouter = createRouter({
           windowCount: Math.min(maxWindows, input.minimumWindows * 2),
           status: "QUEUED",
         })
-        .returning();
+        .returning());
 
       return { run };
     }),

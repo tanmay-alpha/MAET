@@ -8,11 +8,56 @@
  */
 
 import { db } from "../../data/drizzle/client";
-import { strategyBacktestJobs, strategyVersions } from "../../db/schema";
-import { eq, and, lt, sql, isNull } from "drizzle-orm";
+import {
+  strategyBacktestJobs,
+  strategyParameterSweeps,
+  strategyVersions,
+  strategyWalkForwardRuns,
+} from "../../db/schema";
+import { eq, and, lt, sql, isNull, inArray } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
 const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/** Queued + running jobs a single user may hold per job kind (backtests, sweeps, walk-forwards). */
+export const MAX_ACTIVE_JOBS_PER_USER = 3;
+
+const ACTIVE_JOB_TABLES = {
+  backtest: strategyBacktestJobs,
+  sweep: strategyParameterSweeps,
+  "walk-forward": strategyWalkForwardRuns,
+} as const;
+
+export type StrategyJobKind = keyof typeof ACTIVE_JOB_TABLES;
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Runs `insert` only while the user holds fewer than MAX_ACTIVE_JOBS_PER_USER
+ * QUEUED/RUNNING jobs of `kind`. A per-user advisory lock serialises
+ * concurrent creates so parallel requests cannot overshoot the cap.
+ */
+export async function insertWithinActiveJobCap<T>(
+  userId: string,
+  kind: StrategyJobKind,
+  insert: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  const table = ACTIVE_JOB_TABLES[kind];
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`strategy-jobs:${kind}:${userId}`}))`);
+    const [{ active }] = await tx
+      .select({ active: sql<number>`count(*)::int` })
+      .from(table)
+      .where(and(eq(table.userId, userId), inArray(table.status, ["QUEUED", "RUNNING"])));
+    if (active >= MAX_ACTIVE_JOBS_PER_USER) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: `At most ${MAX_ACTIVE_JOBS_PER_USER} active ${kind} jobs allowed; wait for one to finish or cancel it.`,
+      });
+    }
+    return insert(tx);
+  });
+}
 
 export interface BacktestJobRow {
   id: string;
@@ -53,22 +98,24 @@ export async function createJob(
   initialCapital?: number,
   benchmarkSymbol?: string,
 ): Promise<BacktestJobRow> {
-  const [row] = await db
-    .insert(strategyBacktestJobs)
-    .values({
-      userId,
-      strategyVersionId,
-      status: "QUEUED",
-      symbolOrUniverse,
-      timeframe,
-      fromDate,
-      toDate,
-      initialCapital: initialCapital?.toString(),
-      benchmarkSymbol: benchmarkSymbol ?? null,
-      progress: 0,
-    })
-    .returning();
-  return row as unknown as BacktestJobRow;
+  return insertWithinActiveJobCap(userId, "backtest", async (tx) => {
+    const [row] = await tx
+      .insert(strategyBacktestJobs)
+      .values({
+        userId,
+        strategyVersionId,
+        status: "QUEUED",
+        symbolOrUniverse,
+        timeframe,
+        fromDate,
+        toDate,
+        initialCapital: initialCapital?.toString(),
+        benchmarkSymbol: benchmarkSymbol ?? null,
+        progress: 0,
+      })
+      .returning();
+    return row as unknown as BacktestJobRow;
+  });
 }
 
 // ============================================================

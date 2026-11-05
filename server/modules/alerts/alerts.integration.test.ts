@@ -660,4 +660,40 @@ describe("PostgreSQL Alert Lifecycle & Tenant Isolation Suite (Checkpoint 4)", (
       await sql`DELETE FROM auth.users WHERE id IN (${userA}, ${userB})`;
     }
   });
+
+  it("caps alerts per user, including concurrent creates", async () => {
+    if (!process.env.TEST_DATABASE_URL) {
+      console.log("  Skipping PostgreSQL alert cap test: TEST_DATABASE_URL not set");
+      return;
+    }
+    const { getSqlClient } = await import("../../data/drizzle/client");
+    const { createAlert, MAX_ALERTS_PER_USER } = await import("./repository");
+    const sql = getSqlClient();
+    const user = crypto.randomUUID();
+    const input = {
+      symbol: "TCS",
+      enabled: true,
+      config: { type: "PRICE_ABOVE" as const, threshold: 1, mode: "one_time" as const, cooldownMinutes: 60 },
+    };
+    try {
+      await sql`INSERT INTO auth.users (id) VALUES (${user}) ON CONFLICT DO NOTHING`;
+      await sql`INSERT INTO public.users (id, email) VALUES (${user}, ${`alert-cap-${user}@example.com`})`;
+      await sql`
+        INSERT INTO alerts (user_id, symbol, exchange, type, condition, target, enabled, mode)
+        SELECT ${user}, 'TCS', 'NSE', 'PRICE_ABOVE', 'PRICE_ABOVE', 1, true, 'ONE_TIME'
+        FROM generate_series(1, ${MAX_ALERTS_PER_USER - 2})
+      `;
+
+      const results = await Promise.allSettled([createAlert(user, input), createAlert(user, input), createAlert(user, input)]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+      const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+      expect(rejected.reason).toMatchObject({ code: "TOO_MANY_REQUESTS" });
+      const [{ count }] = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM alerts WHERE user_id = ${user}`;
+      expect(count).toBe(MAX_ALERTS_PER_USER);
+    } finally {
+      await sql`DELETE FROM alerts WHERE user_id = ${user}`;
+      await sql`DELETE FROM public.users WHERE id = ${user}`;
+      await sql`DELETE FROM auth.users WHERE id = ${user}`;
+    }
+  });
 });
