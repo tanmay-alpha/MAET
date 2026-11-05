@@ -13,7 +13,40 @@
  */
 
 import type { StrategyDefinition, StrategyRuleGroup, StrategyCondition } from "@shared/strategy/ast";
-import type { StrategyParams, RiskConfig } from "./strategies-v2";
+
+export type StrategyType =
+  | "SMA_CROSS"
+  | "EMA_CROSS"
+  | "RSI_REVERSAL"
+  | "MACD_CROSS"
+  | "DONCHIAN_BREAKOUT"
+  | "BOLLINGER_MEAN_REVERSION"
+  | "COMBINED_RULES";
+
+export interface RiskConfig {
+  initialCapital: number;
+  feeBps: number;
+  slippageBps: number;
+  positionSizePercent: number;
+  maximumOpenPositions: number;
+  stopLossPercent?: number;
+  takeProfitPercent?: number;
+  trailingStopPercent?: number;
+}
+
+export interface StrategyParams {
+  type: StrategyType;
+  fastPeriod?: number;
+  slowPeriod?: number;
+  signalPeriod?: number;
+  rsiPeriod?: number;
+  rsiOversold?: number;
+  rsiOverbought?: number;
+  donchianPeriod?: number;
+  bollingerPeriod?: number;
+  bollingerStdDev?: number;
+  combinedRules?: Array<{ indicator: string; op: string; value: number }>;
+}
 
 // ============================================================
 // Helpers to build common AST fragments
