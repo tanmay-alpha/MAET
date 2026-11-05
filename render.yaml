@@ -41,6 +41,16 @@ services:
       # NSE holiday calendar as JSON array of ISO date strings
       - key: NSE_HOLIDAYS_JSON
         sync: false
+      # Optional BigQuery analytics sink (server/data/bigquery/client.ts).
+      # When unset, warehouse writes fail and are logged; Postgres persistence
+      # is unaffected. GOOGLE_APPLICATION_CREDENTIALS should point at a Render
+      # secret file, e.g. /etc/secrets/gcp-service-account.json.
+      - key: BIGQUERY_PROJECT
+        sync: false
+      - key: BIGQUERY_DATASET
+        sync: false
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false
       # Comma-separated list of exact frontend origins allowed by CORS.
       # server/middleware/cors.ts (Nitro global middleware) reads this at
       # startup and falls back to the local dev hosts plus these Vercel hosts

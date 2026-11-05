@@ -4,8 +4,14 @@ on:
   push:
     branches:
       - main
+    # Everything that changes the Render build: the server, the shared package
+    # it imports via @shared, and the workspace install/deploy inputs.
     paths:
       - "server/**"
+      - "shared/**"
+      - "package.json"
+      - "bun.lock"
+      - "render.yaml"
 
 permissions:
   contents: read

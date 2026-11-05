@@ -33,7 +33,7 @@ flowchart TB
     subgraph Ingestion["Ingestion & Validation Engine"]
         Orchestrator["Daily Orchestrator"]
         DLQ["Dead Letter Queue & Retries"]
-        CalcEngine["179-Indicator Engine\n(0-NaN Invariant)"]
+        CalcEngine["Calculation Engine\n(70 registered calculators)"]
     end
 
     subgraph Storage["Persistence & Analytical Tier"]
@@ -79,14 +79,16 @@ flowchart TB
 
 ## 2. Quantitative Research Engine (P2 Flagship)
 
-MAET features a professional-grade research and simulation engine built to avoid the pitfalls of naive backtesting (overfitting, look-ahead bias, survivorship bias, and zero-cost assumptions).
+MAET includes a research and simulation toolkit built to avoid the pitfalls of naive backtesting (overfitting, look-ahead bias, survivorship bias, and zero-cost assumptions).
+
+> **Wiring status.** Production backtests (the `backtestV2` tRPC router and the backtest, sweep and walk-forward job workers in `server/workers/`) run `server/domain/strategy/runner-v3.ts`, which applies statutory Indian equity charges (`shared/domain/costs`) and slippage. The execution model (A), point-in-time fundamentals (C), shared-capital portfolio engine (D), walk-forward analysis module (E) and robustness analysis (F) below are **research modules covered by tests** (for example `server/domain/strategy/p2-research-invariants.test.ts`); they are not yet called by production backtests.
 
 ### A. Realistic Execution & Market Microstructure (`server/domain/strategy/execution-model.ts`)
 - **Square-Root Market Impact**: Price impact scales nonlinearly with market participation:
   $$\text{impactBps} = \text{impactCoeff} \times \sqrt{\frac{\text{OrderVolume}}{\text{BarVolume}}} \times \sigma_{\text{vol}}$$
 - **Bid-Ask Spread Models**: Configurable spread dynamics: `NONE`, `FIXED_BPS`, `VOLATILITY_BASED`, and `LIQUIDITY_BASED`.
 - **Directional Price Shift**: BUY orders shift execution price upward; SELL orders shift price downward, appropriately penalising aggressive fills.
-- **Participation Rate Capping**: Multi-bar order state machine (`NEW` $\to$ `PARTIALLY_FILLED` $\to$ `FILLED` / `EXPIRED`) capping fills to a realistic percentage of bar volume.
+- **Participation Rate Capping**: Caps fills to a configurable percentage of bar volume.
 - **Full Drag Accounting**: Explicitly accounts for brokerage, exchange turnover fees, STT, GST, SEBI charges, stamp duty, spread, and market impact.
 
 ### B. Corporate Actions & Price Adjustments (`server/domain/data/corporate-actions.ts`)
@@ -94,25 +96,26 @@ MAET features a professional-grade research and simulation engine built to avoid
 - **Backward-Adjusted OHLCV**: Split factors backward-applied to historical candles strictly prior to ex-date.
 - **Dividend Reinvestment Model**: Continuous total return compounding factor ($k = 1 - \frac{D}{P_{\text{close}}}$).
 - **Mathematical Invariant**: A 2:1 stock split **never** triggers an artificial 50% drawdown in strategy simulation.
+- **Status**: The adjustment code exists and `runner-v3` accepts corporate actions, but no corporate-action data is ingested, so production backtests use stored candles (Yahoo prices are split-adjusted, not dividend-adjusted).
 
 ### C. Point-in-Time Fundamentals & Survivorship Bias Prevention (`server/domain/fundamentals/point-in-time.ts`)
 - **Strict Availability Boundary**: Zero look-ahead bias invariant:
   $$\text{availableFrom} \le T_{\text{simulation}}$$
 - **Full Restatement Tracking**: Backtests evaluated before an accounting restatement see Revision 1; evaluations after see Revision 2.
 - **Survivorship-Bias-Free Universe**: Point-in-time index constituent queries (`getActiveUniverseConstituents()`), preventing backtest distortion from delisted or excluded companies.
+- **Status**: Not yet used by any backtest.
 
 ### D. Multi-Symbol Shared Capital Portfolio Engine (`server/domain/strategy/portfolio-engine.ts`)
 - **Synchronized Timeline**: Bar-by-bar multi-asset evaluation across instrument universes.
 - **Shared Capital Pool**: Instruments compete for shared cash—preventing capital double-spending.
 - **Deterministic Priority Ranking**: Priority resolution via `MOMENTUM`, `RELATIVE_VOLUME`, `SCORECARD_SCORE`, or `SYMBOL_ASCENDING`.
 - **Institutional Risk Limits**: Max open positions, max position %, gross exposure caps, sector exposure limits, and minimum cash reserve requirements.
-- **Execution Order**: Strict precedence executing `SELL` orders before `BUY` orders to release margin during rebalancing.
-- **Performance & Attribution Metrics**: CAGR, Sharpe, Sortino, Max Drawdown, Calmar Ratio, Turnover, Benchmark Beta, Alpha, and Tracking Error.
+- **Performance & Attribution Metrics**: CAGR, Sharpe, Sortino, Max Drawdown, Calmar Ratio, Turnover, Benchmark Beta, Alpha, and Tracking Error. Sharpe is the mean excess periodic return divided by its standard deviation, times $\sqrt{\text{periods per year}}$ (risk-free rate configurable, default 0); Sortino uses downside deviation over all $N$ periods.
 
 ### E. Walk-Forward Analysis & Optimization (`server/domain/strategy/walk-forward.ts`)
 - **Three-Phase Windowing**: Parameter training $\to$ validation $\to$ out-of-sample (OOS) testing.
 - **Strict Leakage Isolation**: Future test candles never enter training/validation indicator caches.
-- **Walk-Forward Efficiency (WFE)**: Evaluates performance retention across in-sample vs out-of-sample periods.
+- **Walk-Forward Efficiency (WFE)**: Out-of-sample vs in-sample performance retention; `null` when in-sample performance is $\le 0$.
 - **Continuous OOS Curve**: Stitches out-of-sample equity curves across consecutive rolling windows.
 
 ### F. Parameter Robustness & Overfit Detection (`server/domain/strategy/robustness.ts`)
@@ -124,10 +127,10 @@ MAET features a professional-grade research and simulation engine built to avoid
 
 ## 3. Screener, Data Ingestion & Technical Engine
 
-### 179-Indicator Calculation Engine
-- Deterministic calculation registry computing 179 technical indicators and fundamental valuation metrics.
-- High-performance batch runner with a 50-worker pool.
-- **Zero NaN Guarantee**: Verified cross-system equality (`INDICATOR_ENGINE_VERSION`) ensuring identical indicator calculations across server workers, screener DSL, chart overlays, and strategy backtest runners.
+### Calculation Engine
+- Registry of 70 calculators: 24 technical indicators, 23 fundamental metrics, 14 scanners and 9 portfolio metrics (`server/domain/calculations/calculators/`).
+- Batch runner that processes symbols in parallel chunks of 50 (`server/domain/calculations/engine/batch-runner.ts`).
+- Canonical indicator implementations live in `shared/indicators/canonical.ts`; `tests/canonical-indicators.test.ts` checks them against the strategy engine's indicator cache. Bars inside an indicator's warm-up window have `null` values, not `0`.
 
 ### Dual-Database Storage Architecture
 - **Supabase PostgreSQL**: Operational persistence for companies, historical OHLCV candles, technical snapshots, paper trading orders, fills, margin logs, and alert rules.
@@ -147,47 +150,52 @@ MAET is organized as a clean, type-safe Bun workspace monorepo:
 
 ```text
 MAET/
-├── .github/
-│   └── workflows/
-│       ├── ci.yml                # Main CI: typecheck, unit tests, integration, builds
-│       └── deploy-render.yml     # Production Render deployment & health verification
-├── server/                       # Backend Application (Nitro / H3 / tRPC)
-│   ├── api/                      # REST endpoints & tRPC router hierarchy
-│   ├── data/                     # External data adapters (Angel One, Yahoo, NSE)
-│   ├── db/                       # Drizzle ORM schema, pooler, and migrations (0001–0022)
-│   ├── domain/                   # Core business logic:
-│   │   ├── backtest/             # Legacy & V3 backtesting adapters
-│   │   ├── calculations/         # 179-indicator calculation engine & registry
-│   │   ├── data/                 # Corporate actions & split/dividend adjusters
-│   │   ├── fundamentals/         # Point-in-time financial statement models
-│   │   ├── market/               # Quote services & candle aggregation
-│   │   ├── screener/             # Company queries & screener DSL
-│   │   └── strategy/             # Portfolio engine, execution model, walk-forward, robustness
-│   ├── infra/                    # Encryption (AES-256-GCM), Redis cache, JWT auth
-│   ├── modules/                  # Modular services (alerts, paper-trading, screener-dsl, etc.)
-│   └── workers/                  # Background jobs, orchestrator, DLQ, ingestion pipelines
-├── shared/                       # Shared Contracts & Domain Utilities
-│   ├── domain/paper-trading/     # Canonical paper execution & margin contracts
-│   ├── indicators/               # Canonical mathematical indicator implementations
-│   ├── research/                 # P2 research schemas, contracts, and invariants
-│   ├── screener/                 # Screener AST definitions and filter registry
-│   ├── strategy/                 # Strategy AST, operators, and schemas
+├── .github/workflows/
+│   ├── ci.yml                    # Typecheck, lint, test wiring check, unit/integration/concurrency/advanced suites, builds
+│   └── deploy-render.yml         # Verifies the Render deployment serves the pushed commit and reports healthy
+├── server/                       # Backend (Nitro / H3 / tRPC), deployed to Render
+│   ├── api/                      # File-based REST/SSE routes (/api/*), health.get.ts, tRPC entry & routers
+│   ├── data/                     # Clients & adapters: Drizzle/Postgres, Redis, BigQuery, Angel One, Yahoo, NSE
+│   ├── db/
+│   │   ├── migrations/           # Numbered SQL migrations (0001–0024) + upgrade tests
+│   │   ├── seeds/                # Reference data loads (market_baseline_metrics.sql)
+│   │   └── schema.ts             # Drizzle table definitions
+│   ├── domain/                   # Business logic: analysis, backtest, calculations, company, data
+│   │                             # (corporate actions), fundamentals, market, portfolio, screener,
+│   │                             # strategy (runner-v3, execution model, portfolio engine, walk-forward), technical
+│   ├── http/sse/                 # Server-Sent Events hub
+│   ├── infra/                    # Auth (JWT), event bus, encryption, health, idempotency, logger, rate limit
+│   ├── middleware/cors.ts        # Global CORS (FRONTEND_ORIGIN)
+│   ├── modules/                  # Feature services (alerts, paper-trading, screener-dsl, strategy jobs, ...)
+│   ├── plugins/orchestrator.ts   # Starts/stops the orchestrator with the Nitro server
+│   ├── routes/health/            # Admin-only /health/detailed report
+│   ├── scripts/                  # Migrations, seeds, DB checks, backfills, test wiring check
+│   ├── workers/                  # Background jobs, ingestion engine, quote pollers, job workers
+│   ├── config.ts                 # Environment validation
+│   ├── orchestrator.ts           # Worker/market-data orchestration
+│   └── nitro.config.ts           # Nitro build configuration
+├── shared/                       # Contracts shared by frontend and backend
+│   ├── domain/                   # Domain contracts (paper trading, Indian equity charges)
+│   ├── indicators/               # Canonical indicator implementations
+│   ├── research/                 # Research schemas and contracts
+│   ├── screener/                 # Screener AST and filter registry
+│   ├── strategy/                 # Strategy AST, operators, schemas, engine versions
+│   ├── symbols/                  # Symbol lists (nifty50.json)
 │   └── types/                    # Shared TypeScript domain types
-├── src/                          # Frontend Application (React 19 / TanStack Start / Vite)
-│   ├── components/               # UI components, data tables, charting, and analytics
-│   │   ├── charting/             # Lightweight charts & candlestick rendering
-│   │   ├── options/              # Greeks display, payoff graphs, strategy builder
-│   │   ├── strategy/             # PortfolioAnalyticsView, WalkForwardView, RobustnessHeatmapView
-│   │   └── trading/              # Depth meters, order panels, live tapes, heatmaps
-│   ├── hooks/                    # Reusable React hooks for market feeds, auth, and state
-│   ├── routes/                   # File-based routing (screener, backtest, terminal, etc.)
-│   └── store/                    # Terminal client-side state management
-├── tests/                        # E2E & Cross-System Tests
-│   ├── canonical-indicators.test.ts  # Cross-system indicator equality test suite
-│   └── e2e/                      # Playwright browser integration specs
-├── bun.lock                      # Authoritative Bun lockfile
-├── package.json                  # Workspace configuration and unified scripts
-└── render.yaml                   # Infrastructure-as-Code for Render backend deployment
+├── src/                          # Frontend (React 19 / TanStack Start / Vite), deployed to Vercel
+│   ├── components/               # UI: chart, charting, market, options, strategy, trading, workspace, ui, ...
+│   ├── hooks/                    # React hooks for market feeds, auth and state
+│   ├── lib/                      # REST/tRPC clients, auth token, SSE client, utilities
+│   ├── routes/                   # File-based routes (screener, terminal, portfolio, strategies, ...)
+│   └── store/                    # Client-side state
+├── tests/
+│   ├── canonical-indicators.test.ts  # Canonical indicator test suite
+│   └── e2e/                      # Playwright specs (run manually; not part of CI)
+├── scripts/setup-render.sh       # Render setup helper
+├── playwright.config.ts
+├── bun.lock
+├── package.json                  # Workspace configuration and scripts
+└── render.yaml                   # Render blueprint for the backend
 ```
 
 ---
@@ -237,49 +245,64 @@ ANGELONE_CLIENT_ID=your-client-id
 ANGELONE_PIN=your-pin
 ANGELONE_TOTP_SECRET=your-totp-secret
 
-# Google BigQuery Analytics (Optional)
+# Google BigQuery Analytics (Optional). When unset, warehouse writes fail and
+# are logged; Postgres persistence is unaffected.
 BIGQUERY_PROJECT=your-gcp-project
 BIGQUERY_DATASET=maet_warehouse
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+
+# Frontend (Vite, inlined into the browser bundle: public values only)
+VITE_API_URL=http://localhost:3000
+VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon key, public by design>
 ```
+
+On Render, set the server variables in the dashboard (`render.yaml` lists them, including the optional BigQuery ones); on Vercel, set the `VITE_*` variables.
 
 ### 3. Running Locally
-Start both backend services and frontend development server concurrently:
+Run the backend and frontend in two terminals:
 
 ```bash
-bun run dev
+# Backend: Nitro dev server (API, tRPC, SSE; port 3000 by default)
+bun run --cwd server dev
+
+# Frontend: Vite dev server; set VITE_API_URL (e.g. http://localhost:3000) so it calls the backend
+bun run --cwd src dev
 ```
 
-The frontend will be available at `http://localhost:5173` (or configured Vite port) and the backend API at `http://localhost:3000`.
+The root `bun run dev` only loads the standalone orchestrator module; it does not start the API or the website.
+
+Apply database migrations with `bun run test:db-migrate` (uses `TEST_DATABASE_URL`) or `bun run server/scripts/apply-migrations.ts`.
 
 ---
 
 ## 6. Verification & Test Suite
 
-MAET maintains rigorous financial and algorithmic correctness invariants with a zero-tolerance test policy.
+All of the following run in CI (`.github/workflows/ci.yml`). Database-backed suites need `TEST_DATABASE_URL` pointing at a disposable PostgreSQL database.
 
 ```bash
-# Run full typecheck across frontend and backend
+# Typecheck frontend and backend, lint the frontend
 bun run typecheck
+bun run lint
 
-# Run unit tests across server domain, data, infra, shared, and frontend (435+ tests)
+# Fail if any tracked *.test.ts file is not reachable from test:all
+bun run check:test-wiring
+
+# Unit tests (no database required): server domain/data/infra/api/workers, shared, frontend
 bun run test:unit
 
-# Verify cross-system canonical indicator equality
-bun run test:canonical-indicators
-
-# Verify P2 Research Engine invariants (impact, corporate actions, PIT fundamentals, shared capital)
-bun test server/domain/strategy/p2-research-invariants.test.ts
-
-# Run integration tests against PostgreSQL database
+# Paper-trading integration and concurrency suites (PostgreSQL)
 bun run test:integration
-
-# Run paper-trading concurrency stress tests
 bun run test:concurrency
 
-# Run entire verification suite
+# Remaining PostgreSQL-backed feature suites and migration upgrade tests
+bun run test:advanced
+
+# Everything above in sequence
 bun run test:all
 ```
+
+Playwright specs in `tests/e2e/` need a running frontend and backend and are not part of CI.
 
 ### Production Builds
 ```bash
@@ -292,9 +315,9 @@ bun run --cwd server build
 
 ---
 
-## 7. Financial & Research Invariants Enforced in CI
+## 7. Financial & Research Invariants Checked in CI
 
-Every pull request and push to `main` must strictly pass automated checks verifying these invariants:
+CI runs tests for these invariants on every pull request and push to `main`. Items 1–7 exercise the research modules from section 2, which are not yet wired into production backtests.
 
 1. **Deterministic Execution**: Market impact strictly scales with $\sqrt{\text{participation}}$, increasing buy fill prices and decreasing sell fill prices.
 2. **Corporate Action Split Invariant**: Stock splits (e.g. 2:1) adjust historical series without creating artificial drawdown anomalies.
@@ -310,7 +333,8 @@ Every pull request and push to `main` must strictly pass automated checks verify
 ## 8. Deployment Architecture
 
 - **Frontend (Vercel)**: Automatically deploys from `main`. Uses TanStack Start and pre-built Nitro output (`.vercel/output`).
-- **Backend (Render)**: Automatically triggered on `main` updates impacting `server/**`. Uses `render.yaml` infrastructure configuration, health-checked via `/api/health`.
+- **Backend (Render)**: Render deploys `main` using `render.yaml`. `deploy-render.yml` runs on pushes touching `server/**`, `shared/**`, `package.json`, `bun.lock` or `render.yaml`, builds the backend and waits until `/api/health` reports the pushed commit with `status: "ok"`.
+- **Health semantics**: `GET /api/health` (Render's `healthCheckPath`) always answers HTTP 200 so Render does not restart an instance because of an external outage. The body reports `status: "ok"` or `"degraded"` and per-component `checks`: `database` (live `select 1`) and `redis` (live `PING`), each with a 2 s timeout and cached for 10 s, plus `orchestrator` and `marketData` as reported by those components. `GET /health/detailed` (row counts, DLQ stats, recent ingestion runs) requires an admin JWT.
 - **Database (Supabase)**: Transaction pooler configuration via port `6543` with `sslmode=require`.
 
 ---
