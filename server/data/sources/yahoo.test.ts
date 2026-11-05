@@ -144,4 +144,34 @@ describe("yahoo source", () => {
     await expect(getQuote("X")).resolves.toMatchObject({ price: 75 });
     expect(n).toBe(10);
   });
+
+  it("reuses one candle cache entry for repeated requests within the cache window", async () => {
+    const keys: string[] = [];
+    spyOn(redisClient, "getCachedJson").mockImplementation(async (key: string) => {
+      keys.push(key);
+      return undefined;
+    });
+    globalThis.fetch = (async () => Response.json({ chart: { result: [{ meta: { regularMarketPrice: 1, regularMarketVolume: 1, symbol: "RELIANCE.NS" }, timestamp: [], indicators: { quote: [{ open: [], high: [], low: [], close: [], volume: [] }] } }] } })) as unknown as typeof fetch;
+
+    const to = new Date("2026-11-05T05:00:10.000Z");
+    const tenSecondsLater = new Date(to.getTime() + 10_000);
+    await getCandles("RELIANCE", new Date(to.getTime() - 30 * 86_400_000), to, "1d");
+    await getCandles("RELIANCE", new Date(tenSecondsLater.getTime() - 30 * 86_400_000), tenSecondsLater, "1d");
+
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it("requests candles with the same browser User-Agent as quotes and names the failing status", async () => {
+    const agents: string[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      agents.push(new Headers(init?.headers).get("User-Agent") ?? "");
+      return new Response("", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    await expect(getCandles("ZZZZFAKE", new Date("2026-10-01"), new Date("2026-11-01"), "1d")).rejects.toThrow("404");
+    await expect(getQuote("ZZZZFAKE")).rejects.toBeInstanceOf(UpstreamPermanentError);
+    expect(agents[0]).toBe(agents[1]);
+    expect(agents[0]).toContain("Mozilla/5.0");
+  });
 });

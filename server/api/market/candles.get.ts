@@ -1,6 +1,7 @@
 import { createError, defineEventHandler, getQuery, setResponseHeader } from "h3";
-import type { Candle } from "@shared/types";
+import { AppError, type Candle } from "@shared/types";
 import { loadMarketCandles } from "../../domain/market/candle-service";
+import { getLogger } from "../../infra/logger";
 
 const TIMEFRAMES: Candle["tf"][] = ["1m", "5m", "15m", "1h", "1d", "1wk"];
 const RANGE_MS: Record<string, number> = {
@@ -54,8 +55,16 @@ export default defineEventHandler(async (event) => {
   let result;
   try {
     result = await loadMarketCandles(symbol, tf, from, to);
-  } catch {
-    throw createError({ statusCode: 503, statusMessage: "Market history temporarily unavailable" });
+  } catch (error) {
+    // Both sources failed (stored history is checked first). The upstream code
+    // separates Yahoo throttling (UPSTREAM_DEGRADED, e.g. 429) from a rejected
+    // request (UPSTREAM_PERMANENT, e.g. 404) without exposing provider text.
+    const reason = error instanceof AppError ? error.code : "INTERNAL";
+    getLogger().error(
+      { symbol, tf, range, reason, err: error instanceof Error ? `${error.name}: ${error.message}` : String(error) },
+      "market candles unavailable from database and Yahoo"
+    );
+    throw createError({ statusCode: 503, statusMessage: "Market history temporarily unavailable", data: { reason } });
   }
 
   setResponseHeader(event, "cache-control", "public, max-age=15, s-maxage=30, stale-while-revalidate=60");

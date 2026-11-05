@@ -46,6 +46,14 @@ export async function connectPaperTradingStream(
       return;
     }
 
+    // A misrouted request (e.g. an SPA fallback serving index.html) also answers 200.
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.toLowerCase().startsWith("text/event-stream")) {
+      void res.body.cancel();
+      onError?.(new Error(`SSE endpoint returned ${contentType || "no content type"}, not text/event-stream`));
+      return;
+    }
+
     onOpen?.();
 
     const reader = res.body.getReader();
@@ -112,6 +120,12 @@ export async function connectPaperTradingStream(
     if (buffer.length > 0) {
       processLine(buffer);
       processLine("");
+    }
+
+    // The server (or a proxy idle timeout) ended the stream. Report it so the caller
+    // reconnects instead of believing it is still subscribed.
+    if (!signal?.aborted) {
+      onError?.(new Error("SSE stream closed by server"));
     }
   } catch (err) {
     if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
