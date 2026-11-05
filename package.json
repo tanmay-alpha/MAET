@@ -12,7 +12,7 @@
     "lint": "bun run --cwd src lint",
     "dev": "bun run server/orchestrator.ts",
     "test": "bun run test:phase1",
-    "test:unit": "bun test server/data server/domain server/hooks server/infra shared src tests/canonical-indicators.test.ts server/modules/paper-trading/financial-invariants.test.ts",
+    "test:unit": "bun test server/data server/domain server/hooks server/infra shared src tests/canonical-indicators.test.ts server/modules/paper-trading/financial-invariants.test.ts server/api/market server/api/trpc/routers/market.test.ts server/workers/angelone-ws.test.ts server/workers/candle-writer.test.ts server/workers/daily-processor-schedule.test.ts server/config-holidays.test.ts",
     "test:canonical-indicators": "bun test tests/canonical-indicators.test.ts",
     "test:integration": "bun test server/modules/paper-trading/repository.integration.test.ts server/modules/paper-trading/service.integration.test.ts",
     "test:concurrency": "bun test server/modules/paper-trading/concurrency.integration.test.ts",
