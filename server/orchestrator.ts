@@ -3,11 +3,12 @@ import { MarketClockWorker } from "./workers/market-clock";
 import { ScreenerRunner } from "./workers/screener-runner";
 import { AngelOneWorker } from "./workers/angelone-ws";
 import { OrderMatcherWorker } from "./workers/order-matcher";
-import { DailyProcessorSchedule } from "./workers/daily-processor-schedule";
+import { DAILY_PROCESSOR_LOCK_TTL_MS, DailyProcessorSchedule } from "./workers/daily-processor-schedule";
+import { ReloginBackoff } from "./workers/relogin-backoff";
 import { quoteStore } from "./domain/market/quote-store";
-import { nextIstTime } from "./domain/market/clock";
+import { hasHolidaysForIstYear, nextIstTime } from "./domain/market/clock";
 import { configuredHolidays } from "./domain/market/quote-quality";
-import { closeRedis, setnxWithTtl } from "./data/redis/client";
+import { closeRedis, getRedis, setnxWithTtl } from "./data/redis/client";
 import { RedisKeys } from "./data/redis/keys";
 import { login, onAngelOneSessionRejected, setAngelOneMarketSession } from "./data/sources/angelone/client";
 import { getConfig } from "./config";
@@ -40,7 +41,8 @@ let alertReconcileTimer: ReturnType<typeof setInterval> | undefined;
 const ANGEL_FEED_USER = "render-market-feed";
 // Angel One sessions do not survive the night; log in fresh before pre-open (09:00 IST).
 const ANGEL_DAILY_LOGIN_IST = { hour: 8, minute: 30 };
-const DAILY_PROCESSOR_LOCK_TTL_SECONDS = 2 * 24 * 60 * 60;
+const DAILY_PROCESSOR_DONE_TTL_SECONDS = 2 * 24 * 60 * 60;
+const reloginBackoff = new ReloginBackoff();
 
 function log() {
   return getLogger().child({ module: "orchestrator" });
@@ -82,10 +84,14 @@ function scheduleDailyAngelLogin(): void {
 let dailyProcessorTimer: ReturnType<typeof setInterval> | undefined;
 const dailyProcessor = new DailyProcessorSchedule({
   acquireLock: (istDate) =>
-    setnxWithTtl(RedisKeys.dailyProcessorLockKey(istDate), String(process.pid), DAILY_PROCESSOR_LOCK_TTL_SECONDS),
+    setnxWithTtl(RedisKeys.dailyProcessorLockKey(istDate), String(process.pid), DAILY_PROCESSOR_LOCK_TTL_MS / 1000),
+  isCompleted: async (istDate) => (await getRedis().exists(RedisKeys.dailyProcessorDoneKey(istDate))) > 0,
+  markCompleted: async (istDate) => {
+    await setnxWithTtl(RedisKeys.dailyProcessorDoneKey(istDate), String(process.pid), DAILY_PROCESSOR_DONE_TTL_SECONDS);
+  },
   holidays: configuredHolidays,
   onLockError: (error) =>
-    log().warn({ err: errorMessage(error) }, "daily processor lock unavailable; running without cross-instance guard"),
+    log().warn({ err: errorMessage(error) }, "daily processor Redis guard unavailable; running without cross-instance guard"),
   run: async () => {
     log().info("running daily processor");
     const { runDailyProcessor } = await import("./workers/daily-processor");
@@ -167,6 +173,9 @@ export async function reconcileAlertSubscriptions(fetchActiveSymbols = listActiv
 export function startOrchestrator(): void {
   if (started) return;
   started = true;
+  if (!hasHolidaysForIstYear(configuredHolidays(), new Date())) {
+    log().warn("no NSE holidays configured for the current IST year; holidays will be treated as trading days");
+  }
   quoteStore.start();
   candleWriter.start();
   marketClock.start();
@@ -177,15 +186,18 @@ export function startOrchestrator(): void {
   angelReadyOff = bus.on("user:angelone:ready", ({ userId }) => {
     if (userId === ANGEL_FEED_USER) updateHealthStatus("marketData", true);
   });
-  angelFailedOff = bus.on("user:angelone:auth_failed", ({ userId }) => {
+  angelFailedOff = bus.on("user:angelone:auth_failed", ({ userId, reason }) => {
     if (userId !== ANGEL_FEED_USER) return;
+    const delayMs = reloginBackoff.next(Date.now());
+    log().warn({ reason, delayMs }, "Angel One stream auth failed; logging in again");
     updateHealthStatus("marketData", false);
-    scheduleAngelLogin(5_000);
+    scheduleAngelLogin(delayMs);
   });
   angelRejectedOff = onAngelOneSessionRejected((reason) => {
-    log().warn({ reason }, "Angel One rejected the session; logging in again");
+    const delayMs = reloginBackoff.next(Date.now());
+    log().warn({ reason, delayMs }, "Angel One rejected the session; logging in again");
     updateHealthStatus("marketData", false);
-    scheduleAngelLogin(1_000);
+    scheduleAngelLogin(delayMs);
   });
   quoteBusOff = bus.on("tick", (tick) => {
     void alertEvaluatorWorker.processQuote({

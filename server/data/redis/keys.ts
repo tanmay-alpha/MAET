@@ -11,4 +11,5 @@ export const RedisKeys = {
   angeloneSessionKey: (userId: string) => `angelone:session:${userId}`,
   angeloneSubsKey: (userId: string) => `angelone:subs:${userId}`,
   dailyProcessorLockKey: (istDate: string) => `lock:daily-processor:${istDate}`,
+  dailyProcessorDoneKey: (istDate: string) => `done:daily-processor:${istDate}`,
 } as const;
