@@ -8,6 +8,7 @@ import { computeQuoteFingerprint } from "./quote-fingerprint";
 import { withSerializablePaperTransaction } from "./transaction-retry";
 import { applyFill, paperExecutionPolicy } from "./fill-writer";
 import { signedPositionQuantity } from "./mapper";
+import { CumulativeVolumeTracker } from "./volume-tracker";
 
 const MATCHABLE_ORDER_STATUSES = ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"] as const;
 const MATCHABLE_STATUS_LOOKUP: Partial<Record<PaperOrderRow["status"], true>> = {
@@ -23,18 +24,7 @@ const MAX_TICK_PARTICIPATION = 0.1;
 const MIN_FILL_PER_TICK = 1;
 
 export class PaperTradingTickProcessor {
-  /** Last cumulative session volume per EXCHANGE:SYMBOL; tick volume is cumulative for the day. */
-  private readonly lastVolume = new Map<string, number>();
-
-  /** Volume traded since the previous tick, or undefined for the first tick of an instrument. */
-  private tradedSinceLastTick(exchange: string, symbol: string, cumulative: number): number | undefined {
-    const key = `${exchange}:${symbol}`;
-    const previous = this.lastVolume.get(key);
-    this.lastVolume.set(key, cumulative);
-    if (previous === undefined) return undefined;
-    // A lower cumulative volume means a new session started counting from zero.
-    return cumulative >= previous ? cumulative - previous : cumulative;
-  }
+  private readonly volumes = new CumulativeVolumeTracker();
 
   async processTick(tick: Tick): Promise<MatchingReceipt[]> {
     const policy = evaluateExecutionQuote(tick, tick.symbol, paperExecutionPolicy());
@@ -43,7 +33,7 @@ export class PaperTradingTickProcessor {
     }
 
     const { exchange, symbol } = tick;
-    const tradedVolume = this.tradedSinceLastTick(exchange, symbol, tick.volume);
+    const tradedVolume = this.volumes.traded(`${exchange}:${symbol}`, tick.volume, tick.ts);
     const liquidityCap = Math.max(
       MIN_FILL_PER_TICK,
       Math.floor((tradedVolume ?? 0) * MAX_TICK_PARTICIPATION)
