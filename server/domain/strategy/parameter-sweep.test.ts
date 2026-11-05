@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { Candle } from "@shared/types";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 import { applyParameters, generateCombinations, type SweepParameter } from "./parameter-sweep";
+import { SweepParameterSchema } from "../../../shared/strategy/schemas";
 import { runBacktestV3 } from "./runner-v3";
 
 const sma = (period: number) => ({ kind: "INDICATOR" as const, indicator: "SMA" as const, params: { period }, lag: 0 });
@@ -51,6 +52,21 @@ describe("parameter sweep", () => {
     ).toThrow(/entry\.children\.0\.left\.params\.length/);
   });
 
+
+  it("refuses prototype paths and array lengths, leaving Array.prototype untouched", () => {
+    const lengthBefore = Array.prototype.length;
+    for (const path of [
+      "entry.children.__proto__.length",
+      "entry.constructor.prototype.x",
+      "entry.children.length",
+      "entry.children.0.left.params.toString",
+    ]) {
+      expect(() => applyParameters(definition, [{ name: "p", path, values: [7] }], { p: 7 })).toThrow();
+      expect(SweepParameterSchema.safeParse({ name: "p", path, values: [7] }).success).toBe(path === "entry.children.0.left.params.toString");
+    }
+    expect(Array.prototype.length).toBe(lengthBefore);
+    expect(Object.hasOwn(Array.prototype, "x")).toBe(false);
+  });
   it("produces different backtests for different parameter values", () => {
     const candles: Candle[] = Array.from({ length: 200 }, (_, i) => {
       const p = 100 + 10 * Math.sin(i / 6) + i * 0.05;

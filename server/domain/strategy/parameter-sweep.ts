@@ -7,7 +7,7 @@
 
 import type { z } from "zod";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
-import type { SweepParameterSchema } from "../../../shared/strategy/schemas";
+import { FORBIDDEN_SWEEP_PATH_SEGMENTS, type SweepParameterSchema } from "../../../shared/strategy/schemas";
 
 export type SweepParameter = z.infer<typeof SweepParameterSchema>;
 
@@ -22,8 +22,9 @@ export function generateCombinations(parameters: SweepParameter[], maxCombinatio
 
 /**
  * Returns a copy of `definition` with each parameter's value from `combo` written at its path.
- * Throws if a path does not resolve to an existing number: a typo must fail the run rather than
- * silently optimise nothing.
+ * Throws if a path does not resolve, through own properties only, to an existing number: a typo
+ * must fail the run rather than silently optimise nothing, and a path must never reach a
+ * prototype or an array's length.
  */
 export function applyParameters(
   definition: StrategyDefinition,
@@ -35,14 +36,22 @@ export function applyParameters(
     const value = combo[parameter.name];
     if (value === undefined) continue;
 
+    const invalid = () =>
+      new Error(`Sweep parameter "${parameter.name}": path "${parameter.path}" is not a numeric field of the strategy`);
     const keys = parameter.path.split(".");
+    if (keys.some((key) => FORBIDDEN_SWEEP_PATH_SEGMENTS.includes(key))) throw invalid();
+
     const field = keys.pop()!;
     let target: unknown = cloned;
     for (const key of keys) {
-      target = target !== null && typeof target === "object" ? (target as Record<string, unknown>)[key] : undefined;
+      if (target === null || typeof target !== "object" || !Object.hasOwn(target, key)) throw invalid();
+      target = (target as Record<string, unknown>)[key];
     }
-    if (target === null || typeof target !== "object" || typeof (target as Record<string, unknown>)[field] !== "number") {
-      throw new Error(`Sweep parameter "${parameter.name}": path "${parameter.path}" is not a numeric field of the strategy`);
+    if (
+      target === null || typeof target !== "object" || Array.isArray(target)
+      || !Object.hasOwn(target, field) || typeof (target as Record<string, unknown>)[field] !== "number"
+    ) {
+      throw invalid();
     }
     (target as Record<string, unknown>)[field] = value;
   }
