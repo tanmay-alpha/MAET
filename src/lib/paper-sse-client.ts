@@ -46,6 +46,14 @@ export async function connectPaperTradingStream(
       return;
     }
 
+    // A misrouted request (e.g. an SPA fallback serving index.html) also answers 200.
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.toLowerCase().startsWith("text/event-stream")) {
+      void res.body.cancel();
+      onError?.(new Error(`SSE endpoint returned ${contentType || "no content type"}, not text/event-stream`));
+      return;
+    }
+
     onOpen?.();
 
     const reader = res.body.getReader();

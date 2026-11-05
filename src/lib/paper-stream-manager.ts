@@ -89,13 +89,14 @@ export class PaperStreamManager {
     await this.deps.connect({
       accessToken: token,
       signal: controller.signal,
-      onOpen: () => {
-        this.failures = 0;
-      },
+      // Reset the backoff only once the server confirms the subscription: a proxy or
+      // crashing handler can answer 200 and close at once, which must still back off.
       onEvent: (event) => {
         if (controller.signal.aborted) return;
-        if (event.type === "CONNECTED") this.setConnected(true);
-        else if (STATE_EVENTS[event.type] === true) this.invalidateState();
+        if (event.type === "CONNECTED") {
+          this.failures = 0;
+          this.setConnected(true);
+        } else if (STATE_EVENTS[event.type] === true) this.invalidateState();
       },
       onError: () => {
         if (controller.signal.aborted) return;

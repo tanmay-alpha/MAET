@@ -93,7 +93,7 @@ describe("PaperStreamManager", () => {
     expect(connections[0].options.signal?.aborted).toBe(false);
   });
 
-  test("reconnects with backoff after a drop and resets it after a successful open", async () => {
+  test("reconnects with backoff after a drop and resets it once the server confirms the subscription", async () => {
     const { manager, connections, runPendingTimer } = createHarness();
     manager.subscribe(subscriber([]).sub);
     await flush();
@@ -103,10 +103,25 @@ describe("PaperStreamManager", () => {
     connections.at(-1)!.options.onError?.(new Error("dropped"));
     expect(await runPendingTimer()).toBe(2_000);
 
-    connections.at(-1)!.options.onOpen?.();
+    connections.at(-1)!.options.onEvent?.({ type: "CONNECTED", data: {} });
     connections.at(-1)!.options.onError?.(new Error("dropped"));
     expect(await runPendingTimer()).toBe(1_000);
     expect(connections).toHaveLength(4);
+  });
+
+  test("keeps backing off when the server accepts the request and closes at once", async () => {
+    const { manager, connections, runPendingTimer } = createHarness();
+    manager.subscribe(subscriber([]).sub);
+    await flush();
+
+    const delays: number[] = [];
+    for (let attempt = 0; attempt < 4; attempt++) {
+      connections.at(-1)!.options.onOpen?.();
+      connections.at(-1)!.options.onError?.(new Error("SSE stream closed by server"));
+      delays.push(await runPendingTimer());
+    }
+
+    expect(delays).toEqual([1_000, 2_000, 4_000, 8_000]);
   });
 
   test("does not connect without a session", async () => {
