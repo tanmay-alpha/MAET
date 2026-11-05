@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useId, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { TrendingUp, Zap, BarChart3 } from "lucide-react";
+import { ratioMetric, type MetricRow } from "./-backtest-metrics";
 
 export interface BacktestSearch {
   symbol?: string;
@@ -87,7 +88,7 @@ function Backtest() {
     },
   });
 
-  const metrics = result ? [
+  const metrics: MetricRow[] = result ? [
     { label: "Total Return", value: `${((result.metrics?.totalReturn ?? 0) * 100).toFixed(2)}%`, trend: result.metrics?.totalReturn ?? 0 },
     { label: "CAGR", value: `${((result.metrics?.annualisedReturn ?? 0) * 100).toFixed(2)}%`, trend: result.metrics?.annualisedReturn ?? 0 },
     { label: "Sharpe Ratio", value: (result.metrics?.sharpe ?? 0).toFixed(2), trend: result.metrics?.sharpe ?? 0 },
@@ -96,8 +97,8 @@ function Backtest() {
     { label: "Max Drawdown", value: `${((result.metrics?.maxDrawdown ?? 0) * 100).toFixed(2)}%`, trend: -(result.metrics?.maxDrawdown ?? 0) },
     { label: "Ulcer Index", value: (result.metrics?.ulcerIndex ?? 0).toFixed(2), trend: -(result.metrics?.ulcerIndex ?? 0) },
     { label: "Win Rate", value: `${((result.metrics?.winRate ?? 0) * 100).toFixed(1)}%`, trend: (result.metrics?.winRate ?? 0) - 0.5 },
-    { label: "Profit Factor", value: result.metrics?.profitFactor === Infinity ? "∞" : (result.metrics?.profitFactor ?? 0).toFixed(2), trend: (result.metrics?.profitFactor ?? 0) - 1 },
-    { label: "Payoff Ratio", value: result.metrics?.payoffRatio === Infinity ? "∞" : (result.metrics?.payoffRatio ?? 0).toFixed(2), trend: (result.metrics?.payoffRatio ?? 0) - 1 },
+    ratioMetric("Profit Factor", result.metrics?.profitFactor),
+    ratioMetric("Payoff Ratio", result.metrics?.payoffRatio),
     { label: "Trades Executed", value: String(result.signalCount ?? 0), trend: 0 },
   ] : [];
 
@@ -191,7 +192,7 @@ function Backtest() {
           <div className="rounded-lg border border-border bg-panel">
             <div className="border-b border-border px-4 py-3 text-sm font-medium">Performance Metrics</div>
             <div className="divide-y divide-border">
-              {metrics.map((metric) => <div key={metric.label} className="flex items-center justify-between px-4 py-2.5 text-xs"><span className="text-muted-foreground">{metric.label}</span><span className={`font-mono font-semibold ${metric.trend > 0 ? "text-bull" : metric.trend < 0 ? "text-bear" : ""}`}>{metric.value}</span></div>)}
+              {metrics.map((metric) => <div key={metric.label} className="flex items-center justify-between px-4 py-2.5 text-xs"><span className="text-muted-foreground">{metric.label}</span><span title={metric.hint} className={`font-mono font-semibold ${metric.trend > 0 ? "text-bull" : metric.trend < 0 ? "text-bear" : ""}`}>{metric.value}</span></div>)}
             </div>
           </div>
         </div>
