@@ -1,14 +1,16 @@
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { defineEventHandler, toWebRequest, createError } from "h3";
 import { appRouter } from "./index";
-import { tryAuth } from "./auth";
+import { tryAuth, type AuthContext } from "./auth";
 import { reportTrpcError } from "./core";
 
 // Nitro route handler for tRPC
 export default defineEventHandler(async (event) => {
-  // Try to authenticate user, but allow unauthenticated access too
-  // Individual procedures use protectedProcedure for auth checks
-  const authCtx = await tryAuth(event).catch(() => null);
+  // Reuse the auth context the rate-limit middleware already resolved (when it
+  // ran); otherwise verify here. Unauthenticated calls are allowed:
+  // protectedProcedure enforces auth per procedure.
+  const authCtx: AuthContext | null =
+    event.context.auth !== undefined ? event.context.auth : await tryAuth(event).catch(() => null);
 
   try {
     const webReq = toWebRequest(event) as unknown as Request;

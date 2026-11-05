@@ -259,6 +259,8 @@ PAPER_INITIAL_CASH_INR=1000000
 
 # API rate limiting (token buckets per client IP and per signed-in user)
 RATE_LIMIT_ENABLED=true
+# Bucket store: memory (default, per instance) or redis (shared across instances)
+RATE_LIMIT_STORE=memory
 RATE_LIMIT_IP_CAPACITY=300
 RATE_LIMIT_IP_REFILL_PER_SEC=5
 RATE_LIMIT_USER_CAPACITY=120
