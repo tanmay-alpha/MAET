@@ -196,7 +196,10 @@ function ChartPage() {
     event.preventDefault();
     const name = layoutName.trim();
     if (!name) return;
-    saveNamedLayout(name, chartState);
+    if (!saveNamedLayout(name, chartState)) {
+      setLayoutMessage("Could not save the layout: browser storage is unavailable or full.");
+      return;
+    }
     setLayoutName("");
     setLayoutPanel(null);
     setLayoutMessage(`Layout "${name}" saved.`);

@@ -1,27 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { clearMaetLocalData } from "./local-data";
-
-class MemoryStorage implements Storage {
-  private readonly items = new Map<string, string>();
-  get length() {
-    return this.items.size;
-  }
-  clear() {
-    this.items.clear();
-  }
-  getItem(key: string) {
-    return this.items.get(key) ?? null;
-  }
-  key(index: number) {
-    return [...this.items.keys()][index] ?? null;
-  }
-  removeItem(key: string) {
-    this.items.delete(key);
-  }
-  setItem(key: string, value: string) {
-    this.items.set(key, value);
-  }
-}
+import { MemoryStorage } from "@/test-utils/memory-storage";
 
 describe("clearMaetLocalData", () => {
   test("removes MAET preferences but keeps the sign-in session", () => {

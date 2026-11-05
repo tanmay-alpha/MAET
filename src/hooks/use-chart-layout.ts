@@ -111,49 +111,79 @@ export function parseNamedLayouts(raw: unknown): Record<string, SavedLayout> {
   return layouts;
 }
 
-function readNamedLayouts(symbol: string): Record<string, SavedLayout> {
+export function readStoredNamedLayouts(storage: Storage, symbol: string): Record<string, SavedLayout> {
   try {
-    return parseNamedLayouts(JSON.parse(localStorage.getItem(getNamedLayoutsKey(symbol)) ?? "null"));
+    return parseNamedLayouts(JSON.parse(storage.getItem(getNamedLayoutsKey(symbol)) ?? "null"));
   } catch {
     return {};
   }
 }
 
-function readLayout(symbol: string): ChartLayout {
+// Named layouts are shared by every tab, so each change is a read-modify-write of the
+// stored map rather than a write of this tab's in-memory copy.
+function writeStoredNamedLayouts(storage: Storage, symbol: string, layouts: Record<string, SavedLayout>) {
+  if (Object.keys(layouts).length > 0) storage.setItem(getNamedLayoutsKey(symbol), JSON.stringify(layouts));
+  else storage.removeItem(getNamedLayoutsKey(symbol));
+}
+
+/** Adds or replaces one named layout and returns the stored map. */
+export function saveStoredNamedLayout(storage: Storage, symbol: string, layout: SavedLayout): Record<string, SavedLayout> {
+  const layouts = { ...readStoredNamedLayouts(storage, symbol), [layout.name]: layout };
+  writeStoredNamedLayouts(storage, symbol, layouts);
+  return layouts;
+}
+
+/** Removes one named layout and returns the stored map. */
+export function deleteStoredNamedLayout(storage: Storage, symbol: string, name: string): Record<string, SavedLayout> {
+  const layouts = readStoredNamedLayouts(storage, symbol);
+  delete layouts[name];
+  writeStoredNamedLayouts(storage, symbol, layouts);
+  return layouts;
+}
+
+function readStoredLayout(storage: Storage, symbol: string): ChartLayout {
   try {
-    const stored = ChartLayoutSchema.partial().safeParse(JSON.parse(localStorage.getItem(getStorageKey(symbol)) ?? "null"));
+    const stored = ChartLayoutSchema.partial().safeParse(JSON.parse(storage.getItem(getStorageKey(symbol)) ?? "null"));
     return stored.success ? { ...DEFAULT_LAYOUT, ...stored.data } : DEFAULT_LAYOUT;
   } catch {
     return DEFAULT_LAYOUT;
   }
 }
 
+export function writeStoredLayout(storage: Storage, symbol: string, layout: ChartLayout) {
+  storage.setItem(getStorageKey(symbol), JSON.stringify(layout));
+}
+
 export function useChartLayout(symbol: string) {
   // `symbol` is null until stored layouts are read after mount: server render and first
   // client render both show the defaults so hydration markup matches, and nothing is
   // persisted before the stored layout has been loaded.
-  const [state, setState] = useState<{ symbol: string | null; layout: ChartLayout; named: Record<string, SavedLayout> }>({
+  const [state, setState] = useState<{ symbol: string | null; layout: ChartLayout }>({
     symbol: null,
     layout: DEFAULT_LAYOUT,
-    named: {},
   });
+  const [named, setNamed] = useState<Record<string, SavedLayout>>({});
   const { layout } = state;
 
   useEffect(() => {
-    setState({ symbol, layout: readLayout(symbol), named: readNamedLayouts(symbol) });
+    setState({ symbol, layout: readStoredLayout(localStorage, symbol) });
+    setNamed(readStoredNamedLayouts(localStorage, symbol));
+
+    // Pick up layouts saved or deleted in other tabs.
+    const namedKey = getNamedLayoutsKey(symbol);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === namedKey || event.key === null) setNamed(readStoredNamedLayouts(localStorage, symbol));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, [symbol]);
 
   useEffect(() => {
     if (state.symbol === null) return;
     try {
-      localStorage.setItem(getStorageKey(state.symbol), JSON.stringify(state.layout));
-      if (Object.keys(state.named).length > 0) {
-        localStorage.setItem(getNamedLayoutsKey(state.symbol), JSON.stringify(state.named));
-      } else {
-        localStorage.removeItem(getNamedLayoutsKey(state.symbol));
-      }
+      writeStoredLayout(localStorage, state.symbol, state.layout);
     } catch {
-      // Storage full or disabled: layouts still work for this session.
+      // Storage full or disabled: the layout still works for this session.
     }
   }, [state]);
 
@@ -174,37 +204,36 @@ export function useChartLayout(symbol: string) {
 
   // Named layouts management
   const saveNamedLayout = useCallback((name: string, chartState: ChartState) => {
-    setState((prev) => ({
-      ...prev,
-      named: {
-        ...prev.named,
-        [name]: {
-          name,
-          chartState,
-          timeframe: prev.layout.timeframe,
-          chartType: prev.layout.chartType,
-          indicators: { ...prev.layout.indicators },
-          savedAt: new Date().toISOString(),
-        },
-      },
-    }));
-  }, []);
+    try {
+      setNamed(saveStoredNamedLayout(localStorage, symbol, {
+        name,
+        chartState,
+        timeframe: layout.timeframe,
+        chartType: layout.chartType,
+        indicators: { ...layout.indicators },
+        savedAt: new Date().toISOString(),
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [symbol, layout]);
 
   /** Applies the named layout's settings and returns it (for its chart state), or null if absent. */
   const loadNamedLayout = useCallback((name: string): SavedLayout | null => {
-    const saved = state.named[name];
+    const saved = named[name];
     if (!saved) return null;
     updateLayout({ timeframe: saved.timeframe, chartType: saved.chartType, indicators: saved.indicators });
     return saved;
-  }, [state.named, updateLayout]);
+  }, [named, updateLayout]);
 
   const deleteNamedLayout = useCallback((name: string) => {
-    setState((prev) => {
-      const named = { ...prev.named };
-      delete named[name];
-      return { ...prev, named };
-    });
-  }, []);
+    try {
+      setNamed(deleteStoredNamedLayout(localStorage, symbol, name));
+    } catch {
+      // Storage disabled: nothing was persisted to delete.
+    }
+  }, [symbol]);
 
   // Export layout to JSON file
   const exportLayout = useCallback((chartState?: ChartState) => {
@@ -240,7 +269,7 @@ export function useChartLayout(symbol: string) {
     updateLayout,
     updateIndicator,
     resetLayout,
-    namedLayoutNames: Object.keys(state.named),
+    namedLayoutNames: Object.keys(named),
     saveNamedLayout,
     loadNamedLayout,
     deleteNamedLayout,
