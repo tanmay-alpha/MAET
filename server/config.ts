@@ -1,4 +1,5 @@
 import { z } from "zod";
+import bundledNseHolidays from "../shared/symbols/nse-holidays.json";
 
 const isTest = process.env.BUN_TEST === "1" || process.env.NODE_ENV === "test";
 
@@ -47,6 +48,15 @@ function requireEnv(name: string, value: string | undefined): string {
   return value;
 }
 
+/**
+ * NSE trading holidays. NSE_HOLIDAYS_JSON (array of YYYY-MM-DD) overrides the
+ * bundled calendar; without either, holidays would be treated as trading days.
+ */
+export function parseNseHolidays(json: string | undefined): Date[] {
+  const dates = json ? (JSON.parse(json) as string[]) : bundledNseHolidays.map((holiday) => holiday.date);
+  return dates.map((date) => new Date(date));
+}
+
 export function getConfig(): AppConfig {
   if (cached) return cached;
   const parsed = EnvSchema.safeParse(process.env);
@@ -78,9 +88,7 @@ export function getConfig(): AppConfig {
     return cached;
   }
   // Production / development — all values required.
-  const holidays = d.NSE_HOLIDAYS_JSON
-    ? (JSON.parse(d.NSE_HOLIDAYS_JSON) as string[]).map((s) => new Date(s))
-    : [];
+  const holidays = parseNseHolidays(d.NSE_HOLIDAYS_JSON);
   cached = {
     supabaseUrl: requireEnv("SUPABASE_URL", d.SUPABASE_URL),
     supabaseAnonKey: requireEnv("SUPABASE_ANON_KEY", d.SUPABASE_ANON_KEY),
