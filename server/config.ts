@@ -17,8 +17,10 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   PORT: z.string().default("3000"),
   ENABLE_MARKET_SIMULATOR: z.string().transform((v) => v === "true" || v === "1").default("false"),
-  PAPER_EXECUTION_MAX_QUOTE_AGE_MS: z.string().transform((v) => Number(v) || 86400000).default("86400000"),
-  PAPER_EXECUTION_ALLOW_DELAYED: z.string().transform((v) => v !== "false" && v !== "0").default("true"),
+  // Paper fills must use a fresh exchange quote: at most 15s old and not a delayed (e.g. Yahoo) feed.
+  PAPER_EXECUTION_MAX_QUOTE_AGE_MS: z.string().transform((v) => Number(v) || 15000).default("15000"),
+  PAPER_EXECUTION_ALLOW_DELAYED: z.string().transform((v) => v === "true" || v === "1").default("false"),
+  PAPER_INITIAL_CASH_INR: z.string().transform((v) => Number(v) || 1000000).default("1000000"),
 });
 
 export type AppConfig = {
@@ -38,6 +40,7 @@ export type AppConfig = {
   enableMarketSimulator: boolean;
   paperExecutionMaxQuoteAgeMs: number;
   paperExecutionAllowDelayed: boolean;
+  paperInitialCashInr: number;
 };
 
 let cached: AppConfig | undefined;
@@ -74,6 +77,7 @@ export function getConfig(): AppConfig {
       enableMarketSimulator: d.ENABLE_MARKET_SIMULATOR,
       paperExecutionMaxQuoteAgeMs: d.PAPER_EXECUTION_MAX_QUOTE_AGE_MS,
       paperExecutionAllowDelayed: d.PAPER_EXECUTION_ALLOW_DELAYED,
+      paperInitialCashInr: d.PAPER_INITIAL_CASH_INR,
     };
     return cached;
   }
@@ -98,6 +102,7 @@ export function getConfig(): AppConfig {
     enableMarketSimulator: d.ENABLE_MARKET_SIMULATOR,
     paperExecutionMaxQuoteAgeMs: d.PAPER_EXECUTION_MAX_QUOTE_AGE_MS,
     paperExecutionAllowDelayed: d.PAPER_EXECUTION_ALLOW_DELAYED,
+    paperInitialCashInr: d.PAPER_INITIAL_CASH_INR,
   };
   return cached;
 }

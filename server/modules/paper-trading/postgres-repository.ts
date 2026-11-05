@@ -1,4 +1,4 @@
-import { eq, and, inArray, desc, lte } from "drizzle-orm";
+import { eq, and, inArray, desc, lte, max } from "drizzle-orm";
 import { getDb } from "../../data/drizzle/client";
 import {
   paperAccounts,
@@ -41,38 +41,65 @@ import {
   mapPaperOutboxEventRow,
 } from "./mapper";
 
+/** Orders that can still fill; everything else is terminal. */
+const WORKING_ORDER_STATUSES = ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"] as const;
+
+/**
+ * Opens a generation-1 paper account funded with `initialCash` and records the matching
+ * INITIAL_CASH ledger entry, so the ledger reconciles to the cash balance from day one.
+ * No-op when the account already exists.
+ */
+async function createAccountIfMissing(tx: PaperTransaction, userId: string, initialCash: number): Promise<void> {
+  const cash = initialCash.toFixed(4);
+  const now = new Date();
+
+  await tx
+    .insert(users)
+    .values({ id: userId, email: `${userId}@maet.internal` })
+    .onConflictDoNothing();
+
+  const created = await tx
+    .insert(paperAccounts)
+    .values({
+      userId,
+      cashBalance: cash,
+      initialCash: cash,
+      realisedPnl: "0.0000",
+      currency: "INR",
+      status: "ACTIVE",
+      generation: 1,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing()
+    .returning({ userId: paperAccounts.userId });
+
+  if (created.length === 0) return;
+
+  await tx.insert(paperLedgerEntries).values({
+    userId,
+    generation: 1,
+    fillId: null,
+    entryType: "INITIAL_CASH",
+    amount: cash,
+    balanceAfter: cash,
+    currency: "INR",
+    sourceType: "ACCOUNT_OPEN",
+    sourceId: "open:1",
+    metadata: { generation: 1 },
+    createdAt: now,
+  });
+}
+
 export class PostgresPaperWriteRepository implements PaperTradingWriteRepository {
   constructor(readonly tx: PaperTransaction) {}
 
   async ensureAccountForUpdate(params: {
     userId: string;
-    initialCash?: number | string;
+    initialCash: number;
   }): Promise<PaperAccountRow> {
-    const cashStr = params.initialCash ? String(params.initialCash) : "1000000.0000";
-
-    await this.tx
-      .insert(users)
-      .values({
-        id: params.userId,
-        email: `${params.userId}@maet.internal`,
-      })
-      .onConflictDoNothing();
-
-    await this.tx
-      .insert(paperAccounts)
-      .values({
-        userId: params.userId,
-        cashBalance: cashStr,
-        initialCash: cashStr,
-        realisedPnl: "0.0000",
-        currency: "INR",
-        status: "ACTIVE",
-        generation: 1,
-        version: 1,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .onConflictDoNothing();
+    await createAccountIfMissing(this.tx, params.userId, params.initialCash);
 
     const [account] = await this.tx
       .select()
@@ -126,6 +153,26 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
       .for("update");
 
     return order ? mapPaperOrderRow(order) : undefined;
+  }
+
+  async findLatestFillForOrder(orderId: string): Promise<PaperFillRow | undefined> {
+    const [fill] = await this.tx
+      .select()
+      .from(paperFills)
+      .where(eq(paperFills.orderId, orderId))
+      .orderBy(desc(paperFills.executionSequence))
+      .limit(1);
+
+    return fill ? mapPaperFillRow(fill) : undefined;
+  }
+
+  async nextExecutionSequence(orderId: string): Promise<number> {
+    const [row] = await this.tx
+      .select({ last: max(paperFills.executionSequence) })
+      .from(paperFills)
+      .where(eq(paperFills.orderId, orderId));
+
+    return (row?.last ?? 0) + 1;
   }
 
   async findPositionsForUpdate(params: {
@@ -206,7 +253,7 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
         and(
           eq(paperOrders.userId, params.userId),
           eq(paperOrders.generation, params.generation),
-          inArray(paperOrders.status, ["PENDING", "TRIGGER_PENDING"])
+          inArray(paperOrders.status, [...WORKING_ORDER_STATUSES])
         )
       )
       .returning();
@@ -237,7 +284,7 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
           eq(paperOrders.userId, params.userId),
           eq(paperOrders.generation, params.generation),
           eq(paperOrders.parentOrderId, params.parentOrderId),
-          inArray(paperOrders.status, ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"])
+          inArray(paperOrders.status, [...WORKING_ORDER_STATUSES])
         )
       )
       .returning();
@@ -260,9 +307,15 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
         set: {
           averageEntryPrice: position.averageEntryPrice,
           totalShares: position.totalShares,
+          side: position.side,
           realizedPnl: position.realizedPnl,
           unrealizedPnl: position.unrealizedPnl,
           marginLocked: position.marginLocked,
+          lastQuotePrice: position.lastQuotePrice,
+          lastQuoteSource: position.lastQuoteSource,
+          lastQuoteQuality: position.lastQuoteQuality,
+          lastQuoteTimestamp: position.lastQuoteTimestamp,
+          version: position.version,
           updatedAt: new Date(),
         },
       })
@@ -332,46 +385,18 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
 export class PostgresPaperReadRepository implements PaperTradingReadRepository {
   constructor(readonly db: PaperDatabase) {}
 
-  async getState(params: { userId: string }): Promise<PaperTradingState> {
-    await this.db
-      .insert(users)
-      .values({
-        id: params.userId,
-        email: `${params.userId}@maet.internal`,
-      })
-      .onConflictDoNothing();
-
+  async getState(params: { userId: string; initialCash: number }): Promise<PaperTradingState> {
     let [account] = await this.db
       .select()
       .from(paperAccounts)
       .where(eq(paperAccounts.userId, params.userId));
 
     if (!account) {
-      const [newAccount] = await this.db
-        .insert(paperAccounts)
-        .values({
-          userId: params.userId,
-          cashBalance: "1000000.0000",
-          initialCash: "1000000.0000",
-          realisedPnl: "0.0000",
-          currency: "INR",
-          status: "ACTIVE",
-          generation: 1,
-          version: 1,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .onConflictDoNothing()
-        .returning();
-
-      account = newAccount;
-      if (!account) {
-        const [reFetched] = await this.db
-          .select()
-          .from(paperAccounts)
-          .where(eq(paperAccounts.userId, params.userId));
-        account = reFetched;
-      }
+      await this.db.transaction((tx) => createAccountIfMissing(tx, params.userId, params.initialCash));
+      [account] = await this.db
+        .select()
+        .from(paperAccounts)
+        .where(eq(paperAccounts.userId, params.userId));
     }
 
     if (!account) {
@@ -421,6 +446,16 @@ export class PostgresPaperReadRepository implements PaperTradingReadRepository {
     };
   }
 
+  /** Explicit generation, else the account's current one (history from before a reset stays opt-in). */
+  private async resolveGeneration(userId: string, generation: number | undefined): Promise<number> {
+    if (generation !== undefined) return generation;
+    const [account] = await this.db
+      .select({ generation: paperAccounts.generation })
+      .from(paperAccounts)
+      .where(eq(paperAccounts.userId, userId));
+    return account?.generation ?? 1;
+  }
+
   async listOrders(params: {
     userId: string;
     generation?: number;
@@ -428,7 +463,7 @@ export class PostgresPaperReadRepository implements PaperTradingReadRepository {
     cursor?: string;
   }): Promise<{ orders: PaperOrderRow[]; nextCursor: string | null }> {
     const limit = Math.min(params.limit || 50, 100);
-    const gen = params.generation || 1;
+    const gen = await this.resolveGeneration(params.userId, params.generation);
 
     const conditions = [
       eq(paperOrders.userId, params.userId),
@@ -465,7 +500,7 @@ export class PostgresPaperReadRepository implements PaperTradingReadRepository {
     cursor?: string;
   }): Promise<{ fills: PaperFillRow[]; nextCursor: string | null }> {
     const limit = Math.min(params.limit || 50, 100);
-    const gen = params.generation || 1;
+    const gen = await this.resolveGeneration(params.userId, params.generation);
 
     const conditions = [
       eq(paperFills.userId, params.userId),
@@ -502,7 +537,7 @@ export class PostgresPaperReadRepository implements PaperTradingReadRepository {
     cursor?: string;
   }): Promise<{ entries: PaperLedgerEntryRow[]; nextCursor: string | null }> {
     const limit = Math.min(params.limit || 50, 100);
-    const gen = params.generation || 1;
+    const gen = await this.resolveGeneration(params.userId, params.generation);
 
     const conditions = [
       eq(paperLedgerEntries.userId, params.userId),

@@ -25,9 +25,10 @@ export interface PaperTransactionContext {
 export interface PaperTradingWriteRepository {
   readonly tx: PaperTransaction;
 
+  /** Locks the user's account row, creating it (with its INITIAL_CASH ledger entry) on first use. */
   ensureAccountForUpdate(params: {
     userId: string;
-    initialCash?: number | string;
+    initialCash: number;
   }): Promise<PaperAccountRow>;
 
   findAccountForUpdate(params: {
@@ -43,6 +44,12 @@ export interface PaperTradingWriteRepository {
     userId: string;
     orderId: string;
   }): Promise<PaperOrderRow | undefined>;
+
+  /** Latest fill of an order (highest execution sequence), if any. */
+  findLatestFillForOrder(orderId: string): Promise<PaperFillRow | undefined>;
+
+  /** Next execution_sequence for an order. Callers MUST hold the order row lock. */
+  nextExecutionSequence(orderId: string): Promise<number>;
 
   findPositionsForUpdate(params: {
     userId: string;
@@ -60,6 +67,7 @@ export interface PaperTradingWriteRepository {
 
   updateOrder(orderId: string, updates: Partial<NewPaperOrderRow>): Promise<PaperOrderRow>;
 
+  /** Cancels every working order (PENDING, TRIGGER_PENDING, TRIGGERED, PARTIALLY_FILLED) of a generation. */
   cancelOpenOrders(params: {
     userId: string;
     generation: number;
@@ -96,7 +104,7 @@ export interface PaperTradingWriteRepository {
 }
 
 export interface PaperTradingReadRepository {
-  getState(params: { userId: string }): Promise<PaperTradingState>;
+  getState(params: { userId: string; initialCash: number }): Promise<PaperTradingState>;
 
   listOrders(params: {
     userId: string;

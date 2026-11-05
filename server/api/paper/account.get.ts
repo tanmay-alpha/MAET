@@ -2,6 +2,7 @@ import { defineEventHandler } from "h3";
 import { requireAuth } from "../trpc/auth";
 import { createPaperTradingService } from "../../modules/paper-trading/service";
 import { toPaperHttpError } from "./orders.post";
+import { signedPositionQuantity } from "../../modules/paper-trading/mapper";
 
 export default defineEventHandler(async (event) => {
   try {
@@ -29,7 +30,7 @@ export default defineEventHandler(async (event) => {
       status: state.account.status,
       positions: state.positions.map((p) => ({
         ...p,
-        quantity: Number(p.totalShares),
+        quantity: signedPositionQuantity(p),
         averagePrice: Number(p.averageEntryPrice),
       })),
       orders: state.orders.map((o) => ({

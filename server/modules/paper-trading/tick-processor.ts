@@ -1,401 +1,156 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../data/drizzle/client";
-import {
-  paperOrders,
-  paperAccounts,
-} from "../../db/schema";
-import { executePaperFill } from "@shared/domain/paper-trading/execution";
-import type { PaperExecutionReason } from "@shared/domain/paper-trading/types";
-import { evaluateExecutionQuote, type Tick } from "@shared/types";
-import type { MatchingReceipt } from "./contracts";
-import { mapPaperAccountRow, mapPaperOrderRow, mapPaperPositionRow } from "./mapper";
+import { paperOrders } from "../../db/schema";
+import { PaperExecutionError } from "@shared/domain/paper-trading/execution";
+import { evaluateExecutionQuote, type ExecutionQuote, type Tick } from "@shared/types";
+import type { MatchingReceipt, PaperOrderRow } from "./contracts";
 import { computeQuoteFingerprint } from "./quote-fingerprint";
 import { withSerializablePaperTransaction } from "./transaction-retry";
-import {
-  buildOrderFilledEvent,
-  buildOrderPartiallyFilledEvent,
-  buildPositionUpdatedEvent,
-  buildAccountUpdatedEvent,
-} from "./outbox";
+import { applyFill, paperExecutionPolicy } from "./fill-writer";
+
+const MATCHABLE_ORDER_STATUSES = ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"] as const;
+const MATCHABLE_STATUS_LOOKUP: Partial<Record<PaperOrderRow["status"], true>> = {
+  PENDING: true,
+  TRIGGER_PENDING: true,
+  TRIGGERED: true,
+  PARTIALLY_FILLED: true,
+};
+
+/** Share of the tick's volume a resting order may take per tick. */
+const MAX_TICK_PARTICIPATION = 0.1;
 
 export class PaperTradingTickProcessor {
-  async processTick(quote: Tick): Promise<MatchingReceipt[]> {
-    const receipts: MatchingReceipt[] = [];
-
-    const parsedQuoteResult = evaluateExecutionQuote(
-      {
-        exchange: quote.exchange,
-        symbol: quote.symbol,
-        price: quote.price,
-        volume: quote.volume,
-        ts: quote.ts,
-        source: quote.source,
-        quality: quote.quality,
-      },
-      quote.symbol
-    );
-
-    if (!parsedQuoteResult.executable) {
+  async processTick(tick: Tick): Promise<MatchingReceipt[]> {
+    const policy = evaluateExecutionQuote(tick, tick.symbol, paperExecutionPolicy());
+    if (!policy.executable) {
       return [];
     }
 
-    const { exchange, symbol } = quote;
+    const { exchange, symbol } = tick;
+    const quote: ExecutionQuote = {
+      exchange,
+      symbol,
+      price: tick.price,
+      volume: tick.volume,
+      ts: tick.ts,
+      source: tick.source,
+      quality: tick.quality,
+    };
 
-    const db = getDb();
-    const candidateOrdersRows = await db
-      .select({
-        id: paperOrders.id,
-        user_id: paperOrders.userId,
-        generation: paperOrders.generation,
-        type: paperOrders.type,
-        status: paperOrders.status,
-      })
+    const candidates = await getDb()
+      .select({ id: paperOrders.id, userId: paperOrders.userId })
       .from(paperOrders)
       .where(
         and(
           eq(paperOrders.symbol, symbol),
           eq(paperOrders.exchange, exchange),
-          inArray(paperOrders.status, ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"])
+          inArray(paperOrders.status, [...MATCHABLE_ORDER_STATUSES])
         )
-      );
+      )
+      .orderBy(asc(paperOrders.placedAt));
 
-    if (candidateOrdersRows.length === 0) {
+    if (candidates.length === 0) {
       return [];
     }
 
     const fingerprint = computeQuoteFingerprint({
       exchange,
       symbol,
-      source: quote.source,
-      quality: quote.quality,
-      timestamp: quote.ts,
-      price: quote.price,
-      volume: quote.volume,
+      source: tick.source,
+      quality: tick.quality,
+      timestamp: tick.ts,
+      price: tick.price,
+      volume: tick.volume,
     });
 
-    for (const candidate of candidateOrdersRows) {
+    const receipts: MatchingReceipt[] = [];
+    for (const candidate of candidates) {
       try {
-        const receipt = await withSerializablePaperTransaction(
-          async (repos) => {
-            const rawAccount = await repos.write.findAccountForUpdate({ userId: candidate.user_id });
-            if (!rawAccount) {
-              return null;
-            }
-            const accountRow = mapPaperAccountRow(rawAccount);
-
-            if (accountRow.status === "LIQUIDATED" || accountRow.isLocked) {
-              return null;
-            }
-
-            const rawOrder = await repos.write.findOrderForUpdate({
-              userId: candidate.user_id,
-              orderId: candidate.id,
-            });
-            if (!rawOrder) {
-              return null;
-            }
-            const orderRow = mapPaperOrderRow(rawOrder);
-
-            if (orderRow.lastQuoteFingerprint === fingerprint) {
-              return null;
-            }
-
-            const rawPositions = await repos.write.findPositionsForUpdate({
-              userId: candidate.user_id,
-              generation: candidate.generation,
-            });
-            const positionRows = rawPositions.map(mapPaperPositionRow);
-
-            let currentStatus = orderRow.status;
-
-            if (orderRow.type === "STOP_LOSS_LIMIT" && currentStatus === "TRIGGER_PENDING") {
-              const stopPrice = Number(orderRow.stopPrice);
-              const isTriggered =
-                orderRow.side === "SELL" ? quote.price <= stopPrice : quote.price >= stopPrice;
-
-              if (isTriggered) {
-                currentStatus = "TRIGGERED";
-                await repos.write.updateOrder(orderRow.id, {
-                  status: "TRIGGERED",
-                  triggeredAt: new Date(),
-                  updatedAt: new Date(),
-                });
-              } else {
-                return null;
-              }
-            }
-
-            if (orderRow.type === "LIMIT" || (orderRow.type === "STOP_LOSS_LIMIT" && currentStatus === "TRIGGERED")) {
-              const limitPrice = Number(orderRow.limitPrice);
-              const isMarketable =
-                orderRow.side === "BUY" ? quote.price <= limitPrice : quote.price >= limitPrice;
-              if (!isMarketable) {
-                return null;
-              }
-            }
-
-            const domainPositions = positionRows.map((pos) => ({
-              symbol: pos.symbol,
-              // P0-E fix: restore signed quantity from side + totalShares.
-              // side='SHORT' => negative quantity; side='LONG' => positive.
-              quantity: (pos.side === "SHORT" ? -1 : 1) * pos.totalShares,
-              averagePrice: Number(pos.averageEntryPrice),
-              marginLocked: Number(pos.marginLocked),
-              realisedPnl: Number(pos.realizedPnl),
-              unrealisedPnl: Number(pos.unrealizedPnl),
-              updatedAt: pos.updatedAt?.toISOString() || new Date().toISOString(),
-            }));
-
-            const domainAccount = {
-              id: accountRow.userId,
-              userId: accountRow.userId,
-              version: 3 as const,
-              generation: accountRow.generation,
-              currency: accountRow.currency as "INR",
-              cash: Number(accountRow.cashBalance),
-              initialCash: Number(accountRow.initialCash),
-              realisedPnl: Number(accountRow.realisedPnl),
-              allocatedMargin: Number(accountRow.allocatedMargin),
-              maintenanceMargin: Number(accountRow.maintenanceMargin),
-              status: accountRow.status as any,
-              isLocked: accountRow.isLocked,
-              positions: domainPositions,
-              orders: [],
-              fills: [],
-              createdAt: accountRow.createdAt.toISOString(),
-              updatedAt: accountRow.updatedAt.toISOString(),
-            };
-
-            const domainOrder = {
-              id: orderRow.id,
-              userId: orderRow.userId,
-              symbol: orderRow.symbol,
-              side: orderRow.side as "BUY" | "SELL",
-              quantity: orderRow.qty,
-              type: orderRow.type as any,
-              status: currentStatus as any,
-              limitPrice: orderRow.limitPrice ? Number(orderRow.limitPrice) : undefined,
-              stopPrice: orderRow.stopPrice ? Number(orderRow.stopPrice) : undefined,
-              triggeredAt: orderRow.triggeredAt?.toISOString(),
-              filledQuantity: orderRow.filledQty,
-              averageFillPrice: orderRow.averageFillPrice ? Number(orderRow.averageFillPrice) : undefined,
-              stopLossPrice: orderRow.stopLossPrice ? Number(orderRow.stopLossPrice) : undefined,
-              takeProfitPrice: orderRow.takeProfitPrice ? Number(orderRow.takeProfitPrice) : undefined,
-              trailingDistance: orderRow.trailingDistance ? Number(orderRow.trailingDistance) : undefined,
-              trailingIsPercent: orderRow.isTrailingPercent ?? undefined,
-              createdAt: (orderRow.placedAt instanceof Date ? orderRow.placedAt : new Date(orderRow.placedAt || Date.now())).toISOString(),
-              updatedAt: (orderRow.updatedAt instanceof Date ? orderRow.updatedAt : new Date(orderRow.updatedAt || Date.now())).toISOString(),
-              parentOrderId: orderRow.parentOrderId || undefined,
-            };
-
-            const filledQty = Number(orderRow.filledQty || 0);
-            const remainingQuantity = orderRow.qty - filledQty;
-            const maxFill = quote.volume && quote.volume >= 10 ? Math.floor(quote.volume * 0.10) : remainingQuantity;
-            const fillQuantity = Math.max(1, Math.min(remainingQuantity, maxFill > 0 ? maxFill : remainingQuantity));
-            const reason: PaperExecutionReason = currentStatus === "TRIGGERED" ? "STOP_TRIGGER" : "USER_ORDER";
-
-            let fillResult: any;
-            try {
-              fillResult = executePaperFill({
-                account: domainAccount,
-                order: domainOrder,
-                quote,
-                reason,
-                fillQuantity,
-              });
-            } catch (err) {
-              // P0-H fix: Log fill errors with context instead of silently returning null.
-              // Structured error allows observability without leaking sensitive data.
-              console.error(`[TickProcessor] Fill execution rejected for order ${candidate.id}`, {
-                orderId: candidate.id,
-                userId: candidate.user_id,
-                symbol,
-                reason: err instanceof Error ? err.message : String(err),
-              });
-              return null;
-            }
-
-            const fillPlan = fillResult.fill;
-            const fillId = crypto.randomUUID();
-            const now = new Date();
-
-            const fillRow = await repos.write.insertFill({
-              id: fillId,
-              orderId: orderRow.id,
-              userId: candidate.user_id,
-              generation: orderRow.generation,
-              executionSequence: 1,
-              symbol,
-              exchange,
-              side: orderRow.side,
-              quantity: fillPlan.quantity,
-              referencePrice: String(fillPlan.referencePrice),
-              fillPrice: String(fillPlan.fillPrice),
-              slippage: String(fillPlan.slippage),
-              fees: String(fillPlan.fees),
-              realizedPnl: String(fillPlan.realisedPnl),
-              quoteSource: quote.source,
-              quoteQuality: quote.quality,
-              quoteTimestamp: new Date(quote.ts),
-              quoteFingerprint: fingerprint,
-              executionReason: reason,
-              executedAt: now,
-              createdAt: now,
-            });
-
-            const prevFilledQty = Number(orderRow.filledQty || 0);
-            const fillQty = fillPlan.quantity;
-            const newFilledQty = prevFilledQty + fillQty;
-            const isFullyFilled = newFilledQty >= orderRow.qty;
-            const nextOrderStatus = isFullyFilled ? "FILLED" : "PARTIALLY_FILLED";
-
-            const prevAvgPrice = orderRow.averageFillPrice ? Number(orderRow.averageFillPrice) : 0;
-            const newAvgPrice =
-              (prevAvgPrice * prevFilledQty + fillPlan.fillPrice * fillQty) / newFilledQty;
-
-            await repos.write.updateOrder(orderRow.id, {
-              status: nextOrderStatus,
-              filledQty: newFilledQty,
-              averageFillPrice: String(newAvgPrice),
-              lastFillAt: now,
-              updatedAt: now,
-              lastQuoteFingerprint: fingerprint,
-            });
-
-            await repos.write.updateAccount(candidate.user_id, {
-              cashBalance: String(fillResult.account.cash),
-              allocatedMargin: String(fillResult.account.allocatedMargin),
-              maintenanceMargin: String(fillResult.account.maintenanceMargin),
-              realisedPnl: String(fillResult.account.realisedPnl),
-              updatedAt: now,
-            });
-
-            const matchingPos = fillResult.account.positions.find((p: any) => p.symbol === symbol);
-            if (matchingPos) {
-              // P0-E fix: derive side from signed quantity; always store totalShares as absolute.
-              const posSide = (matchingPos.quantity as number) < 0 ? "SHORT" : "LONG";
-              await repos.write.upsertPosition({
-                id: crypto.randomUUID(),
-                userId: candidate.user_id,
-                generation: orderRow.generation,
-                symbol,
-                exchange,
-                totalShares: Math.abs(matchingPos.quantity),
-                side: posSide,
-                averageEntryPrice: String(matchingPos.averagePrice),
-                marginLocked: String(matchingPos.marginLocked),
-                realizedPnl: String(matchingPos.realisedPnl),
-                unrealizedPnl: String(matchingPos.unrealisedPnl),
-                lastQuotePrice: String(quote.price),
-                lastQuoteSource: quote.source,
-                lastQuoteQuality: quote.quality,
-                lastQuoteTimestamp: new Date(quote.ts),
-                updatedAt: now,
-              });
-            } else {
-              await repos.write.deletePosition({
-                userId: candidate.user_id,
-                generation: orderRow.generation,
-                symbol,
-                exchange,
-              });
-            }
-
-            await repos.write.insertLedgerEntries([
-              // Canonical TRADE_REALIZED_PNL entry (signed: positive = profit, negative = loss)
-              {
-                id: crypto.randomUUID(),
-                userId: candidate.user_id,
-                generation: orderRow.generation,
-                fillId: fillRow.id,
-                entryType: "TRADE_REALIZED_PNL",
-                amount: String(fillPlan.realisedPnl ?? 0),
-                balanceAfter: String(fillResult.account.cash),
-                currency: "INR",
-                sourceType: "FILL",
-                sourceId: fillRow.id,
-                metadata: { fillId: fillRow.id, orderId: orderRow.id, slippage: fillPlan.slippage },
-                createdAt: now,
-              },
-              // Separate EXECUTION_FEE entry so ledger items are individually classifiable
-              {
-                id: crypto.randomUUID(),
-                userId: candidate.user_id,
-                generation: orderRow.generation,
-                fillId: fillRow.id,
-                entryType: "EXECUTION_FEE",
-                amount: String(-(fillPlan.fees ?? 0)),
-                balanceAfter: String(fillResult.account.cash),
-                currency: "INR",
-                sourceType: "FILL",
-                sourceId: fillRow.id,
-                metadata: {
-                  fillId: fillRow.id,
-                  orderId: orderRow.id,
-                  feeRate: fillPlan.fees > 0 && fillPlan.fillPrice > 0
-                    ? fillPlan.fees / (fillPlan.fillPrice * fillQty)
-                    : 0,
-                },
-                createdAt: now,
-              },
-            ]);
-
-            // P0-F fix: If this was a bracket child (has parentOrderId) and it fully filled,
-            // cancel OCO sibling orders in the SAME transaction to prevent double-fill.
-            if (isFullyFilled && orderRow.parentOrderId) {
-              await repos.write.cancelSiblingOrders({
-                userId: candidate.user_id,
-                generation: orderRow.generation,
-                parentOrderId: orderRow.parentOrderId,
-                excludeOrderId: orderRow.id,
-                reason: "OCO bracket sibling filled",
-              });
-            }
-
-            const outboxEvents = [
-              isFullyFilled
-                ? buildOrderFilledEvent({
-                    userId: candidate.user_id,
-                    generation: orderRow.generation,
-                    aggregateType: "PaperOrder",
-                    aggregateId: orderRow.id,
-                    payload: { orderId: orderRow.id, fillId: fillRow.id, fillPrice: fillPlan.fillPrice, quantity: fillPlan.quantity },
-                  })
-                : buildOrderPartiallyFilledEvent({
-                    userId: candidate.user_id,
-                    generation: orderRow.generation,
-                    aggregateType: "PaperOrder",
-                    aggregateId: orderRow.id,
-                    payload: { orderId: orderRow.id, fillId: fillRow.id, fillPrice: fillPlan.fillPrice, quantity: fillPlan.quantity },
-                  }),
-              buildPositionUpdatedEvent({
-                userId: candidate.user_id,
-                generation: orderRow.generation,
-                aggregateType: "PaperPosition",
-                aggregateId: `${candidate.user_id}:${symbol}`,
-                payload: { symbol, position: matchingPos || null },
-              }),
-              buildAccountUpdatedEvent({
-                userId: candidate.user_id,
-                generation: orderRow.generation,
-                aggregateType: "PaperAccount",
-                aggregateId: candidate.user_id,
-                payload: { cashBalance: fillResult.account.cash, realisedPnl: fillResult.account.realisedPnl },
-              }),
-            ];
-
-            await repos.write.insertOutboxEvents(outboxEvents);
-
-            return {
-              orderId: orderRow.id,
-              fillId,
-              symbol,
-              fillPrice: fillPlan.fillPrice,
-              quantity: fillPlan.quantity,
-              status: nextOrderStatus as "FILLED" | "PARTIALLY_FILLED" | "REJECTED",
-            };
+        const receipt = await withSerializablePaperTransaction(async (repos) => {
+          const account = await repos.write.findAccountForUpdate({ userId: candidate.userId });
+          if (!account || account.status !== "ACTIVE" || account.isLocked) {
+            return null;
           }
-        );
+
+          let order = await repos.write.findOrderForUpdate({ userId: candidate.userId, orderId: candidate.id });
+          // The candidate list was read before any lock was taken: a cancel, fill or account
+          // reset may have committed since. Only the locked row is authoritative.
+          if (
+            !order ||
+            !MATCHABLE_STATUS_LOOKUP[order.status] ||
+            order.generation !== account.generation ||
+            order.lastQuoteFingerprint === fingerprint
+          ) {
+            return null;
+          }
+
+          if (order.type === "STOP_LOSS_LIMIT" && order.status === "TRIGGER_PENDING") {
+            const stopPrice = Number(order.stopPrice);
+            const isTriggered = order.side === "SELL" ? quote.price <= stopPrice : quote.price >= stopPrice;
+            if (!isTriggered) {
+              return null;
+            }
+            const now = new Date();
+            order = await repos.write.updateOrder(order.id, { status: "TRIGGERED", triggeredAt: now, updatedAt: now });
+          }
+
+          if (order.type !== "MARKET") {
+            const limitPrice = Number(order.limitPrice);
+            const isMarketable = order.side === "BUY" ? quote.price <= limitPrice : quote.price >= limitPrice;
+            if (!isMarketable) {
+              return null;
+            }
+          }
+
+          const positions = await repos.write.findPositionsForUpdate({
+            userId: candidate.userId,
+            generation: account.generation,
+          });
+
+          const remainingQuantity = order.qty - order.filledQty;
+          const liquidityCap =
+            quote.volume !== undefined && quote.volume >= 10
+              ? Math.floor(quote.volume * MAX_TICK_PARTICIPATION)
+              : remainingQuantity;
+          const fillQuantity = Math.max(1, Math.min(remainingQuantity, liquidityCap));
+
+          try {
+            const applied = await applyFill({
+              write: repos.write,
+              account,
+              order,
+              positions,
+              quote,
+              quoteFingerprint: fingerprint,
+              fillQuantity,
+              reason: order.type === "STOP_LOSS_LIMIT" ? "STOP_TRIGGER" : "USER_ORDER",
+              ledgerSourceType: "FILL",
+              now: new Date(),
+              createId: () => crypto.randomUUID(),
+            });
+            return {
+              orderId: order.id,
+              fillId: applied.fill.id,
+              symbol,
+              fillPrice: Number(applied.fill.fillPrice),
+              quantity: applied.fill.quantity,
+              status: applied.isFullyFilled ? "FILLED" : "PARTIALLY_FILLED",
+            } satisfies MatchingReceipt;
+          } catch (err) {
+            if (!(err instanceof PaperExecutionError)) {
+              throw err;
+            }
+            // Business rejection (e.g. insufficient margin): the order stays working.
+            console.error(`[TickProcessor] Fill execution rejected for order ${order.id}`, {
+              orderId: order.id,
+              userId: candidate.userId,
+              symbol,
+              code: err.code,
+              reason: err.message,
+            });
+            return null;
+          }
+        });
 
         if (receipt) {
           receipts.push(receipt);
