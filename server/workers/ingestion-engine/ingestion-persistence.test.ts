@@ -52,6 +52,12 @@ const dlqContract = dlqModule as typeof dlqModule & {
   };
 };
 
+// The shared postgres.js client is wrapped by Drizzle, which installs
+// pass-through parsers for timestamp types, so raw queries return strings.
+function timestampMs(value: unknown): number {
+  return value instanceof Date ? value.getTime() : Date.parse(String(value));
+}
+
 describe("canonical ingestion persistence", () => {
   it("maps a caller run identity to a canonical running ingestion row", () => {
     expect(writerContract.getIngestionRunStartValues({
@@ -314,7 +320,7 @@ describe("canonical ingestion persistence", () => {
       expect(completedRun.failed).toBe(2);
       expect(completedRun.inserted).toBe(100);
       expect(completedRun.updated).toBe(4);
-      expect(completedRun.completed_at).toBeInstanceOf(Date);
+      expect(timestampMs(completedRun.completed_at)).toBeGreaterThanOrEqual(startedAt.getTime());
       expect(completedRun.duration_ms).toBeGreaterThanOrEqual(1_000);
 
       await dlqModule.pushToDLQ({
@@ -347,7 +353,7 @@ describe("canonical ingestion persistence", () => {
         WHERE id = ${dlqId}::uuid
       `;
       expect(failedRetry.retry_count).toBe(1);
-      expect(failedRetry.last_attempted_at).toBeInstanceOf(Date);
+      expect(timestampMs(failedRetry.last_attempted_at)).toBeGreaterThanOrEqual(startedAt.getTime());
       expect(failedRetry.resolved_at).toBeNull();
       expect(failedRetry.error_message).toBe("retry failed");
 
@@ -357,7 +363,7 @@ describe("canonical ingestion persistence", () => {
         FROM dead_letter_queue
         WHERE id = ${dlqId}::uuid
       `;
-      expect(resolvedRetry.resolved_at).toBeInstanceOf(Date);
+      expect(timestampMs(resolvedRetry.resolved_at)).toBeGreaterThanOrEqual(startedAt.getTime());
     } finally {
       await sqlClient`DELETE FROM dead_letter_queue WHERE batch_id = ${batchId}`;
       await sqlClient`DELETE FROM ingestion_runs WHERE batch_id = ${batchId}`;

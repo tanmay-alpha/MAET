@@ -34,6 +34,12 @@ jobs:
       - name: TypeScript Type Check
         run: bun run typecheck
 
+      - name: Lint
+        run: bun run lint
+
+      - name: Check Every Test File Is Wired Into test:all
+        run: bun run check:test-wiring
+
       - name: Run Unit Test Suite
         run: bun run test:unit
 
@@ -145,8 +151,10 @@ jobs:
       - name: Install Dependencies
         run: bun install --frozen-lockfile
 
+      # test:unit, test:integration and test:concurrency already run in their
+      # own jobs; this job runs the remaining database-backed suites once.
       - name: Run Advanced Feature Tests & Verification
-        run: bun run test:all
+        run: bun run test:advanced
 
   build-frontend:
     name: Frontend Production Build
