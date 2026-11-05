@@ -1,23 +1,26 @@
 import { CandleWriter } from "./workers/candle-writer";
 import { MarketClockWorker } from "./workers/market-clock";
 import { ScreenerRunner } from "./workers/screener-runner";
-import { YahooPoller } from "./workers/yahoo-poller";
 import { AngelOneWorker } from "./workers/angelone-ws";
 import { OrderMatcherWorker } from "./workers/order-matcher";
+import { DailyProcessorSchedule } from "./workers/daily-processor-schedule";
 import { quoteStore } from "./domain/market/quote-store";
-import { closeRedis } from "./data/redis/client";
-import { login, setAngelOneMarketSession } from "./data/sources/angelone/client";
+import { nextIstTime } from "./domain/market/clock";
+import { configuredHolidays } from "./domain/market/quote-quality";
+import { closeRedis, setnxWithTtl } from "./data/redis/client";
+import { RedisKeys } from "./data/redis/keys";
+import { login, onAngelOneSessionRejected, setAngelOneMarketSession } from "./data/sources/angelone/client";
 import { getConfig } from "./config";
 import { lookupSymbol } from "./domain/market/symbol";
 import { bus } from "./infra/bus";
 import { updateHealthStatus } from "./infra/health";
+import { getLogger } from "./infra/logger";
 import { hydrateAngelOneCompanyTokens } from "./data/sources/nse-company-master";
 import { marketDataMultiplexer } from "./domain/market/data-multiplexer";
 
 import { alertEvaluatorWorker } from "./workers/alert-evaluator";
 import { listActiveAlertSymbols } from "./modules/alerts/repository";
 
-const yahooPoller = new YahooPoller({ intervalMs: 60_000 });
 const angelOne = new AngelOneWorker();
 const candleWriter = new CandleWriter();
 const marketClock = new MarketClockWorker();
@@ -27,11 +30,25 @@ const subscriptionRefs = new Map<string, number>();
 const alertSubscriptionSymbols = new Set<string>();
 let started = false;
 let angelRetryTimer: ReturnType<typeof setTimeout> | undefined;
+let angelDailyLoginTimer: ReturnType<typeof setTimeout> | undefined;
+let angelLoginInFlight: Promise<void> | undefined;
 let angelReadyOff: (() => void) | undefined;
 let angelFailedOff: (() => void) | undefined;
+let angelRejectedOff: (() => void) | undefined;
 let quoteBusOff: (() => void) | undefined;
 let alertReconcileTimer: ReturnType<typeof setInterval> | undefined;
 const ANGEL_FEED_USER = "render-market-feed";
+// Angel One sessions do not survive the night; log in fresh before pre-open (09:00 IST).
+const ANGEL_DAILY_LOGIN_IST = { hour: 8, minute: 30 };
+const DAILY_PROCESSOR_LOCK_TTL_SECONDS = 2 * 24 * 60 * 60;
+
+function log() {
+  return getLogger().child({ module: "orchestrator" });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function activeAngelTokens(): string[] {
   const tokens = new Set<string>();
@@ -43,49 +60,61 @@ function activeAngelTokens(): string[] {
 }
 
 function scheduleAngelLogin(delayMs = 15_000): void {
-  if (angelRetryTimer) clearTimeout(angelRetryTimer);
+  clearTimeout(angelRetryTimer);
   angelRetryTimer = setTimeout(() => {
     angelRetryTimer = undefined;
     if (started) void connectAngelOne();
   }, delayMs);
 }
 
-let dailyProcessorTimer: ReturnType<typeof setInterval> | undefined;
-
-function shouldRunDailyProcessor(now: Date): boolean {
-  const day = now.getDay();
-  if (day === 0 || day === 6) return false;
-  const hour = now.getUTCHours();
-  const min = now.getUTCMinutes();
-  return hour === 13 && min === 0;
+function scheduleDailyAngelLogin(): void {
+  clearTimeout(angelDailyLoginTimer);
+  const at = nextIstTime(new Date(), ANGEL_DAILY_LOGIN_IST.hour, ANGEL_DAILY_LOGIN_IST.minute);
+  angelDailyLoginTimer = setTimeout(() => {
+    angelDailyLoginTimer = undefined;
+    if (!started) return;
+    log().info("scheduled Angel One re-login before the session");
+    void connectAngelOne();
+    scheduleDailyAngelLogin();
+  }, at.getTime() - Date.now());
 }
 
-let lastProcessorRunDate = "";
+let dailyProcessorTimer: ReturnType<typeof setInterval> | undefined;
+const dailyProcessor = new DailyProcessorSchedule({
+  acquireLock: (istDate) =>
+    setnxWithTtl(RedisKeys.dailyProcessorLockKey(istDate), String(process.pid), DAILY_PROCESSOR_LOCK_TTL_SECONDS),
+  holidays: configuredHolidays,
+  onLockError: (error) =>
+    log().warn({ err: errorMessage(error) }, "daily processor lock unavailable; running without cross-instance guard"),
+  run: async () => {
+    log().info("running daily processor");
+    const { runDailyProcessor } = await import("./workers/daily-processor");
+    const stats = await runDailyProcessor({ backfillDays: 365 });
+    log().info({ stats }, "daily processor finished");
+  },
+});
 
 function scheduleDailyProcessor(): void {
   if (dailyProcessorTimer) return;
-  dailyProcessorTimer = setInterval(async () => {
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    if (shouldRunDailyProcessor(now) && lastProcessorRunDate !== today) {
-      lastProcessorRunDate = today;
-      console.log("[cron] running daily processor at", now.toISOString());
-      try {
-        const { runDailyProcessor } = await import("./workers/daily-processor");
-        const stats = await runDailyProcessor({ backfillDays: 365 });
-        console.log("[cron] daily processor finished:", stats);
-      } catch (e) {
-        console.error("[cron] daily processor failed:", e);
-      }
-    }
+  dailyProcessorTimer = setInterval(() => {
+    dailyProcessor.tick().catch((error) => log().error({ err: errorMessage(error) }, "daily processor failed"));
   }, 60_000);
 }
 
-async function connectAngelOne(): Promise<void> {
+/** Single-flight: the retry timer, the daily re-login and a 401 can all ask at once. */
+function connectAngelOne(): Promise<void> {
+  angelLoginInFlight ??= loginAngelOne().finally(() => {
+    angelLoginInFlight = undefined;
+  });
+  return angelLoginInFlight;
+}
+
+async function loginAngelOne(): Promise<void> {
   try {
     const config = getConfig();
     if (!config.angeloneApiKey || !config.angeloneClientId || !config.angelonePin || !config.angeloneTotpSecret) {
-      console.warn("Angel One credentials not configured, skipping login");
+      log().warn("Angel One credentials not configured; live market data disabled");
+      updateHealthStatus("marketData", false);
       return;
     }
     const session = await login({
@@ -99,6 +128,8 @@ async function connectAngelOne(): Promise<void> {
     angelOne.manageUser(ANGEL_FEED_USER, session, activeAngelTokens());
     updateHealthStatus("marketData", true);
   } catch (error) {
+    // Error text comes from our client (status codes, provider error codes), never credentials.
+    log().error({ err: errorMessage(error) }, "Angel One login failed; retrying");
     updateHealthStatus("marketData", false);
     scheduleAngelLogin();
   }
@@ -140,7 +171,6 @@ export function startOrchestrator(): void {
   candleWriter.start();
   marketClock.start();
   screenerRunner.start();
-  yahooPoller.start();
   orderMatcher.start();
   void alertEvaluatorWorker.start();
   marketDataMultiplexer.start();
@@ -151,6 +181,11 @@ export function startOrchestrator(): void {
     if (userId !== ANGEL_FEED_USER) return;
     updateHealthStatus("marketData", false);
     scheduleAngelLogin(5_000);
+  });
+  angelRejectedOff = onAngelOneSessionRejected((reason) => {
+    log().warn({ reason }, "Angel One rejected the session; logging in again");
+    updateHealthStatus("marketData", false);
+    scheduleAngelLogin(1_000);
   });
   quoteBusOff = bus.on("tick", (tick) => {
     void alertEvaluatorWorker.processQuote({
@@ -165,6 +200,7 @@ export function startOrchestrator(): void {
   });
   angelOne.start();
   void connectAngelOne();
+  scheduleDailyAngelLogin();
   scheduleDailyProcessor();
 
   // Reconcile alert symbol subscriptions immediately and periodically
@@ -192,6 +228,10 @@ export async function stopOrchestrator(): Promise<void> {
     clearTimeout(angelRetryTimer);
     angelRetryTimer = undefined;
   }
+  if (angelDailyLoginTimer) {
+    clearTimeout(angelDailyLoginTimer);
+    angelDailyLoginTimer = undefined;
+  }
   if (dailyProcessorTimer) {
     clearInterval(dailyProcessorTimer);
     dailyProcessorTimer = undefined;
@@ -202,6 +242,7 @@ export async function stopOrchestrator(): Promise<void> {
   }
   angelReadyOff?.();
   angelFailedOff?.();
+  angelRejectedOff?.();
   quoteBusOff?.();
   await alertEvaluatorWorker.stop();
 
@@ -213,7 +254,6 @@ export async function stopOrchestrator(): Promise<void> {
 
   angelOne.stop();
   orderMatcher.stop();
-  yahooPoller.stop();
   screenerRunner.stop();
   marketClock.stop();
   candleWriter.stop();

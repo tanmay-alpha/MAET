@@ -10,4 +10,5 @@ export const RedisKeys = {
   screenerCriteriaKey: (exchange: string) => `screener:criteria:${exchange}`,
   angeloneSessionKey: (userId: string) => `angelone:session:${userId}`,
   angeloneSubsKey: (userId: string) => `angelone:subs:${userId}`,
+  dailyProcessorLockKey: (istDate: string) => `lock:daily-processor:${istDate}`,
 } as const;
