@@ -20,6 +20,8 @@ export default defineEventHandler(async (event) => {
       req: timedReq,
       router: appRouter,
       createContext: () => ({ userId: authCtx?.userId, email: authCtx?.email ?? null, role: authCtx?.role ?? "user" }),
+      // The frontend never batches; refusing batches blocks request amplification.
+      allowBatching: false,
       onError: reportTrpcError,
     });
   } catch (error: any) {
