@@ -650,8 +650,11 @@ describe("PostgreSQL Alert Lifecycle & Tenant Isolation Suite (Checkpoint 4)", (
         VALUES (${userA}, 'INFY', 'NSE', 'RSI_ABOVE', 'RSI_ABOVE', 70, false, 'ONE_TIME')
         RETURNING id
       `;
-      await expect(toggleAlert(legacyRow.id, userA, true)).rejects.toThrow("Cannot enable unsupported legacy alert type");
-      await expect(rearmAlert(legacyRow.id, userA)).rejects.toThrow("Cannot rearm unsupported legacy alert type");
+      // `await expect(promise).rejects` stalls postgres.js transactions under Bun 1.3; settle explicitly.
+      const toggleError = await toggleAlert(legacyRow.id, userA, true).then(() => undefined, (e: unknown) => e);
+      expect(String(toggleError)).toContain("Cannot enable unsupported legacy alert type");
+      const rearmError = await rearmAlert(legacyRow.id, userA).then(() => undefined, (e: unknown) => e);
+      expect(String(rearmError)).toContain("Cannot rearm unsupported legacy alert type");
     } finally {
       await sql`DELETE FROM user_notifications WHERE user_id IN (${userA}, ${userB})`;
       await sql`DELETE FROM alert_events WHERE user_id IN (${userA}, ${userB})`;
