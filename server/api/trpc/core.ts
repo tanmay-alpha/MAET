@@ -1,4 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
+import { DrizzleQueryError } from "drizzle-orm";
+import { logger } from "../../infra/logger";
 
 export type Context = {
   userId?: string;
@@ -6,17 +8,60 @@ export type Context = {
   role: "user" | "admin";
 };
 
+export const INTERNAL_ERROR_MESSAGE = "Internal server error";
+
 const t = initTRPC.context<Context>().create({
   errorFormatter({ shape, error }) {
+    if (process.env.NODE_ENV !== "production") return shape;
+    // Unexpected errors carry SQL text, bound parameters and hostnames in their
+    // message; production clients only get a generic message and never a stack.
+    // Deliberate TRPCErrors (BAD_REQUEST, NOT_FOUND, ...) keep their message.
+    const { stack: _stack, ...data } = shape.data;
     return {
       ...shape,
-      data: {
-        ...shape.data,
-        code: error.code,
-      },
+      message: error.code === "INTERNAL_SERVER_ERROR" ? INTERNAL_ERROR_MESSAGE : shape.message,
+      data,
     };
   },
 });
+
+type ErrorChainEntry = { name: string; code?: string; message?: string; query?: string };
+type ErrorLog = { error(obj: object, msg: string): void; debug(obj: object, msg: string): void };
+
+function describeErrorChain(error: unknown): ErrorChainEntry[] {
+  const chain: ErrorChainEntry[] = [];
+  for (let current = error; current instanceof Error && chain.length < 5; current = current.cause) {
+    chain.push({
+      name: current.name,
+      // Postgres SQLSTATE / Node errno codes are what operators search for.
+      ...("code" in current && typeof current.code === "string" ? { code: current.code } : {}),
+      // DrizzleQueryError's message embeds the bound parameters (request input);
+      // keep only the parameterised SQL text.
+      ...(current instanceof DrizzleQueryError ? { query: current.query } : { message: current.message }),
+    });
+  }
+  return chain;
+}
+
+/**
+ * tRPC `onError` hook. Internal errors are always logged (in every
+ * environment) with path, code and the cause chain; procedure input is never
+ * logged. Expected client errors are only logged at debug level.
+ */
+export function reportTrpcError(
+  { path, type, error }: { path?: string; type: string; error: TRPCError },
+  log: ErrorLog = logger,
+): void {
+  const context = { path: path ?? "<no-path>", type, code: error.code };
+  if (error.code !== "INTERNAL_SERVER_ERROR") {
+    log.debug({ ...context, message: error.message }, "tRPC request failed");
+    return;
+  }
+  const origin = error.cause ?? error;
+  // Stack frames only: the header line(s) repeat the message, which may embed parameters.
+  const stack = origin.stack?.split("\n").filter((line) => line.trimStart().startsWith("at ")).join("\n");
+  log.error({ ...context, causes: describeErrorChain(origin), stack }, "tRPC internal error");
+}
 
 const isAuthed = t.middleware(({ ctx, next }) => {
   if (!ctx.userId) {

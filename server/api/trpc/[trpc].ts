@@ -2,6 +2,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { defineEventHandler, toWebRequest, createError } from "h3";
 import { appRouter } from "./index";
 import { tryAuth } from "./auth";
+import { reportTrpcError } from "./core";
 
 // Nitro route handler for tRPC
 export default defineEventHandler(async (event) => {
@@ -19,12 +20,7 @@ export default defineEventHandler(async (event) => {
       req: timedReq,
       router: appRouter,
       createContext: () => ({ userId: authCtx?.userId, email: authCtx?.email ?? null, role: authCtx?.role ?? "user" }),
-      onError:
-        process.env.NODE_ENV === "development"
-          ? ({ path, error }) => {
-              console.error(`tRPC error on ${path ?? "<no-path>"}:`, error);
-            }
-          : undefined,
+      onError: reportTrpcError,
     });
   } catch (error: any) {
     if (
