@@ -49,12 +49,15 @@ function requireEnv(name: string, value: string | undefined): string {
 }
 
 /**
- * NSE trading holidays. NSE_HOLIDAYS_JSON (array of YYYY-MM-DD) overrides the
- * bundled calendar; without either, holidays would be treated as trading days.
+ * NSE trading holidays: the bundled calendar plus any extra YYYY-MM-DD dates
+ * from NSE_HOLIDAYS_JSON (e.g. an ad-hoc closure, or next year's list before
+ * the bundle is updated). An empty or unset variable adds nothing, so the
+ * shipped `NSE_HOLIDAYS_JSON=[]` cannot disable the calendar.
  */
 export function parseNseHolidays(json: string | undefined): Date[] {
-  const dates = json ? (JSON.parse(json) as string[]) : bundledNseHolidays.map((holiday) => holiday.date);
-  return dates.map((date) => new Date(date));
+  const extra = json ? (JSON.parse(json) as string[]) : [];
+  const dates = new Set([...bundledNseHolidays.map((holiday) => holiday.date), ...extra]);
+  return [...dates].map((date) => new Date(date));
 }
 
 export function getConfig(): AppConfig {

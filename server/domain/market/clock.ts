@@ -31,6 +31,12 @@ export function istDateKey(d: Date): string {
   return new Date(d.getTime() + IST_OFFSET_MIN * 60_000).toISOString().slice(0, 10);
 }
 
+/** True when `holidays` lists at least one date in `now`'s IST calendar year. */
+export function hasHolidaysForIstYear(holidays: Date[], now: Date): boolean {
+  const year = istDateKey(now).slice(0, 4);
+  return holidays.some((holiday) => istDateKey(holiday).startsWith(year));
+}
+
 /** Minutes since IST midnight and IST weekday (0 = Sunday). */
 export function istClock(d: Date): { minutes: number; weekday: number } {
   const { minutes, weekday } = toIstParts(d);
