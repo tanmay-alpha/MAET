@@ -61,7 +61,7 @@ export function PortfolioAnalyticsView({ result }: Props) {
         <div className="rounded-lg border border-border bg-panel p-3">
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Win Rate</span>
           <p className="mt-1 text-base font-bold font-mono">{(result.winRate * 100).toFixed(1)}%</p>
-          <span className="text-xs text-muted-foreground">Profit Factor: {result.profitFactor.toFixed(2)}</span>
+          <span className="text-xs text-muted-foreground">Profit Factor: {result.profitFactor == null ? "—" : result.profitFactor.toFixed(2)}</span>
         </div>
 
         <div className="rounded-lg border border-border bg-panel p-3">

@@ -215,7 +215,7 @@ export async function processSweep(sweep: any): Promise<void> {
         totalReturn: isFinite(m.totalReturn) ? m.totalReturn.toFixed(6) : "0.000000",
         maxDrawdown: isFinite(m.maxDrawdown) ? m.maxDrawdown.toFixed(6) : "0.000000",
         winRate: isFinite(m.winRate) ? m.winRate.toFixed(6) : "0.000000",
-        profitFactor: isFinite(m.profitFactor) ? m.profitFactor.toFixed(4) : "0.0000",
+        profitFactor: m.profitFactor == null ? null : m.profitFactor.toFixed(4),
         tradeCount: backtestRes.tradeCount,
       },
     });

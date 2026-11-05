@@ -112,7 +112,8 @@ export interface PortfolioBacktestResult {
   maxDrawdown: number;
   calmar: number;
   winRate: number;
-  profitFactor: number;
+  /** null when there were no losing trades (see risk-metrics). */
+  profitFactor: number | null;
   tradeCount: number;
   grossPnl: number;
   netPnl: number;
