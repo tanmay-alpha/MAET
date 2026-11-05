@@ -3,265 +3,193 @@ import {
   buildLiquidationStartedEvent,
   buildLiquidationCompletedEvent,
   buildOrderCancelledEvent,
-  buildPositionUpdatedEvent,
+  buildOrderRejectedEvent,
   buildAccountUpdatedEvent,
 } from "./outbox";
-import type { Tick } from "@shared/types";
-import { parseExecutionQuote, evaluateExecutionQuote } from "@shared/types/market";
-import { executePaperFill } from "@shared/domain/paper-trading/execution";
-import type { PaperAccount, PaperOrder } from "@shared/domain/paper-trading/types";
+import type { ExecutionQuote } from "@shared/types/market";
+import type { PaperAccountStatus } from "@shared/domain/paper-trading/types";
+import { PaperExecutionError } from "@shared/domain/paper-trading/execution";
+import type { NewPaperOutboxEventRow } from "./contracts";
+import { applyFill } from "./fill-writer";
+import { computeQuoteFingerprint } from "./quote-fingerprint";
+import { signedPositionQuantity } from "./mapper";
+
+export interface LiquidationRequest {
+  userId: string;
+  reason: string;
+  /** Latest executable quote for a position's exchange and symbol, if one is available. */
+  quoteFor: (exchange: string, symbol: string) => ExecutionQuote | undefined;
+}
+
+export interface LiquidationOutcome {
+  status: PaperAccountStatus;
+  closedPositions: number;
+  openPositions: number;
+}
 
 export class PaperTradingLiquidationService {
-  async initiateLiquidation(userId: string, reason: string): Promise<boolean> {
-    return withSerializablePaperTransaction(async (repos) => {
-      const account = await repos.write.findAccountForUpdate({ userId });
-      if (!account || account.status !== "ACTIVE") {
-        return false;
-      }
-
-      await repos.write.updateAccount(userId, {
-        status: "LIQUIDATION_PENDING",
-        isLocked: true,
-        lockReason: reason,
-        lockedAt: new Date(),
-        version: Number(account.version) + 1,
-        updatedAt: new Date(),
-      });
-
-      const cancelledOrders = await repos.write.cancelOpenOrders({
-        userId,
-        generation: account.generation,
-        reason: `Account liquidation initiated: ${reason}`,
-      });
-
-      const outboxEvents = [
-        buildLiquidationStartedEvent({
-          userId,
-          generation: account.generation,
-          aggregateType: "PaperAccount",
-          aggregateId: userId,
-          payload: { reason, initiatedAt: new Date().toISOString() },
-        }),
-      ];
-
-      for (const order of cancelledOrders) {
-        outboxEvents.push(
-          buildOrderCancelledEvent({
-            userId,
-            generation: account.generation,
-            aggregateType: "PaperOrder",
-            aggregateId: order.id,
-            payload: { orderId: order.id, reason: order.rejectReason },
-          })
-        );
-      }
-
-      await repos.write.insertOutboxEvents(outboxEvents);
-      return true;
-    });
-  }
-
-  async processPositionLiquidation(userId: string, quoteTick: Tick): Promise<boolean> {
-    const symbol = quoteTick.symbol.trim().toUpperCase();
-    const exchange = quoteTick.exchange || "NSE";
-
-    const parsedQuoteResult = parseExecutionQuote(quoteTick, symbol);
-    if (!parsedQuoteResult.ok) {
-      return false;
-    }
-    const quote = parsedQuoteResult.quote;
-    const policy = evaluateExecutionQuote(quote, symbol);
-    if (!policy.executable) {
-      return false;
-    }
+  /**
+   * Margin-call liquidation in a single serializable transaction: re-checks the breach under
+   * the account lock, locks the account (LIQUIDATION_PENDING), cancels its working orders and
+   * closes every position that has an executable quote with a side-aware MARKET order, fill and
+   * ledger entries. Positions without a quote stay open and the account stays
+   * LIQUIDATION_PENDING until a later call closes them; the account becomes LIQUIDATED once flat.
+   * Returns null when there is nothing to do (account missing, already liquidated, or no longer
+   * in breach).
+   */
+  async liquidateAccount(request: LiquidationRequest): Promise<LiquidationOutcome | null> {
+    const { userId, reason, quoteFor } = request;
 
     return withSerializablePaperTransaction(async (repos) => {
-      const accountRow = await repos.write.findAccountForUpdate({ userId });
-      if (!accountRow || accountRow.status !== "LIQUIDATION_PENDING") {
-        return false;
+      let account = await repos.write.findAccountForUpdate({ userId });
+      if (!account || account.status === "LIQUIDATED") {
+        return null;
       }
 
-      const positionRow = await repos.write.findPositionForUpdate({
-        userId,
-        generation: accountRow.generation,
-        symbol,
-        exchange,
-      });
+      let positions = await repos.write.findPositionsForUpdate({ userId, generation: account.generation });
+      const events: NewPaperOutboxEventRow[] = [];
+      const eventBase = { userId, generation: account.generation };
 
-      if (!positionRow || positionRow.totalShares === 0) {
-        return false;
-      }
+      if (account.status === "ACTIVE") {
+        const markedEquity = positions.reduce((equity, position) => {
+          const mark = quoteFor(position.exchange, position.symbol)?.price ?? Number(position.averageEntryPrice);
+          return equity + signedPositionQuantity(position) * (mark - Number(position.averageEntryPrice));
+        }, Number(account.cashBalance));
+        if (markedEquity >= Number(account.maintenanceMargin)) {
+          return null;
+        }
 
-      const liquidationOrderId = crypto.randomUUID();
-      const liquidationOrderRow = await repos.write.insertOrder({
-        id: liquidationOrderId,
-        userId,
-        generation: accountRow.generation,
-        symbol,
-        exchange,
-        side: "SELL",
-        type: "MARKET",
-        status: "PENDING",
-        qty: positionRow.totalShares,
-        filledQty: 0,
-        version: 1,
-        placedAt: new Date(),
-        updatedAt: new Date(),
-      });
-
-      const domainAccount: PaperAccount = {
-        version: 3,
-        initialCash: Number(accountRow.initialCash),
-        cash: Number(accountRow.cashBalance),
-        allocatedMargin: Number(accountRow.allocatedMargin),
-        maintenanceMargin: Number(accountRow.maintenanceMargin),
-        realisedPnl: Number(accountRow.realisedPnl),
-        status: "LIQUIDATION_PENDING",
-        positions: [
-          {
-            symbol: positionRow.symbol,
-            quantity: positionRow.totalShares,
-            averagePrice: Number(positionRow.averageEntryPrice),
-            marginLocked: Number(positionRow.marginLocked),
-            realisedPnl: Number(positionRow.realizedPnl),
-            unrealisedPnl: Number(positionRow.unrealizedPnl || 0),
-            updatedAt: positionRow.updatedAt.toISOString(),
-          },
-        ],
-        orders: [],
-        fills: [],
-      };
-
-      const domainOrder: PaperOrder = {
-        id: liquidationOrderId,
-        symbol,
-        side: "SELL",
-        type: "MARKET",
-        status: "PENDING",
-        quantity: positionRow.totalShares,
-        filledQuantity: 0,
-        createdAt: liquidationOrderRow.placedAt.toISOString(),
-        updatedAt: liquidationOrderRow.updatedAt.toISOString(),
-      };
-
-      const fillResult = executePaperFill({
-        account: domainAccount,
-        order: domainOrder,
-        fillQuantity: positionRow.totalShares,
-        quote,
-        reason: "MARGIN_LIQUIDATION",
-      });
-
-      const fillRowId = crypto.randomUUID();
-
-      await repos.write.updateOrder(liquidationOrderId, {
-        status: "FILLED",
-        filledQty: positionRow.totalShares,
-        lastFillAt: new Date(),
-        quoteSource: quote.source,
-        quoteQuality: quote.quality,
-        quoteTimestamp: new Date(quote.ts),
-        referencePrice: String(fillResult.fill.referencePrice),
-      });
-
-      await repos.write.insertFill({
-        id: fillRowId,
-        orderId: liquidationOrderId,
-        userId,
-        generation: accountRow.generation,
-        symbol,
-        exchange,
-        side: "SELL",
-        quantity: positionRow.totalShares,
-        referencePrice: String(fillResult.fill.referencePrice),
-        fillPrice: String(fillResult.fill.fillPrice),
-        slippage: String(fillResult.fill.slippage),
-        fees: String(fillResult.fill.fees),
-        realizedPnl: String(fillResult.fill.realisedPnl),
-        quoteSource: quote.source,
-        quoteQuality: quote.quality,
-        quoteTimestamp: new Date(quote.ts),
-        quoteFingerprint: `liq:${liquidationOrderId}`,
-        executionReason: "MARGIN_LIQUIDATION",
-        executionSequence: 1,
-        executedAt: new Date(),
-      });
-
-      await repos.write.deletePosition({
-        userId,
-        generation: accountRow.generation,
-        symbol,
-        exchange,
-      });
-
-      const remainingPositions = await repos.write.findPositionsForUpdate({
-        userId,
-        generation: accountRow.generation,
-      });
-
-      const isFullyLiquidated = remainingPositions.length === 0;
-
-      const newAccountVersion = Number(accountRow.version) + 1;
-      const newStatus = isFullyLiquidated ? "LIQUIDATED" : "LIQUIDATION_PENDING";
-
-      await repos.write.updateAccount(userId, {
-        cashBalance: String(fillResult.account.cash),
-        realisedPnl: String(fillResult.account.realisedPnl),
-        status: newStatus,
-        isLocked: true,
-        liquidationCompletedAt: isFullyLiquidated ? new Date() : null,
-        version: newAccountVersion,
-        updatedAt: new Date(),
-      });
-
-      await repos.write.insertLedgerEntries([
-        {
-          id: crypto.randomUUID(),
-          userId,
-          generation: accountRow.generation,
-          fillId: fillRowId,
-          entryType: "EXECUTION_FEE",
-          amount: String(-fillResult.fill.fees),
-          balanceAfter: String(fillResult.account.cash),
-          currency: "INR",
-          sourceType: "LIQUIDATION_FILL",
-          sourceId: fillRowId,
-          metadata: { liquidation: true },
-          createdAt: new Date(),
-        },
-      ]);
-
-      const events = [
-        buildPositionUpdatedEvent({
-          userId,
-          generation: accountRow.generation,
-          aggregateType: "PaperPosition",
-          aggregateId: `${userId}:${symbol}`,
-          payload: { symbol, liquidated: true },
-        }),
-        buildAccountUpdatedEvent({
-          userId,
-          generation: accountRow.generation,
-          aggregateType: "PaperAccount",
-          aggregateId: userId,
-          payload: { version: newAccountVersion, status: newStatus },
-        }),
-      ];
-
-      if (isFullyLiquidated) {
+        const now = new Date();
+        account = await repos.write.updateAccount(userId, {
+          status: "LIQUIDATION_PENDING",
+          isLocked: true,
+          lockReason: reason,
+          lockedAt: now,
+          version: account.version + 1,
+          updatedAt: now,
+        });
         events.push(
-          buildLiquidationCompletedEvent({
-            userId,
-            generation: accountRow.generation,
+          buildLiquidationStartedEvent({
+            ...eventBase,
             aggregateType: "PaperAccount",
             aggregateId: userId,
-            payload: { completedAt: new Date().toISOString() },
+            payload: { reason, equity: markedEquity, maintenanceMargin: Number(account.maintenanceMargin) },
+          })
+        );
+
+        const cancelled = await repos.write.cancelOpenOrders({
+          userId,
+          generation: account.generation,
+          reason: `Account liquidation initiated: ${reason}`,
+        });
+        for (const order of cancelled) {
+          events.push(
+            buildOrderCancelledEvent({
+              ...eventBase,
+              aggregateType: "PaperOrder",
+              aggregateId: order.id,
+              payload: { orderId: order.id, reason: order.rejectReason },
+            })
+          );
+        }
+      }
+
+      let closedPositions = 0;
+      for (const position of [...positions]) {
+        const quote = quoteFor(position.exchange, position.symbol);
+        if (!quote) {
+          continue;
+        }
+
+        const now = new Date();
+        const order = await repos.write.insertOrder({
+          id: crypto.randomUUID(),
+          userId,
+          generation: account.generation,
+          symbol: position.symbol,
+          exchange: position.exchange,
+          side: position.side === "SHORT" ? "BUY" : "SELL",
+          type: "MARKET",
+          status: "PENDING",
+          qty: position.totalShares,
+          filledQty: 0,
+          quoteSource: quote.source,
+          quoteQuality: quote.quality,
+          quoteTimestamp: new Date(quote.ts),
+          referencePrice: String(quote.price),
+          version: 1,
+          placedAt: now,
+          updatedAt: now,
+        });
+
+        try {
+          const applied = await applyFill({
+            write: repos.write,
+            account,
+            order,
+            positions,
+            quote,
+            quoteFingerprint: computeQuoteFingerprint({ ...quote }),
+            fillQuantity: position.totalShares,
+            reason: "MARGIN_LIQUIDATION",
+            ledgerSourceType: "LIQUIDATION_FILL",
+            now,
+            createId: () => crypto.randomUUID(),
+          });
+          account = applied.account;
+          closedPositions++;
+        } catch (err) {
+          if (!(err instanceof PaperExecutionError)) {
+            throw err;
+          }
+          // Never leave a working MARKET order behind for the matcher to pick up.
+          await repos.write.updateOrder(order.id, { status: "REJECTED", rejectReason: err.message, updatedAt: now });
+          events.push(
+            buildOrderRejectedEvent({
+              ...eventBase,
+              aggregateType: "PaperOrder",
+              aggregateId: order.id,
+              payload: { orderId: order.id, reason: err.message },
+            })
+          );
+          console.error(`[Liquidation] Could not close ${position.exchange}:${position.symbol} for ${userId}`, {
+            code: err.code,
+            reason: err.message,
+          });
+        }
+        positions = await repos.write.findPositionsForUpdate({ userId, generation: account.generation });
+      }
+
+      const isFlat = positions.length === 0;
+      const now = new Date();
+      account = await repos.write.updateAccount(userId, {
+        status: isFlat ? "LIQUIDATED" : "LIQUIDATION_PENDING",
+        isLocked: true,
+        liquidationCompletedAt: isFlat ? now : null,
+        version: account.version + 1,
+        updatedAt: now,
+      });
+      events.push(
+        buildAccountUpdatedEvent({
+          ...eventBase,
+          aggregateType: "PaperAccount",
+          aggregateId: userId,
+          payload: { version: account.version, status: account.status },
+        })
+      );
+      if (isFlat) {
+        events.push(
+          buildLiquidationCompletedEvent({
+            ...eventBase,
+            aggregateType: "PaperAccount",
+            aggregateId: userId,
+            payload: { completedAt: now.toISOString() },
           })
         );
       }
-
       await repos.write.insertOutboxEvents(events);
-      return true;
+
+      return { status: account.status, closedPositions, openPositions: positions.length };
     });
   }
 }

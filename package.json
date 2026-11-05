@@ -14,7 +14,7 @@
     "test": "bun run test:phase1",
     "test:unit": "bun test server/data server/domain server/hooks server/infra shared src tests/canonical-indicators.test.ts server/modules/paper-trading/financial-invariants.test.ts",
     "test:canonical-indicators": "bun test tests/canonical-indicators.test.ts",
-    "test:integration": "bun test server/modules/paper-trading/repository.integration.test.ts server/modules/paper-trading/service.integration.test.ts",
+    "test:integration": "bun test server/modules/paper-trading/repository.integration.test.ts server/modules/paper-trading/service.integration.test.ts server/modules/paper-trading/engine-integrity.integration.test.ts server/modules/paper-trading/risk-liquidation.integration.test.ts server/db/migrations/0023-upgrade.integration.test.ts",
     "test:concurrency": "bun test server/modules/paper-trading/concurrency.integration.test.ts",
     "test:capabilities": "bun test server/modules/capabilities/capabilities.integration.test.ts",
     "test:workspace": "bun test server/modules/workspace/tenant-isolation.integration.test.ts",

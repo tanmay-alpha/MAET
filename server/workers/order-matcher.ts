@@ -1,6 +1,6 @@
 import { bus } from "../infra/bus";
 import { onTick } from "../domain/market/matcher";
-import { riskEngine } from "../domain/portfolio/risk-engine";
+import { paperRiskMonitor } from "../modules/paper-trading/risk-monitor";
 import { evaluateExecutionQuote, type Tick } from "@shared/types";
 
 export class OrderMatcherWorker {
@@ -9,8 +9,8 @@ export class OrderMatcherWorker {
   start(): void {
     if (this.off) return;
 
-    // Start background risk monitoring loop (checks every 2 seconds)
-    riskEngine.start(2000);
+    // Start background margin monitoring loop (checks every 2 seconds)
+    paperRiskMonitor.start(2000);
 
     this.off = bus.on("tick", (tick: Tick) => {
       // 0. Validate tick execution policy
@@ -19,8 +19,8 @@ export class OrderMatcherWorker {
         return;
       }
 
-      // 1. Update risk engine cache with latest asset prices
-      riskEngine.updatePrice(tick.symbol, tick.price);
+      // 1. Feed the margin monitor the latest quote for this exchange:symbol
+      paperRiskMonitor.updateQuote(tick);
 
       // 2. Coordinates order matching for this symbol
       onTick(tick)
@@ -36,8 +36,8 @@ export class OrderMatcherWorker {
     this.off?.();
     this.off = undefined;
 
-    // Stop background risk engine
-    riskEngine.stop();
+    // Stop background margin monitor
+    paperRiskMonitor.stop();
 
     console.log("[OrderMatcherWorker] Stopped order matching worker");
   }
