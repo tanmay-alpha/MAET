@@ -286,7 +286,7 @@ function buildExecution(risk: RiskConfig): StrategyDefinition["execution"] {
  *
  * NOTE ON MAXIMUM OPEN POSITIONS:
  * Single-symbol V3 execution fundamentally supports exactly one position at a time (maximumOpenPositions = 1).
- * Concurrent multi-position strategies are supported in the portfolio runner (portfolio-runner.ts).
+ * Concurrent multi-position strategies belong in the portfolio engine (portfolio-engine.ts).
  *
  * @param params  - The strategy parameters from the Backtest Lab UI
  * @param risk    - The risk/execution configuration

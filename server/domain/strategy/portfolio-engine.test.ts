@@ -86,6 +86,13 @@ describe("P2 Shared Capital Portfolio Engine (Commit 5)", () => {
     expect(bySymbol[0].symbol).toBe("INFY");
     expect(bySymbol[1].symbol).toBe("RELIANCE");
     expect(bySymbol[2].symbol).toBe("TCS");
+
+    // Equal relative volume falls back to symbol ascending
+    const tied = rankCandidates(
+      [{ symbol: "TCS", volume: 1000 }, { symbol: "INFY", volume: 1000 }, { symbol: "RELIANCE", volume: 2000 }],
+      "RELATIVE_VOLUME",
+    );
+    expect(tied.map((c) => c.symbol)).toEqual(["RELIANCE", "INFY", "TCS"]);
   });
 
   it("2. Shared capital: symbols compete for cash; capital is not double spent", () => {
