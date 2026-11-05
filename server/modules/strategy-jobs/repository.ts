@@ -14,7 +14,7 @@ import {
   strategyVersions,
   strategyWalkForwardRuns,
 } from "../../db/schema";
-import { eq, and, lt, sql, isNull, inArray } from "drizzle-orm";
+import { eq, and, lt, gte, sql, isNull, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
@@ -22,6 +22,13 @@ const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 /** Queued + running jobs a single user may hold per job kind (backtests, sweeps, walk-forwards). */
 export const MAX_ACTIVE_JOBS_PER_USER = 3;
+
+/**
+ * Jobs still QUEUED/RUNNING after this long are treated as abandoned for cap
+ * purposes: workers may not run in every environment, and a dead queue must
+ * not lock users out permanently.
+ */
+export const ACTIVE_JOB_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 
 const ACTIVE_JOB_TABLES = {
   backtest: strategyBacktestJobs,
@@ -34,8 +41,9 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * Runs `insert` only while the user holds fewer than MAX_ACTIVE_JOBS_PER_USER
- * QUEUED/RUNNING jobs of `kind`. A per-user advisory lock serialises
- * concurrent creates so parallel requests cannot overshoot the cap.
+ * active jobs of `kind`: QUEUED/RUNNING, created within the stale window and,
+ * for backtests, without a pending cancellation. A per-user advisory lock
+ * serialises concurrent creates so parallel requests cannot overshoot the cap.
  */
 export async function insertWithinActiveJobCap<T>(
   userId: string,
@@ -43,12 +51,18 @@ export async function insertWithinActiveJobCap<T>(
   insert: (tx: Tx) => Promise<T>,
 ): Promise<T> {
   const table = ACTIVE_JOB_TABLES[kind];
+  const staleBefore = new Date(Date.now() - ACTIVE_JOB_STALE_AFTER_MS);
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`strategy-jobs:${kind}:${userId}`}))`);
     const [{ active }] = await tx
       .select({ active: sql<number>`count(*)::int` })
       .from(table)
-      .where(and(eq(table.userId, userId), inArray(table.status, ["QUEUED", "RUNNING"])));
+      .where(and(
+        eq(table.userId, userId),
+        inArray(table.status, ["QUEUED", "RUNNING"]),
+        gte(table.createdAt, staleBefore),
+        kind === "backtest" ? isNull(strategyBacktestJobs.cancelRequestedAt) : undefined,
+      ));
     if (active >= MAX_ACTIVE_JOBS_PER_USER) {
       throw new TRPCError({
         code: "TOO_MANY_REQUESTS",
