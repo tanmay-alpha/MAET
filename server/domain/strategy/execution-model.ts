@@ -8,7 +8,7 @@
  *    - BUY impact shifts execution price upward.
  *    - SELL impact shifts execution price downward.
  *    - Invariant: non-negative, finite, bounded at maxImpactBps, zero impact for zero quantity.
- * 4. Slippage and statutory fees (reusing computeFeeRate).
+ * 4. Slippage and per-leg brokerage/statutory charges (computeLegCharges).
  * 5. Participation constraints: maxFillQuantity = floor(barVolume * maxParticipationRate).
  * 6. Multi-bar order execution state machine (NEW -> PARTIALLY_FILLED -> FILLED / EXPIRED / CANCELLED).
  * 7. Comprehensive execution cost reporting: brokerage, taxes, spread, slippage, impact, cost drag.
@@ -16,7 +16,7 @@
 
 import type { Candle } from "@shared/types";
 import type { StrategyExecutionConfig } from "../../../shared/strategy/ast";
-import { computeFeeRate } from "./fee-model";
+import { computeLegCharges } from "./fee-model";
 
 // ============================================================
 // Types & Contracts
@@ -256,16 +256,10 @@ export class ExecutionModel {
     const notional = fillQty * effectivePrice;
     const baseNotional = fillQty * safeRefPrice;
 
-    // Fee breakdown from fee-model (statutory charges and brokerage)
-    const feeInfo = computeFeeRate(ctx.config, notional);
-    const statutoryCharges = notional * (
-      (feeInfo.breakdown.stt +
-        feeInfo.breakdown.exchangeCharges +
-        feeInfo.breakdown.gst +
-        feeInfo.breakdown.sebiCharges +
-        feeInfo.breakdown.stampDuty) / 10000
-    );
-    const brokerageFees = notional * (feeInfo.breakdown.brokerage / 10000);
+    // Brokerage and statutory charges on the traded notional, side-aware (stamp duty is BUY-only).
+    const charges = computeLegCharges(ctx.config, ctx.side, notional);
+    const statutoryCharges = charges.taxesAndCharges;
+    const brokerageFees = charges.brokerage;
 
     const spreadCost = baseNotional * halfSpreadRate;
     const slippageCost = baseNotional * slippageRate;

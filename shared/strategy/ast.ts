@@ -191,13 +191,10 @@ export interface StrategyExecutionConfig {
   fillPolicy: FillPolicy;         // default NEXT_BAR_OPEN
   intrabarPolicy: IntrabarPolicy; // default CONSERVATIVE
   feeModel: FeeModelType;
-  feeBps?: number;
-  brokerage?: number;             // INR per crore
-  stt?: number;                   // bps
-  exchangeCharges?: number;       // bps
-  gst?: number;                   // bps
-  sebiCharges?: number;           // bps
-  stampDuty?: number;             // bps
+  feeBps?: number;                // FIXED_BPS only: charge per leg in bps of notional
+  brokerage?: number;             // VOLUME_AWARE only: INR per order (each leg)
+  exchange?: "NSE" | "BSE";       // VOLUME_AWARE statutory schedule; default NSE
+  product?: "DELIVERY" | "INTRADAY"; // VOLUME_AWARE statutory schedule; default DELIVERY
   slippageBps?: number;
   initialCapital: number;         // > 0
   benchmarkSymbol?: string;

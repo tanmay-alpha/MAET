@@ -19,7 +19,7 @@ import type { StrategyDefinition, StrategyRiskConfig, StrategyExecutionConfig } 
 import { IndicatorStateCache } from "./indicator-state";
 import { evaluateRuleGroup } from "./ast-evaluator";
 import { calculatePositionSize } from "./position-sizer";
-import { computeFeeRate } from "./fee-model";
+import { computeLegCharges } from "./fee-model";
 import { computeMetrics } from "../backtest/risk-metrics";
 import type { EquityPoint, TradeRecord } from "../backtest/risk-metrics";
 import { STRATEGY_ENGINE_VERSION, INDICATOR_ENGINE_VERSION, FEE_MODEL_VERSION } from "../../../shared/strategy/version";
@@ -205,8 +205,6 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     return equity + unrealized;
   };
 
-  const getFeeRate = (val: number) => computeFeeRate(exec, val).feeRate;
-
   for (let i = 1; i < sorted.length; i++) {
     const bar = sorted[i];
     const barTs = new Date(bar.ts).getTime();
@@ -345,8 +343,8 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
       // Execute exit
       if (exitReason && exitPrice > 0) {
         const exitNotional = quantity * exitPrice;
-        const exitFeeRate = getFeeRate(exitNotional);
-        const exitFees = exitNotional * exitFeeRate;
+        // Closing leg: a long sells, a short buys back.
+        const exitFees = computeLegCharges(exec, direction === "long" ? "SELL" : "BUY", exitNotional).total;
         const exitSlippage = exitNotional * slippageRate;
 
         const totalFees = currentEntryFees + exitFees;
@@ -427,16 +425,16 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
         });
 
         if (sizing.quantity > 0 && sizing.capitalRequired <= equity) {
+          const entryDirection = definition.direction === "SHORT_ONLY" ? "short" : "long";
           const entryNotional = sizing.quantity * fillPrice;
-          const entryFeeRate = getFeeRate(entryNotional);
-          const entryFees = entryNotional * entryFeeRate;
+          const entryFees = computeLegCharges(exec, entryDirection === "long" ? "BUY" : "SELL", entryNotional).total;
           const entrySlippage = entryNotional * slippageRate;
 
           equity -= entryFees + entrySlippage;
           currentEntryFees = entryFees;
           currentEntrySlippage = entrySlippage;
           inPosition = true;
-          direction = definition.direction === "SHORT_ONLY" ? "short" : "long";
+          direction = entryDirection;
           entrySignalBar = i - 1;
           entryBar = i;
           entryPrice = fillPrice;
@@ -463,8 +461,7 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     const exitPrice = last.close;
     const lastTs = new Date(last.ts).getTime();
     const exitNotional = quantity * exitPrice;
-    const exitFeeRate = getFeeRate(exitNotional);
-    const exitFees = exitNotional * exitFeeRate;
+    const exitFees = computeLegCharges(exec, direction === "long" ? "SELL" : "BUY", exitNotional).total;
     const exitSlippage = exitNotional * slippageRate;
 
     const totalFees = currentEntryFees + exitFees;
