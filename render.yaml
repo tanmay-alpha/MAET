@@ -20,6 +20,7 @@ services:
         - package.json
         - bun.lock
         - render.yaml
+        - tsconfig.json
     envVars:
       - key: NODE_VERSION
         value: "20"
@@ -53,13 +54,6 @@ services:
       # NSE holiday calendar as JSON array of ISO date strings
       - key: NSE_HOLIDAYS_JSON
         sync: false
-      # Paper trading execution limits (non-secret)
-      - key: PAPER_EXECUTION_MAX_QUOTE_AGE_MS
-        value: "15000"
-      - key: PAPER_EXECUTION_ALLOW_DELAYED
-        value: "false"
-      - key: PAPER_INITIAL_CASH_INR
-        value: "1000000"
       # Optional BigQuery analytics sink (server/data/bigquery/client.ts).
       # When unset, warehouse writes fail and are logged; Postgres persistence
       # is unaffected. GOOGLE_APPLICATION_CREDENTIALS should point at a Render

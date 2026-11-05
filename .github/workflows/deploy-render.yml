@@ -12,6 +12,7 @@ on:
       - "package.json"
       - "bun.lock"
       - "render.yaml"
+      - "tsconfig.json"
 
 permissions:
   contents: read
