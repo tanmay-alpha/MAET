@@ -3,7 +3,7 @@
  * Company master data and fundamentals management
  */
 
-import { createRouter, protectedProcedure, publicProcedure } from "../core";
+import { adminProcedure, createRouter, protectedProcedure, publicProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
@@ -15,29 +15,16 @@ import {
 } from "../../../modules/peers/contracts";
 import { getPeerComparison } from "../../../modules/peers/service";
 
-// FIX 4: Admin role check
-const ADMIN_USER_IDS = new Set(
-  (process.env.ADMIN_USER_IDS || "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean)
-);
-
-function isAdmin(userId: string | undefined): boolean {
-  if (!userId) return false;
-  return ADMIN_USER_IDS.has(userId);
-}
-
 export const companiesRouter = createRouter({
   // List companies with optional filters and pagination
   getCompanies: protectedProcedure
     .input(
       z.object({
-        sector: z.string().optional(),
-        exchange: z.string().optional(),
+        sector: z.string().max(100).optional(),
+        exchange: z.string().max(10).optional(),
         isActive: z.boolean().optional(),
-        search: z.string().optional(),
-        cursor: z.string().optional(),
+        search: z.string().max(100).optional(),
+        cursor: z.string().max(200).optional(),
         limit: z.number().int().positive().max(200).default(50),
       }).optional()
     )
@@ -160,16 +147,7 @@ export const companiesRouter = createRouter({
     }),
 
   // Upsert a company record (create or update)
-  upsertCompany: protectedProcedure
-    .use(async ({ ctx, next }) => {
-      if (!isAdmin(ctx.userId)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Admin access required",
-        });
-      }
-      return next();
-    })
+  upsertCompany: adminProcedure
     .input(
       z.object({
         symbol: z.string().min(1).max(20),
@@ -240,16 +218,7 @@ export const companiesRouter = createRouter({
     }),
 
   // Sync fundamentals for a symbol from NSE
-  syncFundamentals: protectedProcedure
-    .use(async ({ ctx, next }) => {
-      if (!isAdmin(ctx.userId)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Admin access required",
-        });
-      }
-      return next();
-    })
+  syncFundamentals: adminProcedure
     .input(z.object({ symbol: z.string().min(1).max(20) }))
     .mutation(async ({ input }) => {
       const { getFundamentals: fetchNSEFundamentals } = await import(
