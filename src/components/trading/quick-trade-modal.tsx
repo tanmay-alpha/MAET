@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { WATCHLIST } from "@/lib/market-catalog";
+import { buildTicketOrder } from "@/lib/order-ticket";
 import { X, TrendingUp, TrendingDown } from "lucide-react";
 
 interface QuickTradeModalProps {
@@ -9,6 +10,8 @@ interface QuickTradeModalProps {
   onClose: () => void;
   initialSymbol?: string;
   initialSide?: "BUY" | "SELL";
+  /** Exchange to trade on (e.g. the active symbol's); the user can switch it in the form. */
+  initialExchange?: "NSE" | "BSE";
 }
 
 // The form is only mounted while open, so a closed modal holds no paper-account
@@ -21,10 +24,12 @@ function QuickTradeForm({
   onClose,
   initialSymbol = "",
   initialSide = "BUY",
+  initialExchange = "NSE",
 }: Omit<QuickTradeModalProps, "isOpen">) {
   const { placeOrder, isTradingAvailable } = usePaperAccount();
   const [side, setSide] = useState<"BUY" | "SELL">(initialSide);
   const [symbol, setSymbol] = useState(initialSymbol || WATCHLIST[0].symbol);
+  const [exchange, setExchange] = useState<"NSE" | "BSE">(initialExchange);
   const [qty, setQty] = useState(1);
   const [type, setType] = useState<"MARKET" | "LIMIT">("MARKET");
   const [price, setPrice] = useState("");
@@ -70,14 +75,20 @@ function QuickTradeForm({
       setMessage({ type: "error", text: "Please select a stock symbol." });
       return;
     }
-    if (qty <= 0) {
-      setMessage({ type: "error", text: "Quantity must be greater than zero." });
-      return;
-    }
-
-    const limitPriceNum = type === "LIMIT" ? Number(price) : undefined;
-    if (type === "LIMIT" && (!limitPriceNum || limitPriceNum <= 0)) {
-      setMessage({ type: "error", text: "Please enter a valid limit price." });
+    const ticket = buildTicketOrder({
+      symbol: symbol.toUpperCase(),
+      exchange,
+      side,
+      type: type === "MARKET" ? "MKT" : "LMT",
+      quantity: qty > 0 ? qty : null,
+      limitPrice: price,
+      triggerPrice: "",
+      marketPrice: currentPrice > 0 ? currentPrice : undefined,
+      stopLoss: "",
+      takeProfit: "",
+    });
+    if (!ticket.ok) {
+      setMessage({ type: "error", text: ticket.error });
       return;
     }
 
@@ -85,24 +96,7 @@ function QuickTradeForm({
     setMessage(null);
 
     try {
-      if (type === "MARKET") {
-        await placeOrder({
-          type: "MARKET",
-          symbol: symbol.toUpperCase(),
-          exchange: "NSE",
-          side,
-          quantity: qty,
-        });
-      } else {
-        await placeOrder({
-          type: "LIMIT",
-          symbol: symbol.toUpperCase(),
-          exchange: "NSE",
-          side,
-          quantity: qty,
-          limitPrice: limitPriceNum!,
-        });
-      }
+      await placeOrder(ticket.order);
 
       setMessage({ type: "success", text: `Order placed successfully for ${symbol}` });
       if (timerRef.current) {
@@ -182,6 +176,27 @@ function QuickTradeForm({
                 </option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground mb-1">Exchange</label>
+            <div className="flex gap-1 p-0.5 bg-accent/30 rounded border border-border/40">
+              {(["NSE", "BSE"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setExchange(option)}
+                  aria-pressed={exchange === option}
+                  className={`flex-1 py-1 rounded text-[10px] font-bold transition-all ${
+                    exchange === option
+                      ? "bg-panel text-primary border border-border/60"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">

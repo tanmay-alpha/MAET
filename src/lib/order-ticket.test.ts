@@ -72,4 +72,12 @@ describe("buildTicketOrder", () => {
   test("market and limit orders still reject invalid bracket prices", () => {
     expect(buildTicketOrder({ ...base, type: "LMT", limitPrice: "1300", stopLoss: "-5" }).ok).toBe(false);
   });
+
+  test("orders go to the selected exchange", () => {
+    expect(buildTicketOrder({ ...base, exchange: "BSE", type: "MKT" })).toMatchObject({ ok: true, order: { exchange: "BSE" } });
+    expect(buildTicketOrder({ ...base, exchange: "BSE", type: "LMT", limitPrice: "1300" })).toMatchObject({
+      ok: true,
+      order: { type: "LIMIT", exchange: "BSE", limitPrice: 1300 },
+    });
+  });
 });
