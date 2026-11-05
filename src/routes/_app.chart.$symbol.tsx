@@ -51,6 +51,14 @@ const TIMEFRAMES = {
   "max": { timeframe: "1wk", range: "max", label: "All" },
 };
 
+type TimeframeKey = keyof typeof TIMEFRAMES;
+
+function isTimeframeKey(value: string): value is TimeframeKey {
+  return value in TIMEFRAMES;
+}
+
+const DEFAULT_CHART_STATE: ChartState = { zoom: 1, panOffset: 0, drawings: [] };
+
 function IndicatorCard({ name, enabled, onChange, disabled = false, reason }: { name: string; enabled: boolean; onChange: (enabled: boolean) => void; disabled?: boolean; reason?: string }) {
   return (
     <button
@@ -102,48 +110,34 @@ function ChartPage() {
     [symbol, positions, orders]
   );
 
-  const [selectedTF, setSelectedTF] = useState<keyof typeof TIMEFRAMES>("5m");
-  const [showVolume, setShowVolume] = useState(true);
-  const [showMA, setShowMA] = useState(false);
-  const [showRSI, setShowRSI] = useState(false);
-  const [showMACD, setShowMACD] = useState(false);
-  const [selectedChartType, setSelectedChartType] = useState<"candles" | "line" | "area">("candles");
-  const [selectedTool, setSelectedTool] = useState<string | null>(null);
-  const [chartState, setChartState] = useState<ChartState>({ zoom: 1, panOffset: 0, drawings: [] });
+  const [chartState, setChartState] = useState<ChartState>(DEFAULT_CHART_STATE);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const [layoutPanel, setLayoutPanel] = useState<"save" | "load" | null>(null);
+  const [layoutName, setLayoutName] = useState("");
+  const [layoutMessage, setLayoutMessage] = useState<string | null>(null);
 
-  // Layout persistence
-  const { layout, updateLayout, resetLayout, exportLayout, importLayout } = useChartLayout(symbol);
+  // The persisted layout is the single source of truth for the chart's view settings.
+  const {
+    layout,
+    updateLayout,
+    updateIndicator,
+    resetLayout,
+    namedLayoutNames,
+    saveNamedLayout,
+    loadNamedLayout,
+    deleteNamedLayout,
+    exportLayout,
+    importLayout,
+  } = useChartLayout(symbol);
+  const selectedTF: TimeframeKey = isTimeframeKey(layout.timeframe) ? layout.timeframe : "5m";
+  const selectedChartType = layout.chartType;
+  const selectedTool = layout.drawingTool;
+  const { volume: showVolume, ma: showMA, rsi: showRSI, macd: showMACD } = layout.indicators;
+  const setSelectedTF = (timeframe: TimeframeKey) => updateLayout({ timeframe });
+  const setSelectedChartType = (chartType: ChartLayout["chartType"]) => updateLayout({ chartType });
+  const setSelectedTool = (drawingTool: string | null) => updateLayout({ drawingTool });
   const { isFullscreen, toggleFullscreen } = useFullscreen();
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Sync layout state with chart
-  useEffect(() => {
-    if (layout) {
-      setSelectedTF(layout.timeframe as keyof typeof TIMEFRAMES);
-      setSelectedChartType(layout.chartType);
-      setShowVolume(layout.indicators.volume);
-      setShowMA(layout.indicators.ma);
-      setShowRSI(layout.indicators.rsi);
-      setShowMACD(layout.indicators.macd);
-      setSelectedTool(layout.drawingTool);
-    }
-  }, [layout]);
-
-  // Save layout when settings change
-  useEffect(() => {
-    updateLayout({
-      timeframe: selectedTF,
-      chartType: selectedChartType,
-      indicators: {
-        volume: showVolume,
-        ma: showMA,
-        rsi: showRSI,
-        macd: showMACD,
-      },
-      drawingTool: selectedTool,
-    });
-  }, [selectedTF, selectedChartType, showVolume, showMA, showRSI, showMACD, selectedTool, updateLayout]);
 
   // Keyboard shortcuts
   useChartShortcuts({
@@ -163,19 +157,18 @@ function ChartPage() {
       if (e.altKey) {
         const tfKeys = Object.keys(TIMEFRAMES);
         const currentIdx = tfKeys.indexOf(selectedTF);
-        if (e.key === "ArrowRight" && currentIdx < tfKeys.length - 1) {
-          setSelectedTF(tfKeys[currentIdx + 1] as keyof typeof TIMEFRAMES);
-        } else if (e.key === "ArrowLeft" && currentIdx > 0) {
-          setSelectedTF(tfKeys[currentIdx - 1] as keyof typeof TIMEFRAMES);
-        }
+        const next = e.key === "ArrowRight" ? tfKeys[currentIdx + 1] : e.key === "ArrowLeft" ? tfKeys[currentIdx - 1] : undefined;
+        if (next && isTimeframeKey(next)) updateLayout({ timeframe: next });
       }
     };
     window.addEventListener("keydown", handlePeriodKey);
     return () => window.removeEventListener("keydown", handlePeriodKey);
-  }, [selectedTF]);
+  }, [selectedTF, updateLayout]);
 
-  const { quoteMap, streamConnected } = useMarketQuotes([symbol]);
+  const { quoteMap } = useMarketQuotes([symbol]);
   const liveQuote = quoteMap.get(symbol);
+  // Only a real-time quote taken during market hours is live; a connected stream alone is not.
+  const isLive = liveQuote !== undefined && !liveQuote.delayed;
   const tf = TIMEFRAMES[selectedTF];
   const candleQuery = useMarketCandles(symbol, tf.timeframe as MarketCandle["tf"], tf.range);
 
@@ -199,39 +192,27 @@ function ChartPage() {
   const handleZoomOut = () => setChartState((s) => ({ ...s, zoom: Math.max(0.2, s.zoom / 1.2) }));
   const handleResetZoom = () => setChartState((s) => ({ ...s, zoom: 1, panOffset: 0 }));
 
-  const handleSaveLayout = () => {
-    const layoutName = prompt("Enter layout name:");
-    if (layoutName) {
-      const layouts = JSON.parse(localStorage.getItem(`maet_chart_layouts_${symbol}`) || "{}");
-      layouts[layoutName] = {
-        chartState,
-        selectedTF,
-        selectedChartType,
-        indicators: { volume: showVolume, ma: showMA, rsi: showRSI, macd: showMACD },
-      };
-      localStorage.setItem(`maet_chart_layouts_${symbol}`, JSON.stringify(layouts));
-      alert(`Layout "${layoutName}" saved!`);
-    }
+  const handleSaveLayout = (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = layoutName.trim();
+    if (!name) return;
+    saveNamedLayout(name, chartState);
+    setLayoutName("");
+    setLayoutPanel(null);
+    setLayoutMessage(`Layout "${name}" saved.`);
   };
 
-  const handleLoadLayout = () => {
-    const layouts = JSON.parse(localStorage.getItem(`maet_chart_layouts_${symbol}`) || "{}");
-    const layoutNames = Object.keys(layouts);
-    if (layoutNames.length === 0) {
-      alert("No saved layouts found.");
-      return;
-    }
-    const layoutName = prompt(`Enter layout name to load:\n${layoutNames.join(", ")}`);
-    if (layoutName && layouts[layoutName]) {
-      const loaded = layouts[layoutName];
-      setChartState(loaded.chartState || { zoom: 1, panOffset: 0, drawings: [] });
-      setSelectedTF(loaded.selectedTF);
-      setSelectedChartType(loaded.selectedChartType);
-      setShowVolume(loaded.indicators.volume);
-      setShowMA(loaded.indicators.ma);
-      setShowRSI(loaded.indicators.rsi);
-      setShowMACD(Boolean(loaded.indicators.macd));
-    }
+  const handleLoadLayout = (name: string) => {
+    const saved = loadNamedLayout(name);
+    if (!saved) return;
+    setChartState(saved.chartState ?? DEFAULT_CHART_STATE);
+    setLayoutPanel(null);
+    setLayoutMessage(`Layout "${name}" loaded.`);
+  };
+
+  const toggleLayoutPanel = (panel: "save" | "load") => {
+    setLayoutMessage(null);
+    setLayoutPanel((current) => (current === panel ? null : panel));
   };
 
   const handleExportLayout = () => {
@@ -241,12 +222,8 @@ function ChartPage() {
   const handleImportLayout = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      importLayout(file).then((layout) => {
-        if (layout) {
-          alert("Layout imported successfully!");
-        } else {
-          alert("Failed to import layout. Please check the file format.");
-        }
+      void importLayout(file).then((ok) => {
+        setLayoutMessage(ok ? "Layout imported." : "That file is not a MAET layout export.");
       });
     }
     // Reset the file input value so the same file can be selected again
@@ -282,8 +259,8 @@ function ChartPage() {
                   </span>
                 )}
                 <span className="mx-2">|</span>
-                <span className={`font-mono ${streamConnected ? "text-bull" : "text-muted-foreground"}`}>
-                  {streamConnected ? "Live" : "Delayed"}
+                <span className={`font-mono ${isLive ? "text-bull" : "text-muted-foreground"}`}>
+                  {isLive ? "Live" : "Delayed"}
                 </span>
               </div>
             </div>
@@ -368,7 +345,7 @@ function ChartPage() {
             {Object.entries(TIMEFRAMES).map(([key, tf]) => (
               <button
                 key={key}
-                onClick={() => setSelectedTF(key as keyof typeof TIMEFRAMES)}
+                onClick={() => isTimeframeKey(key) && setSelectedTF(key)}
                 className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
                   selectedTF === key
                     ? "bg-primary text-primary-foreground"
@@ -482,8 +459,8 @@ function ChartPage() {
                   onResetZoom={handleResetZoom}
                   selectedTool={selectedTool}
                   fullscreen={isFullscreen}
-                  onSaveLayout={handleSaveLayout}
-                  onLoadLayout={handleLoadLayout}
+                  onSaveLayout={() => toggleLayoutPanel("save")}
+                  onLoadLayout={() => toggleLayoutPanel("load")}
                 />
 
                 {candleQuery.isLoading ? (
@@ -566,22 +543,22 @@ function ChartPage() {
                   <IndicatorCard
                     name="Volume"
                     enabled={showVolume}
-                    onChange={setShowVolume}
+                    onChange={(enabled) => updateIndicator("volume", enabled)}
                   />
                   <IndicatorCard
                     name="Moving Avg"
                     enabled={showMA}
-                    onChange={setShowMA}
+                    onChange={(enabled) => updateIndicator("ma", enabled)}
                   />
                   <IndicatorCard
                     name="RSI"
                     enabled={showRSI}
-                    onChange={setShowRSI}
+                    onChange={(enabled) => updateIndicator("rsi", enabled)}
                   />
                   <IndicatorCard
                     name="MACD"
                     enabled={showMACD}
-                    onChange={setShowMACD}
+                    onChange={(enabled) => updateIndicator("macd", enabled)}
                   />
                 </div>
               </div>
@@ -594,23 +571,77 @@ function ChartPage() {
                 <div className="space-y-2">
                   <button
                     type="button"
-                    onClick={handleSaveLayout}
+                    onClick={() => toggleLayoutPanel("save")}
+                    aria-expanded={layoutPanel === "save"}
                     className="w-full px-3 py-2 text-sm rounded-md border border-border hover:bg-accent/50 transition-colors flex items-center gap-2"
                   >
                     Save Current Layout
                   </button>
+                  {layoutPanel === "save" && (
+                    <form onSubmit={handleSaveLayout} className="flex gap-2">
+                      <input
+                        value={layoutName}
+                        onChange={(event) => setLayoutName(event.target.value)}
+                        placeholder="Layout name"
+                        aria-label="Layout name"
+                        maxLength={60}
+                        autoFocus
+                        className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!layoutName.trim()}
+                        className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                      >
+                        Save
+                      </button>
+                    </form>
+                  )}
                   <button
                     type="button"
-                    onClick={handleLoadLayout}
+                    onClick={() => toggleLayoutPanel("load")}
+                    aria-expanded={layoutPanel === "load"}
                     className="w-full px-3 py-2 text-sm rounded-md border border-border hover:bg-accent/50 transition-colors flex items-center gap-2"
                   >
                     Load Saved Layout
                   </button>
+                  {layoutPanel === "load" && (
+                    namedLayoutNames.length === 0 ? (
+                      <div className="text-xs text-muted-foreground">No saved layouts for {symbol}.</div>
+                    ) : (
+                      <ul className="space-y-1">
+                        {namedLayoutNames.map((name) => (
+                          <li key={name} className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleLoadLayout(name)}
+                              className="min-w-0 flex-1 truncate rounded-md px-2 py-1 text-left text-sm hover:bg-accent/50"
+                            >
+                              {name}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteNamedLayout(name)}
+                              className="rounded-md p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                              aria-label={`Delete layout ${name}`}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  )}
+                  {layoutMessage && (
+                    <div role="status" className="text-xs text-muted-foreground">
+                      {layoutMessage}
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
                       resetLayout();
-                      setChartState({ zoom: 1, panOffset: 0, drawings: [] });
+                      setChartState(DEFAULT_CHART_STATE);
                     }}
                     className="w-full px-3 py-2 text-sm rounded-md border border-border hover:bg-accent/50 transition-colors flex items-center gap-2"
                   >

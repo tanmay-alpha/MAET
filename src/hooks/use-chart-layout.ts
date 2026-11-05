@@ -10,31 +10,60 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import { z } from "zod";
+import type { ChartState } from "@/components/trading/candlestick-chart";
 
-export interface ChartLayout {
-  timeframe: string;
-  chartType: "candles" | "line" | "area";
-  indicators: {
-    volume: boolean;
-    ma: boolean;
-    rsi: boolean;
-    macd: boolean;
-  };
-  drawingTool: string | null;
-}
+const ChartTypeSchema = z.enum(["candles", "line", "area"]);
 
-export interface SavedLayout {
-  name: string;
-  chartState?: {
-    zoom: number;
-    panOffset: number;
-    drawings: unknown[];
-  };
-  timeframe: string;
-  chartType: "candles" | "line" | "area";
-  indicators: ChartLayout["indicators"];
-  savedAt: string;
-}
+const IndicatorsSchema = z.object({
+  volume: z.boolean(),
+  ma: z.boolean(),
+  rsi: z.boolean(),
+  macd: z.boolean(),
+});
+
+const ChartLayoutSchema = z.object({
+  timeframe: z.string(),
+  chartType: ChartTypeSchema,
+  indicators: IndicatorsSchema,
+  drawingTool: z.string().nullable(),
+});
+
+export type ChartLayout = z.infer<typeof ChartLayoutSchema>;
+
+const ChartStateSchema = z.object({
+  zoom: z.number(),
+  panOffset: z.number(),
+  drawings: z.array(
+    z.object({
+      id: z.string(),
+      type: z.enum(["trendline", "horizontal", "vertical", "fibonacci", "support-resistance"]),
+      points: z.array(z.object({ x: z.number(), y: z.number(), price: z.number(), time: z.number() })),
+      color: z.string(),
+      visible: z.boolean(),
+    })
+  ),
+}) satisfies z.ZodType<ChartState>;
+
+const SavedLayoutSchema = z.object({
+  name: z.string(),
+  chartState: ChartStateSchema.optional(),
+  timeframe: z.string(),
+  chartType: ChartTypeSchema,
+  indicators: IndicatorsSchema,
+  savedAt: z.string(),
+});
+
+export type SavedLayout = z.infer<typeof SavedLayoutSchema>;
+
+// The chart page used to write its own shape under the named-layouts key; keep those
+// entries loadable.
+const LegacySavedLayoutSchema = z.object({
+  chartState: ChartStateSchema.optional(),
+  selectedTF: z.string(),
+  selectedChartType: ChartTypeSchema,
+  indicators: IndicatorsSchema.extend({ macd: z.boolean().optional() }),
+});
 
 const DEFAULT_LAYOUT: ChartLayout = {
   timeframe: "5m",
@@ -56,101 +85,129 @@ function getNamedLayoutsKey(symbol: string): string {
   return `maet_chart_layouts_${symbol}`;
 }
 
-export function useChartLayout(symbol: string) {
-  const [layout, setLayout] = useState<ChartLayout>(() => {
-    // Load from localStorage on init
-    if (typeof window === "undefined") return DEFAULT_LAYOUT;
+/** Validates stored named layouts, upgrading legacy entries and dropping unreadable ones. */
+export function parseNamedLayouts(raw: unknown): Record<string, SavedLayout> {
+  if (raw === null || typeof raw !== "object") return {};
+  const layouts: Record<string, SavedLayout> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    const current = SavedLayoutSchema.safeParse(value);
+    if (current.success) {
+      layouts[name] = current.data;
+      continue;
+    }
+    const legacy = LegacySavedLayoutSchema.safeParse(value);
+    if (legacy.success) {
+      const { chartState, selectedTF, selectedChartType, indicators } = legacy.data;
+      layouts[name] = {
+        name,
+        chartState,
+        timeframe: selectedTF,
+        chartType: selectedChartType,
+        indicators: { ...indicators, macd: indicators.macd ?? false },
+        savedAt: new Date(0).toISOString(),
+      };
+    }
+  }
+  return layouts;
+}
 
+function readNamedLayouts(symbol: string): Record<string, SavedLayout> {
+  try {
+    return parseNamedLayouts(JSON.parse(localStorage.getItem(getNamedLayoutsKey(symbol)) ?? "null"));
+  } catch {
+    return {};
+  }
+}
+
+function readLayout(symbol: string): ChartLayout {
+  try {
+    const stored = ChartLayoutSchema.partial().safeParse(JSON.parse(localStorage.getItem(getStorageKey(symbol)) ?? "null"));
+    return stored.success ? { ...DEFAULT_LAYOUT, ...stored.data } : DEFAULT_LAYOUT;
+  } catch {
+    return DEFAULT_LAYOUT;
+  }
+}
+
+export function useChartLayout(symbol: string) {
+  // `symbol` is null until stored layouts are read after mount: server render and first
+  // client render both show the defaults so hydration markup matches, and nothing is
+  // persisted before the stored layout has been loaded.
+  const [state, setState] = useState<{ symbol: string | null; layout: ChartLayout; named: Record<string, SavedLayout> }>({
+    symbol: null,
+    layout: DEFAULT_LAYOUT,
+    named: {},
+  });
+  const { layout } = state;
+
+  useEffect(() => {
+    setState({ symbol, layout: readLayout(symbol), named: readNamedLayouts(symbol) });
+  }, [symbol]);
+
+  useEffect(() => {
+    if (state.symbol === null) return;
     try {
-      const stored = localStorage.getItem(getStorageKey(symbol));
-      if (stored) {
-        return { ...DEFAULT_LAYOUT, ...JSON.parse(stored) };
+      localStorage.setItem(getStorageKey(state.symbol), JSON.stringify(state.layout));
+      if (Object.keys(state.named).length > 0) {
+        localStorage.setItem(getNamedLayoutsKey(state.symbol), JSON.stringify(state.named));
+      } else {
+        localStorage.removeItem(getNamedLayoutsKey(state.symbol));
       }
     } catch {
-      // Ignore parse errors
+      // Storage full or disabled: layouts still work for this session.
     }
-    return DEFAULT_LAYOUT;
-  });
-
-  // Persist to localStorage on change
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    try {
-      localStorage.setItem(getStorageKey(symbol), JSON.stringify(layout));
-    } catch {
-      // Ignore storage errors
-    }
-  }, [symbol, layout]);
+  }, [state]);
 
   const updateLayout = useCallback((updates: Partial<ChartLayout>) => {
-    setLayout((prev) => ({ ...prev, ...updates }));
+    setState((prev) => ({ ...prev, layout: { ...prev.layout, ...updates } }));
   }, []);
 
   const updateIndicator = useCallback((key: keyof ChartLayout["indicators"], value: boolean) => {
-    setLayout((prev) => ({
+    setState((prev) => ({
       ...prev,
-      indicators: { ...prev.indicators, [key]: value },
+      layout: { ...prev.layout, indicators: { ...prev.layout.indicators, [key]: value } },
     }));
   }, []);
 
   const resetLayout = useCallback(() => {
-    setLayout(DEFAULT_LAYOUT);
+    setState((prev) => ({ ...prev, layout: DEFAULT_LAYOUT }));
   }, []);
 
   // Named layouts management
-  const saveNamedLayout = useCallback((name: string, chartState?: ChartLayout) => {
-    if (typeof window === "undefined") return false;
-    try {
-      const layouts = getNamedLayouts(symbol);
-      const newLayout: SavedLayout = {
-        name,
-        chartState: chartState as SavedLayout["chartState"],
-        timeframe: layout.timeframe,
-        chartType: layout.chartType,
-        indicators: { ...layout.indicators },
-        savedAt: new Date().toISOString(),
-      };
-      layouts[name] = newLayout;
-      localStorage.setItem(getNamedLayoutsKey(symbol), JSON.stringify(layouts));
-      return true;
-    } catch {
-      return false;
-    }
-  }, [symbol, layout]);
+  const saveNamedLayout = useCallback((name: string, chartState: ChartState) => {
+    setState((prev) => ({
+      ...prev,
+      named: {
+        ...prev.named,
+        [name]: {
+          name,
+          chartState,
+          timeframe: prev.layout.timeframe,
+          chartType: prev.layout.chartType,
+          indicators: { ...prev.layout.indicators },
+          savedAt: new Date().toISOString(),
+        },
+      },
+    }));
+  }, []);
 
+  /** Applies the named layout's settings and returns it (for its chart state), or null if absent. */
   const loadNamedLayout = useCallback((name: string): SavedLayout | null => {
-    if (typeof window === "undefined") return null;
-    try {
-      const layouts = getNamedLayouts(symbol);
-      return layouts[name] || null;
-    } catch {
-      return null;
-    }
-  }, [symbol]);
+    const saved = state.named[name];
+    if (!saved) return null;
+    updateLayout({ timeframe: saved.timeframe, chartType: saved.chartType, indicators: saved.indicators });
+    return saved;
+  }, [state.named, updateLayout]);
 
   const deleteNamedLayout = useCallback((name: string) => {
-    if (typeof window === "undefined") return;
-    try {
-      const layouts = getNamedLayouts(symbol);
-      delete layouts[name];
-      localStorage.setItem(getNamedLayoutsKey(symbol), JSON.stringify(layouts));
-    } catch {
-      // Ignore
-    }
-  }, [symbol]);
-
-  const getNamedLayoutNames = useCallback((): string[] => {
-    if (typeof window === "undefined") return [];
-    try {
-      return Object.keys(getNamedLayouts(symbol));
-    } catch {
-      return [];
-    }
-  }, [symbol]);
+    setState((prev) => {
+      const named = { ...prev.named };
+      delete named[name];
+      return { ...prev, named };
+    });
+  }, []);
 
   // Export layout to JSON file
-  const exportLayout = useCallback((chartState?: unknown) => {
+  const exportLayout = useCallback((chartState?: ChartState) => {
     const data = {
       version: 1,
       layout,
@@ -166,48 +223,30 @@ export function useChartLayout(symbol: string) {
     URL.revokeObjectURL(url);
   }, [symbol, layout]);
 
-  // Import layout from JSON file
-  const importLayout = useCallback((file: File): Promise<SavedLayout | null> => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = JSON.parse(e.target?.result as string);
-          if (data.layout) {
-            setLayout(data.layout);
-            resolve(data);
-          } else {
-            resolve(null);
-          }
-        } catch {
-          resolve(null);
-        }
-      };
-      reader.readAsText(file);
-    });
-  }, []);
+  /** Applies an exported layout file; resolves false if it isn't a valid layout export. */
+  const importLayout = useCallback(async (file: File): Promise<boolean> => {
+    try {
+      const parsed = z.object({ layout: ChartLayoutSchema }).safeParse(JSON.parse(await file.text()));
+      if (!parsed.success) return false;
+      updateLayout(parsed.data.layout);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [updateLayout]);
 
   return {
     layout,
     updateLayout,
     updateIndicator,
     resetLayout,
+    namedLayoutNames: Object.keys(state.named),
     saveNamedLayout,
     loadNamedLayout,
     deleteNamedLayout,
-    getNamedLayoutNames,
     exportLayout,
     importLayout,
   };
-}
-
-function getNamedLayouts(symbol: string): Record<string, SavedLayout> {
-  try {
-    const stored = localStorage.getItem(getNamedLayoutsKey(symbol));
-    return stored ? JSON.parse(stored) : {};
-  } catch {
-    return {};
-  }
 }
 
 // Hook for keyboard shortcuts
