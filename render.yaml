@@ -8,6 +8,18 @@ services:
     buildCommand: cd .. && bun install && cd server && bun run build
     startCommand: node .output/server/index.mjs
     healthCheckPath: /api/health
+    # rootDir alone only autodeploys on changes under server/, so shared/ and
+    # lockfile changes never redeployed the backend. buildFilter paths are
+    # relative to the repository root even with rootDir set:
+    # https://render.com/docs/monorepo-support#setting-build-filters
+    # https://render.com/docs/blueprint-spec#buildfilter
+    buildFilter:
+      paths:
+        - server/**
+        - shared/**
+        - package.json
+        - bun.lock
+        - render.yaml
     envVars:
       - key: NODE_VERSION
         value: "20"
