@@ -1,12 +1,17 @@
 import { describe, expect, it } from "bun:test";
 import {
+  MAX_TIMEOUT_MS,
+  MIN_TIMEOUT_MS,
+  UsageError,
   compareMigrations,
   compareSchema,
-  countLedgerMismatches,
   exitCodeFor,
   formatHuman,
+  isLedgerMismatch,
   parseArgs,
   redactTarget,
+  resolveUrlEnv,
+  scrubError,
   toScaledUnits,
 } from "./verify-db-restore";
 
@@ -77,26 +82,53 @@ describe("ledger reconciliation", () => {
     expect(toScaledUnits("7")).toBe(70_000n);
   });
 
-  it("counts mismatches and accounts without a ledger separately", () => {
-    const result = countLedgerMismatches([
-      { cashBalance: "1000000.0000", ledgerSum: "1000000", ledgerEntries: 1 },
-      { cashBalance: "999979.7600", ledgerSum: "999979.7500", ledgerEntries: 3 },
-      { cashBalance: "1000000.0000", ledgerSum: null, ledgerEntries: 0 },
-    ]);
-    expect(result).toEqual({ mismatched: 1, withoutLedger: 1 });
+  it("accepts a never-reset account with no INITIAL_CASH entry (cash = initial_cash + fee/P&L entries)", () => {
+    // Generation 1 after one buy: fee -20, realised P&L 0, no INITIAL_CASH row.
+    expect(isLedgerMismatch({ cashBalance: "999980.0000", initialCash: "1000000.0000", ledgerSum: "-20.0000", ledgerEntries: 2 })).toBe(false);
+    // Untouched account: no ledger at all.
+    expect(isLedgerMismatch({ cashBalance: "1000000.0000", initialCash: "1000000.0000", ledgerSum: null, ledgerEntries: 0 })).toBe(false);
+  });
+
+  it("accepts a reset account (INITIAL_CASH excluded from the sum by the query)", () => {
+    expect(isLedgerMismatch({ cashBalance: "500000.0000", initialCash: "500000.0000", ledgerSum: null, ledgerEntries: 0 })).toBe(false);
+  });
+
+  it("tolerates 0.0001 of rounding drift per ledger entry, no more", () => {
+    // P&L 0.00003 and fee 1.00006 round to 0.0000 and -1.0001; cash moved -1.0000.
+    const base = { initialCash: "100.0000", ledgerSum: "-1.0001", ledgerEntries: 2 };
+    expect(isLedgerMismatch({ ...base, cashBalance: "99.0000" })).toBe(false);
+    expect(isLedgerMismatch({ ...base, cashBalance: "98.9997" })).toBe(false); // diff 0.0002 = 2 entries
+    expect(isLedgerMismatch({ ...base, cashBalance: "98.9996" })).toBe(true); // diff 0.0003
+    expect(isLedgerMismatch({ cashBalance: "100.0001", initialCash: "100.0000", ledgerSum: null, ledgerEntries: 0 })).toBe(true);
+  });
+
+  it("flags a real cash/ledger divergence", () => {
+    expect(isLedgerMismatch({ cashBalance: "500.0000", initialCash: "1000.0000", ledgerSum: null, ledgerEntries: 0 })).toBe(true);
   });
 });
 
 describe("redactTarget", () => {
-  it("keeps only the registrable domain, never credentials or path", () => {
-    const out = redactTarget("postgresql://postgres.abc:s3cret@aws-0-ap-south-1.pooler.supabase.com:6543/postgres");
-    expect(out).toBe("*.supabase.com");
-    expect(out).not.toContain("s3cret");
+  it("shows the Supabase project ref for direct and pooler URLs, never the password", () => {
+    const direct = redactTarget("postgresql://postgres:s3cret@db.abcdefghijklmnop.supabase.co:5432/postgres");
+    expect(direct).toBe("db.abcdefghijklmnop.supabase.co");
+    const pooler = redactTarget("postgresql://postgres.abcdefghijklmnop:s3cret@aws-0-ap-south-1.pooler.supabase.com:6543/postgres");
+    expect(pooler).toBe("postgres.abcdefghijklmnop@*.pooler.supabase.com");
+    expect(direct + pooler).not.toContain("s3cret");
   });
 
-  it("hides IP addresses and tolerates garbage", () => {
-    expect(redactTarget("postgresql://u:p@10.1.2.3:5432/db")).toBe("<ip-address>");
+  it("collapses other hosts to their domain plus database, hides IPs, tolerates garbage", () => {
+    expect(redactTarget("postgresql://u:p@a.b.example.com:5432/maet")).toBe("*.example.com/maet");
+    expect(redactTarget("postgresql://u:p@10.1.2.3:5432/db")).toBe("<ip-address>/db");
     expect(redactTarget("not a url")).toBe("<unparseable-url>");
+  });
+
+  it("scrubs password, user and host from error messages", () => {
+    const url = "postgresql://postgres:s3cretpw@db.abcdefghijklmnop.supabase.co:5432/postgres";
+    const err = Object.assign(new Error("connect to db.abcdefghijklmnop.supabase.co failed for s3cretpw"), { code: "57P01" });
+    const out = scrubError(err, url);
+    expect(out).toStartWith("57P01: ");
+    expect(out).not.toContain("s3cretpw");
+    expect(out).not.toContain("abcdefghijklmnop");
   });
 });
 
@@ -107,8 +139,37 @@ describe("CLI helpers", () => {
       urlEnv: "PROD_DB",
       timeoutMs: 5000,
     });
-    expect(() => parseArgs(["--url-env=postgresql://u:p@h/db"])).toThrow();
-    expect(() => parseArgs(["--bogus"])).toThrow();
+    expect(() => parseArgs(["--url-env=postgresql://u:p@h/db"])).toThrow(UsageError);
+  });
+
+  it("never echoes argument values in usage errors", () => {
+    for (const arg of ["--url=postgresql://postgres:SECRETPW@h/db", "postgresql://postgres:SECRETPW@h/db", "--url-env=postgresql://postgres:SECRETPW@h"]) {
+      let message = "";
+      try {
+        parseArgs([arg]);
+      } catch (err) {
+        expect(err).toBeInstanceOf(UsageError);
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).not.toBe("");
+      expect(message).not.toContain("SECRETPW");
+    }
+    expect(() => parseArgs(["--url=x"])).toThrow("Unknown argument: --url.");
+  });
+
+  it("clamps --timeout-ms and rejects non-numbers", () => {
+    expect(parseArgs(["--timeout-ms=1"]).timeoutMs).toBe(MIN_TIMEOUT_MS);
+    expect(parseArgs(["--timeout-ms=1e30"]).timeoutMs).toBe(MAX_TIMEOUT_MS);
+    expect(() => parseArgs(["--timeout-ms=soon"])).toThrow(UsageError);
+  });
+
+  it("requires --url-env when both SUPABASE_DB_URL and DATABASE_URL are set", () => {
+    expect(() => resolveUrlEnv({ SUPABASE_DB_URL: "a", DATABASE_URL: "b" }, null)).toThrow(UsageError);
+    expect(resolveUrlEnv({ SUPABASE_DB_URL: "a", DATABASE_URL: "b" }, "DATABASE_URL")).toBe("DATABASE_URL");
+    expect(resolveUrlEnv({ SUPABASE_DB_URL: "a" }, null)).toBe("SUPABASE_DB_URL");
+    expect(resolveUrlEnv({ DATABASE_URL: "b" }, null)).toBe("DATABASE_URL");
+    expect(() => resolveUrlEnv({}, null)).toThrow(UsageError);
+    expect(() => resolveUrlEnv({ DATABASE_URL: "b" }, "RESTORED_DB_URL")).toThrow(UsageError);
   });
 
   it("maps check statuses to exit codes and formats a summary", () => {
@@ -119,7 +180,7 @@ describe("CLI helpers", () => {
     expect(exitCodeFor(checks)).toBe(0);
     const failing = [...checks, { name: "c", status: "fail" as const, summary: "bad", details: { missing: ["x"] } }];
     expect(exitCodeFor(failing)).toBe(1);
-    const text = formatHuman({ target: "*.supabase.com", serverVersion: "17.4", checks: failing, exitCode: 1 });
+    const text = formatHuman({ target: "db.abc.supabase.co", serverVersion: "17.4", checks: failing, exitCode: 1 });
     expect(text).toContain("[FAIL] c: bad");
     expect(text).toContain("missing: x");
     expect(text).toContain("1 CHECK(S) FAILED");

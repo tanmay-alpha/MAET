@@ -2,16 +2,22 @@
  * Read-only database restore verifier.
  *
  * Run after restoring the production Supabase project to confirm the schema,
- * migration history and paper-trading invariants are intact. Every query runs
- * inside a `READ ONLY` transaction with a statement timeout; nothing is written.
+ * migration history and paper-trading invariants are intact. The session is
+ * opened with default_transaction_read_only=on, every check runs inside a
+ * `READ ONLY` transaction (one savepoint per check) with a statement timeout,
+ * and the transaction is always rolled back; nothing is written.
  *
  * Usage:
  *   bun run verify:db [--json] [--url-env=VAR_NAME] [--timeout-ms=15000]
  *
- * The connection string comes from SUPABASE_DB_URL, then DATABASE_URL, or the
- * env var named by --url-env. The URL itself is never printed.
+ * The connection string comes from the env var named by --url-env, otherwise
+ * from whichever of SUPABASE_DB_URL / DATABASE_URL is set (if both are set,
+ * --url-env is required). `.env` is not loaded. The URL and password are never
+ * printed; the target is shown as e.g. `db.<ref>.supabase.co`.
+ * --timeout-ms is clamped to 100..600000.
  *
- * Exit codes: 0 = all checks pass, 1 = one or more failures, 2 = cannot connect.
+ * Exit codes: 0 = all checks pass (warnings allowed), 1 = one or more failures,
+ * 2 = cannot connect, 3 = usage/configuration error.
  */
 import * as schemaModule from "../db/schema";
 import { readdirSync } from "fs";
@@ -128,8 +134,14 @@ export function compareSchema(expected: readonly ExpectedTable[], actual: Readon
   return { missingTables: missingTables.sort(), missingColumns: missingColumns.sort() };
 }
 
+/**
+ * One paper account's current generation. `ledgerSum`/`ledgerEntries` cover
+ * only non-INITIAL_CASH entries: INITIAL_CASH is written on reset only, while
+ * never-reset accounts start from `initial_cash` with no ledger entry.
+ */
 export interface LedgerBalanceRow {
   cashBalance: string;
+  initialCash: string;
   ledgerSum: string | null;
   ledgerEntries: number;
 }
@@ -144,30 +156,48 @@ export function toScaledUnits(value: string): bigint {
   return negative ? -units : units;
 }
 
-export function countLedgerMismatches(rows: readonly LedgerBalanceRow[]): { mismatched: number; withoutLedger: number } {
-  let mismatched = 0;
-  let withoutLedger = 0;
-  for (const row of rows) {
-    if (row.ledgerEntries === 0 || row.ledgerSum == null) {
-      withoutLedger++;
-      continue;
-    }
-    if (toScaledUnits(row.cashBalance) !== toScaledUnits(row.ledgerSum)) mismatched++;
-  }
-  return { mismatched, withoutLedger };
+/**
+ * cash_balance must equal initial_cash + Σ ledger amounts (excluding
+ * INITIAL_CASH). Each ledger entry is rounded to numeric(18,4) on its own while
+ * cash is rounded once, so allow 0.0001 (one scaled unit) of drift per entry.
+ */
+export function isLedgerMismatch(row: LedgerBalanceRow): boolean {
+  const expected = toScaledUnits(row.initialCash) + (row.ledgerSum == null ? 0n : toScaledUnits(row.ledgerSum));
+  const diff = toScaledUnits(row.cashBalance) - expected;
+  const tolerance = BigInt(Math.max(0, row.ledgerEntries));
+  return (diff < 0n ? -diff : diff) > tolerance;
 }
 
-/** Keep only the host's registrable domain (e.g. "*.supabase.com"). */
+/**
+ * Identify the target without leaking credentials. Supabase project refs are
+ * not secret and are shown so a restored project can't be confused with
+ * another one: `db.<ref>.supabase.co`, `postgres.<ref>@*.pooler.supabase.com`.
+ * Other hosts collapse to their registrable domain (IPs to `<ip-address>`)
+ * plus the database name.
+ */
 export function redactTarget(url: string): string {
+  let parsed: URL;
   try {
-    const parsed = new URL(url);
-    const host = parsed.hostname;
-    if (/^[\d.]+$/.test(host) || host === "localhost" || host.includes(":")) return host === "localhost" ? "localhost" : "<ip-address>";
-    const parts = host.split(".");
-    return parts.length <= 2 ? host : `*.${parts.slice(-2).join(".")}`;
+    parsed = new URL(url);
   } catch {
     return "<unparseable-url>";
   }
+  const host = parsed.hostname.toLowerCase();
+  if (/^db\.[a-z0-9]+\.supabase\.co$/.test(host)) return host;
+  if (host.endsWith(".pooler.supabase.com")) {
+    const user = decodeURIComponent(parsed.username);
+    const ref = /^[a-z_]+\.([a-z0-9]+)$/i.exec(user)?.[1];
+    return `${ref ? `postgres.${ref}@` : ""}*.pooler.supabase.com`;
+  }
+  const database = decodeURIComponent(parsed.pathname.replace(/^\//, "")) || "<default-db>";
+  let shownHost: string;
+  if (host === "localhost") shownHost = "localhost";
+  else if (/^[\d.]+$/.test(host) || host.startsWith("[")) shownHost = "<ip-address>";
+  else {
+    const parts = host.split(".");
+    shownHost = parts.length <= 2 ? host : `*.${parts.slice(-2).join(".")}`;
+  }
+  return `${shownHost}/${database}`;
 }
 
 export function exitCodeFor(checks: readonly CheckResult[]): 0 | 1 {
@@ -219,6 +249,9 @@ export function loadExpectedTables(): ExpectedTable[] {
 
 type Tx = postgres.TransactionSql;
 
+/** Tables above this estimated size get a reltuples estimate instead of count(*). */
+const EXACT_COUNT_LIMIT = 1_000_000;
+
 async function tableExists(tx: Tx, name: string): Promise<boolean> {
   const [row] = await tx<{ ok: boolean }[]>`SELECT to_regclass(${`public.${name}`}) IS NOT NULL AS ok`;
   return Boolean(row?.ok);
@@ -227,7 +260,14 @@ async function tableExists(tx: Tx, name: string): Promise<boolean> {
 async function checkMigrations(tx: Tx, files: string[]): Promise<CheckResult> {
   const name = "migrations";
   if (!(await tableExists(tx, "_applied_migrations"))) {
-    return { name, status: "fail", summary: "public._applied_migrations table is missing" };
+    return {
+      name,
+      status: "warn",
+      summary:
+        "public._applied_migrations not found; it is only written by server/scripts/apply-migrations.ts. " +
+        "If this database was migrated another way (Supabase SQL editor/CLI), rely on the schema check and " +
+        "confirm the migration history manually.",
+    };
   }
   const rows = await tx<{ name: string; applied_at: Date | null }[]>`
     SELECT name, applied_at FROM public._applied_migrations
@@ -269,8 +309,33 @@ async function checkSchema(tx: Tx, expected: ExpectedTable[]): Promise<CheckResu
   };
 }
 
+interface TableCount {
+  rows: number | null;
+  estimated: boolean;
+}
+
+async function countTable(tx: Tx, table: string): Promise<TableCount> {
+  // pg_partition_tree also returns plain tables, and sums partitions of
+  // partitioned parents (whose own reltuples is -1/0).
+  const [est] = await tx<{ n: string }[]>`
+    SELECT COALESCE(sum(GREATEST(c.reltuples, 0)), 0)::bigint::text AS n
+    FROM pg_partition_tree(${`public.${table}`}::regclass) pt
+    JOIN pg_class c ON c.oid = pt.relid
+  `;
+  const estimate = Number(est?.n ?? 0);
+  if (estimate >= EXACT_COUNT_LIMIT) return { rows: estimate, estimated: true };
+  try {
+    // Own savepoint: a statement timeout here must not abort the remaining counts.
+    const [row] = await tx.savepoint((sp) => sp<{ n: string }[]>`SELECT count(*)::text AS n FROM ${sp("public")}.${sp(table)}`);
+    return { rows: Number(row?.n ?? 0), estimated: false };
+  } catch {
+    return { rows: estimate, estimated: true };
+  }
+}
+
 async function checkRowCounts(tx: Tx): Promise<CheckResult> {
   const counts: Record<string, number | null> = {};
+  const estimated: string[] = [];
   const missing: string[] = [];
   for (const table of KEY_TABLES) {
     if (!(await tableExists(tx, table))) {
@@ -278,15 +343,17 @@ async function checkRowCounts(tx: Tx): Promise<CheckResult> {
       missing.push(table);
       continue;
     }
-    const [row] = await tx<{ n: string }[]>`SELECT count(*)::text AS n FROM ${tx("public")}.${tx(table)}`;
-    counts[table] = Number(row?.n ?? 0);
+    const result = await countTable(tx, table);
+    counts[table] = result.rows;
+    if (result.estimated) estimated.push(table);
   }
   const missingRequired = missing.filter((t) => !OPTIONAL_KEY_TABLES[t]);
+  const label = (t: string) => (counts[t] == null ? "MISSING" : estimated.includes(t) ? `~${counts[t]}` : String(counts[t]));
   return {
     name: "row-counts",
     status: missingRequired.length ? "fail" : missing.length ? "warn" : "pass",
-    summary: KEY_TABLES.map((t) => `${t}=${counts[t] ?? "MISSING"}`).join(" "),
-    details: { counts, missing, missingRequired },
+    summary: KEY_TABLES.map((t) => `${t}=${label(t)}`).join(" ") + (estimated.length ? " (~ = pg_class.reltuples estimate)" : ""),
+    details: { counts, estimated, missing, missingRequired },
   };
 }
 
@@ -298,40 +365,55 @@ async function checkPaperInvariants(tx: Tx): Promise<CheckResult> {
     return { name: "paper-invariants", status: "fail", summary: `cannot evaluate; missing tables: ${absent.join(", ")}` };
   }
 
-  const [orphan] = await tx<{ n: string }[]>`
-    SELECT count(*)::text AS n FROM public.paper_fills f
-    WHERE NOT EXISTS (SELECT 1 FROM public.paper_orders o WHERE o.id = f.order_id)
+  // order_id is NOT NULL with an FK, so orphan fills can't exist; a fill whose
+  // order belongs to another user or generation can.
+  const [crossFills] = await tx<{ n: string }[]>`
+    SELECT count(*)::text AS n
+    FROM public.paper_fills f
+    JOIN public.paper_orders o ON o.id = f.order_id
+    WHERE o.user_id <> f.user_id OR o.generation <> f.generation
   `;
   const [badPositions] = await tx<{ n: string }[]>`
     SELECT count(*)::text AS n FROM public.paper_positions WHERE total_shares <= 0
   `;
-  // Cash = initial cash + realised PnL − fees, all of which are ledgered for
-  // the account's current generation. Only aggregate counts leave this query.
-  const balances = await tx<{ cash_balance: string; ledger_sum: string | null; ledger_entries: number }[]>`
+  // Only balances and counts leave this query — never user ids.
+  const balances = await tx<
+    { cash_balance: string; initial_cash: string; ledger_sum: string | null; ledger_entries: number; liquidated: boolean }[]
+  >`
     SELECT a.cash_balance::text AS cash_balance,
+           a.initial_cash::text AS initial_cash,
            l.ledger_sum::text AS ledger_sum,
-           COALESCE(l.ledger_entries, 0)::int AS ledger_entries
+           COALESCE(l.ledger_entries, 0)::int AS ledger_entries,
+           (a.liquidation_completed_at IS NOT NULL) AS liquidated
     FROM public.paper_accounts a
     LEFT JOIN (
       SELECT user_id, generation, sum(amount) AS ledger_sum, count(*) AS ledger_entries
       FROM public.paper_ledger_entries
+      WHERE entry_type <> 'INITIAL_CASH'
       GROUP BY user_id, generation
     ) l ON l.user_id = a.user_id AND l.generation = a.generation
   `;
-  const ledger = countLedgerMismatches(
-    balances.map((b) => ({ cashBalance: b.cash_balance, ledgerSum: b.ledger_sum, ledgerEntries: b.ledger_entries })),
-  );
-  const orphanFills = Number(orphan?.n ?? 0);
+  const rows = balances.map((b) => ({
+    row: { cashBalance: b.cash_balance, initialCash: b.initial_cash, ledgerSum: b.ledger_sum, ledgerEntries: b.ledger_entries },
+    liquidated: b.liquidated,
+  }));
+  const mismatched = rows.filter((r) => isLedgerMismatch(r.row));
+  const mismatchedLiquidated = mismatched.filter((r) => r.liquidated).length;
+  const crossOwnerFills = Number(crossFills?.n ?? 0);
   const nonPositivePositions = Number(badPositions?.n ?? 0);
-  const failed = orphanFills > 0 || nonPositivePositions > 0 || ledger.mismatched > 0;
+  const failed = crossOwnerFills > 0 || nonPositivePositions > 0 || mismatched.length > 0;
   return {
     name: "paper-invariants",
-    status: failed ? "fail" : ledger.withoutLedger > 0 ? "warn" : "pass",
-    summary: `orphan fills ${orphanFills}, ledger/cash mismatches ${ledger.mismatched} of ${balances.length} accounts (${ledger.withoutLedger} without ledger), positions with total_shares<=0 ${nonPositivePositions}`,
+    status: failed ? "fail" : "pass",
+    summary:
+      `fills on another user's/generation's order ${crossOwnerFills}, ` +
+      `ledger/cash mismatches ${mismatched.length} of ${balances.length} accounts` +
+      (mismatchedLiquidated ? ` (${mismatchedLiquidated} liquidated: liquidation P&L is not ledgered)` : "") +
+      `, positions with total_shares<=0 ${nonPositivePositions}`,
     details: {
-      orphanFills,
-      ledgerCashMismatches: ledger.mismatched,
-      accountsWithoutLedger: ledger.withoutLedger,
+      crossOwnerFills,
+      ledgerCashMismatches: mismatched.length,
+      ledgerCashMismatchesLiquidated: mismatchedLiquidated,
       accountsChecked: balances.length,
       nonPositivePositions,
     },
@@ -354,6 +436,21 @@ async function checkRls(tx: Tx): Promise<CheckResult> {
   };
 }
 
+/** Error text with every part of the connection string scrubbed. */
+export function scrubError(err: unknown, url: string): string {
+  const code = err && typeof err === "object" && "code" in err ? String(err.code) : null;
+  let message = err instanceof Error ? err.message : String(err);
+  const secrets: string[] = [url];
+  try {
+    const parsed = new URL(url);
+    secrets.push(parsed.password, decodeURIComponent(parsed.password), parsed.hostname, parsed.username);
+  } catch {
+    // Unparseable URL: only the whole string can be scrubbed.
+  }
+  for (const secret of secrets) if (secret.length >= 3) message = message.replaceAll(secret, "<redacted>");
+  return code ? `${code}: ${message}` : message;
+}
+
 export interface VerifyOptions {
   url: string;
   timeoutMs?: number;
@@ -362,13 +459,16 @@ export interface VerifyOptions {
 
 const ROLLBACK = Symbol("rollback");
 
-export async function verifyDatabase({ url, timeoutMs = 15_000, migrationFiles }: VerifyOptions): Promise<VerifyReport> {
+export async function verifyDatabase({ url, timeoutMs = DEFAULT_TIMEOUT_MS, migrationFiles }: VerifyOptions): Promise<VerifyReport> {
   const target = redactTarget(url);
   const sql = postgres(url, {
     max: 1,
     prepare: false, // compatible with Supabase's transaction pooler
-    connect_timeout: Math.ceil(timeoutMs / 1000),
+    connect_timeout: Math.ceil(Math.min(timeoutMs, 30_000) / 1000),
     idle_timeout: 5,
+    // Startup parameter: every statement in the session, including the
+    // version probe below, runs read-only.
+    connection: { default_transaction_read_only: true },
     onnotice: () => {},
   });
   try {
@@ -389,22 +489,33 @@ export async function verifyDatabase({ url, timeoutMs = 15_000, migrationFiles }
     const files = migrationFiles ?? listMigrationFiles();
     const expected = loadExpectedTables();
     const checks: CheckResult[] = [{ name: "connectivity", status: "pass", summary: `connected, PostgreSQL ${serverVersion}` }];
+    const steps: [string, (tx: Tx) => Promise<CheckResult>][] = [
+      ["migrations", (tx) => checkMigrations(tx, files)],
+      ["schema", (tx) => checkSchema(tx, expected)],
+      ["row-counts", checkRowCounts],
+      ["paper-invariants", checkPaperInvariants],
+      ["rls", checkRls],
+    ];
 
-    await sql.begin(async (tx) => {
-      await tx`SET TRANSACTION READ ONLY`;
-      await tx.unsafe(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(timeoutMs))}`);
-      checks.push(await checkMigrations(tx, files));
-      checks.push(await checkSchema(tx, expected));
-      checks.push(await checkRowCounts(tx));
-      checks.push(await checkPaperInvariants(tx));
-      checks.push(await checkRls(tx));
-      // Never commit anything, even though READ ONLY already forbids writes.
-      throw ROLLBACK;
-    }).catch((err) => {
-      if (err === ROLLBACK) return;
-      const message = err instanceof Error ? err.message : String(err);
-      checks.push({ name: "query-error", status: "fail", summary: message.replaceAll(url, "<redacted>") });
-    });
+    await sql
+      .begin(async (tx) => {
+        await tx`SET TRANSACTION READ ONLY`;
+        await tx.unsafe(`SET LOCAL statement_timeout = ${timeoutMs}`);
+        for (const [name, run] of steps) {
+          // One savepoint per check: an error or timeout fails that check only.
+          try {
+            checks.push(await tx.savepoint((sp) => run(sp)));
+          } catch (err) {
+            checks.push({ name, status: "fail", summary: `query failed (${scrubError(err, url)})` });
+          }
+        }
+        // Never commit anything, even though READ ONLY already forbids writes.
+        throw ROLLBACK;
+      })
+      .catch((err) => {
+        if (err === ROLLBACK) return;
+        checks.push({ name: "transaction", status: "fail", summary: scrubError(err, url) });
+      });
 
     return { target, serverVersion, checks, exitCode: exitCodeFor(checks) };
   } finally {
@@ -416,29 +527,61 @@ export async function verifyDatabase({ url, timeoutMs = 15_000, migrationFiles }
 // CLI
 // ---------------------------------------------------------------------------
 
+export const DEFAULT_TIMEOUT_MS = 15_000;
+export const MIN_TIMEOUT_MS = 100;
+export const MAX_TIMEOUT_MS = 600_000;
+export const USAGE = "Usage: verify-db-restore [--json] [--url-env=VAR_NAME] [--timeout-ms=N]";
+
+/** Bad invocation; exits 3. Messages never contain argument values. */
+export class UsageError extends Error {}
+
 export function parseArgs(argv: readonly string[]): { json: boolean; urlEnv: string | null; timeoutMs: number } {
   let json = false;
   let urlEnv: string | null = null;
-  let timeoutMs = 15_000;
+  let timeoutMs = DEFAULT_TIMEOUT_MS;
   for (const arg of argv) {
     if (arg === "--json") json = true;
     else if (arg.startsWith("--url-env=")) urlEnv = arg.slice("--url-env=".length);
-    else if (arg.startsWith("--timeout-ms=")) timeoutMs = Number(arg.slice("--timeout-ms=".length));
-    else throw new Error(`Unknown argument: ${arg}. Usage: verify-db-restore [--json] [--url-env=VAR] [--timeout-ms=N]`);
+    else if (arg.startsWith("--timeout-ms=")) {
+      const value = Number(arg.slice("--timeout-ms=".length));
+      if (!Number.isFinite(value)) throw new UsageError(`--timeout-ms must be a number of milliseconds. ${USAGE}`);
+      timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, Math.floor(value)));
+    } else {
+      // Echo only a recognisable flag name; values may be connection strings.
+      const flag = /^--[a-z][a-z0-9-]*/i.exec(arg)?.[0] ?? "<positional argument>";
+      throw new UsageError(`Unknown argument: ${flag}. ${USAGE}`);
+    }
   }
-  if (urlEnv !== null && !/^[A-Z_][A-Z0-9_]*$/i.test(urlEnv)) throw new Error("--url-env must be an environment variable name, not a URL");
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("--timeout-ms must be a positive number");
+  if (urlEnv !== null && !/^[A-Z_][A-Z0-9_]*$/i.test(urlEnv)) {
+    throw new UsageError("--url-env must be an environment variable name, not a URL");
+  }
   return { json, urlEnv, timeoutMs };
+}
+
+/**
+ * Pick the env var holding the connection string. When both defaults are set
+ * the operator must choose, so a restore is never checked against the wrong
+ * database by accident.
+ */
+export function resolveUrlEnv(env: Readonly<Record<string, string | undefined>>, urlEnv: string | null): string {
+  if (urlEnv !== null) {
+    if (!env[urlEnv]) throw new UsageError(`${urlEnv} is not set`);
+    return urlEnv;
+  }
+  const supabase = Boolean(env.SUPABASE_DB_URL);
+  const database = Boolean(env.DATABASE_URL);
+  if (supabase && database) {
+    throw new UsageError("Both SUPABASE_DB_URL and DATABASE_URL are set; pass --url-env=SUPABASE_DB_URL or --url-env=DATABASE_URL");
+  }
+  if (supabase) return "SUPABASE_DB_URL";
+  if (database) return "DATABASE_URL";
+  throw new UsageError(`No connection string: set SUPABASE_DB_URL or DATABASE_URL, or pass --url-env. ${USAGE}`);
 }
 
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
-  const envName = args.urlEnv ?? (process.env.SUPABASE_DB_URL ? "SUPABASE_DB_URL" : "DATABASE_URL");
-  const url = process.env[envName];
-  if (!url) {
-    console.error(`No connection string: ${envName} is not set.`);
-    return 2;
-  }
+  const envName = resolveUrlEnv(process.env, args.urlEnv);
+  const url = process.env[envName] ?? "";
   const report = await verifyDatabase({ url, timeoutMs: args.timeoutMs });
   console.log(args.json ? JSON.stringify({ ...report, urlSource: envName }, null, 2) : `${formatHuman(report)}\n(url from ${envName})`);
   return report.exitCode;
@@ -450,6 +593,11 @@ if (import.meta.main) {
       process.exitCode = code;
     })
     .catch((err) => {
+      if (err instanceof UsageError) {
+        console.error(err.message);
+        process.exitCode = 3;
+        return;
+      }
       console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 2;
     });

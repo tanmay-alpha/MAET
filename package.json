@@ -41,7 +41,7 @@
     "test:strategy-engine": "bun test server/domain/strategy/ast-evaluator.test.ts server/domain/strategy/reproducibility.test.ts server/domain/strategy/look-ahead.test.ts",
     "test:phase1": "bun run test:unit && bun run test:integration && bun run test:concurrency",
     "test:all": "bun run test:unit && bun run test:canonical-indicators && bun run test:integration && bun run test:concurrency && bun run test:capabilities && bun run test:workspace && bun run test:alerts && bun run test:scorecard && bun run test:peers && bun run test:breadth && bun run test:screener-dsl && bun run test:backtest-v2 && bun run test:data-quality && bun run test:migration-0013 && bun run test:migration-0015 && bun run test:migration-0016 && bun run test:migration-0017 && bun run test:migration-0018 && bun run test:migration-0019 && bun run test:options && bun run test:strategy-engine && bun run test:strategy-jobs && bun run test:strategy-jobs-postgres && bun run test:strategy-optimisation && bun run test:strategy-deployments && bun run test:strategy-replay && bun run test:portfolio-backtest",
-    "verify:db": "bun --env-file=.env run server/scripts/verify-db-restore.ts",
+    "verify:db": "bun --no-env-file run server/scripts/verify-db-restore.ts",
     "worker:backtest": "bun run server/workers/backtest-worker.ts",
     "worker:sweep": "bun run server/workers/sweep-worker.ts",
     "worker:walk-forward": "bun run server/workers/walk-forward-worker.ts",
