@@ -11,8 +11,6 @@ beforeAll(() => {
 });
 
 // Build a minimal h3 event with the given Authorization header.
-// Mirrors the pattern in server/infra/health.test.ts: createApp() returns
-// an h3 app whose .fetch() handles a standard Request.
 function makeEvent(authHeader?: string) {
   return {
     node: { req: { headers: authHeader ? { authorization: authHeader } : {} } },

@@ -53,6 +53,7 @@ export function toTrpcError(error: unknown): TRPCError {
   return new TRPCError({
     code: "INTERNAL_SERVER_ERROR",
     message: "Paper trading request failed",
+    cause: error,
   });
 }
 

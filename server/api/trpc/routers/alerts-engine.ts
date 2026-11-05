@@ -11,6 +11,7 @@ import {
   toggleAlert,
   rearmAlert,
   deleteAlert,
+  AlertStateError,
 } from "../../../modules/alerts/repository";
 import {
   CreateAlertInputSchema,
@@ -18,6 +19,19 @@ import {
   type AlertTriggerView,
   type AlertNotificationView,
 } from "../../../modules/alerts/contracts";
+
+/**
+ * Only domain state errors are the caller's fault (BAD_REQUEST). Anything else
+ * (database failures, bugs) is INTERNAL_SERVER_ERROR with the original error as
+ * `cause`, so its message (SQL, parameters) is logged but never returned.
+ */
+export function toAlertMutationError(err: unknown, action: string): TRPCError {
+  if (err instanceof TRPCError) return err;
+  if (err instanceof AlertStateError) {
+    return new TRPCError({ code: "BAD_REQUEST", message: err.message, cause: err });
+  }
+  return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `Failed to ${action} alert`, cause: err });
+}
 
 export const alertsEngineRouter = createRouter({
   listAlerts: protectedProcedure.query(async ({ ctx }): Promise<{ items: AlertView[] }> => {
@@ -67,12 +81,8 @@ export const alertsEngineRouter = createRouter({
           });
         }
         return result;
-      } catch (err: any) {
-        if (err instanceof TRPCError) throw err;
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: err.message ?? "Failed to toggle alert",
-        });
+      } catch (err) {
+        throw toAlertMutationError(err, "toggle");
       }
     }),
 
@@ -88,12 +98,8 @@ export const alertsEngineRouter = createRouter({
           });
         }
         return result;
-      } catch (err: any) {
-        if (err instanceof TRPCError) throw err;
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: err.message ?? "Failed to rearm alert",
-        });
+      } catch (err) {
+        throw toAlertMutationError(err, "rearm");
       }
     }),
 

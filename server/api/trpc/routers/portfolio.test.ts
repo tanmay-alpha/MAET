@@ -1,4 +1,5 @@
-import { describe, expect, it, mock } from "bun:test";
+import { afterAll, describe, expect, it, mock } from "bun:test";
+import * as drizzleClientModule from "../../../data/drizzle/client";
 
 const selections: unknown[][] = [];
 
@@ -13,6 +14,14 @@ function query(rows: unknown[]) {
   };
   return builder;
 }
+
+// mock.module is process-wide in Bun and outlives this file. Snapshot the real
+// client and put it back afterwards so later files in the same `bun test` run
+// don't silently query this stub.
+const realDrizzleClient = { ...drizzleClientModule };
+afterAll(() => {
+  mock.module("../../../data/drizzle/client", () => realDrizzleClient);
+});
 
 mock.module("../../../data/drizzle/client", () => ({
   db: {
