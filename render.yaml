@@ -42,8 +42,8 @@ services:
       - key: NSE_HOLIDAYS_JSON
         sync: false
       # Comma-separated list of exact frontend origins allowed by CORS.
-      # server/app.ts reads this at startup; the default in code is the
-      # local dev hosts. Set the Vercel production + preview hosts here so
-      # browser calls from the deployed frontend aren't rejected.
+      # server/middleware/cors.ts (Nitro global middleware) reads this at
+      # startup and falls back to the local dev hosts plus these Vercel hosts
+      # when it is unset.
       - key: FRONTEND_ORIGIN
         value: "https://maet-pi.vercel.app,https://maet-tanmay-alphas-projects.vercel.app,https://maet-tanmay-alpha-tanmay-alphas-projects.vercel.app"
