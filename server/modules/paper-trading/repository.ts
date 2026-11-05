@@ -82,6 +82,19 @@ export interface PaperTradingWriteRepository {
     parentOrderId: string;
   }): Promise<PaperOrderRow[]>;
 
+  /**
+   * Cancels the working bracket exits on one position (user, generation, symbol, exchange),
+   * except those of `keepParentOrderId`'s bracket. Used when a fill closes or flips the position.
+   */
+  cancelWorkingExits(params: {
+    userId: string;
+    generation: number;
+    symbol: string;
+    exchange: string;
+    keepParentOrderId: string;
+    reason: string;
+  }): Promise<PaperOrderRow[]>;
+
   upsertPosition(position: NewPaperPositionRow): Promise<PaperPositionRow>;
 
   deletePosition(params: {

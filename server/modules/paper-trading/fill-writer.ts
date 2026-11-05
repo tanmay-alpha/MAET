@@ -232,6 +232,21 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
     });
   }
 
+  // Exits protect one direction of one position. Once a fill closes or flips it (a manual
+  // close, an opposite entry), the remaining exits of other brackets on it are void.
+  const quantityBefore = existing ? signedPositionQuantity(existing) : 0;
+  const quantityAfter = projected?.quantity ?? 0;
+  if (quantityBefore !== 0 && Math.sign(quantityAfter) !== Math.sign(quantityBefore)) {
+    await write.cancelWorkingExits({
+      userId: account.userId,
+      generation: account.generation,
+      symbol: order.symbol,
+      exchange,
+      keepParentOrderId: order.parentOrderId ?? order.id,
+      reason: "Position closed",
+    });
+  }
+
   const updatedAccount = await write.updateAccount(account.userId, {
     cashBalance: String(execution.account.cash),
     realisedPnl: String(execution.account.realisedPnl),

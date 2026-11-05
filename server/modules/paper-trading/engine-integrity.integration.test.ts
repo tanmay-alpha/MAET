@@ -653,26 +653,90 @@ describe("Paper trading engine integrity", () => {
       expect(position?.totalShares).toBe(30);
     });
 
-    it("#5: a stale last price still triggers the margin call; closes wait for a fresh quote", async () => {
-      const symbol = uniqueSymbol("STL");
+    async function shortOnThinCash(prefix: string) {
+      const symbol = uniqueSymbol(prefix);
       const userId = await createTestUser();
       const service = makeService({ prices: { [symbol]: 1000 } });
       await service.getState({ userId });
       await getDb().update(paperAccounts).set({ cashBalance: "30000.0000" }).where(eq(paperAccounts.userId, userId));
       await service.placeOrder({ userId, command: { symbol, exchange: "NSE", side: "SELL", type: "MARKET", qty: 100 } });
+      return { symbol, userId };
+    }
 
+    async function accountStatus(userId: string) {
+      const [account] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
+      return account?.status;
+    }
+
+    it("R2#1 (P9/P18): stale or delayed ticks never mark a margin call", async () => {
+      const { symbol, userId } = await shortOnThinCash("STL");
       const monitor = new PaperRiskMonitor();
+
       monitor.updateQuote(tick(symbol, 1300, 1000, { ts: new Date(Date.now() - 60_000).toISOString() }));
       await monitor.monitorRisk();
-      const [pending] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
-      expect(pending?.status).toBe("LIQUIDATION_PENDING");
+      expect(await accountStatus(userId)).toBe("ACTIVE");
+
+      monitor.updateQuote(
+        tick(symbol, 1300, 1000, { source: "yahoo", quality: "delayed", ts: new Date(Date.now() - 15 * 60_000).toISOString() })
+      );
+      await monitor.monitorRisk();
+      expect(await accountStatus(userId)).toBe("ACTIVE");
+
+      monitor.updateQuote(tick(symbol, 1000, 2000));
+      await monitor.monitorRisk();
+      expect(await accountStatus(userId)).toBe("ACTIVE");
       expect(await positionsFor(userId)).toHaveLength(1);
 
-      monitor.updateQuote(tick(symbol, 1300, 1000));
+      monitor.updateQuote(tick(symbol, 1300, 3000));
       await monitor.monitorRisk();
-      const [done] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
-      expect(done?.status).toBe("LIQUIDATED");
+      expect(await accountStatus(userId)).toBe("LIQUIDATED");
       expect(await positionsFor(userId)).toHaveLength(0);
+    });
+
+    it("R2#1: a pending liquidation is re-checked on live prices and released when no longer breached", async () => {
+      const { symbol, userId } = await shortOnThinCash("REL");
+      await getDb()
+        .update(paperAccounts)
+        .set({ status: "LIQUIDATION_PENDING", isLocked: true, lockReason: "MARGIN_CALL_LIQUIDATION", lockedAt: new Date() })
+        .where(eq(paperAccounts.userId, userId));
+
+      const monitor = new PaperRiskMonitor();
+      monitor.updateQuote(tick(symbol, 1000, 1000));
+      await monitor.monitorRisk();
+
+      const [account] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
+      expect(account?.status).toBe("ACTIVE");
+      expect(account?.isLocked).toBe(false);
+      expect(account?.lockReason).toBeNull();
+      expect(await positionsFor(userId)).toHaveLength(1);
+    });
+
+    it("R2#2 (P13): a manual close or flip cancels the position's working bracket exits", async () => {
+      const symbol = uniqueSymbol("STX");
+      const userId = await createTestUser();
+      const service = makeService({ prices: { [symbol]: 1000 } });
+      const closed = await service.placeOrder({
+        userId,
+        command: { symbol, exchange: "NSE", side: "BUY", type: "MARKET", qty: 10, stopLossPrice: 950, takeProfitPrice: 1050 },
+      });
+      await service.placeOrder({ userId, command: { symbol, exchange: "NSE", side: "SELL", type: "MARKET", qty: 10 } });
+      const afterClose = await getDb().select().from(paperOrders).where(eq(paperOrders.parentOrderId, closed.order.id));
+      expect(afterClose.map((exit) => exit.status)).toEqual(["CANCELLED", "CANCELLED"]);
+
+      const flipped = await service.placeOrder({
+        userId,
+        command: { symbol, exchange: "NSE", side: "BUY", type: "MARKET", qty: 10, stopLossPrice: 950 },
+      });
+      await service.placeOrder({ userId, command: { symbol, exchange: "NSE", side: "SELL", type: "MARKET", qty: 25 } });
+      const afterFlip = await getDb().select().from(paperOrders).where(eq(paperOrders.parentOrderId, flipped.order.id));
+      expect(afterFlip.map((exit) => exit.status)).toEqual(["CANCELLED"]);
+
+      // A later unbracketed position is never touched by the old exits.
+      await service.placeOrder({ userId, command: { symbol, exchange: "NSE", side: "BUY", type: "MARKET", qty: 25 } });
+      await primeVolume(symbol, 1000);
+      expect(await paperTradingTickProcessor.processTick(tick(symbol, 940, 100000))).toEqual([]);
+      const [position] = await positionsFor(userId);
+      expect([position?.side, position?.totalShares]).toEqual(["LONG", 10]);
     });
 
     it("#6: fills are sized from the traded volume since the previous tick", async () => {

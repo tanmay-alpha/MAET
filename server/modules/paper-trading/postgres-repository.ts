@@ -1,4 +1,4 @@
-import { eq, and, inArray, desc, lte, max } from "drizzle-orm";
+import { eq, and, inArray, desc, lte, max, isNotNull, ne } from "drizzle-orm";
 import { getDb } from "../../data/drizzle/client";
 import {
   paperAccounts,
@@ -279,6 +279,34 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
       )
       .orderBy(paperOrders.placedAt)
       .for("update");
+
+    return rows.map(mapPaperOrderRow);
+  }
+
+  async cancelWorkingExits(params: {
+    userId: string;
+    generation: number;
+    symbol: string;
+    exchange: string;
+    keepParentOrderId: string;
+    reason: string;
+  }): Promise<PaperOrderRow[]> {
+    const now = new Date();
+    const rows = await this.tx
+      .update(paperOrders)
+      .set({ status: "CANCELLED", rejectReason: params.reason, cancelledAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(paperOrders.userId, params.userId),
+          eq(paperOrders.generation, params.generation),
+          eq(paperOrders.symbol, params.symbol),
+          eq(paperOrders.exchange, params.exchange),
+          isNotNull(paperOrders.parentOrderId),
+          ne(paperOrders.parentOrderId, params.keepParentOrderId),
+          inArray(paperOrders.status, [...WORKING_ORDER_STATUSES])
+        )
+      )
+      .returning();
 
     return rows.map(mapPaperOrderRow);
   }

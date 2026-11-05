@@ -18,11 +18,10 @@ export interface LiquidationRequest {
   userId: string;
   reason: string;
   /**
-   * Last known price for a position, however old; the breach is judged on it, the same way
-   * calculate_live_margin judged it. Positions without one are marked at their entry price.
+   * Fresh executable (live, same-exchange) quote for a position, if any. The breach is judged
+   * only on these marks, exactly as calculate_live_margin was fed; positions without one are
+   * marked at their entry price and stay open until a quote arrives.
    */
-  markPrice: (exchange: string, symbol: string) => number | undefined;
-  /** Fresh executable quote for a position; only closes require one. */
   quoteFor: (exchange: string, symbol: string) => ExecutionQuote | undefined;
 }
 
@@ -34,16 +33,17 @@ export interface LiquidationOutcome {
 
 export class PaperTradingLiquidationService {
   /**
-   * Margin-call liquidation in a single serializable transaction: re-checks the breach under
-   * the account lock, locks the account (LIQUIDATION_PENDING), cancels its working orders and
-   * closes every position that has an executable quote with a side-aware MARKET order, fill and
-   * ledger entries. Positions without a quote stay open and the account stays
-   * LIQUIDATION_PENDING until a later call closes them; the account becomes LIQUIDATED once flat.
-   * Returns null when there is nothing to do (account missing, already liquidated, or no longer
-   * in breach).
+   * Margin-call liquidation in a single serializable transaction. Under the account lock it
+   * re-checks the breach on executable quotes in both ACTIVE and LIQUIDATION_PENDING states:
+   * - ACTIVE and breached: lock the account (LIQUIDATION_PENDING) and cancel working orders;
+   * - LIQUIDATION_PENDING and no longer breached: release it back to ACTIVE;
+   * then close every position that has an executable quote with a side-aware MARKET order,
+   * fill and ledger entries, marking the account LIQUIDATED once flat. Positions without a
+   * quote stay open with the account LIQUIDATION_PENDING until a later call closes them.
+   * Returns null when there is nothing to do (account missing, liquidated, or not in breach).
    */
   async liquidateAccount(request: LiquidationRequest): Promise<LiquidationOutcome | null> {
-    const { userId, reason, markPrice, quoteFor } = request;
+    const { userId, reason, quoteFor } = request;
 
     return withSerializablePaperTransaction(async (repos) => {
       let account = await repos.write.findAccountForUpdate({ userId });
@@ -55,15 +55,39 @@ export class PaperTradingLiquidationService {
       const events: NewPaperOutboxEventRow[] = [];
       const eventBase = { userId, generation: account.generation };
 
-      if (account.status === "ACTIVE") {
-        const markedEquity = positions.reduce((equity, position) => {
-          const mark = markPrice(position.exchange, position.symbol) ?? Number(position.averageEntryPrice);
-          return equity + signedPositionQuantity(position) * (mark - Number(position.averageEntryPrice));
-        }, Number(account.cashBalance));
-        if (markedEquity >= Number(account.maintenanceMargin)) {
+      const markedEquity = positions.reduce((equity, position) => {
+        const mark = quoteFor(position.exchange, position.symbol)?.price ?? Number(position.averageEntryPrice);
+        return equity + signedPositionQuantity(position) * (mark - Number(position.averageEntryPrice));
+      }, Number(account.cashBalance));
+      const breached = markedEquity < Number(account.maintenanceMargin);
+
+      if (!breached) {
+        if (account.status !== "LIQUIDATION_PENDING") {
           return null;
         }
+        // Live prices no longer breach maintenance margin: release the lock. Orders cancelled
+        // when the margin call started stay cancelled.
+        const now = new Date();
+        account = await repos.write.updateAccount(userId, {
+          status: "ACTIVE",
+          isLocked: false,
+          lockReason: null,
+          lockedAt: null,
+          version: account.version + 1,
+          updatedAt: now,
+        });
+        await repos.write.insertOutboxEvents([
+          buildAccountUpdatedEvent({
+            ...eventBase,
+            aggregateType: "PaperAccount",
+            aggregateId: userId,
+            payload: { version: account.version, status: account.status, equity: markedEquity },
+          }),
+        ]);
+        return { status: account.status, closedPositions: 0, openPositions: positions.length };
+      }
 
+      if (account.status === "ACTIVE") {
         const now = new Date();
         account = await repos.write.updateAccount(userId, {
           status: "LIQUIDATION_PENDING",

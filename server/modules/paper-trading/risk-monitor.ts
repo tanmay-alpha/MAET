@@ -22,7 +22,12 @@ export class PaperRiskMonitor {
 
   constructor(private readonly liquidation: PaperTradingLiquidationService = paperTradingLiquidationService) {}
 
+  /**
+   * Keeps the latest executable (live, fresh) tick per EXCHANGE:SYMBOL. Delayed or stale
+   * ticks are ignored, so they can neither start a margin call nor overwrite a live price.
+   */
   updateQuote(tick: Tick): void {
+    if (!evaluateExecutionQuote(tick, tick.symbol, paperExecutionPolicy()).executable) return;
     this.ticks.set(quoteKey(tick.exchange, tick.symbol), tick);
   }
 
@@ -64,7 +69,12 @@ export class PaperRiskMonitor {
     this.running = true;
     try {
       const db = getDb();
-      const prices = Object.fromEntries([...this.ticks].map(([key, tick]) => [key, tick.price]));
+      // Mark only at quotes that are still executable now; a tick that has aged out is no mark.
+      const prices = Object.fromEntries(
+        [...this.ticks].flatMap(([key, tick]) =>
+          this.executableQuote(tick.exchange, tick.symbol) ? [[key, tick.price]] : []
+        )
+      );
       // Bound as text and cast in SQL so the driver cannot re-encode the JSON document.
       const breached = await db.execute<{ user_id: string }>(
         sql`SELECT user_id FROM calculate_live_margin(${JSON.stringify(prices)}::text::jsonb)`
@@ -84,7 +94,6 @@ export class PaperRiskMonitor {
           await this.liquidation.liquidateAccount({
             userId,
             reason: MARGIN_CALL_REASON,
-            markPrice: (exchange, symbol) => this.ticks.get(quoteKey(exchange, symbol))?.price,
             quoteFor: (exchange, symbol) => this.executableQuote(exchange, symbol),
           });
         } catch (err) {
