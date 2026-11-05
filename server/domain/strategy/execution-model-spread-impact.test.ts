@@ -29,6 +29,7 @@ describe("P2 Realistic Execution Model — Spread & Market Impact (Commit 1)", (
     // BUY order
     const buyRes = model.executeBarFill({
       bar: candle,
+      referenceVolume: candle.volume,
       orderQuantity: 10,
       side: "BUY",
       config: baseConfig,
@@ -37,6 +38,7 @@ describe("P2 Realistic Execution Model — Spread & Market Impact (Commit 1)", (
     // SELL order
     const sellRes = model.executeBarFill({
       bar: candle,
+      referenceVolume: candle.volume,
       orderQuantity: 10,
       side: "SELL",
       config: baseConfig,
@@ -61,6 +63,7 @@ describe("P2 Realistic Execution Model — Spread & Market Impact (Commit 1)", (
     // Small order: 100 shares -> 0.1% participation
     const smallRes = model.executeBarFill({
       bar: candle,
+      referenceVolume: candle.volume,
       orderQuantity: 100,
       side: "BUY",
       config: baseConfig,
@@ -69,6 +72,7 @@ describe("P2 Realistic Execution Model — Spread & Market Impact (Commit 1)", (
     // Large order: 5,000 shares -> 5% participation
     const largeRes = model.executeBarFill({
       bar: candle,
+      referenceVolume: candle.volume,
       orderQuantity: 5000,
       side: "BUY",
       config: baseConfig,
@@ -86,6 +90,7 @@ describe("P2 Realistic Execution Model — Spread & Market Impact (Commit 1)", (
 
     const zeroRes = model.executeBarFill({
       bar: candle,
+      referenceVolume: candle.volume,
       orderQuantity: 0,
       side: "BUY",
       config: baseConfig,
@@ -99,6 +104,7 @@ describe("P2 Realistic Execution Model — Spread & Market Impact (Commit 1)", (
     const illiquidCandle = makeCandle(1000, 1010, 990, 1005, 1);
     const cappedRes = model.executeBarFill({
       bar: illiquidCandle,
+      referenceVolume: illiquidCandle.volume,
       orderQuantity: 1000,
       side: "BUY",
       config: { ...baseConfig, maxImpactBps: 150 },
@@ -114,22 +120,22 @@ describe("P2 Realistic Execution Model — Spread & Market Impact (Commit 1)", (
     const candle = makeCandle(1000, 1050, 950, 1000, 50_000); // 10% range
 
     const spreadNone = model.calculateSpreadBps({
-      bar: candle, orderQuantity: 100, side: "BUY", config: { ...baseConfig, spreadModel: "NONE" },
+      bar: candle, referenceVolume: candle.volume, orderQuantity: 100, side: "BUY", config: { ...baseConfig, spreadModel: "NONE" },
     }, 1000);
     expect(spreadNone).toBe(0);
 
     const spreadFixed = model.calculateSpreadBps({
-      bar: candle, orderQuantity: 100, side: "BUY", config: { ...baseConfig, spreadModel: "FIXED_BPS", baseSpreadBps: 12 },
+      bar: candle, referenceVolume: candle.volume, orderQuantity: 100, side: "BUY", config: { ...baseConfig, spreadModel: "FIXED_BPS", baseSpreadBps: 12 },
     }, 1000);
     expect(spreadFixed).toBe(12);
 
     const spreadVol = model.calculateSpreadBps({
-      bar: candle, orderQuantity: 100, side: "BUY", rollingAtr: 40, config: { ...baseConfig, spreadModel: "VOLATILITY_BASED", baseSpreadBps: 5 },
+      bar: candle, referenceVolume: candle.volume, orderQuantity: 100, side: "BUY", rollingAtr: 40, config: { ...baseConfig, spreadModel: "VOLATILITY_BASED", baseSpreadBps: 5 },
     }, 1000);
     expect(spreadVol).toBeGreaterThan(5);
 
     const spreadLiq = model.calculateSpreadBps({
-      bar: candle, orderQuantity: 100, side: "BUY", averageDailyVolume: 500_000, config: { ...baseConfig, spreadModel: "LIQUIDITY_BASED", baseSpreadBps: 5 },
+      bar: candle, referenceVolume: candle.volume, orderQuantity: 100, side: "BUY", averageDailyVolume: 500_000, config: { ...baseConfig, spreadModel: "LIQUIDITY_BASED", baseSpreadBps: 5 },
     }, 1000);
     expect(spreadLiq).toBeGreaterThan(5);
   });
@@ -145,6 +151,7 @@ describe("P2 Realistic Execution Model — Spread & Market Impact (Commit 1)", (
 
     const fillRes = model.executeBarFill({
       bar: candle,
+      referenceVolume: candle.volume,
       orderQuantity: 100,
       side: "BUY",
       config: {

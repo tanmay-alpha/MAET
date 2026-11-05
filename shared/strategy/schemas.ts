@@ -172,7 +172,6 @@ export const StrategyExecutionConfigSchema = z.object({
   impactCoefficient: z.number().min(0).max(100).optional(),
   maxImpactBps: z.number().min(0).max(2000).optional(),
   maxParticipationRate: z.number().min(0.001).max(1).optional(),
-  timeInForce: z.enum(["DAY", "GTC", "IOC"]).optional(),
 });
 
 // ============================================================

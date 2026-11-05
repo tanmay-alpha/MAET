@@ -34,7 +34,10 @@ export interface PortfolioPosition {
   symbol: string;
   direction: "long" | "short";
   quantity: number;
+  /** Fill price including spread, slippage and impact. */
   entryPrice: number;
+  /** Pre-friction reference price (the bar open) the entry order was priced from. */
+  entryReferencePrice: number;
   entryTimestamp: number;
   currentPrice: number;
   notional: number;
@@ -257,22 +260,114 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
     pnlByReason[reasonKey] = (pnlByReason[reasonKey] ?? 0) + trade.netPnl;
   }
 
-  // Helper: compute continuous mark-to-market equity
+  // Cash accounting: opening a position (long or short) sets aside its fill notional plus entry
+  // charges, so `cash` is what is free to fund new positions. Each position is worth its reserved
+  // notional plus unrealised P&L at the latest close.
   function calculateCurrentEquity(): { totalEquity: number; unrealizedPnl: number; grossExposure: number } {
     let unrealizedPnl = 0;
     let grossExposure = 0;
+    let reservedNotional = 0;
 
     for (const pos of positions.values()) {
-      const notional = pos.quantity * pos.currentPrice;
-      grossExposure += notional;
-      const uPnl = pos.direction === "long"
-        ? pos.quantity * (pos.currentPrice - pos.entryPrice)
-        : pos.quantity * (pos.entryPrice - pos.currentPrice);
-      unrealizedPnl += uPnl;
+      grossExposure += pos.quantity * pos.currentPrice;
+      reservedNotional += pos.quantity * pos.entryPrice;
+      unrealizedPnl += pos.unrealizedPnl;
     }
 
-    const totalEquity = cash + unrealizedPnl;
+    const totalEquity = cash + reservedNotional + unrealizedPnl;
     return { totalEquity, unrealizedPnl, grossExposure };
+  }
+
+  function markToClose(pos: PortfolioPosition, close: number) {
+    pos.currentPrice = close;
+    pos.notional = pos.quantity * close;
+    pos.unrealizedPnl = (pos.direction === "long" ? 1 : -1) * pos.quantity * (close - pos.entryPrice);
+  }
+
+  /**
+   * Stop is checked before target (CONSERVATIVE). A bar that opens beyond a level fills at the
+   * open (gap); otherwise the level itself fills.
+   */
+  function stopOrTargetExit(pos: PortfolioPosition, bar: Candle): { price: number; reason: string } | null {
+    const isLong = pos.direction === "long";
+    if (pos.stopPrice && (isLong ? bar.low <= pos.stopPrice : bar.high >= pos.stopPrice)) {
+      const gapped = isLong ? bar.open <= pos.stopPrice : bar.open >= pos.stopPrice;
+      return { price: gapped ? bar.open : pos.stopPrice, reason: "stop_loss" };
+    }
+    if (pos.targetPrice && (isLong ? bar.high >= pos.targetPrice : bar.low <= pos.targetPrice)) {
+      const gapped = isLong ? bar.open >= pos.targetPrice : bar.open <= pos.targetPrice;
+      return { price: gapped ? bar.open : pos.targetPrice, reason: "take_profit" };
+    }
+    return null;
+  }
+
+  function closePosition(
+    pos: PortfolioPosition,
+    bar: Candle,
+    barIndex: number,
+    exitPrice: number,
+    exitReason: string,
+    ts: number,
+  ) {
+    const sym = pos.symbol;
+    const signalIdx = Math.max(0, barIndex - 1);
+    const exitCtx: ExecutionContext = {
+      bar,
+      orderQuantity: pos.quantity,
+      side: pos.direction === "long" ? "SELL" : "BUY",
+      referencePrice: exitPrice,
+      rollingAtr: cacheMap[sym].resolve("ATR", { period: 14 }, signalIdx) ?? undefined,
+      referenceVolume: adjustedCandles[sym][signalIdx].volume,
+      config: execConfig,
+      barIndex,
+    };
+    // Exits always close the whole position; impact still reflects the participation.
+    const exitFill = execModel.executeBarFill(exitCtx, pos.quantity, { enforceParticipationCap: false });
+
+    const direction = pos.direction === "long" ? 1 : -1;
+    const exitCharges = exitFill.costs.brokerageFees + exitFill.costs.taxesAndCharges;
+    const fees = pos.entryFees + exitCharges;
+    const slippage = pos.entrySlippage + exitFill.costs.slippageCost;
+    const spreadCost = pos.entrySpreadCost + exitFill.costs.spreadCost;
+    const marketImpactCost = pos.entryImpactCost + exitFill.costs.marketImpactCost;
+    const totalCosts = fees + slippage + spreadCost + marketImpactCost;
+
+    // Gross P&L uses reference (pre-friction) prices. Spread, slippage and impact are already in the
+    // fill prices, so net P&L is the fill-to-fill P&L minus charges: each cost counted once.
+    const grossPnl = direction * pos.quantity * (exitFill.referencePrice - pos.entryReferencePrice);
+    const realisedPnl = direction * pos.quantity * (exitFill.effectivePrice - pos.entryPrice);
+    const netPnl = realisedPnl - fees;
+    const entryNotional = pos.quantity * pos.entryPrice;
+    const returnPercent = entryNotional > 0 ? (netPnl / entryNotional) * 100 : 0;
+
+    // Release the capital reserved at entry plus realised P&L, less exit charges.
+    cash += entryNotional + realisedPnl - exitCharges;
+    cumulativeTurnover += exitFill.notional;
+
+    const tradeRecord: PortfolioTradeRecord = {
+      symbol: sym,
+      direction: pos.direction,
+      entryTimestamp: pos.entryTimestamp,
+      entryPrice: pos.entryPrice,
+      exitTimestamp: ts,
+      exitPrice: exitFill.effectivePrice,
+      quantity: pos.quantity,
+      grossPnl,
+      fees,
+      slippage,
+      spreadCost,
+      marketImpactCost,
+      totalCosts,
+      netPnl,
+      returnPercent,
+      entryReason: pos.entryReason ?? "entry_rule",
+      exitReason,
+      sector: pos.sector,
+    };
+
+    completedTrades.push(tradeRecord);
+    recordTradeAttribution(tradeRecord);
+    positions.delete(sym);
   }
 
   // 3. Chronological simulation loop
@@ -286,92 +381,22 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
       if (!candleInfo) continue; // No tick on this bar for this symbol
 
       const bar = candleInfo.candle;
-      pos.currentPrice = bar.close;
-      pos.notional = pos.quantity * pos.currentPrice;
-      pos.unrealizedPnl = pos.direction === "long"
-        ? pos.quantity * (pos.currentPrice - pos.entryPrice)
-        : pos.quantity * (pos.entryPrice - pos.currentPrice);
+      markToClose(pos, bar.close);
 
-      let exitReason = "";
-      let exitPrice = 0;
-
-      // Stop / Target check
-      if (pos.stopPrice && ((pos.direction === "long" && bar.low <= pos.stopPrice) || (pos.direction === "short" && bar.high >= pos.stopPrice))) {
-        exitPrice = pos.stopPrice;
-        exitReason = "stop_loss";
-      } else if (pos.targetPrice && ((pos.direction === "long" && bar.high >= pos.targetPrice) || (pos.direction === "short" && bar.low <= pos.targetPrice))) {
-        exitPrice = pos.targetPrice;
-        exitReason = "take_profit";
-      } else if (isLastBar) {
-        exitPrice = bar.close;
-        exitReason = "end_of_period";
-      } else {
-        // Evaluate AST exit rules on previous bar
-        const cache = cacheMap[sym];
-        const prevIdx = candleInfo.index - 1;
-        if (prevIdx >= 0) {
-          const exitGroup = definition.exit ?? (definition as any).exitRules;
-          const evalRes = evaluateRuleGroup(exitGroup, cache, prevIdx);
-          if (evalRes.matched) {
-            exitPrice = bar.open;
-            exitReason = "exit_rule";
-          }
+      let exit = stopOrTargetExit(pos, bar);
+      if (!exit && isLastBar) {
+        exit = { price: bar.close, reason: "end_of_period" };
+      }
+      if (!exit && candleInfo.index >= 1) {
+        // AST exit rules evaluated on the previous bar fill at this bar's open
+        const exitGroup = definition.exit ?? (definition as any).exitRules;
+        if (evaluateRuleGroup(exitGroup, cacheMap[sym], candleInfo.index - 1).matched) {
+          exit = { price: bar.open, reason: "exit_rule" };
         }
       }
 
-      if (exitReason && exitPrice > 0) {
-        // Execute exit through ExecutionModel
-        const exitCtx: ExecutionContext = {
-          bar,
-          orderQuantity: pos.quantity,
-          side: pos.direction === "long" ? "SELL" : "BUY",
-          referencePrice: exitPrice,
-          config: execConfig,
-          barIndex: candleInfo.index,
-        };
-        const exitFill = execModel.executeBarFill(exitCtx, pos.quantity);
-
-        const grossPnl = pos.direction === "long"
-          ? pos.quantity * (exitFill.effectivePrice - pos.entryPrice)
-          : pos.quantity * (pos.entryPrice - exitFill.effectivePrice);
-
-        const totalCosts = pos.entryFees + exitFill.costs.brokerageFees + exitFill.costs.taxesAndCharges +
-          pos.entrySlippage + exitFill.costs.slippageCost +
-          pos.entrySpreadCost + exitFill.costs.spreadCost +
-          pos.entryImpactCost + exitFill.costs.marketImpactCost;
-
-        const netPnl = grossPnl - totalCosts;
-        const entryNotional = pos.quantity * pos.entryPrice;
-        const returnPercent = entryNotional > 0 ? (netPnl / entryNotional) * 100 : 0;
-
-        // Cash flow: release margin/capital and credit net realized profit
-        cash += grossPnl - exitFill.costs.totalTransactionCost;
-        cumulativeTurnover += exitFill.notional;
-
-        const tradeRecord: PortfolioTradeRecord = {
-          symbol: sym,
-          direction: pos.direction,
-          entryTimestamp: pos.entryTimestamp,
-          entryPrice: pos.entryPrice,
-          exitTimestamp: ts,
-          exitPrice: exitFill.effectivePrice,
-          quantity: pos.quantity,
-          grossPnl,
-          fees: pos.entryFees + exitFill.costs.brokerageFees + exitFill.costs.taxesAndCharges,
-          slippage: pos.entrySlippage + exitFill.costs.slippageCost,
-          spreadCost: pos.entrySpreadCost + exitFill.costs.spreadCost,
-          marketImpactCost: pos.entryImpactCost + exitFill.costs.marketImpactCost,
-          totalCosts,
-          netPnl,
-          returnPercent,
-          entryReason: pos.entryReason ?? "entry_rule",
-          exitReason,
-          sector: pos.sector,
-        };
-
-        completedTrades.push(tradeRecord);
-        recordTradeAttribution(tradeRecord);
-        positions.delete(sym);
+      if (exit && exit.price > 0) {
+        closePosition(pos, bar, candleInfo.index, exit.price, exit.reason, ts);
       }
     }
 
@@ -395,25 +420,27 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
         if (!candleInfo || candleInfo.index < 1) continue;
 
         const cache = cacheMap[sym];
-        const prevIdx = candleInfo.index - 1;
+        const signalIdx = candleInfo.index - 1;
         const entryGroup = definition.entry ?? (definition as any).entryRules;
-        const evalRes = evaluateRuleGroup(entryGroup, cache, prevIdx);
+        const evalRes = evaluateRuleGroup(entryGroup, cache, signalIdx);
 
         if (evalRes.matched) {
+          // The order fills at this bar's open, so ranking, sizing and liquidity inputs come from the
+          // signal bar (i-1): this bar's high, low, close and volume are not known yet.
           const bar = candleInfo.candle;
-          const fillPrice = bar.open;
-          const atr = cache.resolve("ATR", { period: 14 }, candleInfo.index) ?? undefined;
-          const momentum = bar.close > 0 && candleInfo.index >= 10
-            ? (bar.close - adjustedCandles[sym][Math.max(0, candleInfo.index - 10)].close) / bar.close
+          const signalBar = adjustedCandles[sym][signalIdx];
+          const atr = cache.resolve("ATR", { period: 14 }, signalIdx) ?? undefined;
+          const momentum = signalBar.close > 0 && signalIdx >= 10
+            ? (signalBar.close - adjustedCandles[sym][signalIdx - 10].close) / signalBar.close
             : 0;
 
           candidates.push({
             symbol: sym,
             bar,
             barIndex: candleInfo.index,
-            fillPrice,
-            score: bar.volume * momentum,
-            volume: bar.volume,
+            fillPrice: bar.open,
+            score: signalBar.volume * momentum,
+            volume: signalBar.volume,
             momentum,
             atr,
           });
@@ -422,6 +449,7 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
 
       // Rank candidate signals deterministically
       const ranked = rankCandidates(candidates, rankingMethod);
+      const direction: "long" | "short" = definition.direction === "SHORT_ONLY" ? "short" : "long";
 
       // C. Allocate capital and execute entries for top candidates respecting portfolio constraints
       for (const cand of ranked) {
@@ -466,11 +494,12 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
         }
 
         // Position sizing
+        const stopPct = risk.stopLossPercent;
         const sizing = calculatePositionSize(risk, {
           currentEquity: capitalForTrade,
           entryPrice: cand.fillPrice,
           atr: cand.atr,
-          stopPrice: risk.stopLossPercent ? cand.fillPrice * (1 - risk.stopLossPercent / 100) : undefined,
+          stopPrice: stopPct ? cand.fillPrice * (direction === "long" ? 1 - stopPct / 100 : 1 + stopPct / 100) : undefined,
         });
 
         const targetQty = sizing.quantity;
@@ -483,44 +512,59 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
         const entryCtx: ExecutionContext = {
           bar: cand.bar,
           orderQuantity: targetQty,
-          side: definition.direction === "SHORT_ONLY" ? "SELL" : "BUY",
+          side: direction === "long" ? "BUY" : "SELL",
           referencePrice: cand.fillPrice,
           rollingAtr: cand.atr,
+          referenceVolume: cand.volume,
           config: execConfig,
           barIndex: cand.barIndex,
         };
-        const entryFill = execModel.executeBarFill(entryCtx, targetQty);
+        let entryFill = execModel.executeBarFill(entryCtx, targetQty);
+        let cashNeeded = entryFill.notional + entryFill.costs.brokerageFees + entryFill.costs.taxesAndCharges;
+        if (entryFill.fillQuantity > 0 && cashNeeded > availableCashForTrade) {
+          // Fill-price frictions and charges pushed the order past the free cash: shrink it to fit.
+          const fittedQty = Math.floor((entryFill.fillQuantity * availableCashForTrade) / cashNeeded);
+          entryFill = execModel.executeBarFill(entryCtx, fittedQty);
+          cashNeeded = entryFill.notional + entryFill.costs.brokerageFees + entryFill.costs.taxesAndCharges;
+        }
 
-        if (entryFill.fillQuantity > 0 && entryFill.notional <= cash) {
-          const entryTotalCosts = entryFill.costs.totalTransactionCost;
-          cash -= entryTotalCosts;
-          cumulativeTurnover += entryFill.notional;
-
-          const stopPct = risk.stopLossPercent;
-          const targetPct = risk.takeProfitPercent;
-          const stopPrice = stopPct ? entryFill.effectivePrice * (1 - stopPct / 100) : undefined;
-          const targetPrice = targetPct ? entryFill.effectivePrice * (1 + targetPct / 100) : undefined;
-
-          positions.set(cand.symbol, {
-            symbol: cand.symbol,
-            direction: definition.direction === "SHORT_ONLY" ? "short" : "long",
-            quantity: entryFill.fillQuantity,
-            entryPrice: entryFill.effectivePrice,
-            entryTimestamp: ts,
-            currentPrice: entryFill.effectivePrice,
-            notional: entryFill.notional,
-            unrealizedPnl: 0,
-            sector,
-            entryReason: "entry_rule",
-            stopPrice,
-            targetPrice,
-            entryFees: entryFill.costs.brokerageFees + entryFill.costs.taxesAndCharges,
-            entrySlippage: entryFill.costs.slippageCost,
-            entrySpreadCost: entryFill.costs.spreadCost,
-            entryImpactCost: entryFill.costs.marketImpactCost,
-          });
-        } else {
+        if (entryFill.fillQuantity <= 0 || cashNeeded > availableCashForTrade) {
           excludedSignalsCount++;
+          continue;
+        }
+
+        cash -= cashNeeded;
+        cumulativeTurnover += entryFill.notional;
+
+        const fill = entryFill.effectivePrice;
+        const targetPct = risk.takeProfitPercent;
+        const position: PortfolioPosition = {
+          symbol: cand.symbol,
+          direction,
+          quantity: entryFill.fillQuantity,
+          entryPrice: fill,
+          entryReferencePrice: entryFill.referencePrice,
+          entryTimestamp: ts,
+          currentPrice: fill,
+          notional: entryFill.notional,
+          unrealizedPnl: 0,
+          sector,
+          entryReason: "entry_rule",
+          stopPrice: stopPct ? fill * (direction === "long" ? 1 - stopPct / 100 : 1 + stopPct / 100) : undefined,
+          targetPrice: targetPct ? fill * (direction === "long" ? 1 + targetPct / 100 : 1 - targetPct / 100) : undefined,
+          entryFees: entryFill.costs.brokerageFees + entryFill.costs.taxesAndCharges,
+          entrySlippage: entryFill.costs.slippageCost,
+          entrySpreadCost: entryFill.costs.spreadCost,
+          entryImpactCost: entryFill.costs.marketImpactCost,
+        };
+        positions.set(cand.symbol, position);
+
+        // The rest of the entry bar trades after the open fill: stops and targets can trigger on it.
+        const sameBarExit = stopOrTargetExit(position, cand.bar);
+        if (sameBarExit) {
+          closePosition(position, cand.bar, cand.barIndex, sameBarExit.price, sameBarExit.reason, ts);
+        } else {
+          markToClose(position, cand.bar.close);
         }
       }
     }

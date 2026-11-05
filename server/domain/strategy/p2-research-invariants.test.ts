@@ -115,6 +115,7 @@ describe("MAET P2 Research & Simulation Invariants", () => {
       const candle = createSyntheticCandles("INFY", 1)[0];
       const ctx: ExecutionContext = {
         bar: candle,
+        referenceVolume: candle.volume,
         orderQuantity: 1000,
         side: "BUY",
         orderType: "MARKET",
@@ -148,6 +149,7 @@ describe("MAET P2 Research & Simulation Invariants", () => {
 
       const makeCtx = (qty: number): ExecutionContext => ({
         bar: candle,
+        referenceVolume: candle.volume,
         orderQuantity: qty,
         side: "BUY",
         config: {

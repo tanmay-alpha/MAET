@@ -417,10 +417,11 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
         // Fill on this bar's open (NEXT_BAR_OPEN: signal was on prev bar i-1)
         const fillPrice = bar.open;
 
+        // Sizing may only use what is known at this bar's open: ATR through the signal bar (i-1).
         const sizing = calculatePositionSize(risk, {
           currentEquity: equity,
           entryPrice: fillPrice,
-          atr: cache.resolve("ATR", { period: 14 }, i) ?? undefined,
+          atr: cache.resolve("ATR", { period: 14 }, i - 1) ?? undefined,
           stopPrice: risk.stopLossPercent ? fillPrice * (1 - risk.stopLossPercent / 100) : undefined,
         });
 

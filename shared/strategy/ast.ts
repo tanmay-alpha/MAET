@@ -206,7 +206,6 @@ export interface StrategyExecutionConfig {
   impactCoefficient?: number;
   maxImpactBps?: number;
   maxParticipationRate?: number;
-  timeInForce?: "DAY" | "GTC" | "IOC";
 }
 
 // ============================================================
