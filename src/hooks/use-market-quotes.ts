@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import {
-  API_BASE_URL,
   fetchMarketQuotes,
   parseMarketQuote,
   type MarketQuote,
   type MarketQuotesResponse,
 } from "@/lib/market-api";
+import { API_BASE_URL } from "@/lib/api-url";
 import { reconnectDelayMs, scheduleTimeout, type ScheduleFn } from "@/lib/reconnect-backoff";
 
 function mergeQuote(
