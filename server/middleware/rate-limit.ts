@@ -2,26 +2,36 @@ import {
   createError,
   defineEventHandler,
   getRequestHeader,
-  getRequestURL,
   setResponseHeader,
   type H3Event,
 } from "h3";
 import type Redis from "ioredis";
-import { tryAuth } from "../api/trpc/auth";
+import { tryAuth, type AuthContext } from "../api/trpc/auth";
 import { getRedis } from "../data/redis/client";
 
 /**
  * Token-bucket rate limiter for the API surface (per client IP and, when a
- * valid bearer token is present, per user). Redis-backed when the shared
- * client is connected so limits hold across instances; otherwise falls back
- * to an in-process bucket map. SSE `/stream` endpoints are excluded because
- * they hold long-lived connections with their own subscription caps.
+ * valid bearer token is present, per user). The in-process store is the
+ * default (single Render instance, no Redis command volume); set
+ * RATE_LIMIT_STORE=redis to share buckets across instances. SSE `/stream`
+ * endpoints are excluded because they hold long-lived connections with their
+ * own subscription caps.
  */
+
+declare module "h3" {
+  interface H3EventContext {
+    /** Verified bearer-token identity, resolved once by the rate limiter (null = none/invalid). */
+    auth?: AuthContext | null;
+  }
+}
 
 export type BucketLimit = { capacity: number; refillPerSec: number };
 
+export type RateLimitStoreKind = "memory" | "redis";
+
 export type RateLimitConfig = {
   enabled: boolean;
+  store: RateLimitStoreKind;
   ip: BucketLimit;
   user: BucketLimit;
 };
@@ -47,6 +57,7 @@ function positiveNumber(raw: string | undefined, fallback: number): number {
 export function rateLimitConfigFromEnv(env: NodeJS.ProcessEnv = process.env): RateLimitConfig {
   return {
     enabled: env.RATE_LIMIT_ENABLED !== "false",
+    store: env.RATE_LIMIT_STORE === "redis" ? "redis" : "memory",
     ip: {
       capacity: positiveNumber(env.RATE_LIMIT_IP_CAPACITY, 300),
       refillPerSec: positiveNumber(env.RATE_LIMIT_IP_REFILL_PER_SEC, 5),
@@ -62,19 +73,41 @@ function retryAfterMs(tokens: number, limit: BucketLimit): number {
   return Math.ceil(((1 - tokens) / limit.refillPerSec) * 1000);
 }
 
+export type MemoryStoreOptions = { maxKeys?: number; evictBatch?: number };
+
+/**
+ * In-process buckets in a Map kept in least-recently-used order (each take
+ * re-inserts its key). When full, the oldest `evictBatch` keys are dropped in
+ * one pass, so eviction cost is amortised instead of scanning per request.
+ */
 export class MemoryRateLimitStore implements RateLimitStore {
   private readonly buckets = new Map<string, { tokens: number; updatedMs: number }>();
+  private readonly maxKeys: number;
+  private readonly evictBatch: number;
 
-  constructor(private readonly maxKeys = 50_000) {}
+  constructor({ maxKeys = 50_000, evictBatch }: MemoryStoreOptions = {}) {
+    this.maxKeys = maxKeys;
+    this.evictBatch = Math.max(1, evictBatch ?? Math.floor(maxKeys / 10));
+  }
+
+  get size(): number {
+    return this.buckets.size;
+  }
 
   async take(key: string, limit: BucketLimit, nowMs: number): Promise<TakeResult> {
     const existing = this.buckets.get(key);
-    const elapsedSec = existing ? Math.max(0, nowMs - existing.updatedMs) / 1000 : 0;
-    const tokens = existing
-      ? Math.min(limit.capacity, existing.tokens + elapsedSec * limit.refillPerSec)
-      : limit.capacity;
-
-    if (!existing && this.buckets.size >= this.maxKeys) this.evictFull(nowMs, limit);
+    let tokens = limit.capacity;
+    if (existing) {
+      this.buckets.delete(key);
+      const elapsedSec = Math.max(0, nowMs - existing.updatedMs) / 1000;
+      tokens = Math.min(limit.capacity, existing.tokens + elapsedSec * limit.refillPerSec);
+    } else if (this.buckets.size >= this.maxKeys) {
+      let remaining = this.evictBatch;
+      for (const oldest of this.buckets.keys()) {
+        this.buckets.delete(oldest);
+        if (--remaining === 0) break;
+      }
+    }
 
     if (tokens < 1) {
       this.buckets.set(key, { tokens, updatedMs: nowMs });
@@ -82,18 +115,6 @@ export class MemoryRateLimitStore implements RateLimitStore {
     }
     this.buckets.set(key, { tokens: tokens - 1, updatedMs: nowMs });
     return { ok: true, retryAfterMs: 0 };
-  }
-
-  /** Drop buckets that have refilled completely; they carry no state. */
-  private evictFull(nowMs: number, limit: BucketLimit): void {
-    for (const [key, bucket] of this.buckets) {
-      const refilled = bucket.tokens + ((nowMs - bucket.updatedMs) / 1000) * limit.refillPerSec;
-      if (refilled >= limit.capacity) this.buckets.delete(key);
-    }
-    if (this.buckets.size >= this.maxKeys) {
-      const oldest = this.buckets.keys().next().value;
-      if (oldest !== undefined) this.buckets.delete(oldest);
-    }
   }
 }
 
@@ -121,7 +142,7 @@ redis.call('PEXPIRE', KEYS[1], math.ceil(capacity / rate * 1000) + 1000)
 return {allowed, math.floor(tokens * 1000)}
 `;
 
-/** Uses Redis while the shared client is connected; the memory store otherwise. */
+/** Shares buckets through Redis while the client is connected; the memory store otherwise. */
 export class RedisRateLimitStore implements RateLimitStore {
   constructor(
     private readonly fallback: RateLimitStore = new MemoryRateLimitStore(),
@@ -156,39 +177,77 @@ export class RedisRateLimitStore implements RateLimitStore {
   }
 }
 
-/** Client IP: rightmost X-Forwarded-For hop (appended by the platform proxy), else the socket. */
-export function clientIp(event: H3Event): string {
-  const forwarded = getRequestHeader(event, "x-forwarded-for");
-  const hops = forwarded?.split(",").map((hop) => hop.trim()).filter(Boolean);
-  return hops?.at(-1) ?? event.node.req.socket?.remoteAddress ?? "unknown";
+export function createRateLimitStore(kind: RateLimitStoreKind): RateLimitStore {
+  return kind === "redis" ? new RedisRateLimitStore() : new MemoryRateLimitStore();
 }
 
-async function defaultResolveUser(event: H3Event): Promise<string | null> {
-  if (!getRequestHeader(event, "authorization")) return null;
-  return (await tryAuth(event))?.userId ?? null;
+/**
+ * Rate-limit key for an IP: IPv4 as-is (IPv4-mapped IPv6 unwrapped), IPv6
+ * collapsed to its /64 because a single subscriber typically owns a whole /64.
+ */
+export function normalizeIp(raw: string): string {
+  let ip = raw.trim().toLowerCase();
+  if (ip.startsWith("[")) ip = ip.slice(1, ip.indexOf("]") === -1 ? undefined : ip.indexOf("]"));
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/u.exec(ip);
+  if (mapped) return mapped[1];
+  if (!ip.includes(":")) return ip;
+
+  const [head, tail] = ip.split("%")[0].split("::");
+  const headGroups = head ? head.split(":") : [];
+  const tailGroups = tail ? tail.split(":") : [];
+  const groups =
+    tail === undefined
+      ? headGroups
+      : [...headGroups, ...Array<string>(Math.max(0, 8 - headGroups.length - tailGroups.length)).fill("0"), ...tailGroups];
+  const prefix = groups.slice(0, 4).map((group) => (Number.parseInt(group, 16) || 0).toString(16));
+  while (prefix.length < 4) prefix.push("0");
+  return `${prefix.join(":")}::/64`;
+}
+
+/**
+ * Client IP. Cloudflare-style `cf-connecting-ip` / `true-client-ip` are set by
+ * the edge and overwrite client values. Render appends its internal proxy hop
+ * to the right of X-Forwarded-For, so the leftmost entry is the only usable
+ * one there — but it is client-controlled and spoofable, so it is only a
+ * fallback. The per-user bucket still applies to authenticated callers.
+ */
+export function clientIp(event: H3Event): string {
+  const header = (name: string) => getRequestHeader(event, name)?.trim() || undefined;
+  const ip =
+    header("cf-connecting-ip") ??
+    header("true-client-ip") ??
+    header("x-forwarded-for")?.split(",")[0]?.trim() ??
+    event.node.req.socket?.remoteAddress;
+  return ip ? normalizeIp(ip) : "unknown";
 }
 
 export type RateLimitMiddlewareOptions = {
   config?: RateLimitConfig;
   store?: RateLimitStore;
   now?: () => number;
-  resolveUser?: (event: H3Event) => Promise<string | null>;
+  /** Verifies the bearer token; defaults to tryAuth. Only called when an Authorization header is present. */
+  authenticate?: (event: H3Event) => Promise<AuthContext | null>;
 };
 
 export function createRateLimitMiddleware(options: RateLimitMiddlewareOptions = {}) {
   const config = options.config ?? rateLimitConfigFromEnv();
-  const store = options.store ?? new RedisRateLimitStore();
+  const store = options.store ?? createRateLimitStore(config.store);
   const now = options.now ?? Date.now;
-  const resolveUser = options.resolveUser ?? defaultResolveUser;
+  const authenticate = options.authenticate ?? tryAuth;
 
   return defineEventHandler(async (event) => {
     if (!config.enabled || event.method === "OPTIONS") return;
-    if (!isRateLimitedPath(getRequestURL(event).pathname)) return;
+    if (!isRateLimitedPath(event.path.split("?")[0])) return;
 
     const nowMs = now();
     let result = await store.take(`ip:${clientIp(event)}`, config.ip, nowMs);
     if (result.ok) {
-      const userId = await resolveUser(event);
+      // Resolved once here and shared through event.context so the tRPC
+      // handler can skip a second JWT verification.
+      event.context.auth = getRequestHeader(event, "authorization")
+        ? await authenticate(event).catch(() => null)
+        : null;
+      const userId = event.context.auth?.userId;
       if (userId) result = await store.take(`user:${userId}`, config.user, nowMs);
     }
     if (result.ok) return;
