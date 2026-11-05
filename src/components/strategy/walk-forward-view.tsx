@@ -51,13 +51,13 @@ export function WalkForwardView({ result }: Props) {
           <div>
             <span className="text-[10px] uppercase text-muted-foreground">Retention</span>
             <p className="text-base font-bold font-mono">
-              {(result.summary.performanceRetention * 100).toFixed(1)}%
+              {result.summary.performanceRetention == null ? "—" : `${(result.summary.performanceRetention * 100).toFixed(1)}%`}
             </p>
           </div>
           <div>
             <span className="text-[10px] uppercase text-muted-foreground">WFE Ratio</span>
             <p className="text-base font-bold font-mono">
-              {result.summary.walkForwardEfficiency.toFixed(2)}
+              {result.summary.walkForwardEfficiency == null ? "—" : result.summary.walkForwardEfficiency.toFixed(2)}
             </p>
           </div>
         </div>
@@ -135,14 +135,14 @@ export function WalkForwardView({ result }: Props) {
                     {JSON.stringify(w.selectedParameters).replace(/[{}"]/g, "")}
                   </td>
                   <td className="px-4 py-2.5">{w.isMetrics.sharpe.toFixed(2)}</td>
-                  <td className="px-4 py-2.5">{w.valMetrics.sharpe.toFixed(2)}</td>
-                  <td className={`px-4 py-2.5 font-bold ${w.oosMetrics.sharpe >= 0 ? "text-bull" : "text-bear"}`}>
-                    {w.oosMetrics.sharpe.toFixed(2)}
+                  <td className="px-4 py-2.5">{w.valMetrics ? w.valMetrics.sharpe.toFixed(2) : "—"}</td>
+                  <td className={`px-4 py-2.5 font-bold ${(w.oosMetrics?.sharpe ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                    {w.oosMetrics ? w.oosMetrics.sharpe.toFixed(2) : "—"}
                   </td>
-                  <td className={`px-4 py-2.5 font-bold ${w.oosMetrics.totalReturn >= 0 ? "text-bull" : "text-bear"}`}>
-                    {(w.oosMetrics.totalReturn * 100).toFixed(1)}%
+                  <td className={`px-4 py-2.5 font-bold ${(w.oosMetrics?.totalReturn ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                    {w.oosMetrics ? `${(w.oosMetrics.totalReturn * 100).toFixed(1)}%` : "—"}
                   </td>
-                  <td className="px-4 py-2.5 text-bear">{(w.oosMetrics.maxDrawdown * 100).toFixed(1)}%</td>
+                  <td className="px-4 py-2.5 text-bear">{w.oosMetrics ? `${(w.oosMetrics.maxDrawdown * 100).toFixed(1)}%` : "—"}</td>
                   <td className="px-4 py-2.5">
                     {w.validationAccepted ? (
                       <span className="inline-flex items-center gap-1 text-[10px] text-bull font-sans">

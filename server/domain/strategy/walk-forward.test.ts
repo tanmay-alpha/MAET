@@ -141,8 +141,8 @@ describe("P2 Leakage-Free 3-Phase Walk-Forward Analysis (Commit 7)", () => {
       windowType: "ROLLING",
       trainRatio: 0.6,
       valRatio: 0.2,
-      parameterRanges: [
-        { name: "period", min: 5, max: 15, step: 5 },
+      parameters: [
+        { name: "fast", path: "entry.children.0.left.params.period", values: [5, 10, 15] },
       ],
     };
 
@@ -166,5 +166,87 @@ describe("P2 Leakage-Free 3-Phase Walk-Forward Analysis (Commit 7)", () => {
 
     // Aggregate OOS curve must be present
     expect(result.aggregateOosEquityCurve.length).toBeGreaterThan(0);
+  });
+});
+
+/** Daily candles whose per-bar drift changes by phase; alternating ±0.4% noise keeps volatility > 0. */
+function makePhasedCandles(drifts: Array<{ bars: number; drift: number }>): Candle[] {
+  const out: Candle[] = [];
+  let price = 100;
+  for (const { bars, drift } of drifts) {
+    for (let k = 0; k < bars; k++) {
+      const i = out.length;
+      price *= 1 + drift + (i % 2 === 0 ? 0.004 : -0.004);
+      out.push({ symbol: "TEST", tf: "1d", ts: new Date(Date.UTC(2023, 0, 1 + i)).toISOString(), open: price, high: price * 1.002, low: price * 0.998, close: price, volume: 100_000, source: "test" });
+    }
+  }
+  return out;
+}
+
+function alwaysLong(): StrategyDefinition {
+  return {
+    ...makeSmaCrossDef(),
+    entry: {
+      kind: "GROUP", id: "entry", combinator: "AND",
+      children: [{ kind: "CONDITION", id: "e1", left: { kind: "PRICE", field: "CLOSE" }, operator: "GREATER_THAN", right: { kind: "CONSTANT", value: 0 } }],
+    },
+    exit: { kind: "GROUP", id: "exit", combinator: "OR", children: [] },
+  };
+}
+
+describe("walk-forward — validation, warm-up and efficiency", () => {
+  const singleWindow = (candles: Candle[]): WalkForwardAnalysisInput => ({
+    strategyVersionId: "wf",
+    definition: alwaysLong(),
+    symbol: "TEST",
+    candles,
+    parameters: [],
+    numWindows: 1,
+    trainRatio: 0.6,
+    valRatio: 0.2,
+  });
+
+  it("does not test or count a window that validation rejected", () => {
+    // 300 bars: rising training (180), collapsing validation (60), rising test (60).
+    const candles = makePhasedCandles([{ bars: 180, drift: 0.003 }, { bars: 60, drift: -0.01 }, { bars: 60, drift: 0.003 }]);
+    const result = runWalkForwardAnalysis(singleWindow(candles));
+
+    expect(result.windows).toHaveLength(1);
+    const [w] = result.windows;
+    expect(w.validationAccepted).toBe(false);
+    expect(w.rejectionReason).toMatch(/validation Sharpe/);
+    expect(w.oosMetrics).toBeNull();
+    expect(result.aggregateOosEquityCurve).toHaveLength(0);
+    expect(result.summary.oosReturnTotal).toBe(0);
+    expect(result.summary.testedWindowsCount).toBe(0);
+    expect(result.summary.walkForwardEfficiency).toBeNull();
+    expect(result.summary.walkForwardEfficiencyReason).toMatch(/No window/);
+  });
+
+  it("reports WFE as undefined (null, with a reason) when the in-sample return is not positive", () => {
+    // Falling training, quiet validation (accepted), rising test.
+    const candles = makePhasedCandles([{ bars: 180, drift: -0.002 }, { bars: 60, drift: 0 }, { bars: 60, drift: 0.003 }]);
+    const result = runWalkForwardAnalysis(singleWindow(candles));
+
+    expect(result.summary.testedWindowsCount).toBe(1);
+    expect(result.windows[0].isMetrics.annualisedReturn).toBeLessThan(0);
+    expect(result.summary.walkForwardEfficiency).toBeNull();
+    expect(result.summary.walkForwardEfficiencyReason).toMatch(/In-sample annualised return/);
+    expect(result.summary.performanceRetention).toBeNull();
+  });
+
+  it("tests short out-of-sample windows using earlier bars to warm up indicators", () => {
+    // 4 windows of 100 bars: each test phase has ~20 bars, fewer than the runner's 50-bar minimum
+    // and than SMA(20) needs, so without warm-up history every test run would fail.
+    const candles = makePhasedCandles([{ bars: 400, drift: 0.002 }]);
+    const result = runWalkForwardAnalysis({
+      ...singleWindow(candles),
+      definition: makeSmaCrossDef(),
+      numWindows: 4,
+    });
+
+    expect(result.summary.acceptedWindowsCount).toBeGreaterThan(0);
+    expect(result.summary.testedWindowsCount).toBe(result.summary.acceptedWindowsCount);
+    expect(result.warnings.filter((m) => /failed/.test(m))).toEqual([]);
   });
 });

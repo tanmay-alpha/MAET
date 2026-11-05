@@ -14,83 +14,13 @@ import {
 } from "../db/schema";
 import { eq, and, desc, asc, gte, lte, sql } from "drizzle-orm";
 import { runBacktestV3 } from "../domain/strategy/runner-v3";
+import { applyParameters, generateCombinations, type SweepParameter } from "../domain/strategy/parameter-sweep";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
 import type { Candle } from "@shared/types";
 import { randomUUID } from "crypto";
 
 const WORKER_ID = `sw-${randomUUID().slice(0, 8)}-${process.pid}`;
 const POLL_INTERVAL_MS = 3000;
-
-export interface SweepParameterRange {
-  name: string; // e.g. "rsiPeriod" or "fastMa"
-  min: number;
-  max: number;
-  step: number;
-}
-
-export function generateCombinations(ranges: SweepParameterRange[], maxCombinations = 500): Record<string, number>[] {
-  if (!ranges || ranges.length === 0) return [{}];
-
-  function getValues(r: SweepParameterRange): number[] {
-    const vals: number[] = [];
-    const step = r.step > 0 ? r.step : 1;
-    for (let v = r.min; v <= r.max; v += step) {
-      vals.push(Number(v.toFixed(4)));
-    }
-    return vals.length > 0 ? vals : [r.min];
-  }
-
-  const rangeValues = ranges.map((r) => ({ name: r.name, values: getValues(r) }));
-
-  let combinations: Record<string, number>[] = [{}];
-  for (const range of rangeValues) {
-    const nextCombinations: Record<string, number>[] = [];
-    for (const combo of combinations) {
-      for (const val of range.values) {
-        nextCombinations.push({ ...combo, [range.name]: val });
-        if (nextCombinations.length >= maxCombinations) break;
-      }
-      if (nextCombinations.length >= maxCombinations) break;
-    }
-    combinations = nextCombinations;
-    if (combinations.length >= maxCombinations) break;
-  }
-
-  return combinations.slice(0, maxCombinations);
-}
-
-export function injectParametersIntoAST(definition: StrategyDefinition, params: Record<string, number>): StrategyDefinition {
-  const cloned: StrategyDefinition = JSON.parse(JSON.stringify(definition));
-
-  function applyParamsToRuleGroup(group: any) {
-    if (!group || !Array.isArray(group.rules)) return;
-    for (const rule of group.rules) {
-      if (!rule) continue;
-      // Target rule parameters directly if specified by path or parameter name
-      for (const [paramName, paramVal] of Object.entries(params)) {
-        if (rule.indicator && typeof rule.indicator === "object") {
-          rule.indicator.params = rule.indicator.params || {};
-          rule.indicator.params[paramName] = paramVal;
-        }
-        if (rule.params && typeof rule.params === "object") {
-          rule.params[paramName] = paramVal;
-        }
-        if (rule.left && typeof rule.left === "object" && rule.left.params) {
-          rule.left.params[paramName] = paramVal;
-        }
-        if (rule.right && typeof rule.right === "object" && rule.right.params) {
-          rule.right.params[paramName] = paramVal;
-        }
-      }
-    }
-  }
-
-  const entry = cloned.entry ?? (cloned as any).entryRules;
-  const exit = cloned.exit ?? (cloned as any).exitRules;
-  applyParamsToRuleGroup(entry);
-  applyParamsToRuleGroup(exit);
-  return cloned;
-}
 
 async function claimNextSweepJob(workerId: string) {
   const result = await db.execute(sql`
@@ -143,8 +73,8 @@ export async function processSweep(sweep: any): Promise<void> {
   const sweepId = (sweep.id ?? sweep.id) as string;
   const userId = (sweep.userId ?? sweep.user_id) as string;
   const strategyId = (sweep.strategyId ?? sweep.strategy_id) as string;
-  const rawParams = sweep.parameters ?? sweep.parameter_ranges ?? [];
-  const ranges = (Array.isArray(rawParams) ? rawParams : rawParams.ranges ?? []) as SweepParameterRange[];
+  // Validated against SweepParameterSchema ({ name, path, values }) when the sweep was created.
+  const parameters = (sweep.parameters ?? []) as SweepParameter[];
   const symbol = (sweep.symbolOrUniverse ?? sweep.symbol_or_universe ?? "RELIANCE") as string;
   const timeframe = (sweep.timeframe ?? "1d") as string;
   const fromDate = new Date(sweep.fromDate ?? sweep.from_date ?? Date.now() - 90 * 86400000);
@@ -169,7 +99,18 @@ export async function processSweep(sweep: any): Promise<void> {
   const versionRow = versionRows[0];
   const versionId = versionRow.id;
   const baseDef = versionRow.definition as unknown as StrategyDefinition;
-  const combinations = generateCombinations(ranges, 500);
+  const combinations = generateCombinations(parameters, 500);
+  let definitions: StrategyDefinition[];
+  try {
+    definitions = combinations.map((combo) => applyParameters(baseDef, parameters, combo));
+  } catch (err) {
+    console.error(`[sweep-worker:${WORKER_ID}] Sweep ${sweepId} has an invalid parameter:`, err);
+    await db
+      .update(strategyParameterSweeps)
+      .set({ status: "FAILED", updatedAt: new Date() })
+      .where(eq(strategyParameterSweeps.id, sweepId));
+    return;
+  }
 
   // Fetch candles
   const candleData = await fetchCandles(symbol, timeframe, fromDate, toDate);
@@ -181,13 +122,11 @@ export async function processSweep(sweep: any): Promise<void> {
     return;
   }
 
-  let bestSharpe = -Infinity;
-  let bestParams: Record<string, number> | null = null;
   const resultsToInsert: any[] = [];
 
   for (let i = 0; i < combinations.length; i++) {
     const combo = combinations[i];
-    const modifiedDef = injectParametersIntoAST(baseDef, combo);
+    const modifiedDef = definitions[i];
 
     const backtestRes = runBacktestV3({
       strategyVersionId: versionId,
@@ -198,11 +137,6 @@ export async function processSweep(sweep: any): Promise<void> {
     });
 
     const m = backtestRes.metrics;
-    const sharpeVal = isFinite(m.sharpe) ? m.sharpe : 0;
-    if (sharpeVal > bestSharpe) {
-      bestSharpe = sharpeVal;
-      bestParams = combo;
-    }
 
     resultsToInsert.push({
       sweepId,
