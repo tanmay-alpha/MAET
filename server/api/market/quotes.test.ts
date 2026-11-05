@@ -12,52 +12,60 @@ type QuotesBody = {
 };
 
 function fakeEvent(path: string) {
-  const headers = new Map<string, string>();
   return {
     path,
-    node: { req: { headers: {} }, res: { setHeader: (k: string, v: string) => headers.set(k, v) } },
+    context: {},
+    node: { req: { headers: {}, socket: {} }, res: { setHeader() {} } },
   };
 }
 
-function callQuotes(symbols: string): Promise<QuotesBody> {
+// Each test uses its own symbols: the quote cache is module state, and
+// anonymous callers cannot bypass it with refresh=1.
+function callQuotes(query: string): Promise<QuotesBody> {
   const handler = quotesHandler as unknown as (event: unknown) => Promise<QuotesBody>;
-  return handler(fakeEvent(`/api/market/quotes?symbols=${symbols}&refresh=1`));
+  return handler(fakeEvent(`/api/market/quotes?${query}`));
 }
 
-/** Angel REST quote for RELIANCE (token 2885) traded at `exchFeedTime` (IST). */
-function angelQuoteResponse(exchFeedTime: string): Response {
-  return Response.json({
-    status: true,
-    data: {
-      fetched: [{ symbolToken: "2885", ltp: 1313.4, tradeVolume: 19_479_324, close: 1311, exchFeedTime }],
-    },
-  });
-}
+type FetchLog = { angel: number; yahoo: number };
 
-function yahooChartResponse(regularMarketTimeSec: number): Response {
-  return Response.json({
-    chart: {
-      result: [{
-        meta: {
-          regularMarketPrice: 100,
-          regularMarketVolume: 10,
-          symbol: "QTESTYAHOO.NS",
-          chartPreviousClose: 99,
-          regularMarketTime: regularMarketTimeSec,
-        },
-        indicators: { quote: [] },
-      }],
-    },
-  });
-}
-
-function installFetch(exchFeedTime: string, yahooTimeSec: number): void {
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+/**
+ * Angel REST answers every requested NSE token with a trade at
+ * `exchFeedTime` (IST); Yahoo answers any ticker at `yahooTimeSec`.
+ */
+function installFetch(exchFeedTime: string, yahooTimeSec: number): FetchLog {
+  const log: FetchLog = { angel: 0, yahoo: 0 };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.includes("apiconnect.angelone.in")) return angelQuoteResponse(exchFeedTime);
-    if (url.includes("query1.finance.yahoo.com")) return yahooChartResponse(yahooTimeSec);
+    if (url.includes("apiconnect.angelone.in")) {
+      log.angel++;
+      const body = JSON.parse(String(init?.body)) as { exchangeTokens: { NSE: string[] } };
+      return Response.json({
+        status: true,
+        data: {
+          fetched: body.exchangeTokens.NSE.map((symbolToken) => ({
+            symbolToken,
+            ltp: 1313.4,
+            tradeVolume: 19_479_324,
+            close: 1311,
+            exchFeedTime,
+          })),
+        },
+      });
+    }
+    if (url.includes("query1.finance.yahoo.com")) {
+      log.yahoo++;
+      return Response.json({
+        chart: {
+          result: [{
+            meta: { regularMarketPrice: 100, regularMarketVolume: 10, symbol: "X.NS", chartPreviousClose: 99, regularMarketTime: yahooTimeSec },
+            indicators: { quote: [] },
+          }],
+        },
+      });
+    }
     throw new Error(`unexpected fetch ${url}`);
   }) as typeof fetch;
+  return log;
 }
 
 beforeEach(() => {
@@ -83,7 +91,7 @@ describe("GET /api/market/quotes", () => {
     setSystemTime(new Date("2026-11-05T14:19:00.000Z"));
     installFetch("05-Nov-2026 16:08:10", Date.parse("2026-11-05T10:38:10Z") / 1000);
 
-    const body = await callQuotes("RELIANCE");
+    const body = await callQuotes("symbols=RELIANCE");
 
     expect(body.quotes).toHaveLength(1);
     expect(body.quotes[0]).toMatchObject({ symbol: "RELIANCE", source: "angelone", quality: "delayed", delayed: true });
@@ -96,11 +104,11 @@ describe("GET /api/market/quotes", () => {
     setSystemTime(new Date("2026-11-05T05:00:00.000Z"));
     installFetch("05-Nov-2026 10:29:59", Date.parse("2026-11-05T04:45:00Z") / 1000);
 
-    const body = await callQuotes("RELIANCE,QTESTYAHOO");
+    const body = await callQuotes("symbols=TCS,QTESTYAHOO");
     const bySymbol = new Map(body.quotes.map((quote) => [quote.symbol, quote]));
 
     expect(body.marketPhase).toBe("OPEN");
-    expect(bySymbol.get("RELIANCE")).toMatchObject({ quality: "live", delayed: false });
+    expect(bySymbol.get("TCS")).toMatchObject({ source: "angelone", quality: "live", delayed: false });
     expect(bySymbol.get("QTESTYAHOO")).toMatchObject({ source: "yahoo", delayed: true });
     expect(body.delayed).toBe(true);
   });
@@ -109,8 +117,22 @@ describe("GET /api/market/quotes", () => {
     setSystemTime(new Date("2026-11-05T05:00:00.000Z"));
     installFetch("04-Nov-2026 15:29:59", Date.parse("2026-11-05T04:45:00Z") / 1000);
 
-    const body = await callQuotes("RELIANCE");
+    const body = await callQuotes("symbols=INFY");
 
-    expect(body.quotes[0]).toMatchObject({ quality: "delayed", delayed: true });
+    expect(body.quotes[0]).toMatchObject({ symbol: "INFY", quality: "delayed", delayed: true });
+  });
+
+  it("ignores refresh=1 from anonymous callers", async () => {
+    setSystemTime(new Date("2026-11-05T05:00:00.000Z"));
+    const log = installFetch("05-Nov-2026 10:29:59", Date.parse("2026-11-05T04:45:00Z") / 1000);
+
+    await callQuotes("symbols=ITC");
+    await callQuotes("symbols=ITC&refresh=1");
+
+    expect(log.angel).toBe(1);
+  });
+
+  it("rejects symbols outside the market symbol pattern", async () => {
+    await expect(callQuotes("symbols=RELIANCE,..%2F..%2Fadmin")).rejects.toMatchObject({ statusCode: 400 });
   });
 });
