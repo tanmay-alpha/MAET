@@ -35,6 +35,7 @@ export function OrderPanel({
   useEffect(() => {
     setStopLoss("");
     setTakeProfit("");
+    setTrigger("");
   }, [symbol]);
 
   const parsedQty = useMemo(() => {
@@ -258,12 +259,20 @@ export function OrderPanel({
         <button
           onClick={handlePreSubmit}
           disabled={isSubmitting || !isTradingAvailable || Boolean(validationError)}
+          aria-describedby={validationError ? "order-ticket-validation" : undefined}
           className={`w-full rounded py-2.5 text-xs font-bold text-white transition ${
             side === "BUY" ? "bg-bull hover:bg-bull/90" : "bg-bear hover:bg-bear/90"
           } disabled:opacity-50`}
         >
           {isSubmitting ? "Submitting..." : `${side} ${parsedQty ?? 0} ${symbol}`}
         </button>
+
+        {/* Why the order button is disabled */}
+        {validationError && (
+          <div id="order-ticket-validation" role="status" className="text-[11px] text-muted-foreground">
+            {validationError}
+          </div>
+        )}
 
         {/* Status Messages */}
         {message && (

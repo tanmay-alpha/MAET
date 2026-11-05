@@ -62,4 +62,14 @@ describe("buildTicketOrder", () => {
       },
     });
   });
+
+  test("stop-loss limit orders ignore bracket fields left over from another order type", () => {
+    expect(
+      buildTicketOrder({ ...base, triggerPrice: "1310", limitPrice: "1312", stopLoss: "-5", takeProfit: "abc" })
+    ).toMatchObject({ ok: true, order: { type: "STOP_LOSS_LIMIT", stopPrice: 1310, limitPrice: 1312 } });
+  });
+
+  test("market and limit orders still reject invalid bracket prices", () => {
+    expect(buildTicketOrder({ ...base, type: "LMT", limitPrice: "1300", stopLoss: "-5" }).ok).toBe(false);
+  });
 });

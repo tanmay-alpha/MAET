@@ -28,11 +28,15 @@ export function buildTicketOrder(input: OrderTicketInput): OrderTicketResult {
   const { symbol, exchange, side, type, quantity } = input;
   if (!quantity) return { ok: false, error: "Quantity must be a positive integer." };
 
-  if (input.stopLoss && positivePrice(input.stopLoss) === null) {
-    return { ok: false, error: "Stop loss price must be positive." };
-  }
-  if (input.takeProfit && positivePrice(input.takeProfit) === null) {
-    return { ok: false, error: "Take profit price must be positive." };
+  // Stop-loss limit orders take no bracket and hide its inputs, so leftover values from
+  // another order type must not block them.
+  if (type !== "SL") {
+    if (input.stopLoss && positivePrice(input.stopLoss) === null) {
+      return { ok: false, error: "Stop loss price must be positive." };
+    }
+    if (input.takeProfit && positivePrice(input.takeProfit) === null) {
+      return { ok: false, error: "Take profit price must be positive." };
+    }
   }
   const brackets = {
     stopLossPrice: positivePrice(input.stopLoss) ?? undefined,
