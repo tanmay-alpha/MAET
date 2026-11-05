@@ -1,12 +1,13 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../data/drizzle/client";
 import { paperOrders } from "../../db/schema";
-import { PaperExecutionError } from "@shared/domain/paper-trading/execution";
+import { PaperExecutionError, closableExitQuantity } from "@shared/domain/paper-trading/execution";
 import { evaluateExecutionQuote, type ExecutionQuote, type Tick } from "@shared/types";
 import type { MatchingReceipt, PaperOrderRow } from "./contracts";
 import { computeQuoteFingerprint } from "./quote-fingerprint";
 import { withSerializablePaperTransaction } from "./transaction-retry";
 import { applyFill, paperExecutionPolicy } from "./fill-writer";
+import { signedPositionQuantity } from "./mapper";
 
 const MATCHABLE_ORDER_STATUSES = ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"] as const;
 const MATCHABLE_STATUS_LOOKUP: Partial<Record<PaperOrderRow["status"], true>> = {
@@ -16,10 +17,25 @@ const MATCHABLE_STATUS_LOOKUP: Partial<Record<PaperOrderRow["status"], true>> = 
   PARTIALLY_FILLED: true,
 };
 
-/** Share of the tick's volume a resting order may take per tick. */
+/** Share of the volume traded since the previous tick a resting order may take. */
 const MAX_TICK_PARTICIPATION = 0.1;
+/** Every marketable tick may fill at least this many shares, so quote-only ticks still progress. */
+const MIN_FILL_PER_TICK = 1;
 
 export class PaperTradingTickProcessor {
+  /** Last cumulative session volume per EXCHANGE:SYMBOL; tick volume is cumulative for the day. */
+  private readonly lastVolume = new Map<string, number>();
+
+  /** Volume traded since the previous tick, or undefined for the first tick of an instrument. */
+  private tradedSinceLastTick(exchange: string, symbol: string, cumulative: number): number | undefined {
+    const key = `${exchange}:${symbol}`;
+    const previous = this.lastVolume.get(key);
+    this.lastVolume.set(key, cumulative);
+    if (previous === undefined) return undefined;
+    // A lower cumulative volume means a new session started counting from zero.
+    return cumulative >= previous ? cumulative - previous : cumulative;
+  }
+
   async processTick(tick: Tick): Promise<MatchingReceipt[]> {
     const policy = evaluateExecutionQuote(tick, tick.symbol, paperExecutionPolicy());
     if (!policy.executable) {
@@ -27,6 +43,11 @@ export class PaperTradingTickProcessor {
     }
 
     const { exchange, symbol } = tick;
+    const tradedVolume = this.tradedSinceLastTick(exchange, symbol, tick.volume);
+    const liquidityCap = Math.max(
+      MIN_FILL_PER_TICK,
+      Math.floor((tradedVolume ?? 0) * MAX_TICK_PARTICIPATION)
+    );
     const quote: ExecutionQuote = {
       exchange,
       symbol,
@@ -84,7 +105,8 @@ export class PaperTradingTickProcessor {
             return null;
           }
 
-          if (order.type === "STOP_LOSS_LIMIT" && order.status === "TRIGGER_PENDING") {
+          const isStop = order.type === "STOP_LOSS_LIMIT" || order.type === "STOP_LOSS_MARKET";
+          if (isStop && order.status === "TRIGGER_PENDING") {
             const stopPrice = Number(order.stopPrice);
             const isTriggered = order.side === "SELL" ? quote.price <= stopPrice : quote.price >= stopPrice;
             if (!isTriggered) {
@@ -94,7 +116,7 @@ export class PaperTradingTickProcessor {
             order = await repos.write.updateOrder(order.id, { status: "TRIGGERED", triggeredAt: now, updatedAt: now });
           }
 
-          if (order.type !== "MARKET") {
+          if (order.type === "LIMIT" || order.type === "STOP_LOSS_LIMIT") {
             const limitPrice = Number(order.limitPrice);
             const isMarketable = order.side === "BUY" ? quote.price <= limitPrice : quote.price >= limitPrice;
             if (!isMarketable) {
@@ -107,12 +129,26 @@ export class PaperTradingTickProcessor {
             generation: account.generation,
           });
 
-          const remainingQuantity = order.qty - order.filledQty;
-          const liquidityCap =
-            quote.volume !== undefined && quote.volume >= 10
-              ? Math.floor(quote.volume * MAX_TICK_PARTICIPATION)
-              : remainingQuantity;
-          const fillQuantity = Math.max(1, Math.min(remainingQuantity, liquidityCap));
+          let fillQuantity = Math.min(order.qty - order.filledQty, liquidityCap);
+          if (order.parentOrderId) {
+            // A bracket exit may only close the position it protects, never reverse it.
+            const position = positions.find((row) => row.symbol === symbol && row.exchange === exchange);
+            const closable = closableExitQuantity(
+              { side: order.side, quantity: order.qty, filledQuantity: order.filledQty },
+              position ? signedPositionQuantity(position) : 0
+            );
+            if (closable === 0) {
+              const now = new Date();
+              await repos.write.updateOrder(order.id, {
+                status: "CANCELLED",
+                rejectReason: "Position closed",
+                cancelledAt: now,
+                updatedAt: now,
+              });
+              return null;
+            }
+            fillQuantity = Math.min(fillQuantity, closable);
+          }
 
           try {
             const applied = await applyFill({
@@ -123,7 +159,7 @@ export class PaperTradingTickProcessor {
               quote,
               quoteFingerprint: fingerprint,
               fillQuantity,
-              reason: order.type === "STOP_LOSS_LIMIT" ? "STOP_TRIGGER" : "USER_ORDER",
+              reason: isStop ? "STOP_TRIGGER" : "USER_ORDER",
               ledgerSourceType: "FILL",
               now: new Date(),
               createId: () => crypto.randomUUID(),

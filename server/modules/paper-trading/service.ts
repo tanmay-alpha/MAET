@@ -1,4 +1,4 @@
-import { loadQuote } from "../../domain/market/quote-service";
+import { loadExecutionQuote } from "./execution-quote";
 import { computePhase, type MarketPhase } from "../../domain/market/clock";
 import { withSerializablePaperTransaction } from "./transaction-retry";
 import { getConfig } from "../../config";
@@ -32,7 +32,8 @@ import { PaperExecutionError } from "@shared/domain/paper-trading/execution";
 
 export interface PaperTradingServiceDependencies {
   database?: PaperDatabase;
-  quoteLoader?: (symbol: string, force?: boolean) => Promise<unknown>;
+  /** Quote for the order's exchange and symbol (default: live tick feed, then the market-data layer). */
+  quoteLoader?: (exchange: "NSE" | "BSE", symbol: string) => Promise<unknown>;
   /** Session phase at a given instant; MARKET orders only execute while it is OPEN. */
   marketPhase?: (now: Date) => MarketPhase;
   now?: () => Date;
@@ -68,8 +69,9 @@ interface OrderTerms {
   takeProfitPrice: string | null;
 }
 
+/** Prices are stored as numeric(18,4); normalise requests the same way so replays compare equal. */
 function toPrice(value: number | undefined): string | null {
-  return value === undefined ? null : String(value);
+  return value === undefined ? null : value.toFixed(4);
 }
 
 function samePrice(stored: string | null, requested: string | null): boolean {
@@ -132,14 +134,14 @@ function parseOrderTerms(command: PaperOrderCommand): OrderTerms {
 }
 
 export class PaperTradingService {
-  private readonly quoteLoader: (symbol: string, force?: boolean) => Promise<unknown>;
+  private readonly quoteLoader: (exchange: "NSE" | "BSE", symbol: string) => Promise<unknown>;
   private readonly marketPhase: (now: Date) => MarketPhase;
   private readonly readRepo: PaperTradingReadRepository;
   private readonly now: () => Date;
   private readonly createId: () => string;
 
   constructor(deps: PaperTradingServiceDependencies = {}) {
-    this.quoteLoader = deps.quoteLoader || loadQuote;
+    this.quoteLoader = deps.quoteLoader || loadExecutionQuote;
     this.marketPhase = deps.marketPhase || ((now) => computePhase(now, getConfig().nseHolidays));
     this.now = deps.now || (() => new Date());
     this.createId = deps.createId || (() => crypto.randomUUID());
@@ -182,7 +184,11 @@ export class PaperTradingService {
     idempotencyKey: string,
     terms: OrderTerms
   ): Promise<PlaceOrderResult | null> {
-    const existing = await write.findOrderByIdempotencyKeyForUpdate({ userId: account.userId, idempotencyKey });
+    const existing = await write.findOrderByIdempotencyKeyForUpdate({
+      userId: account.userId,
+      generation: account.generation,
+      idempotencyKey,
+    });
     if (!existing) {
       return null;
     }
@@ -236,7 +242,7 @@ export class PaperTradingService {
 
     let rawQuote: unknown;
     try {
-      rawQuote = await this.quoteLoader(terms.symbol, true);
+      rawQuote = await this.quoteLoader(terms.exchange, terms.symbol);
     } catch (err: unknown) {
       throw new PaperValidationError(`Failed to load execution quote for ${terms.symbol}`, undefined, err);
     }
@@ -246,6 +252,11 @@ export class PaperTradingService {
       throw new PaperValidationError(`Invalid quote for ${terms.symbol}: ${parsedQuoteResult.reason}`);
     }
     const quote = parsedQuoteResult.quote;
+    if (quote.exchange !== terms.exchange) {
+      throw new PaperValidationError(
+        `Quote for ${terms.symbol} is from ${quote.exchange}, but the order routes to ${terms.exchange}`
+      );
+    }
 
     const policy = evaluateExecutionQuote(quote, terms.symbol, paperExecutionPolicy());
     if (!policy.executable) {

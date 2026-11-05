@@ -84,6 +84,7 @@ export class PaperRiskMonitor {
           await this.liquidation.liquidateAccount({
             userId,
             reason: MARGIN_CALL_REASON,
+            markPrice: (exchange, symbol) => this.ticks.get(quoteKey(exchange, symbol))?.price,
             quoteFor: (exchange, symbol) => this.executableQuote(exchange, symbol),
           });
         } catch (err) {

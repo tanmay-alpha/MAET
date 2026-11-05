@@ -17,7 +17,12 @@ import { signedPositionQuantity } from "./mapper";
 export interface LiquidationRequest {
   userId: string;
   reason: string;
-  /** Latest executable quote for a position's exchange and symbol, if one is available. */
+  /**
+   * Last known price for a position, however old; the breach is judged on it, the same way
+   * calculate_live_margin judged it. Positions without one are marked at their entry price.
+   */
+  markPrice: (exchange: string, symbol: string) => number | undefined;
+  /** Fresh executable quote for a position; only closes require one. */
   quoteFor: (exchange: string, symbol: string) => ExecutionQuote | undefined;
 }
 
@@ -38,7 +43,7 @@ export class PaperTradingLiquidationService {
    * in breach).
    */
   async liquidateAccount(request: LiquidationRequest): Promise<LiquidationOutcome | null> {
-    const { userId, reason, quoteFor } = request;
+    const { userId, reason, markPrice, quoteFor } = request;
 
     return withSerializablePaperTransaction(async (repos) => {
       let account = await repos.write.findAccountForUpdate({ userId });
@@ -52,7 +57,7 @@ export class PaperTradingLiquidationService {
 
       if (account.status === "ACTIVE") {
         const markedEquity = positions.reduce((equity, position) => {
-          const mark = quoteFor(position.exchange, position.symbol)?.price ?? Number(position.averageEntryPrice);
+          const mark = markPrice(position.exchange, position.symbol) ?? Number(position.averageEntryPrice);
           return equity + signedPositionQuantity(position) * (mark - Number(position.averageEntryPrice));
         }, Number(account.cashBalance));
         if (markedEquity >= Number(account.maintenanceMargin)) {

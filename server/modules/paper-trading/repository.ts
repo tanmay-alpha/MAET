@@ -35,8 +35,10 @@ export interface PaperTradingWriteRepository {
     userId: string;
   }): Promise<PaperAccountRow | undefined>;
 
+  /** Idempotency keys are scoped to one account generation. */
   findOrderByIdempotencyKeyForUpdate(params: {
     userId: string;
+    generation: number;
     idempotencyKey: string;
   }): Promise<PaperOrderRow | undefined>;
 
@@ -74,15 +76,10 @@ export interface PaperTradingWriteRepository {
     reason: string;
   }): Promise<PaperOrderRow[]>;
 
-  /** P0-F: Cancel all sibling orders sharing the same parentOrderId, excluding the one that just filled.
-   *  Must be called within the same serializable transaction as the fill that triggered it.
-   */
-  cancelSiblingOrders(params: {
+  /** Locks the working bracket exits (children) of a parent order. */
+  findWorkingChildOrdersForUpdate(params: {
     userId: string;
-    generation: number;
     parentOrderId: string;
-    excludeOrderId: string;
-    reason: string;
   }): Promise<PaperOrderRow[]>;
 
   upsertPosition(position: NewPaperPositionRow): Promise<PaperPositionRow>;

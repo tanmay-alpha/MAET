@@ -51,8 +51,8 @@ describe("Paper Trading Concurrency Test Suite", () => {
     return createPaperTradingService({
       database: getDb(),
       marketPhase: () => "OPEN",
-      quoteLoader: async (symbol: string) => ({
-        exchange: "NSE",
+      quoteLoader: async (exchange: "NSE" | "BSE", symbol: string) => ({
+        exchange,
         symbol,
         price: prices[symbol] || 2000,
         volume: 100,
@@ -71,6 +71,8 @@ describe("Paper Trading Concurrency Test Suite", () => {
       userId: testUserId,
       command: { symbol, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice, qty },
     });
+    // Tick volume is cumulative; a non-marketable first tick sets the volume baseline.
+    expect(await paperTradingTickProcessor.processTick(liveTick(symbol, limitPrice + 1, 0))).toEqual([]);
     return { service, testUserId, orderId: placed.order.id };
   }
 
@@ -167,8 +169,8 @@ describe("Paper Trading Concurrency Test Suite", () => {
     const symbol = uniqueSymbol("SEQ");
     const { testUserId, orderId } = await placeLimitBuy(symbol, 100);
 
-    const volumes = [30, 50, 20];
-    for (const volume of volumes) {
+    const cumulativeVolumes = [30, 80, 100];
+    for (const volume of cumulativeVolumes) {
       const receipts = await paperTradingTickProcessor.processTick(liveTick(symbol, 990, volume));
       expect(receipts).toHaveLength(1);
     }
@@ -189,7 +191,7 @@ describe("Paper Trading Concurrency Test Suite", () => {
     const symbol = uniqueSymbol("CPF");
     const { testUserId, orderId } = await placeLimitBuy(symbol, 100);
 
-    const ticks = [30, 40, 50, 60].map((volume, index) => liveTick(symbol, 990 - index, volume));
+    const ticks = [30, 70, 120, 180].map((volume, index) => liveTick(symbol, 990 - index, volume));
     await Promise.all(ticks.map((tick) => paperTradingTickProcessor.processTick(tick)));
 
     const fills = await fillsForOrder(orderId);

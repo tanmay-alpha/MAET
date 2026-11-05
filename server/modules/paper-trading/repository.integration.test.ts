@@ -23,8 +23,8 @@ describe("Paper Trading Integration Test Suite (Database & Repository Contracts)
     return createPaperTradingService({
       database: getDb(),
       marketPhase: () => "OPEN",
-      quoteLoader: async (symbol: string) => ({
-        exchange: "NSE",
+      quoteLoader: async (exchange: "NSE" | "BSE", symbol: string) => ({
+        exchange,
         symbol,
         price: prices[symbol] || 2500,
         volume: 100,

@@ -325,7 +325,7 @@ describe("Paper Trading Financial Invariants — Bracket / OCO Behavior (P0-F)",
     expect(childOrders.length).toBe(2);
 
     const tpOrder = childOrders.find((o) => o.type === "LIMIT");
-    const slOrder = childOrders.find((o) => o.type === "STOP_LOSS_LIMIT");
+    const slOrder = childOrders.find((o) => o.type === "STOP_LOSS_MARKET");
 
     expect(tpOrder).toBeDefined();
     expect(tpOrder!.side).toBe("SELL"); // Child side opposite to parent
@@ -337,6 +337,7 @@ describe("Paper Trading Financial Invariants — Bracket / OCO Behavior (P0-F)",
     expect(slOrder!.side).toBe("SELL");
     expect(slOrder!.quantity).toBe(100);
     expect(slOrder!.stopPrice).toBe(90);
+    expect(slOrder!.limitPrice).toBeUndefined();
     expect(slOrder!.status).toBe("PENDING");
   });
 

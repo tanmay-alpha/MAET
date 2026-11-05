@@ -126,6 +126,7 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
 
   async findOrderByIdempotencyKeyForUpdate(params: {
     userId: string;
+    generation: number;
     idempotencyKey: string;
   }): Promise<PaperOrderRow | undefined> {
     const [order] = await this.tx
@@ -134,6 +135,7 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
       .where(
         and(
           eq(paperOrders.userId, params.userId),
+          eq(paperOrders.generation, params.generation),
           eq(paperOrders.idempotencyKey, params.idempotencyKey)
         )
       )
@@ -261,36 +263,24 @@ export class PostgresPaperWriteRepository implements PaperTradingWriteRepository
     return rows.map(mapPaperOrderRow);
   }
 
-  /** P0-F: Cancel OCO siblings in the same serializable transaction as the fill.
-   *  This prevents the scenario where both TP and SL fill on the same tick.
-   */
-  async cancelSiblingOrders(params: {
+  async findWorkingChildOrdersForUpdate(params: {
     userId: string;
-    generation: number;
     parentOrderId: string;
-    excludeOrderId: string;
-    reason: string;
   }): Promise<PaperOrderRow[]> {
     const rows = await this.tx
-      .update(paperOrders)
-      .set({
-        status: "CANCELLED",
-        rejectReason: params.reason,
-        cancelledAt: new Date(),
-        updatedAt: new Date(),
-      })
+      .select()
+      .from(paperOrders)
       .where(
         and(
           eq(paperOrders.userId, params.userId),
-          eq(paperOrders.generation, params.generation),
           eq(paperOrders.parentOrderId, params.parentOrderId),
           inArray(paperOrders.status, [...WORKING_ORDER_STATUSES])
         )
       )
-      .returning();
+      .orderBy(paperOrders.placedAt)
+      .for("update");
 
-    // Filter out the order that just filled (it won't be in PENDING states, but be safe)
-    return rows.filter((r) => r.id !== params.excludeOrderId).map(mapPaperOrderRow);
+    return rows.map(mapPaperOrderRow);
   }
 
   async upsertPosition(position: NewPaperPositionRow): Promise<PaperPositionRow> {

@@ -9,7 +9,9 @@ import type { MarketPhase } from "../../domain/market/clock";
 import type { Tick } from "@shared/types";
 import { createPaperTradingService } from "./service";
 import { paperTradingTickProcessor } from "./tick-processor";
+import { PaperRiskMonitor } from "./risk-monitor";
 import { PaperIdempotencyConflictError, PaperValidationError } from "./errors";
+import { quoteStore } from "../../domain/market/quote-store";
 
 type QuoteOverrides = Partial<Pick<Tick, "price" | "volume" | "ts" | "source" | "quality" | "exchange">>;
 
@@ -46,7 +48,8 @@ function makeService(options: {
   return createPaperTradingService({
     database: getDb(),
     marketPhase: () => options.phase ?? "OPEN",
-    quoteLoader: async (symbol: string) => tick(symbol, options.prices?.[symbol] ?? 1000, 100, options.quote),
+    quoteLoader: async (exchange: "NSE" | "BSE", symbol: string) =>
+      tick(symbol, options.prices?.[symbol] ?? 1000, 100, { exchange, ...options.quote }),
   });
 }
 
@@ -60,6 +63,14 @@ async function fillsForOrder(orderId: string) {
 
 async function positionsFor(userId: string) {
   return getDb().select().from(paperPositions).where(eq(paperPositions.userId, userId));
+}
+
+/**
+ * Tick volume is the cumulative session volume; the matcher sizes fills from the change
+ * since the previous tick. A first, non-marketable tick sets that baseline.
+ */
+async function primeVolume(symbol: string, price: number, volume = 0): Promise<void> {
+  expect(await paperTradingTickProcessor.processTick(tick(symbol, price, volume))).toEqual([]);
 }
 
 /**
@@ -90,6 +101,7 @@ describe("Paper trading engine integrity", () => {
       userId,
       command: { symbol, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 1000, qty: 100 },
     });
+    await primeVolume(symbol, 1001);
     const [partial] = await paperTradingTickProcessor.processTick(tick(symbol, 990, 30));
     expect(partial?.status).toBe("PARTIALLY_FILLED");
 
@@ -206,7 +218,7 @@ describe("Paper trading engine integrity", () => {
 
     const children = await getDb().select().from(paperOrders).where(eq(paperOrders.parentOrderId, result.order.id));
     const takeProfit = children.find((child) => child.type === "LIMIT");
-    const stopLoss = children.find((child) => child.type === "STOP_LOSS_LIMIT");
+    const stopLoss = children.find((child) => child.type === "STOP_LOSS_MARKET");
     expect(children).toHaveLength(2);
     expect(takeProfit?.side).toBe("SELL");
     expect(Number(takeProfit?.limitPrice)).toBe(1100);
@@ -240,18 +252,20 @@ describe("Paper trading engine integrity", () => {
       },
     });
 
+    await primeVolume(symbol, 1001);
     const entry = await paperTradingTickProcessor.processTick(tick(symbol, 999, 1000));
     expect(entry.map((receipt) => receipt.status)).toEqual(["FILLED"]);
 
     const children = await getDb().select().from(paperOrders).where(eq(paperOrders.parentOrderId, parent.order.id));
-    expect(children.map((child) => child.type).sort()).toEqual(["LIMIT", "STOP_LOSS_LIMIT"]);
+    expect(children.map((child) => child.type).sort()).toEqual(["LIMIT", "STOP_LOSS_MARKET"]);
+    expect(children.map((child) => child.qty)).toEqual([10, 10]);
 
-    const exit = await paperTradingTickProcessor.processTick(tick(symbol, 1051, 1000));
+    const exit = await paperTradingTickProcessor.processTick(tick(symbol, 1051, 2000));
     const takeProfit = children.find((child) => child.type === "LIMIT")!;
     expect(exit.map((receipt) => receipt.orderId)).toEqual([takeProfit.id]);
 
     const after = await getDb().select().from(paperOrders).where(eq(paperOrders.parentOrderId, parent.order.id));
-    expect(after.find((child) => child.type === "STOP_LOSS_LIMIT")?.status).toBe("CANCELLED");
+    expect(after.find((child) => child.type === "STOP_LOSS_MARKET")?.status).toBe("CANCELLED");
     expect(await positionsFor(userId)).toHaveLength(0);
   });
 
@@ -368,6 +382,7 @@ describe("Paper trading engine integrity", () => {
       userId,
       command: { symbol, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 1000, qty: 100 },
     });
+    await primeVolume(symbol, 1001);
     await paperTradingTickProcessor.processTick(tick(symbol, 995, 40));
 
     const cancelled = await service.cancelOrder({ userId, orderId: placed.order.id });
@@ -429,6 +444,7 @@ describe("Paper trading engine integrity", () => {
         command: { symbol, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 1000, qty: 6000 },
       });
 
+      await primeVolume(symbol, 1001);
       const receipts = await paperTradingTickProcessor.processTick(tick(symbol, 1000, 100000));
       expect(receipts).toHaveLength(0);
       const [order] = await getDb().select().from(paperOrders).where(eq(paperOrders.id, placed.order.id));
@@ -464,17 +480,236 @@ describe("Paper trading engine integrity", () => {
       });
       expect(stop.order.status).toBe("TRIGGER_PENDING");
 
+      await primeVolume(symbol, 1000);
       expect(await paperTradingTickProcessor.processTick(tick(symbol, 970, 1000))).toHaveLength(0);
       const [triggered] = await getDb().select().from(paperOrders).where(eq(paperOrders.id, stop.order.id));
       expect(triggered?.status).toBe("TRIGGERED");
       expect(triggered?.triggeredAt).not.toBeNull();
 
-      const receipts = await paperTradingTickProcessor.processTick(tick(symbol, 986, 1000));
+      const receipts = await paperTradingTickProcessor.processTick(tick(symbol, 986, 2000));
       expect(receipts.map((receipt) => receipt.status)).toEqual(["FILLED"]);
       const [fill] = await fillsForOrder(stop.order.id);
       expect(fill?.executionReason).toBe("STOP_TRIGGER");
       expect(Number(fill?.fillPrice)).toBeGreaterThanOrEqual(985);
       expect(await positionsFor(userId)).toHaveLength(0);
+    });
+  });
+
+  describe("review follow-ups", () => {
+    /**
+     * Real default quote wiring. The provider HTTP boundary (Angel One REST, Yahoo) is faked as
+     * unavailable and every call is recorded; the Angel One WS feed is faked via quoteStore.
+     */
+    async function withProvidersDown<T>(run: (calls: string[]) => Promise<T>): Promise<T> {
+      const originalFetch = globalThis.fetch;
+      const calls: string[] = [];
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        calls.push(String(input instanceof Request ? input.url : input));
+        return new Response("not found", { status: 404 });
+      }) as typeof fetch;
+      try {
+        return await run(calls);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+
+    function defaultWiredService() {
+      return createPaperTradingService({ database: getDb(), marketPhase: () => "OPEN" });
+    }
+
+    it("#1: a fresh streamed Angel One tick prices MARKET orders without any provider refetch", async () => {
+      const userId = await createTestUser();
+      quoteStore.set(tick("AXISBANK", 1111, 5000));
+      const result = await withProvidersDown(async (calls) => {
+        const placed = await defaultWiredService().placeOrder({
+          userId,
+          command: { symbol: "AXISBANK", exchange: "NSE", side: "BUY", type: "MARKET", qty: 2 },
+        });
+        expect(calls).toEqual([]);
+        return placed;
+      });
+      expect(Number(result.fill?.referencePrice)).toBe(1111);
+      expect(result.fill?.quoteSource).toBe("angelone");
+    });
+
+    it("#1: a stale streamed tick is not executed; the market-data fallback must supply a live quote", async () => {
+      const userId = await createTestUser();
+      quoteStore.set(tick("ADANIPORTS", 1234, 5000, { ts: new Date(Date.now() - 60_000).toISOString() }));
+      await withProvidersDown(async () => {
+        const error = await rejectionOf(
+          defaultWiredService().placeOrder({
+            userId,
+            command: { symbol: "ADANIPORTS", exchange: "NSE", side: "BUY", type: "MARKET", qty: 1 },
+          })
+        );
+        expect(error).toBeInstanceOf(PaperValidationError);
+      });
+      expect(await getDb().select().from(paperOrders).where(eq(paperOrders.userId, userId))).toHaveLength(0);
+    });
+
+    it("#1/#10: a MARKET order never fills against a quote from another exchange", async () => {
+      const userId = await createTestUser();
+      quoteStore.set(tick("ASIANPAINT", 2500, 5000));
+      await withProvidersDown(async () => {
+        const error = await rejectionOf(
+          defaultWiredService().placeOrder({
+            userId,
+            command: { symbol: "ASIANPAINT", exchange: "BSE", side: "BUY", type: "MARKET", qty: 1 },
+          })
+        );
+        expect(error).toBeInstanceOf(PaperValidationError);
+      });
+
+      const mismatched = createPaperTradingService({
+        database: getDb(),
+        marketPhase: () => "OPEN",
+        quoteLoader: async (_exchange, symbol) => tick(symbol, 1000, 100, { exchange: "NSE" }),
+      });
+      const error = await rejectionOf(
+        mismatched.placeOrder({ userId, command: { symbol: "ASIANPAINT", exchange: "BSE", side: "BUY", type: "MARKET", qty: 1 } })
+      );
+      expect(error).toBeInstanceOf(PaperValidationError);
+      expect(await getDb().select().from(paperOrders).where(eq(paperOrders.userId, userId))).toHaveLength(0);
+    });
+
+    it("#2: bracket exits never close past the position (partial TP, then SL)", async () => {
+      const symbol = uniqueSymbol("OCO");
+      const userId = await createTestUser();
+      const parent = await makeService({ prices: { [symbol]: 1000 } }).placeOrder({
+        userId,
+        command: { symbol, exchange: "NSE", side: "BUY", type: "MARKET", qty: 100, stopLossPrice: 950, takeProfitPrice: 1050 },
+      });
+
+      await primeVolume(symbol, 1000);
+      const tp = await paperTradingTickProcessor.processTick(tick(symbol, 1050, 100));
+      expect(tp.map((receipt) => [receipt.status, receipt.quantity])).toEqual([["PARTIALLY_FILLED", 10]]);
+
+      const afterTp = await getDb().select().from(paperOrders).where(eq(paperOrders.parentOrderId, parent.order.id));
+      expect(afterTp.find((child) => child.type === "STOP_LOSS_MARKET")?.qty).toBe(90);
+
+      const sl = await paperTradingTickProcessor.processTick(tick(symbol, 950, 100100));
+      expect(sl.map((receipt) => [receipt.status, receipt.quantity])).toEqual([["FILLED", 90]]);
+
+      expect(await positionsFor(userId)).toHaveLength(0);
+      const after = await getDb().select().from(paperOrders).where(eq(paperOrders.parentOrderId, parent.order.id));
+      const takeProfit = after.find((child) => child.type === "LIMIT");
+      expect(takeProfit?.status).toBe("CANCELLED");
+      expect(takeProfit?.filledQty).toBe(10);
+    });
+
+    it("#2: an exit is capped at the remaining position after a manual partial close", async () => {
+      const symbol = uniqueSymbol("CAP");
+      const userId = await createTestUser();
+      const service = makeService({ prices: { [symbol]: 1000 } });
+      await service.placeOrder({
+        userId,
+        command: { symbol, exchange: "NSE", side: "BUY", type: "MARKET", qty: 100, stopLossPrice: 950 },
+      });
+      await service.placeOrder({ userId, command: { symbol, exchange: "NSE", side: "SELL", type: "MARKET", qty: 60 } });
+
+      await primeVolume(symbol, 1000);
+      const sl = await paperTradingTickProcessor.processTick(tick(symbol, 949, 100000));
+      expect(sl.map((receipt) => [receipt.status, receipt.quantity])).toEqual([["PARTIALLY_FILLED", 40]]);
+      expect(await positionsFor(userId)).toHaveLength(0);
+    });
+
+    it("#3: a bracket stop-loss exits at market when price gaps through the stop", async () => {
+      const symbol = uniqueSymbol("GAP");
+      const userId = await createTestUser();
+      const parent = await makeService({ prices: { [symbol]: 1000 } }).placeOrder({
+        userId,
+        command: { symbol, exchange: "NSE", side: "BUY", type: "MARKET", qty: 10, stopLossPrice: 950 },
+      });
+
+      await primeVolume(symbol, 1000);
+      const receipts = await paperTradingTickProcessor.processTick(tick(symbol, 880, 10000));
+      expect(receipts.map((receipt) => receipt.status)).toEqual(["FILLED"]);
+      expect(Number(receipts[0]?.fillPrice)).toBeLessThan(900);
+      expect(await positionsFor(userId)).toHaveLength(0);
+      const [stop] = await getDb().select().from(paperOrders).where(eq(paperOrders.parentOrderId, parent.order.id));
+      expect(stop?.status).toBe("FILLED");
+    });
+
+    it("#4: a partially filled, then cancelled bracket entry keeps exits for the filled quantity", async () => {
+      const symbol = uniqueSymbol("PBR");
+      const userId = await createTestUser();
+      const service = makeService({ prices: { [symbol]: 1000 } });
+      const parent = await service.placeOrder({
+        userId,
+        command: { symbol, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 1000, qty: 100, stopLossPrice: 950, takeProfitPrice: 1050 },
+      });
+
+      await primeVolume(symbol, 1001);
+      await paperTradingTickProcessor.processTick(tick(symbol, 999, 300));
+      await service.cancelOrder({ userId, orderId: parent.order.id });
+
+      const children = await getDb().select().from(paperOrders).where(eq(paperOrders.parentOrderId, parent.order.id));
+      expect(children.map((child) => [child.type, child.qty, child.status]).sort()).toEqual([
+        ["LIMIT", 30, "PENDING"],
+        ["STOP_LOSS_MARKET", 30, "TRIGGER_PENDING"],
+      ]);
+      const [position] = await positionsFor(userId);
+      expect(position?.totalShares).toBe(30);
+    });
+
+    it("#5: a stale last price still triggers the margin call; closes wait for a fresh quote", async () => {
+      const symbol = uniqueSymbol("STL");
+      const userId = await createTestUser();
+      const service = makeService({ prices: { [symbol]: 1000 } });
+      await service.getState({ userId });
+      await getDb().update(paperAccounts).set({ cashBalance: "30000.0000" }).where(eq(paperAccounts.userId, userId));
+      await service.placeOrder({ userId, command: { symbol, exchange: "NSE", side: "SELL", type: "MARKET", qty: 100 } });
+
+      const monitor = new PaperRiskMonitor();
+      monitor.updateQuote(tick(symbol, 1300, 1000, { ts: new Date(Date.now() - 60_000).toISOString() }));
+      await monitor.monitorRisk();
+      const [pending] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
+      expect(pending?.status).toBe("LIQUIDATION_PENDING");
+      expect(await positionsFor(userId)).toHaveLength(1);
+
+      monitor.updateQuote(tick(symbol, 1300, 1000));
+      await monitor.monitorRisk();
+      const [done] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
+      expect(done?.status).toBe("LIQUIDATED");
+      expect(await positionsFor(userId)).toHaveLength(0);
+    });
+
+    it("#6: fills are sized from the traded volume since the previous tick", async () => {
+      const symbol = uniqueSymbol("VOL");
+      const userId = await createTestUser();
+      await makeService({ prices: { [symbol]: 1000 } }).placeOrder({
+        userId,
+        command: { symbol, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 1000, qty: 500 },
+      });
+
+      await primeVolume(symbol, 1001, 50_000);
+      const quantities: number[] = [];
+      for (const cumulative of [50_009, 50_109, 50_109, 50_309]) {
+        const [receipt] = await paperTradingTickProcessor.processTick(tick(symbol, 999, cumulative));
+        quantities.push(receipt?.quantity ?? 0);
+      }
+      expect(quantities).toEqual([1, 10, 1, 20]);
+    });
+
+    it("#7: idempotent retries match prices at stored precision and keys are per generation", async () => {
+      const symbol = uniqueSymbol("IDP");
+      const userId = await createTestUser();
+      const service = makeService({ prices: { [symbol]: 1000 } });
+      const limit = { symbol, exchange: "NSE", side: "BUY" as const, type: "LIMIT" as const, limitPrice: 999.12345, qty: 2, idempotencyKey: `lim-${userId}` };
+      const first = await service.placeOrder({ userId, command: limit });
+      const retry = await service.placeOrder({ userId, command: { ...limit } });
+      expect(retry.idempotentReplay).toBe(true);
+      expect(retry.order.id).toBe(first.order.id);
+
+      const market = { symbol, exchange: "NSE", side: "BUY" as const, type: "MARKET" as const, qty: 3, idempotencyKey: `mkt-${userId}` };
+      const before = await service.placeOrder({ userId, command: market });
+      await service.resetAccount({ userId, confirmation: true });
+      const after = await service.placeOrder({ userId, command: market });
+      expect(after.idempotentReplay).toBe(false);
+      expect(after.order.id).not.toBe(before.order.id);
+      expect(after.order.generation).toBe(2);
+      expect(after.position?.totalShares).toBe(3);
     });
   });
 });

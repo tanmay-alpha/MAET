@@ -84,8 +84,8 @@ function toDomainOrder(order: PaperOrderRow): PaperOrder {
     symbol: order.symbol,
     side: order.side,
     type: order.type,
-    // TRIGGER_PENDING is filtered out by the caller; the remaining statuses map 1:1.
-    status: order.status as PaperOrder["status"],
+    // Untriggered stops are TRIGGER_PENDING in the database and PENDING in the domain.
+    status: order.status === "TRIGGER_PENDING" ? "PENDING" : order.status,
     quantity: order.qty,
     filledQuantity: order.filledQty,
     limitPrice: optionalNumber(order.limitPrice),
@@ -129,9 +129,10 @@ export interface AppliedFill {
 /**
  * Executes one fill of a locked order and persists every consequence of it: the fill row
  * (with the next execution sequence), the order's progress, the position (side included),
- * the account's cash and margins, the TRADE_REALIZED_PNL / EXECUTION_FEE ledger pair, bracket
- * children, OCO sibling cancellation and the outbox events. Must run inside the caller's
- * serializable transaction; throws PaperExecutionError before any write if the fill is rejected.
+ * the account's cash and margins, the TRADE_REALIZED_PNL / EXECUTION_FEE ledger pair, the
+ * bracket linkage (exits grown by entry fills; siblings shrunk or cancelled by exit fills)
+ * and the outbox events. Must run inside the caller's serializable transaction; throws
+ * PaperExecutionError before any write if the fill is rejected.
  */
 export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
   const { write, account, order, now } = input;
@@ -139,9 +140,18 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
     throw new Error(`Order ${order.id} is not fillable (status ${order.status}, generation ${order.generation})`);
   }
 
+  // The bracket this order belongs to: its own exits when it is an entry, its siblings when it is an exit.
+  const relatives = (
+    await write.findWorkingChildOrdersForUpdate({
+      userId: account.userId,
+      parentOrderId: order.parentOrderId ?? order.id,
+    })
+  ).filter((relative) => relative.id !== order.id);
+
   const exchange = ExchangeSchema.parse(order.exchange);
+  const domainAccount = toDomainAccount(account, input.positions, order);
   const execution = executePaperFill({
-    account: toDomainAccount(account, input.positions, order),
+    account: { ...domainAccount, orders: relatives.map(toDomainOrder) },
     order: toDomainOrder(order),
     fillQuantity: input.fillQuantity,
     quote: input.quote,
@@ -175,15 +185,16 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
     createdAt: now,
   });
 
-  const filledQty = order.filledQty + fillPlan.quantity;
-  const isFullyFilled = filledQty >= order.qty;
-  const previousAverage = order.averageFillPrice === null ? 0 : Number(order.averageFillPrice);
+  const isFullyFilled = execution.order.status === "FILLED";
+  const remainderCancelled = execution.order.status === "CANCELLED";
   const updatedOrder = await write.updateOrder(order.id, {
-    status: isFullyFilled ? "FILLED" : "PARTIALLY_FILLED",
-    filledQty,
-    averageFillPrice: String((previousAverage * order.filledQty + fillPlan.fillPrice * fillPlan.quantity) / filledQty),
+    status: execution.order.status,
+    filledQty: execution.order.filledQuantity,
+    averageFillPrice: String(execution.order.averageFillPrice),
     lastFillAt: now,
     filledAt: isFullyFilled ? now : null,
+    cancelledAt: remainderCancelled ? now : null,
+    rejectReason: remainderCancelled ? (execution.order.rejectionReason ?? null) : order.rejectReason,
     lastQuoteFingerprint: input.quoteFingerprint,
     updatedAt: now,
   });
@@ -257,38 +268,39 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
     },
   ]);
 
-  // Bracket exits are plain LIMIT / STOP_LOSS_LIMIT orders: they carry no SL/TP of their own.
-  const children = execution.account.orders.filter((child) => child.parentOrderId === order.id && child.status === "PENDING");
-  for (const child of children) {
-    const childRow: NewPaperOrderRow = {
-      id: child.id,
-      userId: account.userId,
-      parentOrderId: order.id,
-      generation: account.generation,
-      symbol: order.symbol,
-      exchange,
-      side: child.side,
-      type: child.type,
-      status: child.type === "STOP_LOSS_LIMIT" ? "TRIGGER_PENDING" : "PENDING",
-      qty: child.quantity,
-      filledQty: 0,
-      limitPrice: child.limitPrice === undefined ? null : String(child.limitPrice),
-      stopPrice: child.stopPrice === undefined ? null : String(child.stopPrice),
-      version: 1,
-      placedAt: now,
-      updatedAt: now,
-    };
-    await write.insertOrder(childRow);
-  }
-
-  if (isFullyFilled && order.parentOrderId) {
-    await write.cancelSiblingOrders({
-      userId: account.userId,
-      generation: account.generation,
-      parentOrderId: order.parentOrderId,
-      excludeOrderId: order.id,
-      reason: "OCO bracket sibling filled",
-    });
+  const loadedRelatives = new Map(relatives.map((relative) => [relative.id, relative]));
+  for (const relative of execution.account.orders) {
+    const loaded = loadedRelatives.get(relative.id);
+    if (!loaded) {
+      // A new bracket exit: a plain LIMIT take-profit or STOP_LOSS_MARKET stop with no SL/TP of its own.
+      await write.insertOrder({
+        id: relative.id,
+        userId: account.userId,
+        parentOrderId: order.id,
+        generation: account.generation,
+        symbol: order.symbol,
+        exchange,
+        side: relative.side,
+        type: relative.type,
+        status: relative.type === "STOP_LOSS_MARKET" ? "TRIGGER_PENDING" : "PENDING",
+        qty: relative.quantity,
+        filledQty: 0,
+        limitPrice: relative.limitPrice === undefined ? null : String(relative.limitPrice),
+        stopPrice: relative.stopPrice === undefined ? null : String(relative.stopPrice),
+        version: 1,
+        placedAt: now,
+        updatedAt: now,
+      } satisfies NewPaperOrderRow);
+    } else if (relative.status === "CANCELLED") {
+      await write.updateOrder(relative.id, {
+        status: "CANCELLED",
+        rejectReason: relative.rejectionReason ?? null,
+        cancelledAt: now,
+        updatedAt: now,
+      });
+    } else if (relative.quantity !== loaded.qty) {
+      await write.updateOrder(relative.id, { qty: relative.quantity, updatedAt: now });
+    }
   }
 
   const eventBase = { userId: account.userId, generation: account.generation };

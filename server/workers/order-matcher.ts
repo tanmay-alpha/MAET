@@ -1,6 +1,7 @@
 import { bus } from "../infra/bus";
 import { onTick } from "../domain/market/matcher";
 import { paperRiskMonitor } from "../modules/paper-trading/risk-monitor";
+import { paperExecutionPolicy } from "../modules/paper-trading/fill-writer";
 import { evaluateExecutionQuote, type Tick } from "@shared/types";
 
 export class OrderMatcherWorker {
@@ -13,16 +14,16 @@ export class OrderMatcherWorker {
     paperRiskMonitor.start(2000);
 
     this.off = bus.on("tick", (tick: Tick) => {
-      // 0. Validate tick execution policy
-      const policyResult = evaluateExecutionQuote(tick);
-      if (!policyResult.executable) {
+      // 1. The margin monitor marks positions at the last known price, fresh or not;
+      //    it only closes positions against executable quotes.
+      paperRiskMonitor.updateQuote(tick);
+
+      // 2. Only executable ticks (configured freshness, no delayed feeds) can fill orders
+      if (!evaluateExecutionQuote(tick, tick.symbol, paperExecutionPolicy()).executable) {
         return;
       }
 
-      // 1. Feed the margin monitor the latest quote for this exchange:symbol
-      paperRiskMonitor.updateQuote(tick);
-
-      // 2. Coordinates order matching for this symbol
+      // 3. Coordinates order matching for this symbol
       onTick(tick)
         .catch((err) => {
           console.error(`[OrderMatcherWorker] Error processing tick for ${tick.symbol}:`, err);

@@ -70,6 +70,8 @@ export type PaperExecutionPlan = {
 
 export interface ExecuteFillResult {
   account: PaperAccount;
+  /** The filled order after this fill (status, filled quantity, average price). */
+  order: PaperOrder;
   fill: PaperFill;
   charges: EquityChargeBreakdown;
 }
@@ -99,6 +101,124 @@ export function getErrorMessage(error: unknown): string {
 
 function sameSymbol(left: string, right: string): boolean {
   return left.trim().toUpperCase() === right.trim().toUpperCase();
+}
+
+function wasStopTriggered(order: PaperOrder): boolean {
+  return (
+    order.status === "TRIGGERED" ||
+    (order.status === "PARTIALLY_FILLED" && order.triggeredAt !== undefined)
+  );
+}
+
+function isWorkingOrder(order: PaperOrder): boolean {
+  return (
+    order.status === "PENDING" ||
+    order.status === "TRIGGERED" ||
+    order.status === "PARTIALLY_FILLED"
+  );
+}
+
+/**
+ * Shares a bracket exit may still fill: its unfilled quantity, capped at the position it
+ * protects (a SELL exit closes a long, a BUY exit closes a short). 0 once that position is gone.
+ */
+export function closableExitQuantity(
+  exit: Pick<PaperOrder, "side" | "quantity" | "filledQuantity">,
+  positionQuantity: number
+): number {
+  const closable =
+    exit.side === "SELL"
+      ? Math.max(0, positionQuantity)
+      : Math.max(0, -positionQuantity);
+  return Math.min(exit.quantity - exit.filledQuantity, closable);
+}
+
+/**
+ * Each entry fill grows the bracket exits by the filled quantity (creating them on the first
+ * fill), so a partially filled entry is protected for exactly what was bought or sold.
+ */
+function applyEntryFillToBracket(
+  orders: PaperOrder[],
+  entry: PaperOrder,
+  fillQuantity: number,
+  fillTime: string
+): PaperOrder[] {
+  const hasWorkingExit = orders.some(
+    (order) => order.parentOrderId === entry.id && isWorkingOrder(order)
+  );
+  if (hasWorkingExit) {
+    return orders.map((order) =>
+      order.parentOrderId === entry.id && isWorkingOrder(order)
+        ? { ...order, quantity: order.quantity + fillQuantity, updatedAt: fillTime }
+        : order
+    );
+  }
+
+  const side = entry.side === "BUY" ? "SELL" : "BUY";
+  const exits: PaperOrder[] = [];
+  if (entry.takeProfitPrice) {
+    exits.push({
+      id: crypto.randomUUID(),
+      symbol: entry.symbol,
+      side,
+      quantity: fillQuantity,
+      type: "LIMIT",
+      limitPrice: entry.takeProfitPrice,
+      status: "PENDING",
+      filledQuantity: 0,
+      parentOrderId: entry.id,
+      createdAt: fillTime,
+      updatedAt: fillTime,
+    });
+  }
+  if (entry.stopLossPrice) {
+    exits.push({
+      id: crypto.randomUUID(),
+      symbol: entry.symbol,
+      side,
+      quantity: fillQuantity,
+      type: "STOP_LOSS_MARKET",
+      stopPrice: entry.stopLossPrice,
+      status: "PENDING",
+      filledQuantity: 0,
+      parentOrderId: entry.id,
+      createdAt: fillTime,
+      updatedAt: fillTime,
+    });
+  }
+  return [...exits, ...orders];
+}
+
+/**
+ * One-cancels-other with quantity linkage: every exit fill shrinks the working siblings by
+ * the filled quantity, and once the position is flat the remaining siblings are cancelled.
+ */
+function applyExitFillToSiblings(
+  orders: PaperOrder[],
+  exit: PaperOrder,
+  fillQuantity: number,
+  positionAfter: number,
+  fillTime: string
+): PaperOrder[] {
+  return orders.map((order): PaperOrder => {
+    if (
+      order.id === exit.id ||
+      order.parentOrderId !== exit.parentOrderId ||
+      !isWorkingOrder(order)
+    ) {
+      return order;
+    }
+    const quantity = order.quantity - fillQuantity;
+    if (positionAfter === 0 || quantity <= order.filledQuantity) {
+      return {
+        ...order,
+        status: "CANCELLED",
+        rejectionReason: "OCO bracket sibling filled",
+        updatedAt: fillTime,
+      };
+    }
+    return { ...order, quantity, updatedAt: fillTime };
+  });
 }
 
 function assertExecutableQuote(
@@ -154,7 +274,13 @@ function createExecutionPlanFromValidatedQuote(
   );
   let fillPrice: number;
 
-  if (request.order.type === "MARKET") {
+  if (request.order.type === "MARKET" || request.order.type === "STOP_LOSS_MARKET") {
+    if (request.order.type === "STOP_LOSS_MARKET" && !wasStopTriggered(request.order)) {
+      throw new PaperExecutionError(
+        "INVALID_ORDER",
+        "Stop-market order must be triggered before execution"
+      );
+    }
     fillPrice =
       request.order.side === "BUY"
         ? referencePrice + calculatedSlippage
@@ -173,11 +299,7 @@ function createExecutionPlanFromValidatedQuote(
     }
 
     if (request.order.type === "STOP_LOSS_LIMIT") {
-      const wasTriggered =
-        request.order.status === "TRIGGERED" ||
-        (request.order.status === "PARTIALLY_FILLED" &&
-          request.order.triggeredAt !== undefined);
-      if (!wasTriggered) {
+      if (!wasStopTriggered(request.order)) {
         throw new PaperExecutionError(
           "INVALID_ORDER",
           "Stop-limit order must be triggered before execution"
@@ -339,6 +461,17 @@ export function executePaperFill(
     (position) =>
       sameSymbol(position.symbol, request.order.symbol)
   );
+  const isBracketExit = request.order.parentOrderId !== undefined;
+  if (
+    isBracketExit &&
+    plan.fillQuantity >
+      closableExitQuantity(request.order, existingPosition?.quantity ?? 0)
+  ) {
+    throw new PaperExecutionError(
+      "INVALID_ORDER",
+      "Bracket exit fill exceeds the open position it protects"
+    );
+  }
   const reconciliation = reconcilePosition({
     existingQuantity: existingPosition?.quantity ?? 0,
     existingAveragePrice:
@@ -402,9 +535,13 @@ export function executePaperFill(
     request.order.filledQuantity + plan.fillQuantity;
   const isFullyFilled =
     totalFilled >= request.order.quantity;
+  const positionAfter = Math.abs(reconciliation.resultingQuantity);
+  // An exit that flattens its position has nothing left to protect: drop its remainder.
   const nextOrderStatus = isFullyFilled
     ? "FILLED"
-    : "PARTIALLY_FILLED";
+    : isBracketExit && positionAfter === 0
+      ? "CANCELLED"
+      : "PARTIALLY_FILLED";
   const existingValue =
     request.order.filledQuantity *
     (request.order.averageFillPrice ?? 0);
@@ -412,79 +549,44 @@ export function executePaperFill(
     (existingValue + plan.fillQuantity * plan.fillPrice) /
     totalFilled;
 
-  let updatedOrders: PaperOrder[] =
-    request.account.orders.map((order): PaperOrder =>
-      order.id === request.order.id
-        ? {
-            ...order,
-            status: nextOrderStatus,
-            filledQuantity: totalFilled,
-            averageFillPrice,
-            updatedAt: fillTime,
-            quoteSource: quote.source,
-            quoteQuality: quote.quality,
-            quoteTimestamp: quote.ts,
-            referencePrice: quote.price,
-          }
-        : order
-    );
+  const updatedOrder: PaperOrder = {
+    ...request.order,
+    status: nextOrderStatus,
+    filledQuantity: totalFilled,
+    averageFillPrice,
+    rejectionReason:
+      nextOrderStatus === "CANCELLED"
+        ? "Position closed"
+        : request.order.rejectionReason,
+    updatedAt: fillTime,
+    quoteSource: quote.source,
+    quoteQuality: quote.quality,
+    quoteTimestamp: quote.ts,
+    referencePrice: quote.price,
+  };
+  let updatedOrders: PaperOrder[] = request.account.orders.map(
+    (order): PaperOrder =>
+      order.id === request.order.id ? updatedOrder : order
+  );
 
   if (
-    isFullyFilled &&
-    (request.order.takeProfitPrice ||
-      request.order.stopLossPrice)
+    !isBracketExit &&
+    (request.order.takeProfitPrice || request.order.stopLossPrice)
   ) {
-    const childSide =
-      request.order.side === "BUY" ? "SELL" : "BUY";
-    if (request.order.takeProfitPrice) {
-      updatedOrders.unshift({
-        id: crypto.randomUUID(),
-        symbol: request.order.symbol,
-        side: childSide,
-        quantity: request.order.quantity,
-        type: "LIMIT",
-        limitPrice: request.order.takeProfitPrice,
-        status: "PENDING",
-        filledQuantity: 0,
-        parentOrderId: request.order.id,
-        createdAt: fillTime,
-        updatedAt: fillTime,
-      });
-    }
-    if (request.order.stopLossPrice) {
-      updatedOrders.unshift({
-        id: crypto.randomUUID(),
-        symbol: request.order.symbol,
-        side: childSide,
-        quantity: request.order.quantity,
-        type: "STOP_LOSS_LIMIT",
-        stopPrice: request.order.stopLossPrice,
-        limitPrice: request.order.stopLossPrice,
-        status: "PENDING",
-        filledQuantity: 0,
-        parentOrderId: request.order.id,
-        createdAt: fillTime,
-        updatedAt: fillTime,
-      });
-    }
+    updatedOrders = applyEntryFillToBracket(
+      updatedOrders,
+      request.order,
+      plan.fillQuantity,
+      fillTime
+    );
   }
-
-  if (isFullyFilled && request.order.parentOrderId) {
-    updatedOrders = updatedOrders.map(
-      (order): PaperOrder =>
-        order.parentOrderId ===
-          request.order.parentOrderId &&
-        order.id !== request.order.id &&
-        (order.status === "PENDING" ||
-          order.status === "TRIGGERED" ||
-          order.status === "PARTIALLY_FILLED")
-          ? {
-              ...order,
-              status: "CANCELLED",
-              rejectionReason: "OCO bracket filled",
-              updatedAt: fillTime,
-            }
-          : order
+  if (isBracketExit) {
+    updatedOrders = applyExitFillToSiblings(
+      updatedOrders,
+      request.order,
+      plan.fillQuantity,
+      positionAfter,
+      fillTime
     );
   }
 
@@ -509,6 +611,7 @@ export function executePaperFill(
 
   return {
     account: updatedAccount,
+    order: updatedOrder,
     fill,
     charges: plan.charges,
   };
@@ -864,10 +967,9 @@ export function settlePaperAccount(
       if (isTriggered) reason = "TRAILING_STOP";
     }
 
-    if (
-      order.type === "STOP_LOSS_LIMIT" &&
-      order.status === "PENDING"
-    ) {
+    const isStopOrder =
+      order.type === "STOP_LOSS_LIMIT" || order.type === "STOP_LOSS_MARKET";
+    if (isStopOrder && order.status === "PENDING") {
       const stopPrice = order.stopPrice;
       if (
         stopPrice !== undefined &&
@@ -891,25 +993,24 @@ export function settlePaperAccount(
     const isMarketable =
       order.type === "MARKET"
         ? !order.trailingDistance || isTriggered
-        : order.type === "LIMIT"
-          ? order.limitPrice !== undefined &&
-            (order.side === "BUY"
-              ? quote.price <= order.limitPrice
-              : quote.price >= order.limitPrice)
-          : isTriggered &&
-            order.limitPrice !== undefined &&
-            (order.side === "BUY"
-              ? quote.price <= order.limitPrice
-              : quote.price >= order.limitPrice);
+        : order.type === "STOP_LOSS_MARKET"
+          ? isTriggered
+          : order.type === "LIMIT"
+            ? order.limitPrice !== undefined &&
+              (order.side === "BUY"
+                ? quote.price <= order.limitPrice
+                : quote.price >= order.limitPrice)
+            : isTriggered &&
+              order.limitPrice !== undefined &&
+              (order.side === "BUY"
+                ? quote.price <= order.limitPrice
+                : quote.price >= order.limitPrice);
 
     if (!isMarketable) continue;
 
     let fillQuantity =
       order.quantity - order.filledQuantity;
-    if (
-      order.type === "LIMIT" ||
-      order.type === "STOP_LOSS_LIMIT"
-    ) {
+    if (order.type !== "MARKET") {
       if (quote.volume === undefined || quote.volume <= 0) {
         continue;
       }
@@ -922,9 +1023,26 @@ export function settlePaperAccount(
         maximumLiquidityFill
       );
     }
+    if (order.parentOrderId !== undefined) {
+      const position = next.positions.find((candidate) =>
+        sameSymbol(candidate.symbol, order.symbol)
+      );
+      const closable = closableExitQuantity(order, position?.quantity ?? 0);
+      if (closable === 0) {
+        next = updateOrder(next, {
+          ...order,
+          status: "CANCELLED",
+          rejectionReason: "Position closed",
+          updatedAt: new Date().toISOString(),
+        });
+        updated = true;
+        continue;
+      }
+      fillQuantity = Math.min(fillQuantity, closable);
+    }
 
     if (fillQuantity <= 0) continue;
-    if (order.type === "STOP_LOSS_LIMIT") {
+    if (isStopOrder) {
       reason = "STOP_TRIGGER";
     }
 
