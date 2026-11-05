@@ -22,6 +22,25 @@ interface SupabaseSessionData {
 
 let refreshPromise: Promise<string | null> | null = null;
 
+/** localStorage keys that hold a Supabase session ("supabase.auth.token" or "sb-<project>-auth-token"). */
+function isSupabaseSessionKey(key: string): boolean {
+  return key === "supabase.auth.token" || key.endsWith("-auth-token");
+}
+
+/**
+ * Calls `onChange` when another tab signs in, signs out or refreshes the session.
+ * (`storage` events only fire for writes made by other documents.)
+ */
+export function watchStoredSession(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    // A null key means another tab called localStorage.clear().
+    if (event.key === null || isSupabaseSessionKey(event.key)) onChange();
+  };
+  window.addEventListener("storage", onStorage);
+  return () => window.removeEventListener("storage", onStorage);
+}
+
 function getStoredSession(): { rawKey: string; data: SupabaseSessionData } | null {
   if (typeof window === "undefined" || !window.localStorage) {
     return null;
@@ -41,7 +60,7 @@ function getStoredSession(): { rawKey: string; data: SupabaseSessionData } | nul
   // Check standard Supabase project storage keys if primary key is not set
   for (let i = 0; i < window.localStorage.length; i++) {
     const key = window.localStorage.key(i);
-    if (key && (key === "supabase.auth.token" || key.endsWith("-auth-token"))) {
+    if (key && isSupabaseSessionKey(key)) {
       const raw = window.localStorage.getItem(key);
       if (raw) {
         try {

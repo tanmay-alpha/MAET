@@ -2,11 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { PaperStreamManager, type PaperStreamSubscriber } from "./paper-stream-manager";
 import type { ConnectPaperTradingStreamOptions } from "./paper-sse-client";
 
-function createHarness(token: string | null = "token-1") {
+function createHarness(initialToken: string | null = "token-1") {
+  let token = initialToken;
+  const authListeners = new Set<() => void>();
   const connections: Array<{ options: ConnectPaperTradingStreamOptions }> = [];
   const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
   const manager = new PaperStreamManager({
     getToken: async () => token,
+    watchAuth: (onChange) => {
+      authListeners.add(onChange);
+      return () => authListeners.delete(onChange);
+    },
     connect: (options) => {
       const { promise, resolve } = Promise.withResolvers<void>();
       connections.push({ options });
@@ -33,7 +39,14 @@ function createHarness(token: string | null = "token-1") {
     return timer.ms;
   };
 
-  return { manager, connections, timers, runPendingTimer };
+  // Simulates another tab signing in/out or refreshing the session.
+  const changeSession = async (next: string | null) => {
+    token = next;
+    authListeners.forEach((listener) => listener());
+    await flush();
+  };
+
+  return { manager, connections, timers, runPendingTimer, changeSession, authListeners };
 }
 
 async function flush() {
@@ -133,5 +146,66 @@ describe("PaperStreamManager", () => {
     expect(connections).toHaveLength(0);
     expect(timers).toHaveLength(0);
     expect(statuses.at(-1)).toBe(false);
+  });
+
+  test("reconnects with the new token when the session changes", async () => {
+    const { manager, connections, changeSession } = createHarness("user-a-token");
+    const { sub, statuses } = subscriber([]);
+    manager.subscribe(sub);
+    await flush();
+    connections[0].options.onEvent?.({ type: "CONNECTED", data: {} });
+
+    await changeSession("user-b-token");
+
+    expect(connections[0].options.signal?.aborted).toBe(true);
+    expect(connections).toHaveLength(2);
+    expect(connections[1].options.accessToken).toBe("user-b-token");
+    expect(statuses.at(-1)).toBe(false);
+  });
+
+  test("closes the stream when the session ends", async () => {
+    const { manager, connections, changeSession } = createHarness();
+    manager.subscribe(subscriber([]).sub);
+    await flush();
+
+    await changeSession(null);
+
+    expect(connections[0].options.signal?.aborted).toBe(true);
+    expect(connections).toHaveLength(1);
+  });
+
+  test("keeps the connection when the session is unchanged", async () => {
+    const { manager, connections, changeSession } = createHarness();
+    manager.subscribe(subscriber([]).sub);
+    await flush();
+
+    await changeSession("token-1");
+
+    expect(connections).toHaveLength(1);
+    expect(connections[0].options.signal?.aborted).toBe(false);
+  });
+
+  test("connects once another tab signs in", async () => {
+    const { manager, connections, changeSession } = createHarness(null);
+    manager.subscribe(subscriber([]).sub);
+    await flush();
+    expect(connections).toHaveLength(0);
+
+    await changeSession("new-session-token");
+
+    expect(connections).toHaveLength(1);
+    expect(connections[0].options.accessToken).toBe("new-session-token");
+  });
+
+  test("stops watching the session once the stream closes", async () => {
+    const { manager, authListeners, runPendingTimer } = createHarness();
+    const unsubscribe = manager.subscribe(subscriber([]).sub);
+    await flush();
+    expect(authListeners.size).toBe(1);
+
+    unsubscribe();
+    await runPendingTimer();
+
+    expect(authListeners.size).toBe(0);
   });
 });

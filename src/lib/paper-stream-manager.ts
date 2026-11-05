@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { getCurrentAccessToken } from "./auth-token";
+import { getCurrentAccessToken, watchStoredSession } from "./auth-token";
 import { connectPaperTradingStream, type ConnectPaperTradingStreamOptions } from "./paper-sse-client";
 import { reconnectDelayMs, scheduleTimeout, type ScheduleFn } from "./reconnect-backoff";
 
@@ -10,6 +10,8 @@ export interface PaperStreamSubscriber {
 
 export interface PaperStreamDeps {
   getToken: () => Promise<string | null>;
+  /** Subscribes to session changes made outside this tab; returns the unsubscribe function. */
+  watchAuth: (onChange: () => void) => () => void;
   connect: (options: ConnectPaperTradingStreamOptions) => Promise<void>;
   schedule: ScheduleFn;
   random: () => number;
@@ -33,7 +35,8 @@ const IDLE_CLOSE_DELAY_MS = 1_000;
 /**
  * One authenticated paper-trading SSE connection shared by every usePaperAccount()
  * consumer. Ref-counted: opens on the first subscriber, closes shortly after the last
- * one leaves, and reconnects with capped exponential backoff after drops.
+ * one leaves, reconnects with capped exponential backoff after drops, and reopens with
+ * the new credentials when the session changes (sign-in, sign-out, user switch).
  */
 export class PaperStreamManager {
   private static instance: PaperStreamManager | null = null;
@@ -43,12 +46,16 @@ export class PaperStreamManager {
   private cancelIdleClose: (() => void) | null = null;
   private failures = 0;
   private connected = false;
+  // Token the current (or last attempted) connection authenticated with.
+  private token: string | null = null;
+  private stopWatchingAuth: (() => void) | null = null;
 
   constructor(private readonly deps: PaperStreamDeps) {}
 
   static getInstance(): PaperStreamManager {
     PaperStreamManager.instance ??= new PaperStreamManager({
       getToken: getCurrentAccessToken,
+      watchAuth: watchStoredSession,
       connect: connectPaperTradingStream,
       schedule: scheduleTimeout,
       random: Math.random,
@@ -61,6 +68,7 @@ export class PaperStreamManager {
     subscriber.onStatusChange(this.connected);
     this.cancelIdleClose?.();
     this.cancelIdleClose = null;
+    this.stopWatchingAuth ??= this.deps.watchAuth(() => void this.onSessionChanged());
     if (!this.controller && !this.cancelRetry) void this.open();
 
     return () => {
@@ -79,8 +87,9 @@ export class PaperStreamManager {
 
     const token = await this.deps.getToken();
     if (controller.signal.aborted) return;
+    this.token = token;
     if (!token) {
-      // Signed out: consumers fall back to polling. The next first subscriber retries.
+      // Signed out: consumers fall back to polling until a session appears.
       this.controller = null;
       this.setConnected(false);
       return;
@@ -108,13 +117,30 @@ export class PaperStreamManager {
     });
   }
 
-  private close() {
+  // The open stream is bound to the identity it authenticated with; when another tab
+  // signs in, signs out or replaces the token, reconnect with the current credentials.
+  private async onSessionChanged() {
+    if (this.subscribers.size === 0) return;
+    const token = await this.deps.getToken();
+    if (token === this.token || this.subscribers.size === 0) return;
+    this.disconnect();
+    void this.open();
+  }
+
+  private disconnect() {
     this.cancelRetry?.();
     this.cancelRetry = null;
     this.controller?.abort();
     this.controller = null;
     this.failures = 0;
     this.setConnected(false);
+  }
+
+  private close() {
+    this.disconnect();
+    this.stopWatchingAuth?.();
+    this.stopWatchingAuth = null;
+    this.token = null;
   }
 
   private invalidateState() {
