@@ -335,15 +335,15 @@ function Landing() {
               Practice the desk. <em className="text-muted-foreground/80 italic">Risk nothing.</em>
             </h2>
             <p className="mt-5 max-w-md text-sm leading-relaxed text-muted-foreground">
-              Place browser-only paper orders against the latest delayed market quote and track positions
-              without risking money. Nothing leaves the browser and no broker order is sent.
+              Sign in to place paper orders that the MAET server fills against market quotes and records in your
+              account. It is play money: no broker order is ever sent.
             </p>
 
             <ul className="mt-7 space-y-3 text-sm">
               {[
-                ["Real quote marks", "Paper fills and positions use the Yahoo market quote, not a random walk."],
+                ["Real quote marks", "Paper fills and positions are marked to real exchange quotes, not a random walk."],
                 ["Honest data limits", "Order-book depth and institutional flows remain blank without a verified feed."],
-                ["Play-money P&L", "Reset any time. Market, limit, and stop orders stay in this browser."],
+                ["Play-money P&L", "Reset any time. Market, limit, and stop orders are stored with your account on the server."],
                 ["Keyboard-first", "B / S to ticket, ⌘K to jump symbols, Esc to cancel."],
               ].map(([t, d]) => (
                 <li key={t} className="flex gap-3">
@@ -368,7 +368,7 @@ function Landing() {
                 <span className="rounded-sm bg-accent px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em] text-muted-foreground">simulated</span>
               </div>
               <div className="mt-1 font-mono tabular text-3xl font-semibold">₹0.00</div>
-              <div className="mt-1 font-mono tabular text-[11px] text-muted-foreground">No paper trades recorded in this browser</div>
+              <div className="mt-1 font-mono tabular text-[11px] text-muted-foreground">Sign in to track your paper P&amp;L</div>
             </div>
           </div>
         </div>
@@ -395,7 +395,7 @@ function Landing() {
               { icon: LineChart, t: "Tick-grade charts", d: "Candles, indicators, drawing tools, multi-timeframe. Built for reading, not for screenshots." },
               { icon: Table2, t: "Stock screener", d: "Filter NSE/BSE universe by fundamentals, momentum, breadth and your own derived columns." },
               { icon: FlaskConical, t: "Historical replay", d: "Step through past sessions candle-by-candle and watch your rules trigger as the day unfolds." },
-              { icon: Activity, t: "Paper execution", d: "Place browser-only orders against delayed market quotes without sending anything to a broker." },
+              { icon: Activity, t: "Paper execution", d: "Place orders that the MAET server fills in a simulated account. Nothing is sent to a broker." },
               { icon: Layers, t: "Versioned ideas", d: "Every tweak is its own revision. Compare equity curves side-by-side, keep the one that holds up." },
               { icon: Keyboard, t: "Keyboard-first UX", d: "Roving focus across screener rows, hotkeys in the terminal — TradingView-style ergonomics." },
             ].map((f) => (

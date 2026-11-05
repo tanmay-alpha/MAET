@@ -3,6 +3,7 @@ import { getLogger as getInfraLogger } from "../infra/logger";
 import { defaultWsFactory, type WsFactory, type WsLike } from "../data/sources/angelone/ws";
 import type { AngelOneSession } from "../data/sources/angelone/client";
 import { lookupSymbolByToken } from "../domain/market/symbol";
+import { currentMarketPhase, sessionQuality } from "../domain/market/quote-quality";
 import type { Tick } from "@shared/types";
 
 const WS_URL = "wss://smartapisocket.angelone.in/smart-stream";
@@ -12,8 +13,14 @@ const HEARTBEAT_MS = 30_000;
 type UserState = {
   session: AngelOneSession;
   tokens: string[];
-  socket?: WsLike;
   reconnectAttempts: number;
+};
+
+/** One socket per user. `open` gates sends: `ws` throws on send while CONNECTING. */
+type Connection = {
+  socket: WsLike;
+  open: boolean;
+  heartbeat?: ReturnType<typeof setInterval>;
 };
 
 export type WorkerOptions = {
@@ -21,9 +28,8 @@ export type WorkerOptions = {
   createSocket?: WsFactory;
 };
 
-// Lazy logger init — same env-caveat pattern as yahoo-poller (Task 18).
-// `getLogger()` calls `getConfig()` which requires env vars. We defer
-// resolution to first use so env-less test runs do not crash at module load.
+// `getLogger()` calls `getConfig()` which requires env vars. Resolve lazily
+// so env-less test runs do not crash at module load.
 let cachedLog: ReturnType<ReturnType<typeof getLogger>["child"]> | undefined;
 function getLog() {
   if (cachedLog) return cachedLog;
@@ -45,13 +51,25 @@ function getLogger() {
   return getInfraLogger();
 }
 
+/** Stream-level rejection message from SmartAPI (JSON text frame). */
+class AngelOneStreamRejection extends Error {}
+
+/** `ws` reports a rejected upgrade as "Unexpected server response: <status>". */
+function isHandshakeAuthFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Unexpected server response: 401\b/.test(message);
+}
+
+function isAuthRejection(message: string): boolean {
+  return /invalid[\s_-]*(jwt|feed[\s_-]*)?token|token[\s_-]*expired|unauthori[sz]ed/i.test(message);
+}
+
 export class AngelOneWorker {
   private url: string;
   private factory: WsFactory;
   private users = new Map<string, UserState>();
-  private sockets = new Map<string, WsLike>();
+  private connections = new Map<string, Connection>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private heartbeatTimers = new Map<string, ReturnType<typeof setInterval>>();
   private stopped = true;
 
   constructor(opts: WorkerOptions = {}) {
@@ -69,15 +87,7 @@ export class AngelOneWorker {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    for (const timer of this.reconnectTimers.values()) clearTimeout(timer);
-    this.reconnectTimers.clear();
-    for (const timer of this.heartbeatTimers.values()) clearInterval(timer);
-    this.heartbeatTimers.clear();
-    for (const [uid, s] of this.sockets) {
-      try { s.close(); } catch {}
-      this.sockets.delete(uid);
-    }
-    this.users.clear();
+    for (const uid of [...this.users.keys(), ...this.connections.keys()]) this.dropUser(uid);
   }
 
   manageUser(userId: string, session: AngelOneSession, tokens: string[]): void {
@@ -92,26 +102,34 @@ export class AngelOneWorker {
     const previous = new Set(state.tokens);
     const next = new Set(tokens);
     state.tokens = [...next];
-    const socket = this.sockets.get(userId);
-    if (!socket) return;
+    // A socket that is still connecting subscribes to `state.tokens` on open.
+    const connection = this.connections.get(userId);
+    if (!connection?.open) return;
 
-    this.sendSubscription(socket, 0, [...previous].filter((token) => !next.has(token)));
-    this.sendSubscription(socket, 1, [...next].filter((token) => !previous.has(token)));
+    this.sendSubscription(connection.socket, 0, [...previous].filter((token) => !next.has(token)));
+    this.sendSubscription(connection.socket, 1, [...next].filter((token) => !previous.has(token)));
   }
 
   dropUser(userId: string): void {
     this.users.delete(userId);
-    const s = this.sockets.get(userId);
-    const timer = this.reconnectTimers.get(userId);
-    const heartbeat = this.heartbeatTimers.get(userId);
-    if (timer) clearTimeout(timer);
-    if (heartbeat) clearInterval(heartbeat);
+    clearTimeout(this.reconnectTimers.get(userId));
     this.reconnectTimers.delete(userId);
-    this.heartbeatTimers.delete(userId);
-    if (s) {
-      try { s.close(); } catch {}
-      this.sockets.delete(userId);
+    const connection = this.connections.get(userId);
+    if (connection) {
+      // Remove before close(): the socket's own close event is then stale.
+      this.connections.delete(userId);
+      clearInterval(connection.heartbeat);
+      try { connection.socket.close(); } catch {}
     }
+  }
+
+  private isCurrent(userId: string, socket: WsLike): boolean {
+    return this.connections.get(userId)?.socket === socket;
+  }
+
+  private authFailed(userId: string, reason: string): void {
+    bus.emit("user:angelone:auth_failed", { userId, reason });
+    this.dropUser(userId);
   }
 
   private connect(userId: string): void {
@@ -123,17 +141,23 @@ export class AngelOneWorker {
       "x-client-code": u.session.clientCode,
       "x-feed-token": u.session.feedToken,
     });
-    this.sockets.set(userId, sock);
+    const connection: Connection = { socket: sock, open: false };
+    this.connections.set(userId, connection);
+
     sock.on("open", () => {
-      u.reconnectAttempts = 0;
-      this.sendSubscription(sock, 1, u.tokens);
-      const heartbeat = setInterval(() => {
+      if (!this.isCurrent(userId, sock)) return;
+      const state = this.users.get(userId);
+      if (!state) return;
+      connection.open = true;
+      state.reconnectAttempts = 0;
+      this.sendSubscription(sock, 1, state.tokens);
+      connection.heartbeat = setInterval(() => {
         try { sock.send("ping"); } catch {}
       }, HEARTBEAT_MS);
-      this.heartbeatTimers.set(userId, heartbeat);
       bus.emit("user:angelone:ready", { userId });
     });
     sock.on("message", (raw) => {
+      if (!this.isCurrent(userId, sock)) return;
       try {
         const buffer = typeof raw === "string" ? Buffer.from(raw) : Buffer.from(raw as ArrayBuffer);
         const text = buffer.toString("utf8");
@@ -141,54 +165,72 @@ export class AngelOneWorker {
         if (text.trimStart().startsWith("{")) {
           const msg = JSON.parse(text);
           if (msg.status === false || msg.errorCode) {
-            throw new Error(msg.errorMessage ?? msg.message ?? "Angel One stream rejected request");
+            throw new AngelOneStreamRejection(msg.errorMessage ?? msg.message ?? "Angel One stream rejected request");
           }
           return;
         }
 
-        bus.emit("tick", parseAngelOnePacket(buffer));
+        const tick = parseAngelOnePacket(buffer);
+        const now = new Date();
+        bus.emit("tick", { ...tick, quality: sessionQuality(tick, now, currentMarketPhase(now)) });
       } catch (e) {
         const message = (e as Error).message;
-        if (/invalid.*token|401/i.test(message)) {
-          bus.emit("user:angelone:auth_failed", { userId, reason: "invalid_token" });
-          this.dropUser(userId);
+        // Only provider rejections can mean auth failure; packet parse errors
+        // (e.g. "Unknown Angel One token: 14010") never do.
+        if (e instanceof AngelOneStreamRejection && isAuthRejection(message)) {
+          this.authFailed(userId, "invalid_token");
           return;
         }
         getLog().warn({ err: message }, "ws message parse failed");
       }
     });
     sock.on("close", () => {
-      this.sockets.delete(userId);
-      const heartbeat = this.heartbeatTimers.get(userId);
-      if (heartbeat) clearInterval(heartbeat);
-      this.heartbeatTimers.delete(userId);
-      if (this.stopped || !this.users.has(userId)) return;
-      if (u.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-        bus.emit("user:angelone:auth_failed", { userId, reason: "reconnect_exhausted" });
-        this.users.delete(userId);
+      // A replaced or dropped socket closes asynchronously; it must not touch
+      // the user's current connection or schedule a reconnect.
+      if (!this.isCurrent(userId, sock)) return;
+      this.connections.delete(userId);
+      clearInterval(connection.heartbeat);
+      const state = this.users.get(userId);
+      if (this.stopped || !state) return;
+      if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        this.authFailed(userId, "reconnect_exhausted");
         return;
       }
-      const wait = Math.min(30_000, 500 * Math.pow(2, u.reconnectAttempts));
-      u.reconnectAttempts++;
+      const wait = Math.min(30_000, 500 * Math.pow(2, state.reconnectAttempts));
+      state.reconnectAttempts++;
       const timer = setTimeout(() => {
         this.reconnectTimers.delete(userId);
         this.connect(userId);
       }, wait);
       this.reconnectTimers.set(userId, timer);
     });
-    sock.on("error", (e) => getLog().warn({ err: (e as Error)?.message }, "ws error"));
+    sock.on("error", (e) => {
+      if (!this.isCurrent(userId, sock)) return;
+      if (isHandshakeAuthFailure(e)) {
+        // Reconnecting with the same JWT would fail identically; ask for a re-login.
+        this.authFailed(userId, "handshake_unauthorized");
+        return;
+      }
+      getLog().warn({ err: (e as Error)?.message }, "ws error");
+    });
   }
 
   private sendSubscription(socket: WsLike, action: 0 | 1, tokens: string[]): void {
     if (tokens.length === 0) return;
-    socket.send(JSON.stringify({
-      correlationID: `maet-${Date.now()}`,
-      action,
-      params: {
-        mode: 2,
-        tokenList: [{ exchangeType: 1, tokens }],
-      },
-    }));
+    try {
+      socket.send(JSON.stringify({
+        correlationID: `maet-${Date.now()}`,
+        action,
+        params: {
+          mode: 2,
+          tokenList: [{ exchangeType: 1, tokens }],
+        },
+      }));
+    } catch (e) {
+      // Socket closed between the open check and send; the close handler reconnects
+      // and the next open re-subscribes from the user's token list.
+      getLog().warn({ err: (e as Error).message, action }, "ws subscription send failed");
+    }
   }
 }
 

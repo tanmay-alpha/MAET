@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Code2, FlaskConical, GitBranch, Play, Save, CheckCircle, AlertCircle, Clock } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 
-export const Route = createFileRoute("/_app/strategies/$strategyId")({
+export const Route = createFileRoute("/_app/strategies/$strategyId/")({
   head: () => ({ meta: [{ title: "Strategy Editor — MAET" }] }),
   component: StrategyWorkspace,
 });

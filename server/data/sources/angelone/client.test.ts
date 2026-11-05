@@ -1,11 +1,13 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import {
+  AngelOneAuthError,
   generateTotp,
   getAngelOneFullMarketQuotes,
   getAngelOneMarketQuotes,
   getAngelOneOptionGreeks,
   hasAngelOneMarketSession,
   login,
+  onAngelOneSessionRejected,
   parseAngelOneExchangeTime,
   resolveAngelOneOptionContracts,
   setAngelOneMarketSession,
@@ -96,6 +98,58 @@ describe("angelone login", () => {
 
     expect(await getAngelOneMarketQuotes([{ symbol: "RELIANCE", token: "2885" }])).toEqual([]);
     expect(parseAngelOneExchangeTime("31-Feb-2026 10:00:00")).toBeUndefined();
+  });
+
+  it("aborts a login that does not answer in time", async () => {
+    let signal: AbortSignal | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      signal = init?.signal ?? undefined;
+      return Response.json({ status: true, data: { jwtToken: "J", feedToken: "F", refreshToken: "R" } });
+    }) as unknown as typeof fetch;
+    await login({ apiKey: "K", clientCode: "C", password: "P", totpSecret: "JBSWY3DPEHPK3PXP" });
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("drops the market session and notifies listeners when the broker rejects the JWT", async () => {
+    activateMarketSession();
+    const reasons: string[] = [];
+    const off = onAngelOneSessionRejected((reason) => reasons.push(reason));
+    globalThis.fetch = (async () => new Response("Unauthorized", { status: 401 })) as unknown as typeof fetch;
+
+    await expect(getAngelOneMarketQuotes([{ symbol: "RELIANCE", token: "2885" }])).rejects.toBeInstanceOf(AngelOneAuthError);
+    off();
+
+    expect(hasAngelOneMarketSession()).toBe(false);
+    expect(reasons).toHaveLength(1);
+  });
+
+  it.each(["AB1010", "AB1011"])("treats session-expiry code %s as a rejected session", async (errorcode) => {
+    activateMarketSession();
+    globalThis.fetch = (async () => Response.json({ status: false, message: "Session expired", errorcode, data: null })) as unknown as typeof fetch;
+
+    await expect(getAngelOneMarketQuotes([{ symbol: "RELIANCE", token: "2885" }])).rejects.toBeInstanceOf(AngelOneAuthError);
+    expect(hasAngelOneMarketSession()).toBe(false);
+  });
+
+  it("treats an Angel One token error code in a 200 response as a rejected session", async () => {
+    activateMarketSession();
+    let rejected = 0;
+    const off = onAngelOneSessionRejected(() => rejected++);
+    globalThis.fetch = (async () => Response.json({ status: false, message: "Invalid Token", errorcode: "AG8001", data: null })) as unknown as typeof fetch;
+
+    await expect(getAngelOneMarketQuotes([{ symbol: "RELIANCE", token: "2885" }])).rejects.toBeInstanceOf(AngelOneAuthError);
+    off();
+
+    expect(hasAngelOneMarketSession()).toBe(false);
+    expect(rejected).toBe(1);
+  });
+
+  it("keeps the session on non-auth failures such as rate limiting", async () => {
+    activateMarketSession();
+    globalThis.fetch = (async () => new Response("Access denied because of exceeding access rate", { status: 403 })) as unknown as typeof fetch;
+
+    await expect(getAngelOneMarketQuotes([{ symbol: "RELIANCE", token: "2885" }])).rejects.toThrow("403");
+    expect(hasAngelOneMarketSession()).toBe(true);
   });
 });
 

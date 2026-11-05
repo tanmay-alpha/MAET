@@ -8,6 +8,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { apiUrl } from "@/lib/api-url";
 
 export type CapabilityKey =
   | "cloudWorkspace"
@@ -36,7 +37,7 @@ export interface CapabilitiesResponse {
 const EMPTY_RESPONSE: CapabilitiesResponse = { capabilities: [] };
 
 async function fetchCapabilities(): Promise<CapabilitiesResponse> {
-  const url = "/api/trpc/capabilities.get";
+  const url = apiUrl("/api/trpc/capabilities.get");
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) {
     return EMPTY_RESPONSE;

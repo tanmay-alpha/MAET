@@ -8,25 +8,29 @@ const LOCAL_STORAGE_KEY = "maet_guest_watchlist_v1";
 export function useWatchlist() {
   const queryClient = useQueryClient();
 
-  const [localItems, setLocalItems] = useState<MarketCatalogItem[]>(() => {
-    if (typeof window === "undefined") return WATCHLIST;
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : WATCHLIST;
-    } catch {
-      return WATCHLIST;
-    }
-  });
+  // Start from the default list on both server and first client render; the saved guest
+  // list is restored after mount so hydration markup matches.
+  const [localItems, setLocalItems] = useState<MarketCatalogItem[]>(WATCHLIST);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(localItems));
-      } catch (err) {
-        console.warn("Failed to persist guest watchlist locally:", err);
-      }
+    try {
+      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (saved) setLocalItems(JSON.parse(saved));
+    } catch {
+      // Corrupt entry: keep the default list; the next change overwrites it.
     }
-  }, [localItems]);
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(localItems));
+    } catch (err) {
+      console.warn("Failed to persist guest watchlist locally:", err);
+    }
+  }, [hydrated, localItems]);
 
   const watchlistsQuery = useQuery({
     queryKey: ["workspace", "listWatchlists"],

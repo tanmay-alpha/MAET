@@ -1,9 +1,15 @@
 import { defineEventHandler, setResponseHeader } from "h3";
-import { healthHandler } from "../infra/health";
+import { healthChecker, type HealthChecker } from "../infra/health";
 
-export default defineEventHandler((event) => {
-  // Explicit Content-Type so Render's health check (and any
-  // intermediate proxy) can detect the response shape without sniffing.
-  setResponseHeader(event, "content-type", "application/json");
-  return healthHandler();
-});
+// Always HTTP 200: Render's healthCheckPath restarts the instance on non-2xx,
+// which would not help when an external dependency (Supabase, Redis) is down.
+// Dependency failures are reported in the body as `status: "degraded"`.
+export function createHealthRoute(checker: HealthChecker) {
+  return defineEventHandler(async (event) => {
+    setResponseHeader(event, "content-type", "application/json");
+    setResponseHeader(event, "cache-control", "no-store");
+    return checker.check();
+  });
+}
+
+export default createHealthRoute(healthChecker);

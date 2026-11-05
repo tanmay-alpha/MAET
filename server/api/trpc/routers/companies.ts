@@ -301,7 +301,8 @@ export const companiesRouter = createRouter({
         }
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: err.message || "Failed to load peer comparison",
+          message: "Failed to load peer comparison",
+          cause: err,
         });
       }
     }),

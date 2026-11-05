@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { alertsEngineRouter } from "./alerts-engine";
+import { DrizzleQueryError } from "drizzle-orm";
+import { AlertStateError } from "../../../modules/alerts/repository";
+import { alertsEngineRouter, toAlertMutationError } from "./alerts-engine";
 
 const caller = alertsEngineRouter.createCaller({
   userId: "00000000-0000-0000-0000-000000000001",
@@ -104,5 +106,22 @@ describe("Alerts Engine Router Contract Suite", () => {
     await expect(caller.dismissNotification({ notificationId: "invalid-uuid" })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
+  });
+});
+
+describe("alert mutation error mapping", () => {
+  it("maps alert state errors to BAD_REQUEST with their message", () => {
+    const err = toAlertMutationError(new AlertStateError("Cannot rearm unsupported legacy alert type: RSI_ABOVE"), "rearm");
+    expect(err.code).toBe("BAD_REQUEST");
+    expect(err.message).toBe("Cannot rearm unsupported legacy alert type: RSI_ABOVE");
+  });
+
+  it("maps unexpected (database) errors to INTERNAL_SERVER_ERROR without their message, keeping the cause", () => {
+    const dbError = new DrizzleQueryError('update "alerts" set "enabled" = $1 where "id" = $2', [true, "secret-id"], new Error("deadlock detected"));
+    const err = toAlertMutationError(dbError, "toggle");
+    expect(err.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(err.message).toBe("Failed to toggle alert");
+    expect(err.message).not.toContain("secret-id");
+    expect(err.cause).toBe(dbError);
   });
 });

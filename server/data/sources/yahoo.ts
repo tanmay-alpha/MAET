@@ -11,6 +11,22 @@ export { UpstreamDegradedError, UpstreamPermanentError };
 
 const HOST = "query1.finance.yahoo.com";
 const MAX_CONCURRENT_REQUESTS = 4;
+// Yahoo throttles (429) non-browser agents from datacenter IPs; quotes and
+// candles must present the same browser identity.
+const BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+
+// Candle cache freshness per timeframe: an intraday chart must not be served
+// an hour-old snapshot. The request window is aligned to this granularity so
+// repeated requests within one window share a cache entry.
+const CANDLE_CACHE_SECONDS: Record<Candle["tf"], number> = {
+  "1m": 60,
+  "5m": 300,
+  "15m": 900,
+  "1h": 1800,
+  "1d": 3600,
+  "1wk": 3600,
+};
 
 let activeRequests = 0;
 const requestWaiters: Array<() => void> = [];
@@ -96,10 +112,7 @@ export async function getQuote(
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`;
     const res = await withRequestSlot(() =>
       fetch(url, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        },
+        headers: { "User-Agent": BROWSER_USER_AGENT },
       })
     );
     if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo ${res.status}`);
@@ -147,9 +160,10 @@ export async function getCandles(
   tf: Candle["tf"]
 ): Promise<Candle[]> {
   // --- Redis cache lookup ---
+  const cacheSeconds = CANDLE_CACHE_SECONDS[tf];
   const cacheKey = RedisKeys.candlesKey("NSE", ticker, tf,
-    Math.floor(from.getTime() / 1000).toString(),
-    Math.floor(to.getTime() / 1000).toString(),
+    Math.floor(from.getTime() / 1000 / cacheSeconds).toString(),
+    Math.floor(to.getTime() / 1000 / cacheSeconds).toString(),
   );
   const cached = await getCachedJson<Candle[]>(cacheKey);
   if (cached) return cached;
@@ -178,10 +192,10 @@ export async function getCandles(
     const interval = tf === "1h" ? "60m" : tf;
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(fullTicker)}?period1=${period1}&period2=${period2}&interval=${interval}`;
     const res = await withRequestSlot(() =>
-      fetch(url, { headers: { "User-Agent": "stock-market-backend/1.0" } })
+      fetch(url, { headers: { "User-Agent": BROWSER_USER_AGENT } })
     );
-    if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo ${res.status}`);
-    if (!res.ok) throw new UpstreamPermanentError(`yahoo ${res.status}`);
+    if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo candles ${res.status} for ${fullTicker}`);
+    if (!res.ok) throw new UpstreamPermanentError(`yahoo candles ${res.status} for ${fullTicker}`);
     const data = (await res.json()) as YahooChartResp;
     const r = data.chart.result?.[0];
     if (!r) throw new UpstreamPermanentError("yahoo: empty result");
@@ -226,8 +240,7 @@ export async function getCandles(
       }
     }
 
-    // Write through to Redis cache (1 hour TTL)
-    await setCachedJson(cacheKey, out, 3600);
+    await setCachedJson(cacheKey, out, cacheSeconds);
 
     return out;
   });

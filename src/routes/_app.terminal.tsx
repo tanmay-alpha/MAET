@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CandlestickChart } from "@/components/trading/candlestick-chart";
 import { OrderPanel } from "@/components/trading/order-panel";
 import { Watchlist } from "@/components/trading/watchlist";
@@ -12,7 +12,8 @@ import { ShieldAlert, RefreshCw, Layers, ClipboardList, History, TrendingUp, Bar
 import { useTerminalStore } from "@/store/useTerminalStore";
 import { DepthMeter } from "@/components/trading/depth-meter";
 import type { PaperOrderRow, PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
-import { calculateMarkedUnrealisedPnl, getPositionCloseSide } from "@shared/domain/paper-trading/margin";
+import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
+import { buildClosePositionOrder } from "@/lib/paper-orders";
 import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
 import { mapFillsToTradeMarkers } from "@/components/trading/chart-trade-markers";
 
@@ -105,10 +106,7 @@ function Terminal() {
     [fills, active]
   );
 
-  const [chartType, setChartType] = useState<"candle" | "line">(() => {
-    if (typeof window === "undefined") return "candle";
-    return (localStorage.getItem("maet_chart_type") as "candle" | "line") || "candle";
-  });
+  const [chartType, setChartType] = useState<"candle" | "line">("candle");
   const [indicators, setIndicators] = useState({
     sma: false,
     ema: false,
@@ -117,22 +115,27 @@ function Terminal() {
     volume: true,
   });
 
+  // Restore saved chart preferences after mount; reading storage during render would
+  // make the first client render differ from the server markup.
+  useEffect(() => {
+    const savedType = localStorage.getItem("maet_chart_type");
+    if (savedType === "candle" || savedType === "line") setChartType(savedType);
+    const savedInterval = localStorage.getItem("maet_chart_interval");
+    if (savedInterval && savedInterval in INTERVAL_CONFIG) setInterval(savedInterval);
+  }, []);
+
   const toggleIndicator = (key: keyof typeof indicators) => {
     setIndicators((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const handleSetInterval = (tf: string) => {
     setInterval(tf);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("maet_chart_interval", tf);
-    }
+    localStorage.setItem("maet_chart_interval", tf);
   };
 
   const handleSetChartType = (type: "candle" | "line") => {
     setChartType(type);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("maet_chart_type", type);
-    }
+    localStorage.setItem("maet_chart_type", type);
   };
 
   const dataQuality = liveQuote?.quality ?? (candleQuery.data?.delayed ? "delayed" : "historical");
@@ -398,7 +401,6 @@ function Terminal() {
                       const isShort = pos.side === "SHORT" || Number(pos.totalShares) < 0;
                       const signedQty = isShort ? -Math.abs(pos.totalShares) : Math.abs(pos.totalShares);
                       const pnl = calculateMarkedUnrealisedPnl({ quantity: signedQty, averagePrice: avgPrice }, ltp);
-                      const closeSide = getPositionCloseSide(pos);
 
                       return (
                         <tr key={pos.id} className="border-b border-border hover:bg-accent/40 transition-colors">
@@ -418,13 +420,7 @@ function Terminal() {
                           <td className="px-3 py-2 text-right">
                             <button
                               onClick={() => {
-                                placeOrder({
-                                  symbol: pos.symbol,
-                                  exchange: "NSE",
-                                  side: closeSide,
-                                  type: "MARKET",
-                                  quantity: Math.abs(pos.totalShares),
-                                });
+                                void placeOrder(buildClosePositionOrder(pos));
                               }}
                               disabled={!isTradingAvailable}
                               className="rounded bg-bear hover:bg-bear/90 text-white px-2 py-0.5 text-[10px] font-semibold transition disabled:opacity-50"
@@ -544,7 +540,7 @@ function Terminal() {
 
         {/* Right Order Panel & Depth */}
         <div className="w-72 border-l border-border bg-panel flex flex-col">
-          <OrderPanel symbol={active} price={currentPrice} />
+          <OrderPanel symbol={active} exchange={context.exchange} price={currentPrice} />
           <div className="border-t border-border p-2">
             <DepthMeter />
           </div>

@@ -12,6 +12,14 @@ import {
   CreatableAlertTypeSchema,
 } from "./contracts";
 
+/** A request that is invalid for the alert's current state (a client error, not a fault). */
+export class AlertStateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AlertStateError";
+  }
+}
+
 export function mapRowToAlertView(r: typeof alerts.$inferSelect): AlertView {
   const supported = isSupportedAlertType(r.type);
   let threshold: number | null = null;
@@ -133,7 +141,7 @@ export async function toggleAlert(
   if (!existing) return null;
 
   if (enabled && !isSupportedAlertType(existing.type)) {
-    throw new Error(`Cannot enable unsupported legacy alert type: ${existing.type}`);
+    throw new AlertStateError(`Cannot enable unsupported legacy alert type: ${existing.type}`);
   }
 
   const [result] = await db
@@ -152,7 +160,7 @@ export async function rearmAlert(alertId: string, userId: string): Promise<Alert
   if (!existing) return null;
 
   if (!isSupportedAlertType(existing.type)) {
-    throw new Error(`Cannot rearm unsupported legacy alert type: ${existing.type}`);
+    throw new AlertStateError(`Cannot rearm unsupported legacy alert type: ${existing.type}`);
   }
 
   const [result] = await db
