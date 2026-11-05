@@ -193,7 +193,7 @@ export function createRateLimitMiddleware(options: RateLimitMiddlewareOptions = 
     }
     if (result.ok) return;
 
-    setResponseHeader(event, "retry-after", String(Math.max(1, Math.ceil(result.retryAfterMs / 1000))));
+    setResponseHeader(event, "retry-after", Math.max(1, Math.ceil(result.retryAfterMs / 1000)));
     throw createError({ statusCode: 429, statusMessage: "Too Many Requests", message: "Rate limit exceeded" });
   });
 }
