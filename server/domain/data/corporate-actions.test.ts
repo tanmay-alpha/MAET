@@ -183,3 +183,32 @@ describe("P2 Corporate Action Historical Adjustments (Commit 3)", () => {
     expect(res.metrics.maxDrawdown).toBe(0);
   });
 });
+
+describe("adjustCandles — action ordering and bonus notation", () => {
+  const raw: Candle[] = [
+    makeCandle("2024-01-01T09:15:00.000Z", 200, 200, 200, 200),
+    makeCandle("2024-01-02T09:15:00.000Z", 200, 200, 200, 200),
+    makeCandle("2024-01-03T09:15:00.000Z", 190, 190, 190, 190), // ex-dividend ₹10
+    makeCandle("2024-01-04T09:15:00.000Z", 190, 190, 190, 190),
+    makeCandle("2024-01-05T09:15:00.000Z", 95, 95, 95, 95), // ex-split 2:1
+  ];
+  const dividend: CorporateAction = { symbol: "TCS", actionType: "DIVIDEND", exDate: "2024-01-03", amount: 10 };
+  const split: CorporateAction = { symbol: "TCS", actionType: "SPLIT", exDate: "2024-01-05", ratioNumerator: 2, ratioDenominator: 1 };
+
+  it("gives the same adjusted series whatever order the actions arrive in", () => {
+    // Dividend factor uses the raw pre-ex-date close: (200 - 10) / 200 = 0.95; split halves it again.
+    for (const actions of [[dividend, split], [split, dividend]]) {
+      const adjusted = adjustCandles(raw, actions, "TOTAL_RETURN_ADJUSTED");
+      expect(adjusted.map((c) => c.close)).toEqual([95, 95, 95, 95, 95]);
+    }
+  });
+
+  it("reads a bonus a:b as a bonus shares for every b held", () => {
+    // 1:1 bonus doubles the share count, halving pre-ex-date prices; 3:2 gives 5 shares per 2 (x0.4).
+    const oneForOne = adjustCandles(raw, [{ symbol: "TCS", actionType: "BONUS", exDate: "2024-01-05", ratioNumerator: 1, ratioDenominator: 1 }]);
+    expect(oneForOne[0].close).toBe(100);
+    expect(oneForOne[0].volume).toBe(200_000);
+    const threeForTwo = adjustCandles(raw, [{ symbol: "TCS", actionType: "BONUS", exDate: "2024-01-05", ratioNumerator: 3, ratioDenominator: 2 }]);
+    expect(threeForTwo[0].close).toBe(80);
+  });
+});
