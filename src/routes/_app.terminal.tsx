@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CandlestickChart } from "@/components/trading/candlestick-chart";
 import { OrderPanel } from "@/components/trading/order-panel";
 import { Watchlist } from "@/components/trading/watchlist";
@@ -106,10 +106,7 @@ function Terminal() {
     [fills, active]
   );
 
-  const [chartType, setChartType] = useState<"candle" | "line">(() => {
-    if (typeof window === "undefined") return "candle";
-    return (localStorage.getItem("maet_chart_type") as "candle" | "line") || "candle";
-  });
+  const [chartType, setChartType] = useState<"candle" | "line">("candle");
   const [indicators, setIndicators] = useState({
     sma: false,
     ema: false,
@@ -118,22 +115,27 @@ function Terminal() {
     volume: true,
   });
 
+  // Restore saved chart preferences after mount; reading storage during render would
+  // make the first client render differ from the server markup.
+  useEffect(() => {
+    const savedType = localStorage.getItem("maet_chart_type");
+    if (savedType === "candle" || savedType === "line") setChartType(savedType);
+    const savedInterval = localStorage.getItem("maet_chart_interval");
+    if (savedInterval && savedInterval in INTERVAL_CONFIG) setInterval(savedInterval);
+  }, []);
+
   const toggleIndicator = (key: keyof typeof indicators) => {
     setIndicators((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const handleSetInterval = (tf: string) => {
     setInterval(tf);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("maet_chart_interval", tf);
-    }
+    localStorage.setItem("maet_chart_interval", tf);
   };
 
   const handleSetChartType = (type: "candle" | "line") => {
     setChartType(type);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("maet_chart_type", type);
-    }
+    localStorage.setItem("maet_chart_type", type);
   };
 
   const dataQuality = liveQuote?.quality ?? (candleQuery.data?.delayed ? "delayed" : "historical");
