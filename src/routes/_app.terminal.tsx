@@ -12,7 +12,8 @@ import { ShieldAlert, RefreshCw, Layers, ClipboardList, History, TrendingUp, Bar
 import { useTerminalStore } from "@/store/useTerminalStore";
 import { DepthMeter } from "@/components/trading/depth-meter";
 import type { PaperOrderRow, PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
-import { calculateMarkedUnrealisedPnl, getPositionCloseSide } from "@shared/domain/paper-trading/margin";
+import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
+import { buildClosePositionOrder } from "@/lib/paper-orders";
 import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
 import { mapFillsToTradeMarkers } from "@/components/trading/chart-trade-markers";
 
@@ -398,7 +399,6 @@ function Terminal() {
                       const isShort = pos.side === "SHORT" || Number(pos.totalShares) < 0;
                       const signedQty = isShort ? -Math.abs(pos.totalShares) : Math.abs(pos.totalShares);
                       const pnl = calculateMarkedUnrealisedPnl({ quantity: signedQty, averagePrice: avgPrice }, ltp);
-                      const closeSide = getPositionCloseSide(pos);
 
                       return (
                         <tr key={pos.id} className="border-b border-border hover:bg-accent/40 transition-colors">
@@ -418,13 +418,7 @@ function Terminal() {
                           <td className="px-3 py-2 text-right">
                             <button
                               onClick={() => {
-                                placeOrder({
-                                  symbol: pos.symbol,
-                                  exchange: "NSE",
-                                  side: closeSide,
-                                  type: "MARKET",
-                                  quantity: Math.abs(pos.totalShares),
-                                });
+                                void placeOrder(buildClosePositionOrder(pos));
                               }}
                               disabled={!isTradingAvailable}
                               className="rounded bg-bear hover:bg-bear/90 text-white px-2 py-0.5 text-[10px] font-semibold transition disabled:opacity-50"
