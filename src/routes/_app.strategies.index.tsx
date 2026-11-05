@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import {
   Layers, Plus, FlaskConical, Play, GitBranch,
@@ -13,7 +13,7 @@ import {
 } from "@/components/strategy/strategy-library";
 import { trpc } from "@/lib/trpc";
 
-export const Route = createFileRoute("/_app/strategies")({
+export const Route = createFileRoute("/_app/strategies/")({
   head: () => ({ meta: [{ title: "Strategy Lab — MAET" }] }),
   component: StrategyLab,
 });
@@ -117,6 +117,7 @@ function StrategyLibraryTab() {
 
 function TemplateDetail({ template }: { template: StrategyTemplate }) {
   const createMutation = trpc.strategyDefinitions.create.useMutation();
+  const navigate = useNavigate();
   return (
     <div className="max-w-2xl">
       <div className="flex items-start gap-3 mb-6">
@@ -162,10 +163,8 @@ function TemplateDetail({ template }: { template: StrategyTemplate }) {
                 definition: template.definition,
               },
               {
-                onSuccess: (data: any) => {
-                  if (data?.strategy?.id) {
-                    window.location.href = `/_app/strategies/${data.strategy.id}`;
-                  }
+                onSuccess: (data) => {
+                  void navigate({ to: "/strategies/$strategyId", params: { strategyId: data.strategy.id } });
                 },
               },
             );
