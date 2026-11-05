@@ -3,11 +3,10 @@
  * Retrieves and automatically refreshes Supabase authentication tokens.
  */
 
-const SUPABASE_URL = "https://ztpbfmpfgmgmsitshzma.supabase.co";
-const SUPABASE_ANON_KEY =
-  typeof process !== "undefined" && process.env?.SUPABASE_ANON_KEY
-    ? process.env.SUPABASE_ANON_KEY
-    : "";
+// Both values are public by design (the anon key only grants what RLS allows) and must be
+// VITE_-prefixed so Vite inlines them into the browser bundle; process.env is empty there.
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://ztpbfmpfgmgmsitshzma.supabase.co";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 interface SupabaseSessionData {
   currentSession?: {
@@ -63,6 +62,8 @@ async function refreshAccessToken(
   refreshToken: string,
   sessionData: SupabaseSessionData
 ): Promise<string | null> {
+  // Supabase rejects refresh requests without the project's anon key.
+  if (!SUPABASE_ANON_KEY) return null;
   try {
     const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
       method: "POST",
