@@ -29,6 +29,7 @@ describe("Migration 0024 ingestion storage tables", () => {
     const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
     const freshSchema = `t_m0024_fresh_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const upgradeSchema = `t_m0024_upgrade_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const placeholderSchema = `t_m0024_stub_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const inSchema = (text: string, schema: string) => text.replaceAll("public.", `${schema}.`);
     const seededRows = seedSql.match(/^\('/gmu)?.length ?? 0;
 
@@ -86,9 +87,37 @@ describe("Migration 0024 ingestion storage tables", () => {
       expect(baseline.map((row) => row.symbol)).toEqual(["KEEPME"]);
       const [priceDaily] = await sql.unsafe(`SELECT to_regclass('${upgradeSchema}.price_daily') AS relation`);
       expect(priceDaily?.relation).toBe(`${upgradeSchema}.price_daily`);
+
+      // Old local/test databases: apply-migrations.ts used to pre-create empty
+      // `(id uuid PRIMARY KEY)` placeholders under these names.
+      await sql.unsafe(`CREATE SCHEMA ${placeholderSchema}`);
+      for (const table of ["price_daily", "calculation_results", "market_baseline_metrics"]) {
+        await sql.unsafe(`CREATE TABLE ${placeholderSchema}.${table} (id uuid PRIMARY KEY DEFAULT gen_random_uuid())`);
+      }
+      await sql.unsafe(inSchema(migrationSql, placeholderSchema));
+      await sql.unsafe(inSchema(migrationSql, placeholderSchema));
+      await sql.unsafe(inSchema(seedSql, placeholderSchema));
+      const [{ count: stubSeeded }] = await sql.unsafe(
+        `SELECT count(*)::int AS count FROM ${placeholderSchema}.market_baseline_metrics`,
+      );
+      expect(stubSeeded).toBe(seededRows);
+      // The ingestion writers' ON CONFLICT targets must be backed by a unique key.
+      for (let run = 0; run < 2; run += 1) {
+        await sql.unsafe(`
+          INSERT INTO ${placeholderSchema}.price_daily (symbol, date, open, high, low, close, volume, source_tag)
+          VALUES ('INFY', '2026-07-03', 1, 2, 0.5, 1.5, 10, 'yahoo')
+          ON CONFLICT (symbol, date) DO UPDATE SET close = EXCLUDED.close;
+          INSERT INTO ${placeholderSchema}.calculation_results (symbol, date, indicator_name, indicator_value, timeframe)
+          VALUES ('INFY', '2026-07-03', 'RSI_14', 55, '1d')
+          ON CONFLICT (symbol, date, indicator_name, timeframe) DO UPDATE SET indicator_value = EXCLUDED.indicator_value;
+        `);
+      }
+      const [{ count: priceRows }] = await sql.unsafe(`SELECT count(*)::int AS count FROM ${placeholderSchema}.price_daily`);
+      expect(priceRows).toBe(1);
     } finally {
       await sql.unsafe(`DROP SCHEMA IF EXISTS ${freshSchema} CASCADE`);
       await sql.unsafe(`DROP SCHEMA IF EXISTS ${upgradeSchema} CASCADE`);
+      await sql.unsafe(`DROP SCHEMA IF EXISTS ${placeholderSchema} CASCADE`);
       await sql.end();
     }
   });

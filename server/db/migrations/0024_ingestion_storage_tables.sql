@@ -11,6 +11,12 @@
 -- inserts). Everything is IF NOT EXISTS / DROP POLICY IF EXISTS so databases
 -- that already have these tables keep their data. RLS and grants mirror what
 -- 0009/0010 apply when the tables exist.
+--
+-- Databases bootstrapped by apply-migrations.ts before commit eed4850 contain
+-- empty placeholder tables `(id uuid PRIMARY KEY)` under these names. The DO
+-- blocks below complete such placeholders in place (add the real columns and
+-- a UNIQUE key matching the writers' ON CONFLICT targets) instead of dropping
+-- them; real tables are left untouched.
 
 -- ============================================================================
 -- price_daily: daily OHLCV written by the ingestion engine
@@ -31,6 +37,20 @@ CREATE TABLE IF NOT EXISTS public.price_daily (
   PRIMARY KEY (symbol, date)
 );
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('public.price_daily') AND attname = 'symbol' AND NOT attisdropped) THEN
+    ALTER TABLE public.price_daily
+      ADD COLUMN symbol TEXT NOT NULL, ADD COLUMN date DATE NOT NULL,
+      ADD COLUMN open NUMERIC(18,4) NOT NULL, ADD COLUMN high NUMERIC(18,4) NOT NULL,
+      ADD COLUMN low NUMERIC(18,4) NOT NULL, ADD COLUMN close NUMERIC(18,4) NOT NULL,
+      ADD COLUMN volume BIGINT NOT NULL DEFAULT 0, ADD COLUMN adjusted_close NUMERIC(18,4),
+      ADD COLUMN turnover NUMERIC(24,2), ADD COLUMN source_tag TEXT NOT NULL DEFAULT 'yahoo',
+      ADD COLUMN ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), ADD COLUMN raw_payload JSONB,
+      ADD CONSTRAINT price_daily_symbol_date_key UNIQUE (symbol, date);
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS price_daily_symbol_date_idx ON public.price_daily (symbol, date DESC);
 CREATE INDEX IF NOT EXISTS price_daily_date_idx ON public.price_daily (date DESC);
 
@@ -50,6 +70,19 @@ CREATE TABLE IF NOT EXISTS public.calculation_results (
   PRIMARY KEY (symbol, date, indicator_name, timeframe)
 );
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('public.calculation_results') AND attname = 'symbol' AND NOT attisdropped) THEN
+    ALTER TABLE public.calculation_results
+      ADD COLUMN symbol TEXT NOT NULL, ADD COLUMN date DATE NOT NULL,
+      ADD COLUMN indicator_name TEXT NOT NULL, ADD COLUMN indicator_value NUMERIC(18,6),
+      ADD COLUMN indicator_signal NUMERIC(18,6), ADD COLUMN indicator_hist NUMERIC(18,6),
+      ADD COLUMN timeframe TEXT NOT NULL DEFAULT '1d', ADD COLUMN parameters JSONB,
+      ADD COLUMN calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ADD CONSTRAINT calculation_results_natural_key UNIQUE (symbol, date, indicator_name, timeframe);
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS calc_results_symbol_date_idx ON public.calculation_results (symbol, date DESC);
 CREATE INDEX IF NOT EXISTS calc_results_indicator_idx ON public.calculation_results (indicator_name, date DESC);
 
@@ -64,6 +97,17 @@ CREATE TABLE IF NOT EXISTS public.market_baseline_metrics (
   last_trading_date DATE          NOT NULL,
   updated_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('public.market_baseline_metrics') AND attname = 'symbol' AND NOT attisdropped) THEN
+    ALTER TABLE public.market_baseline_metrics
+      ADD COLUMN symbol TEXT NOT NULL, ADD COLUMN adv_30 NUMERIC NOT NULL,
+      ADD COLUMN atr_14 NUMERIC NOT NULL, ADD COLUMN last_trading_date DATE NOT NULL,
+      ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ADD CONSTRAINT market_baseline_metrics_symbol_key UNIQUE (symbol);
+  END IF;
+END $$;
 
 -- ============================================================================
 -- Row level security and grants (same names and rules as 0009/0010)
