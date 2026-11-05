@@ -8,6 +8,7 @@ import {
 import type Redis from "ioredis";
 import { tryAuth, type AuthContext } from "../api/trpc/auth";
 import { getRedis } from "../data/redis/client";
+import { getClientIp } from "../infra/client-ip";
 
 /**
  * Token-bucket rate limiter for the API surface (per client IP and, when a
@@ -181,46 +182,6 @@ export function createRateLimitStore(kind: RateLimitStoreKind): RateLimitStore {
   return kind === "redis" ? new RedisRateLimitStore() : new MemoryRateLimitStore();
 }
 
-/**
- * Rate-limit key for an IP: IPv4 as-is (IPv4-mapped IPv6 unwrapped), IPv6
- * collapsed to its /64 because a single subscriber typically owns a whole /64.
- */
-export function normalizeIp(raw: string): string {
-  let ip = raw.trim().toLowerCase();
-  if (ip.startsWith("[")) ip = ip.slice(1, ip.indexOf("]") === -1 ? undefined : ip.indexOf("]"));
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/u.exec(ip);
-  if (mapped) return mapped[1];
-  if (!ip.includes(":")) return ip;
-
-  const [head, tail] = ip.split("%")[0].split("::");
-  const headGroups = head ? head.split(":") : [];
-  const tailGroups = tail ? tail.split(":") : [];
-  const groups =
-    tail === undefined
-      ? headGroups
-      : [...headGroups, ...Array<string>(Math.max(0, 8 - headGroups.length - tailGroups.length)).fill("0"), ...tailGroups];
-  const prefix = groups.slice(0, 4).map((group) => (Number.parseInt(group, 16) || 0).toString(16));
-  while (prefix.length < 4) prefix.push("0");
-  return `${prefix.join(":")}::/64`;
-}
-
-/**
- * Client IP. Cloudflare-style `cf-connecting-ip` / `true-client-ip` are set by
- * the edge and overwrite client values. Render appends its internal proxy hop
- * to the right of X-Forwarded-For, so the leftmost entry is the only usable
- * one there — but it is client-controlled and spoofable, so it is only a
- * fallback. The per-user bucket still applies to authenticated callers.
- */
-export function clientIp(event: H3Event): string {
-  const header = (name: string) => getRequestHeader(event, name)?.trim() || undefined;
-  const ip =
-    header("cf-connecting-ip") ??
-    header("true-client-ip") ??
-    header("x-forwarded-for")?.split(",")[0]?.trim() ??
-    event.node.req.socket?.remoteAddress;
-  return ip ? normalizeIp(ip) : "unknown";
-}
-
 export type RateLimitMiddlewareOptions = {
   config?: RateLimitConfig;
   store?: RateLimitStore;
@@ -240,7 +201,7 @@ export function createRateLimitMiddleware(options: RateLimitMiddlewareOptions = 
     if (!isRateLimitedPath(event.path.split("?")[0])) return;
 
     const nowMs = now();
-    let result = await store.take(`ip:${clientIp(event)}`, config.ip, nowMs);
+    let result = await store.take(`ip:${getClientIp(event)}`, config.ip, nowMs);
     if (result.ok) {
       // Resolved once here and shared through event.context so the tRPC
       // handler can skip a second JWT verification.

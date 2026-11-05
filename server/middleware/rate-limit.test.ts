@@ -7,7 +7,6 @@ import {
   createRateLimitMiddleware,
   createRateLimitStore,
   MemoryRateLimitStore,
-  normalizeIp,
   rateLimitConfigFromEnv,
   RedisRateLimitStore,
   type RateLimitConfig,
@@ -86,12 +85,6 @@ describe("rate limit middleware", () => {
   });
 
   it("groups IPv6 clients by /64", async () => {
-    expect(normalizeIp("2001:db8:abcd:12:1::5")).toBe("2001:db8:abcd:12::/64");
-    expect(normalizeIp("2001:DB8:ABCD:0012:ffff:0:0:1")).toBe("2001:db8:abcd:12::/64");
-    expect(normalizeIp("::1")).toBe("0:0:0:0::/64");
-    expect(normalizeIp("::ffff:192.0.2.1")).toBe("192.0.2.1");
-    expect(normalizeIp(" 192.0.2.1 ")).toBe("192.0.2.1");
-
     const request = buildApp({ now: 0 });
     for (let i = 0; i < 3; i++) {
       expect((await request("/api/trpc/x", { "cf-connecting-ip": `2001:db8:1:2::${i + 1}` })).status).toBe(200);
