@@ -38,14 +38,58 @@ export type QuoteLoadResult = {
 };
 
 /**
- * Latest quote for one symbol. Cached broker quotes are re-labelled on every
- * read, so a quote cached as "live" at 15:29 is "delayed" when served at 15:45.
+ * Latest quote for one symbol, with the same source order as loadQuotes():
+ * a fresh live Angel One stream tick, then Angel One REST, then Yahoo.
+ * Broker quotes are re-labelled on every read, so a quote cached as "live"
+ * at 15:29 is "delayed" when served at 15:45.
  */
 export async function loadQuote(symbol: string, force = false): Promise<Tick> {
-  const tick = await fetchQuote(symbol, force);
+  const [result] = await resolveQuotes([symbol.trim().toUpperCase()], force);
+  if (result.status === "rejected") throw result.reason;
   const now = new Date();
-  const quality = sessionQuality(tick, now, currentMarketPhase(now));
-  return quality === tick.quality ? tick : { ...tick, quality };
+  const quality = sessionQuality(result.value, now, currentMarketPhase(now));
+  return quality === result.value.quality ? result.value : { ...result.value, quality };
+}
+
+/**
+ * A broker tick already delivered by the WebSocket (or a REST snapshot) that
+ * is live for the current session and younger than the cache TTL.
+ */
+function freshStreamTick(symbol: string, now: Date, ttl: number): Tick | undefined {
+  const tick = quoteStore.get(symbol);
+  if (!tick || tick.source !== "angelone") return undefined;
+  if (sessionQuality(tick, now, currentMarketPhase(now)) !== "live") return undefined;
+  return now.getTime() - Date.parse(tick.ts) < ttl ? tick : undefined;
+}
+
+/**
+ * Source order shared by loadQuote/loadQuotes. `force` skips the stream tick
+ * and the cache; a forced symbol that Angel One could not refresh goes to
+ * Yahoo rather than back to the cache.
+ */
+async function resolveQuotes(symbols: string[], force: boolean): Promise<PromiseSettledResult<Tick>[]> {
+  const now = new Date();
+  const ttl = getCacheTtl();
+  const streamed = new Map<string, Tick>();
+  if (!force) {
+    for (const symbol of symbols) {
+      const tick = freshStreamTick(symbol, now, ttl);
+      if (tick) streamed.set(symbol, tick);
+    }
+  }
+  const needsRefresh = symbols.filter((symbol) => {
+    if (streamed.has(symbol)) return false;
+    const existing = cache.get(symbol);
+    return force || !existing || now.getTime() - existing.fetchedAt >= ttl;
+  });
+  const refreshed = needsRefresh.length > 0 ? await refreshFromAngelOne(needsRefresh) : new Set<string>();
+
+  return Promise.allSettled(
+    symbols.map((symbol) => {
+      const tick = streamed.get(symbol);
+      return tick ? Promise.resolve(tick) : fetchQuote(symbol, force && !refreshed.has(symbol));
+    })
+  );
 }
 
 function fetchQuote(symbol: string, force: boolean): Promise<Tick> {
@@ -79,7 +123,9 @@ function fetchQuote(symbol: string, force: boolean): Promise<Tick> {
   return request;
 }
 
-async function refreshFromAngelOne(symbols: string[]): Promise<void> {
+/** Refreshes catalogued NSE symbols from Angel One REST; returns the symbols it refreshed. */
+async function refreshFromAngelOne(symbols: string[]): Promise<Set<string>> {
+  const refreshed = new Set<string>();
   const requests = symbols.flatMap((symbol) => {
     const record = lookupSymbol("NSE", symbol);
     return record ? [{ symbol, token: record.token }] : [];
@@ -97,7 +143,7 @@ async function refreshFromAngelOne(symbols: string[]): Promise<void> {
     } catch {
       // Logger unavailable (invalid env); the fallback itself must still work.
     }
-    return;
+    return refreshed;
   }
 
   const now = new Date();
@@ -119,19 +165,14 @@ async function refreshFromAngelOne(symbols: string[]): Promise<void> {
     rememberQuote(tick);
     quoteStore.set(tick);
     bus.emit("tick", tick);
+    refreshed.add(tick.symbol);
   }
+  return refreshed;
 }
 
 export async function loadQuotes(symbols: string[], force = false): Promise<QuoteLoadResult> {
   const unique = [...new Set(symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean))];
-  const ttl = getCacheTtl();
-  const missing = unique.filter((symbol) => {
-    const existing = cache.get(symbol);
-    return force || !existing || Date.now() - existing.fetchedAt >= ttl;
-  });
-  if (missing.length > 0) await refreshFromAngelOne(missing);
-
-  const settled = await Promise.allSettled(unique.map((symbol) => fetchQuote(symbol, false)));
+  const settled = await resolveQuotes(unique, force);
   const now = new Date();
   const phase = currentMarketPhase(now);
   const quotes: MarketQuote[] = [];
