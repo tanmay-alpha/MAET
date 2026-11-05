@@ -116,7 +116,7 @@ function StockDetail() {
     retry: 1,
   });
   const fallbackCandles = useMarketCandles(symbol, "1d", "1y");
-  const { quoteMap, streamConnected } = useMarketQuotes([symbol]);
+  const { quoteMap } = useMarketQuotes([symbol]);
   const detail = detailQuery.data;
   const quote = quoteMap.get(symbol) ?? detail?.quote;
   const quoteAsOf = quote && "ts" in quote ? quote.ts : detail?.quote?.asOf;
@@ -154,7 +154,7 @@ function StockDetail() {
           </div>
           <div className="flex items-center gap-5">
             <div className="text-right"><div className="font-mono text-2xl font-semibold tabular-nums">{quote?.price !== undefined ? `₹${quote.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}</div>
-              <div className={`font-mono text-xs ${(quote?.changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>{quote?.changePct === undefined ? "Quote unavailable" : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}% · ${streamConnected ? "live stream" : quote.source}`}</div></div>
+              <div className={`font-mono text-xs ${(quote?.changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>{quote?.changePct === undefined ? "Quote unavailable" : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}% · ${quoteMap.get(symbol)?.delayed === false ? "live" : `${quote.source} · delayed`}`}</div></div>
             <button type="button" onClick={() => void detailQuery.refetch()} className="rounded border border-border p-2 text-muted-foreground hover:bg-accent" aria-label="Refresh company data"><RefreshCw className={`h-4 w-4 ${detailQuery.isFetching ? "animate-spin" : ""}`} /></button>
           </div>
         </div>

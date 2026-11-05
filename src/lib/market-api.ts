@@ -10,21 +10,41 @@ export type MarketQuote = ExecutionQuote & {
   changePct?: number;
   marketState?: string;
   currency?: string;
+  /** True unless this quote is a real-time broker print taken during market hours. */
+  delayed: boolean;
 };
 
-export const MarketQuoteSchema = ExecutionQuoteSchema.extend({
+const MarketQuoteWireSchema = ExecutionQuoteSchema.extend({
   previousClose: z.number().finite().positive().optional(),
   change: z.number().finite().optional(),
   changePct: z.number().finite().optional(),
   marketState: z.string().optional(),
   currency: z.string().optional(),
+  // Backends that predate the per-quote contract omit this field.
+  delayed: z.boolean().optional(),
 });
 
-export const MarketQuotesResponseSchema = z.object({
+type MarketQuoteWire = z.infer<typeof MarketQuoteWireSchema>;
+
+// When the backend does not send a per-quote `delayed` flag, treat the quote as delayed
+// if its response was flagged delayed or its quality is anything other than "live".
+function normalizeQuote(quote: MarketQuoteWire, responseDelayed: boolean): MarketQuote {
+  return { ...quote, delayed: quote.delayed ?? (responseDelayed || quote.quality !== "live") };
+}
+
+/** Parses one quote from the SSE stream; returns null for malformed payloads. */
+export function parseMarketQuote(raw: unknown, responseDelayed = false): MarketQuote | null {
+  const parsed = MarketQuoteWireSchema.safeParse(raw);
+  return parsed.success ? normalizeQuote(parsed.data, responseDelayed) : null;
+}
+
+const MarketQuotesResponseSchema = z.object({
   asOf: z.string().datetime(),
   source: z.string(),
   delayed: z.boolean(),
-  quotes: z.array(MarketQuoteSchema),
+  // Exchange session phase from the backend clock (e.g. "OPEN", "CLOSED"); absent on older backends.
+  marketPhase: z.string().optional(),
+  quotes: z.array(MarketQuoteWireSchema),
   errors: z.array(
     z.object({
       symbol: z.string(),
@@ -32,9 +52,10 @@ export const MarketQuotesResponseSchema = z.object({
     })
   ),
 });
-export type MarketQuotesResponse = z.infer<
-  typeof MarketQuotesResponseSchema
->;
+
+export type MarketQuotesResponse = Omit<z.infer<typeof MarketQuotesResponseSchema>, "quotes"> & {
+  quotes: MarketQuote[];
+};
 
 export type MarketCompany = {
   symbol: string;
@@ -217,46 +238,6 @@ export type MarketCandlesResponse = {
   candles: MarketCandle[];
 };
 
-export type BacktestRequest = {
-  symbol: string;
-  timeframe: "5m" | "15m" | "1h" | "1d" | "1wk";
-  range: "5d" | "1mo" | "3mo" | "1y" | "2y" | "5y";
-  strategy: "sma_cross" | "rsi";
-  initialCapital: number;
-  feeBps: number;
-  params: Record<string, number>;
-};
-
-export type BacktestResponse = {
-  asOf: string;
-  source: "yahoo";
-  delayed: true;
-  symbol: string;
-  timeframe: BacktestRequest["timeframe"];
-  range: BacktestRequest["range"];
-  candleCount: number;
-  strategy: { name: BacktestRequest["strategy"]; params: Record<string, number> };
-  initialCapital: number;
-  finalEquity: number;
-  totalReturnPct: number;
-  maxDrawdownPct: number;
-  sharpe: number;
-  winRatePct: number;
-  profitFactor: number | null;
-  avgTradePnl: number;
-  trades: Array<{
-    entryTs: string;
-    exitTs: string;
-    entryPrice: number;
-    exitPrice: number;
-    qty: number;
-    pnl: number;
-    returnPct: number;
-  }>;
-  equity: Array<{ ts: string; value: number }>;
-  monthlyReturns: Array<{ month: string; returnPct: number }>;
-};
-
 const configuredApiUrl = import.meta.env.VITE_API_URL as string | undefined;
 export const API_BASE_URL = (configuredApiUrl ?? "").replace(/\/$/, "");
 
@@ -294,8 +275,8 @@ export async function fetchMarketQuotes(
   const params = new URLSearchParams({ symbols: symbols.join(",") });
   const response = await fetchMarketEndpoint(`/api/market/quotes?${params}`, signal);
   if (!response.ok) throw new Error(`Quote service returned ${response.status}`);
-  const payload: unknown = await response.json();
-  return MarketQuotesResponseSchema.parse(payload);
+  const payload = MarketQuotesResponseSchema.parse(await response.json());
+  return { ...payload, quotes: payload.quotes.map((quote) => normalizeQuote(quote, payload.delayed)) };
 }
 
 export async function fetchMarketCompanies(
@@ -349,27 +330,4 @@ export async function fetchMarketCandles(
   }
   if (!response.ok) throw new Error(`Candle service returned ${response.status}`);
   return response.json() as Promise<MarketCandlesResponse>;
-}
-
-export async function runMarketBacktest(
-  input: BacktestRequest,
-  signal?: AbortSignal
-): Promise<BacktestResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/backtest/run`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(input),
-    signal,
-  });
-  if (!response.ok) {
-    let message = `Backtest service returned ${response.status}`;
-    try {
-      const error = await response.json() as { statusMessage?: string; message?: string };
-      message = error.statusMessage ?? error.message ?? message;
-    } catch {
-      // Keep the HTTP status fallback.
-    }
-    throw new Error(message);
-  }
-  return response.json() as Promise<BacktestResponse>;
 }

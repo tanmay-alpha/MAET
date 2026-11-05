@@ -2,21 +2,17 @@
  * Strategy Lab E2E — Playwright test suite.
  * Tests user-facing journeys for Phase 3.
  *
- * Prerequisites:
- * - App running on TEST_BASE_URL (default: http://localhost:5173)
- * - Authenticated session available
+ * Runs against playwright.config.ts `baseURL` (PLAYWRIGHT_TEST_BASE_URL or the dev server it starts).
  */
 
 import { test, expect, type Page } from "@playwright/test";
-
-const BASE = process.env.TEST_BASE_URL ?? "http://localhost:5173";
 
 // ============================================================
 // Helpers
 // ============================================================
 
 async function goTo(page: Page, path: string) {
-  await page.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
+  await page.goto(path, { waitUntil: "domcontentloaded" });
 }
 
 async function waitForHeading(page: Page, text: string) {
