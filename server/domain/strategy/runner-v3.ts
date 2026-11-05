@@ -22,7 +22,8 @@ import { calculatePositionSize } from "./position-sizer";
 import { computeLegCharges } from "./fee-model";
 import { computeMetrics } from "../backtest/risk-metrics";
 import type { EquityPoint, TradeRecord } from "../backtest/risk-metrics";
-import { STRATEGY_ENGINE_VERSION, INDICATOR_ENGINE_VERSION, FEE_MODEL_VERSION } from "../../../shared/strategy/version";
+import { STRATEGY_ENGINE_VERSION, FEE_MODEL_VERSION } from "../../../shared/strategy/version";
+import { INDICATOR_ENGINE_VERSION } from "../../../shared/indicators/canonical";
 
 import {
   adjustCandles,

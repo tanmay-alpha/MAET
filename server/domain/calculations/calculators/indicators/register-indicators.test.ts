@@ -94,3 +94,12 @@ describe("indicator calculators — canonical parity and date alignment", () => 
     }
   });
 });
+
+describe("VWAP calculator", () => {
+  it("uses the canonical session VWAP: one daily bar is one session, so VWAP is its typical price", () => {
+    const input = buildInput();
+    const last = BARS - 1;
+    const out = runOne("VWAP", input);
+    expect(out.value).toBeCloseTo((input.highs![last] + input.lows![last] + input.closes![last]) / 3, 10);
+  });
+});

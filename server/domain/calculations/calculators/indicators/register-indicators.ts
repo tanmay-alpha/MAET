@@ -312,8 +312,9 @@ registerCalculator({
   },
   calculate: (input: CalculatorInput): CalculatorOutput[] => {
     if (!input.highs || !input.lows || !input.closes || !input.volumes) return [];
-    // Calculation input carries no timestamps → cumulative over the loaded window.
-    const values = computeVWAP(candlesOf(input.highs, input.lows, input.closes, input.volumes));
+    // Same session VWAP as everywhere else: the bar dates anchor each IST trading day.
+    const dates = input.dates ?? [];
+    const values = computeVWAP(candlesOf(input.highs, input.lows, input.closes, input.volumes).map((c, i) => ({ ...c, ts: dates[i] })));
     return buildOutputs(input.symbol, input.dates ?? [], values, "VWAP");
   },
 });

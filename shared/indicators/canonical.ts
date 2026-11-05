@@ -25,7 +25,8 @@ import type {
   CanonicalIndicatorsSnapshot,
 } from "./types";
 
-export const INDICATOR_ENGINE_VERSION = "1.0.0";
+/** 1.1.0: VWAP resets each IST trading session; calculation engine uses canonical series. */
+export const INDICATOR_ENGINE_VERSION = "1.1.0";
 
 // ============================================================================
 // Helper: Extract price / candle field array
