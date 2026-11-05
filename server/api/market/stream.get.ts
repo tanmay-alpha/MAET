@@ -1,11 +1,16 @@
 import { createError, defineEventHandler, getQuery } from "h3";
 import { bus } from "../../infra/bus";
-import { loadQuotes } from "../../domain/market/quote-service";
+import { buildQuotesPayload, loadQuotes } from "../../domain/market/quote-service";
+import { toMarketQuote } from "../../domain/market/quote-quality";
 import { subscribeMarketSymbols } from "../../orchestrator";
 import type { Tick } from "@shared/types";
 
 let activeConnections = 0;
 const MAX_CONNECTIONS = 100;
+
+export function getActiveStreamConnections(): number {
+  return activeConnections;
+}
 
 export default defineEventHandler(async (event) => {
   if (activeConnections >= MAX_CONNECTIONS) {
@@ -29,10 +34,29 @@ export default defineEventHandler(async (event) => {
   event.node.res.flushHeaders();
   event.node.res.write("retry: 5000\n\n");
 
-  activeConnections++;
   const symbolSet = new Set(symbols);
-  const releaseSubscription = subscribeMarketSymbols(symbols);
+  const pendingTicks = new Map<string, Tick>();
   let closed = false;
+  let offTick: (() => void) | undefined;
+  let flushInterval: ReturnType<typeof setInterval> | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+
+  activeConnections++;
+  const releaseSubscription = subscribeMarketSymbols(symbols);
+
+  // Teardown is registered before the first await: a client that disconnects
+  // while the snapshot loads must still release its slot and subscriptions.
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    activeConnections = Math.max(0, activeConnections - 1);
+    clearInterval(heartbeat);
+    clearInterval(flushInterval);
+    offTick?.();
+    releaseSubscription();
+  };
+  event.node.req.once("close", close);
+  event.node.res.once("close", close);
 
   const send = (name: string, data: unknown) => {
     if (closed || event.node.res.destroyed) return;
@@ -41,36 +65,25 @@ export default defineEventHandler(async (event) => {
   };
 
   const initial = await loadQuotes(symbols);
-  send("snapshot", initial);
+  if (closed) return;
+  send("snapshot", buildQuotesPayload(initial));
 
-  const pendingTicks = new Map<string, Tick>();
-  const offTick = bus.on("tick", (tick) => {
+  offTick = bus.on("tick", (tick) => {
     if (symbolSet.has(tick.symbol)) {
       pendingTicks.set(tick.symbol, tick);
     }
   });
 
-  const flushInterval = setInterval(() => {
+  flushInterval = setInterval(() => {
     if (closed || pendingTicks.size === 0) return;
+    const now = new Date();
     for (const tick of pendingTicks.values()) {
-      send("tick", tick);
+      send("tick", toMarketQuote(tick, now));
     }
     pendingTicks.clear();
   }, 200);
 
-  const heartbeat = setInterval(() => send("heartbeat", { ts: new Date().toISOString() }), 15_000);
+  heartbeat = setInterval(() => send("heartbeat", { ts: new Date().toISOString() }), 15_000);
 
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    activeConnections = Math.max(0, activeConnections - 1);
-    clearInterval(heartbeat);
-    clearInterval(flushInterval);
-    offTick();
-    releaseSubscription();
-  };
-
-  event.node.req.once("close", close);
-  event.node.res.once("close", close);
   return new Promise(() => {});
 });

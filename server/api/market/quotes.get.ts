@@ -1,5 +1,5 @@
 import { createError, defineEventHandler, getQuery, setResponseHeader } from "h3";
-import { loadQuotes } from "../../domain/market/quote-service";
+import { buildQuotesPayload, loadQuotes } from "../../domain/market/quote-service";
 
 const DEFAULT_SYMBOLS = [
   "RELIANCE",
@@ -34,13 +34,7 @@ export default defineEventHandler(async (event) => {
   const query = getQuery(event);
   const symbols = parseSymbols(query.symbols);
   const result = await loadQuotes(symbols, query.refresh === "1");
-  const source = result.quotes.some((quote) => quote.source === "angelone") ? "angelone" : "yahoo";
 
   setResponseHeader(event, "cache-control", "public, max-age=5, s-maxage=10, stale-while-revalidate=30");
-  return {
-    asOf: new Date().toISOString(),
-    source,
-    delayed: source !== "angelone",
-    ...result,
-  };
+  return buildQuotesPayload(result);
 });

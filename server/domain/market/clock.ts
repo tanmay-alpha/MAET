@@ -1,6 +1,9 @@
-export type MarketPhase = "PRE_OPEN" | "OPEN" | "CLOSED" | "HOLIDAY" | "AFTER_HOURS";
+import type { MarketPhase } from "@shared/types";
+
+export type { MarketPhase };
 
 const IST_OFFSET_MIN = 330;
+const DAY_MS = 86_400_000;
 
 function toIstParts(d: Date): { year: number; month: number; day: number; minutes: number; weekday: number } {
   const utcMs = d.getTime();
@@ -21,6 +24,26 @@ function isSameIstDay(a: Date, b: Date): boolean {
   const A = toIstParts(a);
   const B = toIstParts(b);
   return A.year === B.year && A.month === B.month && A.day === B.day;
+}
+
+/** Calendar date in IST as YYYY-MM-DD (independent of the host time zone). */
+export function istDateKey(d: Date): string {
+  return new Date(d.getTime() + IST_OFFSET_MIN * 60_000).toISOString().slice(0, 10);
+}
+
+/** Minutes since IST midnight and IST weekday (0 = Sunday). */
+export function istClock(d: Date): { minutes: number; weekday: number } {
+  const { minutes, weekday } = toIstParts(d);
+  return { minutes, weekday };
+}
+
+/** Next instant strictly after `now` whose IST wall-clock time is hour:minute. */
+export function nextIstTime(now: Date, hour: number, minute: number): Date {
+  const offsetMs = IST_OFFSET_MIN * 60_000;
+  const istMidnightUtcMs = Math.floor((now.getTime() + offsetMs) / DAY_MS) * DAY_MS - offsetMs;
+  let target = istMidnightUtcMs + (hour * 60 + minute) * 60_000;
+  if (target <= now.getTime()) target += DAY_MS;
+  return new Date(target);
 }
 
 export function computePhase(now: Date, holidays: Date[]): MarketPhase {
