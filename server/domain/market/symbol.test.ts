@@ -8,6 +8,11 @@ describe("symbol domain", () => {
     expect(SYMBOLS.every((q) => q.exchange === "NSE" || q.exchange === "BSE")).toBe(true);
   });
 
+  it("nifty50.json lists exactly the 50 index constituents, each once", () => {
+    expect(nifty50).toHaveLength(50);
+    expect(new Set(nifty50.map((entry) => entry.symbol)).size).toBe(50);
+  });
+
   it("lookupSymbol returns the same record for RELIANCE", () => {
     const q = lookupSymbol("NSE", "RELIANCE");
     expect(q).toBeDefined();

@@ -43,7 +43,7 @@ const RANGE_LABELS: { id: RangeType; label: string }[] = [
 const PRESETS = [
   { name: "IT services", symbols: ["TCS", "INFY", "WIPRO", "HCLTECH"] },
   { name: "Private banks", symbols: ["HDFCBANK", "ICICIBANK", "KOTAKBANK", "AXISBANK"] },
-  { name: "Autos", symbols: ["MARUTI", "TATAMOTORS", "M&M", "BAJAJ-AUTO"] },
+  { name: "Autos", symbols: ["MARUTI", "TMPV", "M&M", "BAJAJ-AUTO"] },
   { name: "Energy", symbols: ["RELIANCE", "ONGC", "NTPC", "POWERGRID"] },
 ];
 
