@@ -18,6 +18,7 @@
 
 import { randomUUID } from "node:crypto";
 import * as backtests from "./repository";
+import { isDatabaseAvailable, recordDatabaseFailure } from "../../data/drizzle/availability";
 import { createJobContext, JobInterruptedError, type JobContext } from "./job-context";
 import * as optimisation from "../strategy-optimisation/repository";
 import { runBacktestJob } from "../../workers/backtest-worker";
@@ -85,6 +86,8 @@ export interface StrategyJobRunnerOptions {
   staleAfterMs?: number;
   /** How often to look for stale jobs (also done once on start). */
   recoveryIntervalMs?: number;
+  /** While false the runner does not query the queues (defaults to the database circuit breaker). */
+  isDatabaseAvailable?: () => boolean;
 }
 
 export interface StrategyJobRunner {
@@ -104,6 +107,7 @@ export function createStrategyJobRunner(options: StrategyJobRunnerOptions = {}):
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
   const staleAfterMs = options.staleAfterMs ?? backtests.HEARTBEAT_TIMEOUT_MS;
   const recoveryIntervalMs = options.recoveryIntervalMs ?? 60_000;
+  const databaseAvailable = options.isDatabaseAvailable ?? isDatabaseAvailable;
   const tag = `[strategy-jobs:${workerId}]`;
 
   let stopping = false;
@@ -184,6 +188,12 @@ export function createStrategyJobRunner(options: StrategyJobRunnerOptions = {}):
   async function runLoop(): Promise<void> {
     let nextRecoveryAt = 0;
     while (!stopping) {
+      // While the database circuit is open every claim would wait out the connect timeout and log
+      // an error; stay idle until the health probe or a guarded read closes it.
+      if (!databaseAvailable()) {
+        await idle(pollIntervalMs);
+        continue;
+      }
       try {
         if (Date.now() >= nextRecoveryAt) {
           await recoverStale();
@@ -195,6 +205,7 @@ export function createStrategyJobRunner(options: StrategyJobRunnerOptions = {}):
         else await idle(pollIntervalMs);
       } catch (err) {
         console.error(`${tag} Runner loop error:`, err);
+        recordDatabaseFailure(err);
         if (!stopping) await idle(pollIntervalMs);
       }
     }
