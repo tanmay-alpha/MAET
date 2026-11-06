@@ -15,6 +15,8 @@ import {
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { fetchMarketCandles } from "@/lib/market-api";
 import { trpc } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import type { PeerComparisonEntry, PeerMetric } from "../../server/modules/peers/contracts";
 
 export const Route = createFileRoute("/_app/compare")({
@@ -54,9 +56,11 @@ function Compare() {
 
   const { quoteMap, isFetching, isError } = useMarketQuotes(symbols);
 
+  const signedIn = useSignedIn();
   const peerQuery = useQuery({
     queryKey: ["peerComparison", primarySymbol],
     queryFn: () => trpc.companies.getPeerComparison.query({ symbol: primarySymbol, limit: 6 }),
+    enabled: signedIn,
   });
 
   const candleQueries = useQueries({
@@ -463,6 +467,11 @@ function Compare() {
         </div>
       ) : (
         <div className="p-4 flex-1 overflow-auto">
+          {!signedIn && (
+            <div className="mb-3">
+              <SignedOutNotice feature="Peer fundamentals" />
+            </div>
+          )}
           <div className="mb-3 text-xs text-muted-foreground flex flex-wrap items-center justify-between gap-2">
             <span>
               Comparing peers for <strong>{primarySymbol}</strong>

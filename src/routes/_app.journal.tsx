@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
+import { useSignedIn } from "@/hooks/use-signed-in";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import { trpc } from "@/lib/trpc";
 import { BookOpen, Award, AlertTriangle, CheckCircle2, FileText, ArrowUpRight, ArrowDownRight, X, Check } from "lucide-react";
 
@@ -16,7 +18,8 @@ export const Route = createFileRoute("/_app/journal")({
 
 function JournalPage() {
   const [activeTab, setActiveTab] = useState<"THESES" | "REVIEWS">("THESES");
-  const thesesQuery = trpc.tradeTheses.list.useQuery();
+  const signedIn = useSignedIn();
+  const thesesQuery = trpc.tradeTheses.list.useQuery(undefined, { enabled: signedIn });
   const { positions } = usePaperAccount();
 
   const theses = thesesQuery.data || [];
@@ -63,6 +66,8 @@ function JournalPage() {
           </button>
         </div>
       </div>
+
+      {!signedIn && <SignedOutNotice feature="Trade theses and reviews" />}
 
       {/* Overview Cards */}
       <div className="grid grid-cols-4 gap-4 text-xs font-mono">

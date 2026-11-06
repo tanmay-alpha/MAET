@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import { DataQualityOverviewComponent } from "@/components/data-quality/data-quality-overview";
 
 export const Route = createFileRoute("/_app/admin/data-quality")({
@@ -10,23 +11,27 @@ export const Route = createFileRoute("/_app/admin/data-quality")({
 
 function AdminDataQualityPage() {
   const queryClient = useQueryClient();
+  const signedIn = useSignedIn();
 
   const overviewQuery = useQuery({
     queryKey: ["dataQuality", "getOverview"],
     queryFn: () => trpc.dataQuality.getOverview.query(),
     retry: false,
+    enabled: signedIn,
   });
 
   const coverageQuery = useQuery({
     queryKey: ["dataQuality", "getCoverage"],
     queryFn: () => trpc.dataQuality.getCoverage.query(),
     retry: false,
+    enabled: signedIn,
   });
 
   const anomaliesQuery = useQuery({
     queryKey: ["dataQuality", "listAnomalies"],
     queryFn: () => trpc.dataQuality.listAnomalies.query(),
     retry: false,
+    enabled: signedIn,
   });
 
   const retryMutation = useMutation({
@@ -43,7 +48,7 @@ function AdminDataQualityPage() {
     },
   });
 
-  if (overviewQuery.isError) {
+  if (!signedIn || overviewQuery.isError) {
     return (
       <div className="container mx-auto max-w-4xl p-12 text-center">
         <h2 className="text-2xl font-bold text-destructive">Access Restricted</h2>

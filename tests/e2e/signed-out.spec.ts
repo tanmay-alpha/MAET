@@ -32,3 +32,30 @@ test("signed out: /terminal makes no protected calls and asks the visitor to sig
     .map(({ method, url }) => `${method} ${url.pathname}`);
   expect(protectedCalls).toEqual([]);
 });
+
+const SIGNED_OUT_PAGES = [
+  { path: "/journal", notice: "Trade theses and reviews require a signed-in account." },
+  { path: "/replay", notice: "Replay sessions require a signed-in account." },
+  { path: "/performance", notice: "Backtest results require a signed-in account." },
+  { path: "/options/NIFTY", notice: "Options chains require a signed-in account." },
+  { path: "/admin/data-quality", notice: "Data Quality Centre is available to admin users only." },
+];
+
+for (const { path, notice } of SIGNED_OUT_PAGES) {
+  test(`signed out: ${path} explains sign-in and makes no protected tRPC calls`, async ({ page, api }) => {
+    await page.goto(path);
+    await expect(page.getByText(notice)).toBeVisible();
+
+    const trpcCalls = api.requests
+      .filter(({ url }) => url.pathname.startsWith("/api/trpc/"))
+      .map(({ url }) => url.pathname);
+    expect(trpcCalls).toEqual([]);
+  });
+}
+
+test("signed out: /compare charts prices without requesting protected peer fundamentals", async ({ page, api }) => {
+  await page.goto("/compare");
+  await page.getByRole("button", { name: "Valuation", exact: true }).click();
+  await expect(page.getByText("Peer fundamentals require a signed-in account.")).toBeVisible();
+  expect(api.requests.some(({ url }) => url.pathname.includes("getPeerComparison"))).toBe(false);
+});
