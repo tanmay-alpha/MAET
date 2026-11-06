@@ -81,7 +81,7 @@ flowchart TB
 
 MAET includes a research and simulation toolkit built to avoid the pitfalls of naive backtesting (overfitting, look-ahead bias, survivorship bias, and zero-cost assumptions).
 
-> **Wiring status.** Production backtests (the `backtestV2` tRPC router and the backtest, sweep and walk-forward job workers in `server/workers/`) run `server/domain/strategy/runner-v3.ts`, which applies statutory Indian equity charges (`shared/domain/costs`) and slippage. The execution model (A), point-in-time fundamentals (C), shared-capital portfolio engine (D), walk-forward analysis module (E) and robustness analysis (F) below are **research modules covered by tests** (for example `server/domain/strategy/p2-research-invariants.test.ts`); they are not yet called by production backtests.
+> **Wiring status.** Production backtests (the `backtestV2` tRPC router and the backtest, sweep and walk-forward jobs in `server/workers/`) run `server/domain/strategy/runner-v3.ts`, which applies statutory Indian equity charges (`shared/domain/costs`) and slippage. Queued Strategy Lab jobs run inside the API process (`server/plugins/strategy-jobs.ts`, one job at a time; see `STRATEGY_JOBS_IN_PROCESS` in `.env.example`) or in a standalone worker (`bun run worker:strategy-jobs`). Walk-forward runs use the walk-forward module (E) and `strategyOptimisation.getSweep` returns the robustness analysis (F) of a finished sweep. The execution model (A), point-in-time fundamentals (C) and shared-capital portfolio engine (D) below are **research modules covered by tests** (for example `server/domain/strategy/p2-research-invariants.test.ts`); they are not yet called by production backtests.
 
 ### A. Realistic Execution & Market Microstructure (`server/domain/strategy/execution-model.ts`)
 - **Square-Root Market Impact**: Price impact scales nonlinearly with market participation:
@@ -168,7 +168,7 @@ MAET/
 │   ├── infra/                    # Auth (JWT), event bus, encryption, health, idempotency, logger, rate limit
 │   ├── middleware/cors.ts        # Global CORS (FRONTEND_ORIGIN)
 │   ├── modules/                  # Feature services (alerts, paper-trading, screener-dsl, strategy jobs, ...)
-│   ├── plugins/orchestrator.ts   # Starts/stops the orchestrator with the Nitro server
+│   ├── plugins/                  # Nitro plugins: orchestrator, in-process strategy job runner
 │   ├── routes/health/            # Admin-only /health/detailed report
 │   ├── scripts/                  # Migrations, seeds, DB checks, backfills, test wiring check
 │   ├── workers/                  # Background jobs, ingestion engine, quote pollers, job workers

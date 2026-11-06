@@ -244,7 +244,7 @@ These naming rules help you understand almost every file without opening it firs
 - **Market data:** Some data can be delayed, stale, provider-dependent, or unavailable. The API carries source and delay information for this reason.
 - **Angel One:** The server can use Angel One when credentials and symbol tokens are available. It is not proof that every deployed environment has a live session.
 - **Options:** The Angel One options client and normalized options database tables now exist, but no options ingestion worker, tRPC route, or frontend delivery path is wired to them yet.
-- **Strategy workers:** Scripts exist for backtests, sweeps, walk-forward analysis, and evaluation. The single Render web-service definition starts the web server; production needs separate worker processes or scheduling for queued jobs.
+- **Strategy jobs:** Backtests, parameter sweeps and walk-forward runs queued from the Strategy Lab run inside the single Render web service, one at a time with a per-job time budget, handing control back to the API between backtests. On the free plan the service sleeps when idle, so queued jobs wait until it wakes. The live-signal evaluator (`server/workers/strategy-evaluator.ts`) still runs only as a separate script, so strategy deployment stays disabled in the UI.
 - **BigQuery:** The ingestion engine has an optional BigQuery output path. Do not say it is actively populated unless that deployment is verified.
 
 ### Do not claim
