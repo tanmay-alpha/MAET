@@ -57,7 +57,7 @@ Where each transition happens:
 | Placement as `PENDING`/`TRIGGER_PENDING` | `placeRestingOrder` in `service.ts`; bracket exits in `applyFill` (`fill-writer.ts`). |
 | `TRIGGER_PENDING → TRIGGERED` | `processTick` (`tick-processor.ts`): a SELL stop triggers at `price <= stop`, a BUY stop at `price >= stop`. |
 | Fills | `applyFill`; status comes from `executePaperFill` (`FILLED` when `filled >= qty`, else `PARTIALLY_FILLED`). |
-| User cancel | `cancelOrder` (`service.ts`) accepts `PENDING`, `TRIGGER_PENDING`, `TRIGGERED`, `PARTIALLY_FILLED`; already-filled quantity stays filled. |
+| User cancel | `cancelOrder` (`service.ts`) accepts every working status (`PENDING`, `TRIGGER_PENDING`, `TRIGGERED`, `PARTIALLY_FILLED`: `WORKING_ORDER_STATUSES` in `shared/domain/paper-trading/order-status.ts`, which the matcher, bulk cancels, live-feed interest and the UI also use); already-filled quantity stays filled. |
 | Bulk cancel | `cancelOpenOrders` on reset and margin call; `cancelWorkingExits` when a fill closes or flips a position (`postgres-repository.ts`). |
 | OCO / position closed | `applyExitFillToSiblings` and the `CANCELLED` branch in `executePaperFill`; `closableExitQuantity === 0` in `processTick`. |
 | `REJECTED` | Only the liquidation path marks its own close order `REJECTED` when the fill is refused (`liquidation-service.ts`). |
