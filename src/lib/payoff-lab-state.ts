@@ -82,6 +82,15 @@ export interface LabValidation {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A real YYYY-MM-DD day: engines disagree on "2026-02-30" (rolled into March, or NaN). */
+function isCalendarDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
 const NUMERIC_DRAFT = /^\d{0,9}(\.\d{0,4})?$/;
 
 const payoffSearchSchema = z.object({
@@ -95,7 +104,7 @@ const payoffSearchSchema = z.object({
   spot: z.coerce.number().finite().positive().optional().catch(undefined),
   lot: z.coerce.number().int().positive().optional().catch(undefined),
   step: z.coerce.number().finite().positive().optional().catch(undefined),
-  exp: z.string().regex(ISO_DATE).optional().catch(undefined),
+  exp: z.string().refine(isCalendarDate).optional().catch(undefined),
   r: z.coerce.number().min(0).max(50).optional().catch(undefined),
   iv: z.coerce.number().positive().max(300).optional().catch(undefined),
   legs: z.string().max(MAX_LEGS * 48).optional().catch(undefined),
@@ -216,7 +225,12 @@ function calendarDaysBetween(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);
 }
 
-/** `today` is the viewer's local date (YYYY-MM-DD); null until the browser has rendered. */
+/** NSE contracts expire on IST dates, so days to expiry count from the IST date wherever the viewer is. */
+export function istIsoDate(instant: Date): string {
+  return instant.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+
+/** `today` is the IST date (YYYY-MM-DD, see istIsoDate); null until the browser has rendered. */
 export function validateLab(draft: LabDraft, today: string | null): LabValidation {
   const { contract } = draft;
   const spot = parseNumber(contract.spot);
@@ -224,14 +238,14 @@ export function validateLab(draft: LabDraft, today: string | null): LabValidatio
   const strikeStep = parseNumber(contract.strikeStep);
   const rate = parseNumber(contract.rate);
   const iv = parseNumber(contract.iv);
-  const daysToExpiry = today !== null && ISO_DATE.test(contract.expiry) ? calendarDaysBetween(today, contract.expiry) : null;
+  const daysToExpiry = today !== null && isCalendarDate(contract.expiry) ? calendarDaysBetween(today, contract.expiry) : null;
 
   const contractErrors: ContractErrors = {};
   if (contract.symbol.trim() === "") contractErrors.symbol = "Required";
   if (spot === null || spot <= 0) contractErrors.spot = "Enter spot > 0";
   if (lotSize === null || lotSize <= 0 || !Number.isInteger(lotSize)) contractErrors.lotSize = "Whole number > 0";
   if (strikeStep === null || strikeStep <= 0) contractErrors.strikeStep = "Enter a step > 0";
-  if (!ISO_DATE.test(contract.expiry)) contractErrors.expiry = "Pick an expiry";
+  if (!isCalendarDate(contract.expiry)) contractErrors.expiry = "Pick an expiry";
   else if (daysToExpiry !== null && daysToExpiry < 0) contractErrors.expiry = "Expiry is in the past";
   if (rate === null || rate < 0 || rate > 50) contractErrors.rate = "0 to 50";
   if (iv === null || iv <= 0 || iv > 300) contractErrors.iv = "Above 0, up to 300";
