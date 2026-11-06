@@ -8,6 +8,19 @@ services:
     buildCommand: cd .. && bun install && cd server && bun run build
     startCommand: node .output/server/index.mjs
     healthCheckPath: /api/health
+    # rootDir alone only autodeploys on changes under server/, so shared/ and
+    # lockfile changes never redeployed the backend. buildFilter paths are
+    # relative to the repository root even with rootDir set:
+    # https://render.com/docs/monorepo-support#setting-build-filters
+    # https://render.com/docs/blueprint-spec#buildfilter
+    buildFilter:
+      paths:
+        - server/**
+        - shared/**
+        - package.json
+        - bun.lock
+        - render.yaml
+        - tsconfig.json
     envVars:
       - key: NODE_VERSION
         value: "20"
@@ -41,9 +54,19 @@ services:
       # NSE holiday calendar as JSON array of ISO date strings
       - key: NSE_HOLIDAYS_JSON
         sync: false
+      # Optional BigQuery analytics sink (server/data/bigquery/client.ts).
+      # When unset, warehouse writes fail and are logged; Postgres persistence
+      # is unaffected. GOOGLE_APPLICATION_CREDENTIALS should point at a Render
+      # secret file, e.g. /etc/secrets/gcp-service-account.json.
+      - key: BIGQUERY_PROJECT
+        sync: false
+      - key: BIGQUERY_DATASET
+        sync: false
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false
       # Comma-separated list of exact frontend origins allowed by CORS.
-      # server/app.ts reads this at startup; the default in code is the
-      # local dev hosts. Set the Vercel production + preview hosts here so
-      # browser calls from the deployed frontend aren't rejected.
+      # server/middleware/cors.ts (Nitro global middleware) reads this at
+      # startup and falls back to the local dev hosts plus these Vercel hosts
+      # when it is unset.
       - key: FRONTEND_ORIGIN
         value: "https://maet-pi.vercel.app,https://maet-tanmay-alphas-projects.vercel.app,https://maet-tanmay-alpha-tanmay-alphas-projects.vercel.app"

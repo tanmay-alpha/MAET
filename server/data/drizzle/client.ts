@@ -14,18 +14,30 @@ let sqlClientInstance: postgres.Sql | null = null;
  * Initialize or get the Drizzle database client
  * Connects to Supabase Postgres via connection string
  */
-export function getDb() {
+export function getDb(): ReturnType<typeof drizzle> {
   if (!dbInstance) {
-    const connectionString = process.env.TEST_DATABASE_URL ||
-                            (process.env.NODE_ENV === "test" || process.env.BUN_TEST ? "postgresql://postgres:tanmay@127.0.0.1:5432/maet_test" : undefined) ||
-                            process.env.SUPABASE_DB_URL ||
-                            process.env.DATABASE_URL ||
-                            process.env.POSTGRES_URL;
+    // Test runs must name their database explicitly: never fall back to a
+    // shared local database or to the application's (production) URL.
+    const isTestRun = process.env.NODE_ENV === "test" || Boolean(process.env.BUN_TEST);
+    const connectionString = isTestRun
+      ? process.env.TEST_DATABASE_URL
+      : process.env.TEST_DATABASE_URL ||
+        process.env.SUPABASE_DB_URL ||
+        process.env.DATABASE_URL ||
+        process.env.POSTGRES_URL;
 
     if (!connectionString) {
-      throw new Error(
-        "Database connection string not found. Set TEST_DATABASE_URL, SUPABASE_DB_URL or DATABASE_URL env var."
-      );
+      if (!isTestRun) {
+        throw new Error("Database connection string not found. Set SUPABASE_DB_URL or DATABASE_URL env var.");
+      }
+      // Some modules wire a client at import time; let them load and fail on
+      // first use (like an unreachable database would), without caching, so a
+      // test that sets TEST_DATABASE_URL later still gets a real client.
+      return new Proxy({} as ReturnType<typeof drizzle>, {
+        get() {
+          throw missingTestDatabaseError();
+        },
+      });
     }
 
     // Supabase's transaction pooler should receive a small bounded application
@@ -52,7 +64,14 @@ export function getDb() {
  */
 export function getSqlClient() {
   getDb(); // Ensure client is initialized
-  return sqlClientInstance!;
+  if (!sqlClientInstance) throw missingTestDatabaseError();
+  return sqlClientInstance;
+}
+
+function missingTestDatabaseError(): Error {
+  return new Error(
+    "TEST_DATABASE_URL is not set. Tests only connect to an explicitly configured, disposable database.",
+  );
 }
 
 /** Close the pool and wait for its sockets/timers to be released. */

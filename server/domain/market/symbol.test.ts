@@ -18,6 +18,14 @@ describe("symbol domain", () => {
     expect(lookupSymbol("NSE", "ZZZZZ")).toBeUndefined();
   });
 
+  it("bundled NSE equities use the NSE symbol as the Yahoo ticker", () => {
+    // Yahoo keeps NSE punctuation (BAJAJ-AUTO.NS); a stripped ticker 404s.
+    expect(resolveMarketSymbol("BAJAJ-AUTO").ticker).toBe("BAJAJ-AUTO.NS");
+    for (const q of SYMBOLS.filter((item) => item.exchange === "NSE")) {
+      expect(q.yahooTicker).toBe(`${q.symbol}.NS`);
+    }
+  });
+
   it("registers dynamically loaded broker symbols and token lookups", () => {
     registerMarketSymbols([{ exchange: "NSE", symbol: "DYNAMIC", name: "Dynamic Limited", token: "999999", yahooTicker: "DYNAMIC.NS", isActive: true }]);
     expect(lookupSymbol("NSE", "DYNAMIC")?.token).toBe("999999");

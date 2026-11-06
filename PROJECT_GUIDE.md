@@ -107,7 +107,6 @@ Use this order when you want to understand the code without getting lost:
 | `playwright.config.ts` | Browser-test configuration. |
 | `eslint.config.js`, `.prettierrc`, `.prettierignore` | Code-quality and formatting rules. |
 | `components.json` | UI-component generator configuration. |
-| `insert_baselines.sql` | SQL helper used for baseline database data. |
 | `scripts/` | Small project-level helper scripts. |
 | `.github/` | GitHub workflows and repository automation. |
 
@@ -148,7 +147,6 @@ This folder contains the web server, APIs, provider integrations, business rules
 |---|---|
 | `server/plugins/orchestrator.ts` | Starts the market-data and background-work coordinator when the Nitro server starts. |
 | `server/orchestrator.ts` | Starts and stops workers, manages market subscriptions, and attempts Angel One login when credentials are configured. |
-| `server/app.ts` | Builds the H3 app and registers CORS and health endpoints. Nitro also discovers the file-based API routes. |
 | `server/config.ts` | Reads and validates server settings and secret names. |
 | `server/api/` | File-based REST and streaming endpoints. For example, `market/quotes.get.ts`, `market/candles.get.ts`, and `market/stream.get.ts`. |
 | `server/api/trpc/[trpc].ts` | The tRPC entry point used by signed-in frontend features. |
@@ -168,10 +166,11 @@ This folder contains the web server, APIs, provider integrations, business rules
 | `server/workers/` | Background tasks such as Yahoo polling, Angel One WebSocket processing, candle writing, alert evaluation, paper-order matching, daily processing, and strategy workers. |
 | `server/workers/ingestion-engine/` | A more structured ingestion pipeline with normalisation, validation, retry/dead-letter handling, Supabase writes, and optional BigQuery output. |
 | `server/db/schema.ts` | TypeScript description of database tables for Drizzle ORM. |
-| `server/db/migrations/` | Numbered SQL upgrades for PostgreSQL. New migrations only add forward-safe changes; for example, `0017_options_market_data.sql` adds the options-data foundation. |
+| `server/db/migrations/` | Numbered SQL upgrades for PostgreSQL, applied by `server/scripts/apply-migrations.ts` (each file and its tracking row in one transaction). New migrations only add forward-safe changes; for example, `0017_options_market_data.sql` adds the options-data foundation. |
+| `server/db/seeds/` | Reference-data loads, such as `market_baseline_metrics.sql` (run with `server/scripts/populate-baselines.ts`). |
 | `server/infra/` | Shared technical services such as the internal event bus, encryption, health status, logging, and metrics. |
 | `server/middleware/` | Request-wide behavior such as CORS rules. |
-| `server/routes/` | Additional server route handlers, including health checks. |
+| `server/routes/` | Non-`/api` route handlers, such as the admin-only `/health/detailed` report. Public health is `server/api/health.get.ts` (`/api/health`). |
 | `server/scripts/` | Server-side operational scripts, such as a database connection check. |
 | `server/nitro.config.ts` | Nitro build, aliases, ignored files, and route-cache configuration. |
 

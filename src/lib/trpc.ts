@@ -1,5 +1,6 @@
 import { useQuery as useReactQuery, useMutation as useReactMutation } from "@tanstack/react-query";
 import { getCurrentAccessToken } from "./auth-token";
+import { apiUrl } from "./api-url";
 import type {
   PaperOrderCommandInput,
   PaperTradingState,
@@ -81,7 +82,7 @@ async function fetchWithAuth(
 }
 
 async function trpcQuery<T>(path: string, queryParams?: Record<string, any>): Promise<T> {
-  let url = `/api/trpc/${path}`;
+  let url = apiUrl(`/api/trpc/${path}`);
   if (queryParams) {
     const search = new URLSearchParams();
     search.set("input", JSON.stringify(queryParams));
@@ -99,7 +100,7 @@ async function trpcQuery<T>(path: string, queryParams?: Record<string, any>): Pr
 }
 
 async function trpcMutation<TInput, TOutput>(path: string, input: TInput): Promise<TOutput> {
-  const res = await fetchWithAuth(`/api/trpc/${path}`, {
+  const res = await fetchWithAuth(apiUrl(`/api/trpc/${path}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

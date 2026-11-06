@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it, mock } from "bun:test";
+import { TRPCError } from "@trpc/server";
 
 // ============================================================
 // Pure logic tests (no DB required)
@@ -105,6 +106,8 @@ describe("Strategy Jobs — Job Queue Logic", () => {
       VALUES ('${testStratId}', '${testUserId}', 'Test Strat', '{"name":"Test"}') ON CONFLICT DO NOTHING;
       INSERT INTO public.strategy_versions (id, strategy_id, user_id, version_number, definition, definition_hash, engine_version, indicator_version)
       VALUES ('${testVersionId}', '${testStratId}', '${testUserId}', 1, '{"name":"v1"}', 'hash_test', '3.0.0', '1.0.0') ON CONFLICT DO NOTHING;
+      UPDATE public.strategy_backtest_jobs SET status = 'CANCELLED'
+      WHERE user_id = '${testUserId}' AND status IN ('QUEUED', 'RUNNING');
     `);
 
     const job = await createJob(
@@ -120,5 +123,147 @@ describe("Strategy Jobs — Job Queue Logic", () => {
     expect(claimed?.workerId).toBe("test-worker-1");
 
     await markFailed(claimed!.id, "TEST_ERROR", "Test failure");
+  });
+
+  it("9. DB integration: caps active backtest jobs and sweeps per user", async () => {
+    if (!process.env.TEST_DATABASE_URL) {
+      console.log("  Skipping DB cap test: TEST_DATABASE_URL not set");
+      return;
+    }
+    const { createJob, MAX_ACTIVE_JOBS_PER_USER } = await import("./repository");
+    const { strategyOptimisationRouter } = await import("../../api/trpc/routers/strategy-optimisation");
+    const { getSqlClient } = await import("../../data/drizzle/client");
+    const sql = getSqlClient();
+    const user = crypto.randomUUID();
+    const strategyId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+
+    try {
+      await sql`INSERT INTO auth.users (id) VALUES (${user}) ON CONFLICT DO NOTHING`;
+      await sql`INSERT INTO public.users (id, email) VALUES (${user}, ${`jobs-cap-${user}@example.com`})`;
+      await sql`
+        INSERT INTO public.strategy_definitions (id, user_id, name, current_draft)
+        VALUES (${strategyId}, ${user}, 'Cap Strat', '{"name":"Cap"}')
+      `;
+      await sql`
+        INSERT INTO public.strategy_versions (id, strategy_id, user_id, version_number, definition, definition_hash, engine_version, indicator_version)
+        VALUES (${versionId}, ${strategyId}, ${user}, 1, '{"name":"v1"}', 'hash_cap', '3.0.0', '1.0.0')
+      `;
+
+      const create = () => createJob(user, versionId, "TEST", "1d", new Date("2023-01-01"), new Date("2023-12-31"));
+      const results = await Promise.allSettled(Array.from({ length: MAX_ACTIVE_JOBS_PER_USER + 1 }, create));
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(MAX_ACTIVE_JOBS_PER_USER);
+      expect((results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason).toMatchObject({
+        code: "TOO_MANY_REQUESTS",
+      });
+
+      // Finished jobs free a slot.
+      await sql`
+        UPDATE public.strategy_backtest_jobs SET status = 'COMPLETED'
+        WHERE id = (SELECT id FROM public.strategy_backtest_jobs WHERE user_id = ${user} LIMIT 1)
+      `;
+      expect((await create()).status).toBe("QUEUED");
+
+      const caller = strategyOptimisationRouter.createCaller({ userId: user, email: "cap@example.com", role: "user" });
+      const sweep = () =>
+        caller.createSweep({
+          strategyId,
+          parameters: [{ name: "p", path: "a.b", values: [1, 2] }],
+          symbolOrUniverse: "TCS",
+          timeframe: "1d",
+          from: "2023-01-01T00:00:00.000Z",
+          to: "2023-12-31T00:00:00.000Z",
+        });
+      for (let i = 0; i < MAX_ACTIVE_JOBS_PER_USER; i++) await sweep();
+      await expect(sweep()).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    } finally {
+      await sql`DELETE FROM public.users WHERE id = ${user}`;
+      await sql`DELETE FROM auth.users WHERE id = ${user}`;
+    }
+  });
+
+  it("10. DB integration: cancelled and stale (>6h) jobs do not count toward the cap", async () => {
+    if (!process.env.TEST_DATABASE_URL) {
+      console.log("  Skipping DB cap test: TEST_DATABASE_URL not set");
+      return;
+    }
+    const { createJob, requestCancellation, MAX_ACTIVE_JOBS_PER_USER } = await import("./repository");
+    const { strategyOptimisationRouter } = await import("../../api/trpc/routers/strategy-optimisation");
+    const { getSqlClient } = await import("../../data/drizzle/client");
+    const sql = getSqlClient();
+    const user = crypto.randomUUID();
+    const strategyId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    // Settle directly instead of expect(promise).rejects, which can stall postgres.js under Bun 1.3.
+    const settle = async (operation: Promise<unknown>) => {
+      try {
+        await operation;
+        return "ok";
+      } catch (error) {
+        return error instanceof TRPCError ? error.code : String(error);
+      }
+    };
+
+    try {
+      await sql`INSERT INTO auth.users (id) VALUES (${user}) ON CONFLICT DO NOTHING`;
+      await sql`INSERT INTO public.users (id, email) VALUES (${user}, ${`jobs-stale-${user}@example.com`})`;
+      await sql`
+        INSERT INTO public.strategy_definitions (id, user_id, name, current_draft)
+        VALUES (${strategyId}, ${user}, 'Stale Strat', '{"name":"Stale"}')
+      `;
+      await sql`
+        INSERT INTO public.strategy_versions (id, strategy_id, user_id, version_number, definition, definition_hash, engine_version, indicator_version)
+        VALUES (${versionId}, ${strategyId}, ${user}, 1, '{"name":"v1"}', 'hash_stale', '3.0.0', '1.0.0')
+      `;
+
+      // Backtests: three queued jobs, all cancelled, leave room for a fourth.
+      const create = () => createJob(user, versionId, "TEST", "1d", new Date("2023-01-01"), new Date("2023-12-31"));
+      const jobs = [];
+      for (let i = 0; i < MAX_ACTIVE_JOBS_PER_USER; i++) jobs.push(await create());
+      expect(await settle(create())).toBe("TOO_MANY_REQUESTS");
+      for (const job of jobs) expect(await requestCancellation(user, job.id)).toBe(true);
+      expect(await settle(create())).toBe("ok");
+
+      // A job queued more than 6h ago (no worker picked it up) is stale and frees its slot.
+      await create();
+      await create();
+      expect(await settle(create())).toBe("TOO_MANY_REQUESTS");
+      await sql`
+        UPDATE public.strategy_backtest_jobs SET created_at = now() - interval '7 hours'
+        WHERE id = (
+          SELECT id FROM public.strategy_backtest_jobs
+          WHERE user_id = ${user} AND cancel_requested_at IS NULL LIMIT 1
+        )
+      `;
+      expect(await settle(create())).toBe("ok");
+
+      const caller = strategyOptimisationRouter.createCaller({ userId: user, email: "stale@example.com", role: "user" });
+      const window = { strategyId, timeframe: "1d", from: "2023-01-01T00:00:00.000Z", to: "2023-12-31T00:00:00.000Z" };
+      const parameters = [{ name: "p", path: "a.b", values: [1, 2] }];
+      const sweep = () => caller.createSweep({ ...window, parameters, symbolOrUniverse: "TCS" });
+      const walkForward = () =>
+        caller.createWalkForward({
+          ...window,
+          parameters,
+          symbol: "TCS",
+          mode: "ROLLING",
+          trainingWindowDays: 30,
+          validationWindowDays: 14,
+          minimumWindows: 2,
+        });
+
+      for (const [table, start] of [
+        ["strategy_parameter_sweeps", sweep],
+        ["strategy_walk_forward_runs", walkForward],
+      ] as const) {
+        for (let i = 0; i < MAX_ACTIVE_JOBS_PER_USER; i++) expect(await settle(start())).toBe("ok");
+        expect(await settle(start())).toBe("TOO_MANY_REQUESTS");
+        await sql`UPDATE ${sql(table)} SET created_at = now() - interval '7 hours' WHERE user_id = ${user}`;
+        expect(await settle(start())).toBe("ok");
+      }
+    } finally {
+      await sql`DELETE FROM public.users WHERE id = ${user}`;
+      await sql`DELETE FROM auth.users WHERE id = ${user}`;
+    }
   });
 });

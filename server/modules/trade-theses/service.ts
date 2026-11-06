@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { tradeThesisRepository } from "./repository";
 import type { CreateThesisInput, LinkOrderToThesisInput } from "@shared/research/contracts";
 
@@ -9,7 +10,7 @@ export class TradeThesisService {
   async getThesisDetails(userId: string, thesisId: string) {
     const thesis = await tradeThesisRepository.getThesisById(userId, thesisId);
     if (!thesis) {
-      throw new Error("Thesis not found or unauthorized.");
+      throw new TRPCError({ code: "NOT_FOUND", message: "Thesis not found" });
     }
     return thesis;
   }
@@ -33,7 +34,7 @@ export class TradeThesisService {
 
   async linkOrder(userId: string, input: LinkOrderToThesisInput) {
     await this.getThesisDetails(userId, input.thesisId);
-    return tradeThesisRepository.linkOrder(input.thesisId, input);
+    return tradeThesisRepository.linkOrder(userId, input.thesisId, input);
   }
 }
 

@@ -136,6 +136,19 @@ export async function requireAuth(event: H3Event): Promise<AuthContext> {
   return ctx;
 }
 
+/** Like requireAuth, but additionally rejects non-admin callers with 403. */
+export async function requireAdmin(event: H3Event): Promise<AuthContext> {
+  const ctx = await requireAuth(event);
+  if (ctx.role !== "admin") {
+    throw createError({
+      statusCode: 403,
+      statusMessage: "Forbidden",
+      data: { code: "FORBIDDEN" },
+    });
+  }
+  return ctx;
+}
+
 /**
  * Attach an auth context to an h3 event. Useful for routes that want to
  * populate `event.context.userId` without throwing when auth fails (e.g.

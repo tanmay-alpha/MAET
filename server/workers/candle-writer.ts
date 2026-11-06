@@ -1,15 +1,19 @@
 import { bus } from "../infra/bus";
 import type { Candle, Tick } from "@shared/types";
+import { istDateKey } from "../domain/market/clock";
 
-type Bucket = {
-  symbol: string;
-  tf: "1m";
-  ts: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
+/** Closed 1m candles kept per symbol (plus the open minute) until flushed. */
+export const RETAINED_CLOSED_MINUTES = 30;
+
+type Bucket = Candle & { tf: "1m" };
+
+type SymbolState = {
+  /** Minute key (YYYY-MM-DDTHH:MM, UTC) → bucket, in ascending minute order. */
+  buckets: Map<string, Bucket>;
+  lastTsMs: number;
+  /** IST date of `cumulativeVolume`; providers reset the counter each session. */
+  volumeDay: string;
+  cumulativeVolume: number;
 };
 
 function minuteKey(ts: string): string {
@@ -17,8 +21,13 @@ function minuteKey(ts: string): string {
   return ts.slice(0, 16);
 }
 
+/**
+ * Builds 1-minute candles from ticks. Tick `volume` is the provider's
+ * cumulative volume for the day (Angel One and Yahoo both report it that
+ * way), so a candle's volume is the increase in that counter.
+ */
 export class CandleWriter {
-  private buckets = new Map<string, Bucket>();
+  private symbols = new Map<string, SymbolState>();
   private off: (() => void) | undefined;
 
   start(): void {
@@ -32,35 +41,67 @@ export class CandleWriter {
   }
 
   onTick(t: Tick): void {
-    const key = `${t.symbol}:1m:${minuteKey(t.ts)}`;
-    const b = this.buckets.get(key);
-    if (!b) {
-      this.buckets.set(key, {
-        symbol: t.symbol,
-        tf: "1m",
-        ts: `${minuteKey(t.ts)}:00.000Z`,
-        open: t.price,
-        high: t.price,
-        low: t.price,
-        close: t.price,
-        volume: t.volume,
-      });
-    } else {
-      b.high = Math.max(b.high, t.price);
-      b.low = Math.min(b.low, t.price);
-      b.close = t.price;
-      b.volume += t.volume;
+    const tsMs = Date.parse(t.ts);
+    if (!Number.isFinite(tsMs)) return;
+    const day = istDateKey(new Date(tsMs));
+    let state = this.symbols.get(t.symbol);
+    if (!state) {
+      // Mid-session start: the counter already includes earlier trades that
+      // cannot be attributed to any minute we saw, so it only sets the baseline.
+      state = { buckets: new Map(), lastTsMs: tsMs, volumeDay: day, cumulativeVolume: t.volume };
+      this.symbols.set(t.symbol, state);
+    } else if (tsMs < state.lastTsMs) {
+      // Out-of-order tick: its price is older than the current close and its
+      // counter is behind the baseline.
+      return;
+    }
+
+    let volumeDelta = 0;
+    if (state.volumeDay !== day) {
+      // New session observed after a previous one: the counter restarted at 0.
+      state.volumeDay = day;
+      volumeDelta = t.volume;
+      state.cumulativeVolume = t.volume;
+    } else if (t.volume > state.cumulativeVolume) {
+      volumeDelta = t.volume - state.cumulativeVolume;
+      state.cumulativeVolume = t.volume;
+    }
+    state.lastTsMs = tsMs;
+
+    const key = minuteKey(t.ts);
+    const bucket = state.buckets.get(key);
+    if (bucket) {
+      bucket.high = Math.max(bucket.high, t.price);
+      bucket.low = Math.min(bucket.low, t.price);
+      bucket.close = t.price;
+      bucket.volume += volumeDelta;
+      return;
+    }
+
+    state.buckets.set(key, {
+      symbol: t.symbol,
+      tf: "1m",
+      ts: `${key}:00.000Z`,
+      open: t.price,
+      high: t.price,
+      low: t.price,
+      close: t.price,
+      volume: volumeDelta,
+    });
+    // Ticks arrive in time order (older ones are dropped above), so the
+    // first keys are the oldest closed minutes.
+    for (const oldest of state.buckets.keys()) {
+      if (state.buckets.size <= RETAINED_CLOSED_MINUTES + 1) break;
+      state.buckets.delete(oldest);
     }
   }
 
-  flush(symbol: string, tf: "1m" | "1d"): Candle[] {
-    const out: Candle[] = [];
-    for (const [k, b] of this.buckets) {
-      if (b.symbol === symbol && b.tf === tf) {
-        out.push({ ...b });
-        this.buckets.delete(k);
-      }
-    }
+  /** Removes and returns the retained 1m candles for `symbol`, oldest first. */
+  flush(symbol: string): Candle[] {
+    const state = this.symbols.get(symbol);
+    if (!state) return [];
+    const out = [...state.buckets.values()].map((bucket) => ({ ...bucket }));
+    state.buckets.clear();
     return out;
   }
 }

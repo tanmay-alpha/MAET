@@ -3,7 +3,7 @@
   { "exchange": "NSE", "symbol": "APOLLOHOSP", "name": "Apollo Hospitals", "token": "157", "yahooTicker": "APOLLOHOSP.NS", "isActive": true },
   { "exchange": "NSE", "symbol": "ASIANPAINT", "name": "Asian Paints", "token": "236", "yahooTicker": "ASIANPAINT.NS", "isActive": true },
   { "exchange": "NSE", "symbol": "AXISBANK", "name": "Axis Bank", "token": "5900", "yahooTicker": "AXISBANK.NS", "isActive": true },
-  { "exchange": "NSE", "symbol": "BAJAJ-AUTO", "name": "Bajaj Auto", "token": "16669", "yahooTicker": "BAJAJAUTO.NS", "isActive": true },
+  { "exchange": "NSE", "symbol": "BAJAJ-AUTO", "name": "Bajaj Auto", "token": "16669", "yahooTicker": "BAJAJ-AUTO.NS", "isActive": true },
   { "exchange": "NSE", "symbol": "BAJFINANCE", "name": "Bajaj Finance", "token": "317", "yahooTicker": "BAJFINANCE.NS", "isActive": true },
   { "exchange": "NSE", "symbol": "BAJAJFINSV", "name": "Bajaj Finserv", "token": "16675", "yahooTicker": "BAJAJFINSV.NS", "isActive": true },
   { "exchange": "NSE", "symbol": "BPCL", "name": "BPCL", "token": "526", "yahooTicker": "BPCL.NS", "isActive": true },

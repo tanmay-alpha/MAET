@@ -1,5 +1,6 @@
-import { describe, expect, it, mock } from "bun:test";
+import { afterAll, describe, expect, it, mock } from "bun:test";
 import { TRPCError } from "@trpc/server";
+import * as drizzleClientModule from "../../../data/drizzle/client";
 
 interface MockQueryBuilder {
   where: (...args: unknown[]) => MockQueryBuilder;
@@ -33,6 +34,14 @@ function createMockQuery(rows: unknown[]): MockQueryBuilder {
   };
   return builder;
 }
+
+// mock.module is process-wide in Bun and outlives this file. Snapshot the real
+// client and put it back afterwards so later files in the same `bun test` run
+// (e.g. companies-peers.test.ts) don't silently query this stub.
+const realDrizzleClient = { ...drizzleClientModule };
+afterAll(() => {
+  mock.module("../../../data/drizzle/client", () => realDrizzleClient);
+});
 
 mock.module("../../../data/drizzle/client", () => ({
   db: {
