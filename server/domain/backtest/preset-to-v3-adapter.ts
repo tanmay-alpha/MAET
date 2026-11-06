@@ -181,18 +181,20 @@ function buildMacdCrossDefinition(params: StrategyParams, risk: RiskConfig): Str
   const fast = params.fastPeriod ?? 12;
   const slow = params.slowPeriod ?? 26;
   const signal = params.signalPeriod ?? 9;
+  // Named as the indicator cache reads them (server/domain/strategy/indicator-state.ts).
+  const macd = { fastPeriod: fast, slowPeriod: slow, signalPeriod: signal };
   return {
     name: `MACD Cross (${fast}/${slow}/${signal})`,
     direction: "LONG_ONLY",
     // Entry: MACD line crosses above signal line
     entry: group("entry", "AND", [
-      condition("e1", "INDICATOR", "MACD_LINE", { fast, slow, signal }, "MACD_LINE",
-        "CROSS_ABOVE", "INDICATOR", "MACD_SIGNAL", { fast, slow, signal }, "MACD_SIGNAL"),
+      condition("e1", "INDICATOR", "MACD_LINE", macd, "MACD_LINE",
+        "CROSS_ABOVE", "INDICATOR", "MACD_SIGNAL", macd, "MACD_SIGNAL"),
     ]),
     // Exit: MACD line crosses below signal line
     exit: group("exit", "AND", [
-      condition("x1", "INDICATOR", "MACD_LINE", { fast, slow, signal }, "MACD_LINE",
-        "CROSS_BELOW", "INDICATOR", "MACD_SIGNAL", { fast, slow, signal }, "MACD_SIGNAL"),
+      condition("x1", "INDICATOR", "MACD_LINE", macd, "MACD_LINE",
+        "CROSS_BELOW", "INDICATOR", "MACD_SIGNAL", macd, "MACD_SIGNAL"),
     ]),
     risk: {
       sizingMethod: "PERCENT_OF_EQUITY",
