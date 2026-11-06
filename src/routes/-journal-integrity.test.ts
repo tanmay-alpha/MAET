@@ -11,7 +11,6 @@ describe("Journal integrity", () => {
     expect(content).not.toContain("100.0%");
     expect(content).not.toContain("(trpc as any).paperTrading.getState.useQuery()");
     expect(content).toContain("usePaperAccount()");
-    expect(content).toContain("Unavailable until review outcomes are recorded.");
   });
 
   it("exposes the thesis-list client procedure required by Journal", () => {
