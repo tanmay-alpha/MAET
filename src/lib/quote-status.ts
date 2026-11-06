@@ -1,4 +1,3 @@
-import { istDateKey } from "@server/domain/market/clock";
 import type { MarketQuote, MarketQuotesResponse } from "@/lib/market-api";
 
 export type QuoteFeedState =
@@ -52,22 +51,31 @@ const CLOSED_SESSIONS: Record<string, string> = {
   AFTER_HOURS: "Market closed · after hours",
 };
 
+// Asia/Kolkata is UTC+05:30 with no DST (server/domain/market/clock.ts). The client
+// build may not import server modules, so the IST day is computed here.
+const IST_OFFSET_MS = 330 * 60_000;
+const DAY_MS = 86_400_000;
+
+/** Days since the epoch on the IST calendar; NaN for an unparseable time. */
+function istDay(ms: number): number {
+  return Math.floor((ms + IST_OFFSET_MS) / DAY_MS);
+}
+
 /**
  * The server's own rule (server/domain/market/quote-quality.ts `sessionQuality`): a
  * broker print is live only if it is from today's IST session. Re-applied against the
  * browser clock so a response held in cache does not stay "live" into the next day.
  */
-function isLiveQuote(quote: MarketQuote, today: string): boolean {
+function isLiveQuote(quote: MarketQuote, today: number): boolean {
   if (quote.quality !== "live" || quote.delayed || quote.source !== "angelone") return false;
-  const ts = new Date(quote.ts);
-  return !Number.isNaN(ts.getTime()) && istDateKey(ts) === today;
+  return istDay(Date.parse(quote.ts)) === today;
 }
 
 function freshness(quotes: MarketQuote[], marketPhase: string | undefined, now: Date): QuoteFeedState {
   if (quotes.some((quote) => quote.quality === "stale")) return "stale";
   if (marketPhase && CLOSED_SESSIONS[marketPhase]) return "closed";
   if (marketPhase === "PRE_OPEN") return "pre-open";
-  const today = istDateKey(now);
+  const today = istDay(now.getTime());
   if (!quotes.every((quote) => isLiveQuote(quote, today))) return "delayed";
   // Live also needs the session to be open; an unknown phase cannot confirm that.
   return marketPhase === "OPEN" ? "live" : "unverified";
