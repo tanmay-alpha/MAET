@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import {
   STRATEGY_TEMPLATES,
+  templateCreateInput,
   TEMPLATE_CATEGORY_LABELS,
   TEMPLATE_CATEGORY_COLORS,
   type StrategyTemplate,
@@ -157,11 +158,7 @@ function TemplateDetail({ template }: { template: StrategyTemplate }) {
           disabled={createMutation.isPending}
           onClick={() => {
             createMutation.mutate(
-              {
-                name: template.name,
-                description: template.description,
-                definition: template.definition,
-              },
+              templateCreateInput(template),
               {
                 onSuccess: (data) => {
                   void navigate({ to: "/strategies/$strategyId", params: { strategyId: data.strategy.id } });
