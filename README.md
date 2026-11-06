@@ -21,9 +21,16 @@
 
 ## 1. System Overview & Core Capabilities
 
-MAET combines technical screening, strategy research, paper trading and market data in one web terminal.
+MAET combines screening, strategy research, paper trading, investing tools and world-event context for Indian equities in one web terminal. Every figure shown comes from a named source with its timestamp; when a source or the database is unavailable, the page says so instead of showing placeholder numbers.
 
-- **World Monitor** (`/world`): mapped USGS M4.5+ earthquakes and NASA EONET open events, source-linked GDELT market headlines, transparent Indian-sector exposure rules, and World Bank GDP/CPI observations with data years. Each source carries fetch time and stale/error status. TradingView's attributed global ticker is display-only, never an input to MAET calculations.
+- **Screener & market pages**: 70 registered calculators (technical, fundamental, scanner, portfolio), Gainers/Losers sorted by change %, a public NIFTY 50 heatmap and source labels taken from the API response.
+- **Charts**: TradingView Lightweight Charts with an IST (exchange-time) axis, dividend and split markers, and paper/backtest trade markers placed on the bar that contains them.
+- **Strategy Lab**: backtests, walk-forward analysis, parameter-robustness heatmaps, bar replay and run comparison.
+- **Paper trading**: market/limit/stop orders with OCO brackets, 5× margin, serializable fills and a ledger.
+- **Returns & tax** (`/portfolio`): XIRR of the paper account and an Indian capital-gains estimate (s.111A/s.112A, the 23 Jul 2024 rate change, ₹1.25 lakh exemption, loss set-off, 4% cess).
+- **Import portfolio** (`/import`): analyse a Zerodha or Groww tradebook (or any CSV) in the browser — FIFO holdings, realised gains per FY, tax estimate and XIRR. The file is never uploaded.
+- **Payoff Lab** (`/payoff`): multi-leg options builder with exact breakevens and max profit/loss, Black-Scholes Greeks and a scenario grid.
+- **World Monitor** (`/world`): USGS earthquakes, NASA EONET events, GDELT headlines and World Bank GDP/CPI on one page, with rule-based Indian-sector exposure hints (labelled as hints, not predictions).
 
 ```mermaid
 flowchart TB
@@ -154,6 +161,7 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 
 ### Charts
 - Candlestick, line and area charts on TradingView Lightweight Charts with volume, moving averages, RSI, backtest trade markers and paper position lines.
+- Times on the chart axis and crosshair are shown in IST (`Asia/Kolkata`), so NSE bars read 09:15–15:30; daily and weekly bars show dates only (`src/components/trading/chart-time.ts`). Bar timestamps stay in UTC, and trade markers are placed on the bar that contains the fill (`snapTradeMarkersToBars`).
 - Dividend and split markers on the stock page chart and the full chart (toolbar toggle "Dividends & splits"; hover a marker for the amount or ratio, ex-date and source), plus a table of the last 10 corporate actions on the stock page. Events come from Yahoo Finance via `GET /api/market/corporate-actions`, cached server-side for 24 h and served stale (and labelled so) when Yahoo fails. Yahoo reports NSE bonus issues as splits, so they are labelled "Split/bonus".
 
 ### Storage
@@ -178,6 +186,23 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 - Expiry payoff and today's Black-Scholes value on one chart, with breakevens, spot and hover read-out; a summary of max profit/loss (including "Unlimited"), exact breakevens, net credit/debit, risk : reward and position Greeks; a spot-move × day scenario grid with an IV shift.
 - Max profit/loss and breakevens are solved analytically from the strikes (`shared/domain/options/payoff.ts`), not read off a sampled curve. Index lot defaults follow NSE circular NSE/FAOP/70616 (NIFTY 65, BANKNIFTY 30, FINNIFTY 60) and stay editable.
 - State lives in the URL (shareable) and the last session in localStorage; nothing is stored server-side. On an options chain, "Open in Payoff Lab" and each LTP open the lab pre-filled. See [docs/RESEARCH_ENGINE.md §10](docs/RESEARCH_ENGINE.md#10-options-payoff-lab).
+
+### Returns & Capital-Gains Tax (`/portfolio`)
+- **XIRR** of the paper account's current generation: starting cash on the generation start date (outflow) and current equity today (inflow). `shared/domain/investing/xirr.ts` uses Newton's method with a bracketed bisection fallback and returns `null` when there is no root, rather than a wrong number.
+- **Capital-gains estimate** per Indian financial year from realised fills, FIFO per symbol and per account generation (`shared/domain/investing/capital-gains.ts`):
+  - Equity delivery held ≤ 12 months is STCG (s.111A); longer is LTCG (s.112A).
+  - Rates change on 23 Jul 2024: STCG 15% → 20%, LTCG 10% → 12.5%. The ₹1.25 lakh LTCG exemption covers all of FY 2024–25 (₹1 lakh before).
+  - Losses are set off as the Act allows (LTCL only against LTCG; STCL against STCG, then LTCG); 4% cess is added.
+  - Same-day round trips are reported separately as intraday income taxed at the user's slab rate. Surcharge and slabs are not computed, and the page says so. It is an estimate for a paper account, not tax advice.
+
+### World Monitor (`/world`)
+- USGS M4.5+ earthquakes (24 h) and NASA EONET open events (7 days) on a MapLibre GL map (OpenFreeMap dark style, attribution kept); clicking a feed row moves the map to the event.
+- GDELT headlines for market-relevant topics (sanctions, oil supply, shipping routes, rate decisions, export bans, conflict) appear in the feed only, since they have no coordinates.
+- Exposure hints: a data-driven rule set (`shared/world/exposure-rules.ts`) maps an event's region, category or headline keywords to Indian sectors and NSE symbols, and the table shows the exact rule that matched. A test checks every symbol exists. Labelled "Rule-based exposure hints, not predictions."
+- Macro snapshot: World Bank GDP growth and CPI for India, US, China, Euro area, Japan and UK, with the year of each value.
+- Backend (`server/modules/world/`, routes `/api/world/events`, `/news`, `/macro`): per-source TTL caches (USGS 1 min, EONET 5 min, GDELT 15 min per topic, World Bank 24 h) that keep serving the last good payload, marked stale, when a source fails; 8 s timeouts; GDELT requests are queued at least 5 s apart. Render's network cannot reach NASA EONET or GDELT, so when the server reports one of them stale with no data the page fetches it from the browser with the same normaliser (`shared/world/normalize.ts`) and labels it "fetched by your browser".
+- The global indices strip is TradingView's ticker-tape widget with its attribution. It is display-only; MAET never reads those numbers.
+
 ---
 
 ## 4. Repository Structure
@@ -193,7 +218,7 @@ MAET/
 │   ├── api/                      # File-based REST/SSE routes (/api/*), health.get.ts, tRPC entry, auth (trpc/auth.ts) & routers
 │   ├── data/                     # Clients & adapters: Drizzle/Postgres, Redis, BigQuery, Angel One, Yahoo, NSE
 │   ├── db/
-│   │   ├── migrations/           # Numbered SQL migrations (0001–0026) + upgrade tests
+│   │   ├── migrations/           # Numbered SQL migrations (0001–0027) + upgrade tests
 │   │   ├── seeds/                # Reference data loads (market_baseline_metrics.sql)
 │   │   └── schema.ts             # Drizzle table definitions
 │   ├── domain/                   # Business logic: analysis, backtest, calculations, company, data
@@ -201,7 +226,7 @@ MAET/
 │   │                             # strategy (runner-v3, execution model, portfolio engine, walk-forward), technical
 │   ├── infra/                    # Event bus, encryption, health, logger, client IP, DB diagnostics; unregistered shutdown helper
 │   ├── middleware/               # CORS (FRONTEND_ORIGIN), token-bucket rate limiting, request body size limit
-│   ├── modules/                  # Feature services (alerts, paper-trading, screener-dsl, strategy jobs, ...)
+│   ├── modules/                  # Feature services (alerts, paper-trading incl. returns & tax report, screener-dsl, strategy jobs, world, ...)
 │   ├── plugins/                  # Nitro plugins: orchestrator, in-process strategy job runner
 │   ├── routes/health/            # Admin-only /health/detailed report
 │   ├── scripts/                  # Migrations, seeds, DB checks, backfills, test wiring check
@@ -210,18 +235,19 @@ MAET/
 │   ├── orchestrator.ts           # Worker/market-data orchestration
 │   └── nitro.config.ts           # Nitro build configuration
 ├── shared/                       # Contracts shared by frontend and backend
-│   ├── domain/                   # Domain logic shared by both sides (paper trading, Indian equity charges, options pricing and payoff)
+│   ├── domain/                   # Domain logic shared by both sides (paper trading, Indian equity charges, investing: XIRR, FIFO tax, tradebook import; options pricing and payoff)
 │   ├── indicators/               # Canonical indicator implementations
 │   ├── research/                 # Research schemas and contracts
 │   ├── screener/                 # Screener AST and filter registry
 │   ├── strategy/                 # Strategy AST, operators, schemas, engine versions
 │   ├── symbols/                  # Symbol lists (nifty50.json)
-│   └── types/                    # Shared TypeScript domain types
+│   ├── types/                    # Shared TypeScript domain types
+│   └── world/                    # World Monitor contracts, normalisers and exposure rules
 ├── src/                          # Frontend (React 19 / TanStack Start / Vite), deployed to Vercel
 │   ├── components/               # UI: chart, charting, market, options, strategy, trading, workspace, ui, ...
 │   ├── hooks/                    # React hooks for market feeds, auth and state
 │   ├── lib/                      # REST/tRPC clients, auth token, SSE client, utilities
-│   ├── routes/                   # File-based routes (screener, terminal, portfolio, strategies, ...)
+│   ├── routes/                   # File-based routes (screener, terminal, portfolio, import, payoff, world, strategies, ...)
 │   └── store/                    # Client-side state
 ├── tests/
 │   ├── canonical-indicators.test.ts  # Canonical indicator test suite
@@ -377,9 +403,10 @@ bun run test:all
 End-to-end tests need no database, broker or secret: `bun run test:e2e` builds the frontend in
 production mode with `VITE_API_URL=https://api.test`, serves it with the node-server preview, and
 answers every backend request from `tests/e2e/support/mock-api.ts` (shaped like the real market,
-tRPC and SSE contracts). Install the browser once with `bunx playwright install chromium`. The specs
-cover the screener, chart, dividend and split markers, quote freshness labels, the paper terminal (signed in and out) and
-strategy creation, on one desktop and one mobile viewport.
+tRPC and SSE contracts). Install the browser once with `bunx playwright install chromium`. The 13 specs
+cover the landing page, screener, chart and corporate actions, quote freshness, the paper terminal and account
+states (signed in, signed out, expired session, backend down), account pages, strategy creation, the
+tradebook import, Payoff Lab and World Monitor, each on one desktop and one mobile viewport.
 
 ### Production Builds
 ```bash
@@ -405,6 +432,9 @@ CI runs tests for these invariants on every pull request and push to `main`. Ite
 7. **Robustness Overfit Detection**: Fragile parameter spikes (e.g., high Sharpe with zero neighbor support) are flagged with `OVERFIT_RISK`.
 8. **RBAC & Security Boundaries**: Ingestion and administrative mutations strictly require authenticated admin claims derived from verified JWT `app_metadata`.
 9. **Look-Ahead (runner-v3)**: A run truncated at time $T$ reproduces the full run's trades and equity before $T$, and fill-bar high/low/close/volume cannot influence decisions made at the open (`truncated-history.test.ts`, `fill-bar-look-ahead.test.ts`).
+10. **Capital-gains rules**: STCG/LTCG classification at the 12-month boundary, the 23 Jul 2024 rate change, the shared ₹1.25 lakh exemption and the loss set-off order (`shared/domain/investing/capital-gains.test.ts`); XIRR against reference cash flows and scale invariance (`xirr.test.ts`).
+11. **Options payoff**: Black-Scholes reference values and put-call parity, Greeks against finite differences, exact breakevens, unlimited-loss detection and iron-condor max profit = net credit × lots × lot size (`shared/domain/options/black-scholes.test.ts`, `payoff.test.ts`).
+12. **No invented account figures**: with an expired session or a failing backend the dashboard, terminal and portfolio show a status line and no balance (`tests/e2e/paper-account-state.spec.ts`).
 
 ---
 
