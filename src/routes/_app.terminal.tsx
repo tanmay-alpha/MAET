@@ -217,14 +217,16 @@ function Terminal() {
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
+      {/* Three columns from lg up. Below lg they stack (chart and orders, then the ticket,
+          then the watchlist) and this area scrolls, so every panel keeps a usable width. */}
+      <div className="flex flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
         {/* Left Watchlist */}
-        <div className="w-56 border-r border-border bg-panel">
+        <div className="order-3 w-full border-t border-border bg-panel lg:order-none lg:w-56 lg:shrink-0 lg:border-r lg:border-t-0">
           <Watchlist quotes={quoteMap as any} onSelect={(item) => setSymbolContext({ symbol: item.symbol, exchange: ((item as any).exchange as "NSE" | "BSE") || "NSE", sourceContext: "watchlist" })} />
         </div>
 
         {/* Main Chart and Bottom Tabs Area */}
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex min-w-0 flex-col lg:flex-1 lg:overflow-hidden">
           {/* Chart Header Bar */}
           <div className="flex flex-wrap items-center justify-between border-b border-border bg-panel px-3 py-1.5 text-xs gap-2">
             <div className="flex items-center gap-3">
@@ -245,7 +247,7 @@ function Terminal() {
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {/* Interval selector */}
               <div className="flex items-center gap-0.5 rounded border border-border bg-background p-0.5">
                 {INTERVALS.map((tf) => (
@@ -317,7 +319,7 @@ function Terminal() {
           </div>
 
           {/* Chart Canvas */}
-          <div className="flex-1 overflow-hidden bg-background">
+          <div className="min-h-[350px] overflow-hidden bg-background lg:min-h-0 lg:flex-1">
             {candles.length > 1 ? (
               <CandlestickChart
                 data={candles}
@@ -348,7 +350,7 @@ function Terminal() {
           )}
 
           {/* Bottom Tabs Panel */}
-          <div className="border-t border-border bg-panel flex flex-col h-60 overflow-hidden">
+          <div className="border-t border-border bg-panel flex shrink-0 flex-col h-60 overflow-hidden">
             <div className="flex items-center gap-1 border-b border-border bg-panel-elevated/40 px-3 text-xs">
               <button
                 onClick={() => setActiveTab("positions")}
@@ -539,7 +541,7 @@ function Terminal() {
         </div>
 
         {/* Right Order Panel & Depth */}
-        <div className="w-72 border-l border-border bg-panel flex flex-col">
+        <div className="order-2 flex w-full flex-col border-t border-border bg-panel lg:order-none lg:w-72 lg:shrink-0 lg:border-l lg:border-t-0">
           <OrderPanel symbol={active} exchange={context.exchange} price={currentPrice} />
           <div className="border-t border-border p-2">
             <DepthMeter />

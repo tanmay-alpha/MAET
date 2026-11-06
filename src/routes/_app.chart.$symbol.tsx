@@ -245,7 +245,7 @@ function ChartPage() {
     <div className={`h-screen bg-background flex flex-col ${isFullscreen ? "fixed inset-0 z-50" : ""}`}>
       {/* Header */}
       <div className="sticky top-0 z-50 border-b border-border bg-panel">
-        <div className="flex items-center justify-between px-6 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 lg:px-6">
           <div className="flex items-center gap-3">
             <button
               onClick={() => navigate({ to: "/" })}
@@ -269,7 +269,7 @@ function ChartPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="font-mono text-xl font-semibold mr-2">
               {currentPrice ? `₹${currentPrice.toFixed(2)}` : "—"}
             </div>
@@ -341,15 +341,16 @@ function ChartPage() {
         </div>
       )}
 
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Below lg the chart and sidebar stack and this area scrolls. */}
+      <div className="flex-1 flex flex-col overflow-y-auto lg:overflow-hidden">
         {/* Time Period Selector */}
-        <div className="flex items-center justify-between border-b border-border px-6 py-2">
-          <div className="flex gap-1">
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 lg:px-6">
+          <div className="flex min-w-0 gap-1 overflow-x-auto">
             {Object.entries(TIMEFRAMES).map(([key, tf]) => (
               <button
                 key={key}
                 onClick={() => isTimeframeKey(key) && setSelectedTF(key)}
-                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                className={`shrink-0 whitespace-nowrap px-3 py-1.5 text-sm rounded-md transition-colors ${
                   selectedTF === key
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-accent/50"
@@ -361,7 +362,7 @@ function ChartPage() {
             ))}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={() => setSelectedChartType("candles")}
               className={`p-2 rounded-md ${
@@ -449,9 +450,10 @@ function ChartPage() {
         )}
 
         {/* Main Chart Area */}
-        <div className="flex-1 flex">
+        {/* Side by side from lg up; stacked below so the chart keeps the full width. */}
+        <div className="flex flex-col lg:flex-1 lg:flex-row">
           {/* Chart Canvas */}
-          <div className="flex-1 p-6">
+          <div className="min-w-0 p-3 lg:flex-1 lg:p-6">
             <TiltCard max={5} className="h-full">
               <div className="h-full rounded-2xl border border-border bg-panel/95 p-4 relative">
                 <ChartToolbar
@@ -508,7 +510,7 @@ function ChartPage() {
           </div>
 
           {/* Sidebar */}
-          <div className="w-80 border-l border-border p-6 space-y-4">
+          <div className="w-full space-y-4 border-t border-border p-3 lg:w-80 lg:shrink-0 lg:border-l lg:border-t-0 lg:p-6">
             {/* Price Info */}
             <TiltCard>
               <div className="p-4">
