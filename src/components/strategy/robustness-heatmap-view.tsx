@@ -1,6 +1,5 @@
-import React from "react";
-import { AlertTriangle, ShieldCheck, ShieldAlert, Zap, Layers, BarChart2 } from "lucide-react";
 import type { ParameterStabilityAnalysis } from "../../../server/domain/strategy/robustness";
+import { MetricGrid } from "./page-chrome";
 
 interface Props {
   analysis: ParameterStabilityAnalysis;
@@ -33,153 +32,70 @@ export function RobustnessHeatmapView({
     return `rgba(16, 185, 129, ${0.15 + norm * 0.65})`; // Bull green
   };
 
-  const getScoreColor = (score: number) => {
-    if (score >= 70) return "text-bull";
-    if (score >= 45) return "text-amber-500";
-    return "text-bear";
-  };
+  const score = robustnessScore.overallRobustnessScore;
 
   return (
-    <div className="space-y-6">
-      {/* Top Banner: Robustness Score & Overfit Risk */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-lg border border-border bg-panel p-4">
-          <div className="flex items-center justify-between text-xs text-muted-foreground uppercase">
-            <span>Robustness Score</span>
-            {robustnessScore.overallRobustnessScore >= 65 ? (
-              <ShieldCheck className="h-4 w-4 text-bull" />
-            ) : (
-              <ShieldAlert className="h-4 w-4 text-bear" />
-            )}
-          </div>
-          <p className={`text-2xl font-bold font-mono mt-1 ${getScoreColor(robustnessScore.overallRobustnessScore)}`}>
-            {robustnessScore.overallRobustnessScore.toFixed(0)} / 100
-          </p>
-          <span className="text-xs text-muted-foreground">
-            {isFragileSpike ? "⚠️ Fragile Peak Detected" : "Stable Plateau Verified"}
-          </span>
-        </div>
+    <div className="space-y-4">
+      <section>
+        <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">Robustness</h3>
+        <MetricGrid
+          label="Sweep robustness"
+          items={[
+            { label: "Robustness score", value: `${score.toFixed(0)} / 100`, tone: score >= 70 ? "text-bull" : score >= 45 ? "text-amber-400" : "text-bear" },
+            { label: "Best combination", value: isFragileSpike ? "Isolated spike" : "Neighbours hold up", tone: isFragileSpike ? "text-bear" : "" },
+            { label: "Peak Sharpe", value: analysis.bestSharpe.toFixed(2) },
+            { label: `Neighbour avg Sharpe (${analysis.neighborCount})`, value: analysis.neighborAverageSharpe.toFixed(2) },
+            { label: "Neighbour stability", value: `${robustnessScore.neighborStabilityScore.toFixed(0)}%` },
+            { label: "Drawdown stability", value: `${robustnessScore.drawdownStabilityScore.toFixed(0)}%` },
+          ]}
+        />
+        <p className={`mt-1.5 text-xs ${flags.length ? "text-bear" : "text-muted-foreground"}`}>
+          Flags: {flags.length === 0 ? "none" : flags.map((flag) => flag.replace(/_/g, " ").toLowerCase()).join(", ")}
+        </p>
+      </section>
 
-        <div className="rounded-lg border border-border bg-panel p-4">
-          <div className="flex items-center justify-between text-xs text-muted-foreground uppercase">
-            <span>Peak vs Neighbors</span>
-            <Zap className="h-4 w-4 text-primary" />
-          </div>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-xl font-bold font-mono text-bull">{analysis.bestSharpe.toFixed(2)}</span>
-            <span className="text-xs text-muted-foreground">peak Sharpe</span>
-          </div>
-          <span className="text-xs text-muted-foreground font-mono">
-            {analysis.neighborAverageSharpe.toFixed(2)} avg adjacent ({analysis.neighborCount} neighbors)
-          </span>
-        </div>
-
-        <div className="rounded-lg border border-border bg-panel p-4">
-          <div className="flex items-center justify-between text-xs text-muted-foreground uppercase">
-            <span>Stability Breakdown</span>
-            <BarChart2 className="h-4 w-4 text-primary" />
-          </div>
-          <div className="mt-1 space-y-1 text-xs">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Neighbors:</span>
-              <span className="font-mono">{robustnessScore.neighborStabilityScore.toFixed(0)}%</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Drawdown:</span>
-              <span className="font-mono">{robustnessScore.drawdownStabilityScore.toFixed(0)}%</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-border bg-panel p-4">
-          <div className="flex items-center justify-between text-xs text-muted-foreground uppercase">
-            <span>Safeguards & Flags</span>
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
-          </div>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {flags.length === 0 ? (
-              <span className="inline-flex items-center gap-1 rounded bg-bull/10 px-2 py-0.5 text-xs font-semibold text-bull">
-                No Safeguard Violations
-              </span>
-            ) : (
-              flags.map((flag) => (
-                <span
-                  key={flag}
-                  className="inline-flex items-center gap-1 rounded bg-bear/10 px-2 py-0.5 text-[10px] font-mono font-bold text-bear"
-                >
-                  {flag.replace(/_/g, " ")}
-                </span>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* 2D Heatmap Grid */}
       {heatmapMatrix && heatmapMatrix.length > 0 && xValues.length > 0 && yValues.length > 0 && (
-        <div className="rounded-lg border border-border bg-panel p-4">
-          <div className="flex items-center justify-between pb-3 border-b border-border">
-            <div className="flex items-center gap-2">
-              <Layers className="h-4 w-4 text-primary" />
-              <span className="text-sm font-semibold">Parameter Sensitivity Heatmap</span>
-            </div>
-            <span className="text-xs text-muted-foreground">
-              {paramXName} vs {paramYName} (Sharpe Ratio)
-            </span>
-          </div>
-
-          <div className="mt-4 overflow-x-auto">
-            <div className="inline-block min-w-full">
-              <table className="border-collapse text-xs font-mono">
-                <thead>
-                  <tr>
-                    <th className="p-2 text-left text-muted-foreground">{paramYName} \ {paramXName}</th>
-                    {xValues.map((x) => (
-                      <th key={x} className="p-2 text-center text-muted-foreground font-semibold">
-                        {x}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {yValues.map((y) => (
-                    <tr key={y}>
-                      <td className="p-2 font-semibold text-muted-foreground text-right">{y}</td>
-                      {xValues.map((x) => {
-                        const cell = heatmapMatrix.find((c) => c.paramX === x && c.paramY === y);
-                        if (!cell) {
-                          return <td key={x} className="p-2 border border-border/30 bg-muted/20" />;
-                        }
-                        const isBest =
-                          analysis.bestParams[paramXName] === x && analysis.bestParams[paramYName] === y;
-                        return (
-                          <td
-                            key={x}
-                            className={`p-2.5 text-center border border-border/40 transition-transform hover:scale-105 cursor-pointer relative ${
-                              isBest ? "ring-2 ring-primary font-bold shadow-lg" : ""
-                            }`}
-                            style={{ backgroundColor: getHeatmapColor(cell.sharpe) }}
-                            title={`${paramXName}: ${x}, ${paramYName}: ${y}\nSharpe: ${cell.sharpe.toFixed(2)}\nReturn: ${cell.totalReturn.toFixed(1)}%`}
-                          >
-                            <span className={cell.sharpe > 0 ? "text-foreground" : "text-bear font-bold"}>
-                              {cell.sharpe.toFixed(2)}
-                            </span>
-                            {isBest && (
-                              <span className="absolute -top-1 -right-1 flex h-2 w-2">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
-                              </span>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
+        <section>
+          <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">
+            Sharpe by {paramYName} (rows) and {paramXName} (columns) · outlined cell is the best combination
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="border-collapse font-mono text-xs">
+              <thead>
+                <tr>
+                  <th className="p-1.5 text-left font-normal text-muted-foreground">{paramYName} \ {paramXName}</th>
+                  {xValues.map((x) => (
+                    <th key={x} className="p-1.5 text-center font-normal text-muted-foreground">{x}</th>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </tr>
+              </thead>
+              <tbody>
+                {yValues.map((y) => (
+                  <tr key={y}>
+                    <td className="p-1.5 text-right text-muted-foreground">{y}</td>
+                    {xValues.map((x) => {
+                      const cell = heatmapMatrix.find((c) => c.paramX === x && c.paramY === y);
+                      if (!cell) {
+                        return <td key={x} className="border border-border/30 p-1.5" />;
+                      }
+                      const isBest = analysis.bestParams[paramXName] === x && analysis.bestParams[paramYName] === y;
+                      return (
+                        <td
+                          key={x}
+                          className={`border border-border/40 px-2 py-1.5 text-center ${isBest ? "outline outline-2 -outline-offset-2 outline-primary font-semibold" : ""}`}
+                          style={{ backgroundColor: getHeatmapColor(cell.sharpe) }}
+                          title={`${paramXName} ${x}, ${paramYName} ${y}: Sharpe ${cell.sharpe.toFixed(2)}, return ${cell.totalReturn.toFixed(1)}%`}
+                        >
+                          {cell.sharpe.toFixed(2)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

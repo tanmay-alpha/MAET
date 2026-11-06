@@ -1,9 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useId, useState } from "react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
-import { TrendingUp, Zap, BarChart3 } from "lucide-react";
-import { ratioMetric, type MetricRow } from "./-backtest-metrics";
+import { ratioMetric } from "./-backtest-metrics";
+import { EquityLine } from "@/components/strategy/equity-line";
+import { EmptyLine, ErrorLine, MetricGrid, PageHeader, primaryButton, secondaryButton, type MetricItem } from "@/components/strategy/page-chrome";
+import { count, dateTime, decimal, percent, rupees, shortDate, signTone } from "@/components/strategy/format";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { useSignedIn } from "@/hooks/use-signed-in";
 
 export interface BacktestSearch {
   symbol?: string;
@@ -15,37 +19,71 @@ export const Route = createFileRoute("/_app/backtest")({
     symbol: typeof search.symbol === "string" ? search.symbol : undefined,
     sourceContext: typeof search.sourceContext === "string" ? search.sourceContext : undefined,
   }),
-  head: () => ({ meta: [{ title: "Backtest Lab V2 — MAET" }] }),
+  head: () => ({ meta: [{ title: "Backtest — MAET" }] }),
   component: Backtest,
 });
 
-function Curve({ data }: { data: Array<{ timestamp: number; equity: number }> }) {
-  const gradientId = useId().replace(/:/g, "");
-  if (!data || data.length < 2) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">No equity curve available</div>;
-  const min = Math.min(...data.map((point) => point.equity));
-  const max = Math.max(...data.map((point) => point.equity));
-  const spread = max - min || 1;
-  const points = data.map((point, index) => `${(index / (data.length - 1)) * 100},${100 - ((point.equity - min) / spread) * 100}`).join(" ");
-  const profitable = data[data.length - 1].equity >= data[0].equity;
-  const color = profitable ? "var(--color-bull)" : "var(--color-bear)";
-  return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
-      <defs>
-        <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.35" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {Array.from({ length: 5 }).map((_, index) => (
-        <line key={index} x1="0" x2="100" y1={(index / 4) * 100} y2={(index / 4) * 100} stroke="var(--color-grid)" strokeWidth="0.1" />
-      ))}
-      <polyline points={`0,100 ${points} 100,100`} fill={`url(#${gradientId})`} stroke="none" />
-      <polyline points={points} fill="none" stroke={color} strokeWidth="0.5" />
-    </svg>
-  );
+const STRATEGIES: Record<string, string> = {
+  SMA_CROSS: "SMA cross",
+  EMA_CROSS: "EMA cross",
+  RSI_REVERSAL: "RSI reversal",
+  MACD_CROSS: "MACD cross",
+  DONCHIAN_BREAKOUT: "Donchian breakout",
+  BOLLINGER_MEAN_REVERSION: "Bollinger mean reversion",
+};
+
+/** Risk settings every run uses; shown next to the results so the numbers can be read correctly. */
+const RISK = {
+  initialCapital: 100000,
+  feeBps: 10,
+  slippageBps: 5,
+  positionSizePercent: 100,
+  maximumOpenPositions: 1,
+};
+
+/** backtestV2 metrics (server/domain/backtest/risk-metrics.ts): ratios are fractions. */
+interface RunMetrics {
+  totalReturn?: number;
+  annualisedReturn?: number;
+  sharpe?: number;
+  sortino?: number;
+  calmar?: number;
+  maxDrawdown?: number;
+  ulcerIndex?: number;
+  winRate?: number;
+  profitFactor?: number | null;
+  payoffRatio?: number | null;
 }
 
+interface RunResult {
+  runId?: string;
+  symbol: string;
+  from?: string;
+  to?: string;
+  metrics?: RunMetrics;
+  equityCurve?: Array<{ timestamp: number; equity: number }>;
+  trades?: unknown[];
+}
+
+interface RunResponse {
+  runId: string;
+  result: RunResult;
+}
+
+/** backtest_runs row; `result` is the stored payload, with signalCount = number of trades. */
+interface StoredRun {
+  id: string;
+  symbol: string;
+  timeframe: string;
+  strategy: string;
+  createdAt: string;
+  result?: { metrics?: RunMetrics; signalCount?: number } | null;
+}
+
+const inputClass = "h-8 w-full rounded border border-border bg-background px-2 text-xs";
+
 function Backtest() {
+  const signedIn = useSignedIn();
   const navigate = useNavigate();
   const search = Route.useSearch();
   const queryClient = useQueryClient();
@@ -59,197 +97,199 @@ function Backtest() {
   const runsQuery = useQuery({
     queryKey: ["backtestV2", "listRuns"],
     queryFn: () => trpc.backtestV2.listRuns.query(),
+    enabled: signedIn,
   });
 
   const mutation = useMutation({
-    mutationFn: (input: any) => trpc.backtestV2.run.mutate(input),
+    mutationFn: (input: unknown): Promise<RunResponse> => trpc.backtestV2.run.mutate(input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["backtestV2"] });
     },
   });
 
   const result = mutation.data?.result;
+  const m = result?.metrics;
 
   const run = () => mutation.mutate({
     symbol,
     timeframe,
-    strategy: {
-      type: strategy,
-      fastPeriod: fast,
-      slowPeriod: slow,
-      rsiPeriod,
-    },
-    risk: {
-      initialCapital: 100000,
-      feeBps: 10,
-      slippageBps: 5,
-      positionSizePercent: 100,
-      maximumOpenPositions: 1,
-    },
+    strategy: { type: strategy, fastPeriod: fast, slowPeriod: slow, rsiPeriod },
+    risk: RISK,
   });
 
-  const metrics: MetricRow[] = result ? [
-    { label: "Total Return", value: `${((result.metrics?.totalReturn ?? 0) * 100).toFixed(2)}%`, trend: result.metrics?.totalReturn ?? 0 },
-    { label: "CAGR", value: `${((result.metrics?.annualisedReturn ?? 0) * 100).toFixed(2)}%`, trend: result.metrics?.annualisedReturn ?? 0 },
-    { label: "Sharpe Ratio", value: (result.metrics?.sharpe ?? 0).toFixed(2), trend: result.metrics?.sharpe ?? 0 },
-    { label: "Sortino Ratio", value: (result.metrics?.sortino ?? 0).toFixed(2), trend: result.metrics?.sortino ?? 0 },
-    { label: "Calmar Ratio", value: (result.metrics?.calmar ?? 0).toFixed(2), trend: result.metrics?.calmar ?? 0 },
-    { label: "Max Drawdown", value: `${((result.metrics?.maxDrawdown ?? 0) * 100).toFixed(2)}%`, trend: -(result.metrics?.maxDrawdown ?? 0) },
-    { label: "Ulcer Index", value: (result.metrics?.ulcerIndex ?? 0).toFixed(2), trend: -(result.metrics?.ulcerIndex ?? 0) },
-    { label: "Win Rate", value: `${((result.metrics?.winRate ?? 0) * 100).toFixed(1)}%`, trend: (result.metrics?.winRate ?? 0) - 0.5 },
-    ratioMetric("Profit Factor", result.metrics?.profitFactor),
-    ratioMetric("Payoff Ratio", result.metrics?.payoffRatio),
-    { label: "Trades Executed", value: String(result.signalCount ?? 0), trend: 0 },
+  const metrics: MetricItem[] = result ? [
+    { label: "Total return", value: percent(m?.totalReturn), tone: signTone(m?.totalReturn) },
+    { label: "CAGR", value: percent(m?.annualisedReturn), tone: signTone(m?.annualisedReturn) },
+    { label: "Max drawdown", value: percent(m?.maxDrawdown), tone: m?.maxDrawdown ? "text-bear" : "" },
+    { label: "Sharpe", value: decimal(m?.sharpe) },
+    { label: "Sortino", value: decimal(m?.sortino) },
+    { label: "Calmar", value: decimal(m?.calmar) },
+    { label: "Ulcer index", value: decimal(m?.ulcerIndex) },
+    { label: "Win rate", value: percent(m?.winRate, 1) },
+    ...[ratioMetric("Profit factor", m?.profitFactor), ratioMetric("Payoff ratio", m?.payoffRatio)].map((r) => ({ label: r.label, value: r.value, hint: r.hint })),
+    { label: "Trades", value: count(result.trades?.length) },
   ] : [];
 
   return (
-    <div className="h-full overflow-y-auto p-4 space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Backtest Lab V2</h1>
-          <p className="text-xs text-muted-foreground">Next-bar execution · zero lookahead bias · persisted runs</p>
-        </div>
-        <button type="button" onClick={run} disabled={mutation.isPending} className="rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">
-          {mutation.isPending ? "Running…" : "Run Backtest V2"}
-        </button>
-      </div>
+    <div className="flex h-full flex-col overflow-y-auto">
+      <PageHeader
+        title="Backtest"
+        meta={`Built-in strategies on stored daily candles · fills at the next bar's open · ${rupees(RISK.initialCapital, 0)} capital, ${RISK.feeBps} bps fees, ${RISK.slippageBps} bps slippage`}
+        actions={<Link to="/strategies" className={secondaryButton}>Strategy Lab</Link>}
+      />
 
-      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
-        <label className="rounded-lg border border-border bg-panel p-3">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Symbol</span>
-          <input value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} className="mt-1 w-full bg-transparent text-sm font-medium outline-none" />
-        </label>
-        <label className="rounded-lg border border-border bg-panel p-3">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Strategy</span>
-          <select value={strategy} onChange={(event) => setStrategy(event.target.value)} className="mt-1 w-full bg-transparent text-sm font-medium outline-none">
-            <option value="SMA_CROSS">SMA Cross</option>
-            <option value="EMA_CROSS">EMA Cross</option>
-            <option value="RSI_REVERSAL">RSI Reversal</option>
-            <option value="MACD_CROSS">MACD Cross</option>
-            <option value="DONCHIAN_BREAKOUT">Donchian Breakout</option>
-            <option value="BOLLINGER_MEAN_REVERSION">Bollinger Mean Reversion</option>
-          </select>
-        </label>
-        <label className="rounded-lg border border-border bg-panel p-3">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Timeframe</span>
-          <select value={timeframe} onChange={(event) => setTimeframe(event.target.value)} className="mt-1 w-full bg-transparent text-sm font-medium outline-none">
-            <option value="1d">Daily</option>
-          </select>
-        </label>
-        {strategy === "SMA_CROSS" || strategy === "EMA_CROSS" ? <>
-          <label className="rounded-lg border border-border bg-panel p-3"><span className="text-[10px] uppercase tracking-wider text-muted-foreground">Fast Period</span><input type="number" min={2} value={fast} onChange={(event) => setFast(Number(event.target.value))} className="mt-1 w-full bg-transparent text-sm font-medium outline-none" /></label>
-          <label className="rounded-lg border border-border bg-panel p-3"><span className="text-[10px] uppercase tracking-wider text-muted-foreground">Slow Period</span><input type="number" min={3} value={slow} onChange={(event) => setSlow(Number(event.target.value))} className="mt-1 w-full bg-transparent text-sm font-medium outline-none" /></label>
-        </> : <label className="rounded-lg border border-border bg-panel p-3"><span className="text-[10px] uppercase tracking-wider text-muted-foreground">RSI Period</span><input type="number" min={2} value={rsiPeriod} onChange={(event) => setRsiPeriod(Number(event.target.value))} className="mt-1 w-full bg-transparent text-sm font-medium outline-none" /></label>}
-      </div>
-
-      {mutation.isError && <div className="rounded-lg border border-bear/40 bg-bear/10 p-3 text-sm text-bear">{mutation.error.message}</div>}
-
-      {!result && !mutation.isPending && !mutation.isError && (
-        <div className="rounded-lg border border-border bg-panel px-4 py-16 text-center text-sm text-muted-foreground">Choose a symbol and strategy to run a V2 backtest.</div>
-      )}
-
-      {result && <>
-        <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-          <div className="rounded-lg border border-border bg-panel">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3 text-sm">
-              <span className="font-medium">Equity Curve</span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void navigate({
-                    to: `/chart/${result.symbol}` as any,
-                    search: {
-                      backtestRunId: mutation.data?.runId || result.runId,
-                      sourceContext: "backtest",
-                    } as any,
-                  })}
-                  className="flex items-center gap-1.5 rounded bg-primary/15 hover:bg-primary/25 text-primary border border-primary/30 px-2.5 py-1 text-xs font-semibold transition"
-                  title="View execution fills and trade markers directly on TradingView chart"
-                >
-                  <TrendingUp className="h-3.5 w-3.5" />
-                  View Trades on Chart
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void navigate({
-                    to: "/terminal" as any,
-                    search: {
-                      symbol: result.symbol,
-                      sourceContext: "backtest",
-                    } as any,
-                  })}
-                  className="flex items-center gap-1.5 rounded bg-bull/15 hover:bg-bull/25 text-bull border border-bull/30 px-2.5 py-1 text-xs font-semibold transition"
-                  title="Deploy or trade in Paper Terminal"
-                >
-                  <Zap className="h-3.5 w-3.5" />
-                  Terminal
-                </button>
-                <span className="text-xs text-muted-foreground ml-1">{result.equityCurve?.length ?? 0} points · {result.symbol}</span>
-              </div>
-            </div>
-            <div className="h-80 p-2"><Curve data={result.equityCurve ?? []} /></div>
-          </div>
-          <div className="rounded-lg border border-border bg-panel">
-            <div className="border-b border-border px-4 py-3 text-sm font-medium">Performance Metrics</div>
-            <div className="divide-y divide-border">
-              {metrics.map((metric) => <div key={metric.label} className="flex items-center justify-between px-4 py-2.5 text-xs"><span className="text-muted-foreground">{metric.label}</span><span title={metric.hint} className={`font-mono font-semibold ${metric.trend > 0 ? "text-bull" : metric.trend < 0 ? "text-bear" : ""}`}>{metric.value}</span></div>)}
-            </div>
-          </div>
-        </div>
-      </>}
-
-      {/* Persisted Runs */}
-      <div className="rounded-lg border bg-card p-6 shadow-sm">
-        <h3 className="text-lg font-semibold mb-4">Persisted Run History</h3>
-        <div className="space-y-3">
-          {runsQuery.data?.runs?.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No past backtest runs found.</p>
+      <div className="space-y-4 p-4">
+        <form
+          onSubmit={(event) => { event.preventDefault(); run(); }}
+          className="grid grid-cols-2 items-end gap-2 sm:grid-cols-3 lg:flex lg:flex-wrap"
+        >
+          <Field label="Symbol">
+            <input value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} className={`${inputClass} font-mono lg:w-32`} />
+          </Field>
+          <Field label="Strategy">
+            <select value={strategy} onChange={(event) => setStrategy(event.target.value)} className={`${inputClass} lg:w-52`}>
+              {Object.entries(STRATEGIES).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </Field>
+          <Field label="Timeframe">
+            <select value={timeframe} onChange={(event) => setTimeframe(event.target.value)} className={`${inputClass} lg:w-24`}>
+              <option value="1d">Daily</option>
+            </select>
+          </Field>
+          {strategy === "SMA_CROSS" || strategy === "EMA_CROSS" ? (
+            <>
+              <Field label="Fast period">
+                <input type="number" min={2} value={fast} onChange={(event) => setFast(Number(event.target.value))} className={`${inputClass} font-mono lg:w-24`} />
+              </Field>
+              <Field label="Slow period">
+                <input type="number" min={3} value={slow} onChange={(event) => setSlow(Number(event.target.value))} className={`${inputClass} font-mono lg:w-24`} />
+              </Field>
+            </>
           ) : (
-            runsQuery.data?.runs?.map((runItem: any) => (
-              <div key={runItem.id} className="flex items-center justify-between border-b pb-3 text-xs">
-                <div>
-                  <span className="font-mono font-semibold">{runItem.symbol}</span>
-                  <span className="ml-2 text-muted-foreground">({runItem.strategy} • {runItem.timeframe})</span>
-                  <p className="text-muted-foreground text-[10px]">{new Date(runItem.createdAt).toLocaleString()}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void navigate({
-                      to: `/chart/${runItem.symbol}` as any,
-                      search: {
-                        backtestRunId: runItem.id,
-                        sourceContext: "backtest",
-                      } as any,
-                    })}
-                    className="flex items-center gap-1 rounded border border-border bg-panel px-2 py-1 text-[11px] font-medium hover:bg-accent hover:text-foreground transition"
-                    title="Open full chart with trade markers for this run"
-                  >
-                    <TrendingUp className="h-3 w-3 text-primary" />
-                    Chart
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void navigate({
-                      to: "/terminal" as any,
-                      search: {
-                        symbol: runItem.symbol,
-                        sourceContext: "backtest",
-                      } as any,
-                    })}
-                    className="flex items-center gap-1 rounded border border-border bg-panel px-2 py-1 text-[11px] font-medium hover:bg-accent hover:text-foreground transition"
-                    title="Open symbol in Terminal"
-                  >
-                    <Zap className="h-3 w-3 text-bull" />
-                    Terminal
-                  </button>
-                  <span className="font-mono text-xs">ID: {runItem.id.slice(0, 8)}</span>
-                </div>
-              </div>
-            ))
+            <Field label="RSI period">
+              <input type="number" min={2} value={rsiPeriod} onChange={(event) => setRsiPeriod(Number(event.target.value))} className={`${inputClass} font-mono lg:w-24`} />
+            </Field>
           )}
-        </div>
+          <button type="submit" disabled={!signedIn || mutation.isPending} className={`${primaryButton} h-8 justify-center`}>
+            {mutation.isPending ? "Running…" : "Run backtest"}
+          </button>
+        </form>
+
+        {!signedIn && <SignedOutNotice feature="Backtests" />}
+        {mutation.isError && <ErrorLine title="Backtest failed" error={mutation.error} />}
+
+        {result && (
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-medium">
+                {result.symbol} · {STRATEGIES[strategy] ?? strategy}
+                <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">
+                  {shortDate(result.from)} – {shortDate(result.to)} · {count(result.equityCurve?.length)} bars
+                </span>
+              </h2>
+              <div className="flex gap-1.5">
+                <Link
+                  to="/chart/$symbol"
+                  params={{ symbol: result.symbol }}
+                  search={{ backtestRunId: mutation.data?.runId || result.runId, sourceContext: "backtest" }}
+                  className={secondaryButton}
+                >
+                  Trades on chart
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void navigate({ href: `/terminal?symbol=${encodeURIComponent(result.symbol)}&sourceContext=backtest` })}
+                  className={secondaryButton}
+                >
+                  Open in terminal
+                </button>
+              </div>
+            </div>
+            <div className="grid gap-3 xl:grid-cols-[1fr_28rem]">
+              <div className="rounded border border-border bg-panel p-3">
+                <EquityLine label="Equity curve" height={260} points={(result.equityCurve ?? []).map((p) => ({ time: p.timestamp, equity: p.equity }))} />
+              </div>
+              <MetricGrid label="Backtest metrics" items={metrics} />
+            </div>
+          </section>
+        )}
+
+        <RunHistory signedIn={signedIn} query={runsQuery} />
       </div>
     </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block text-[11px] text-muted-foreground">
+      {label}
+      <div className="mt-0.5 text-foreground">{children}</div>
+    </label>
+  );
+}
+
+function RunHistory({ signedIn, query }: {
+  signedIn: boolean;
+  query: { data?: { runs: StoredRun[] }; error: Error | null; isLoading: boolean };
+}) {
+  if (!signedIn) return null;
+  const runs = query.data?.runs ?? [];
+  let body: ReactNode;
+  if (query.error) body = <div className="p-3"><ErrorLine title="Could not load past runs" error={query.error} /></div>;
+  else if (query.isLoading) body = <EmptyLine>Loading past runs…</EmptyLine>;
+  else if (runs.length === 0) body = <EmptyLine>No saved runs yet. Each run above is saved here.</EmptyLine>;
+  else {
+    body = (
+      <div className="overflow-x-auto">
+        <table className="w-full whitespace-nowrap text-xs">
+          <thead className="border-b border-border bg-panel text-muted-foreground">
+            <tr>
+              <th className="px-3 py-1.5 text-left font-medium">Symbol</th>
+              <th className="px-3 py-1.5 text-left font-medium">Strategy</th>
+              <th className="px-3 py-1.5 text-right font-medium">Return</th>
+              <th className="px-3 py-1.5 text-right font-medium">Max DD</th>
+              <th className="px-3 py-1.5 text-right font-medium">Sharpe</th>
+              <th className="px-3 py-1.5 text-right font-medium">Trades</th>
+              <th className="px-3 py-1.5 text-right font-medium">Run at (IST)</th>
+              <th className="px-3 py-1.5"><span className="sr-only">Chart</span></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {runs.map((r) => {
+              const rm = r.result?.metrics;
+              return (
+                <tr key={r.id} className="hover:bg-accent/30">
+                  <td className="px-3 py-1.5 font-mono font-medium">{r.symbol} <span className="font-normal text-muted-foreground">{r.timeframe}</span></td>
+                  <td className="px-3 py-1.5">{STRATEGIES[r.strategy] ?? r.strategy}</td>
+                  <td className={`px-3 py-1.5 text-right font-mono ${signTone(rm?.totalReturn)}`}>{percent(rm?.totalReturn)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-bear">{percent(rm?.maxDrawdown)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{decimal(rm?.sharpe)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{count(r.result?.signalCount)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-muted-foreground">{dateTime(r.createdAt)}</td>
+                  <td className="px-3 py-1.5 text-right">
+                    <Link
+                      to="/chart/$symbol"
+                      params={{ symbol: r.symbol }}
+                      search={{ backtestRunId: r.id, sourceContext: "backtest" }}
+                      className="text-primary hover:underline"
+                      title="Open the chart with this run's trade markers"
+                    >
+                      Chart
+                    </Link>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+  return (
+    <section className="rounded border border-border">
+      <h2 className="border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">Past runs</h2>
+      {body}
+    </section>
   );
 }

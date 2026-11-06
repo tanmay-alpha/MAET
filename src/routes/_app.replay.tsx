@@ -1,256 +1,242 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-import {
-  Play, Pause, SkipForward, RotateCcw, X,
-  ChevronRight, BarChart3, Clock, DollarSign,
-} from "lucide-react";
+import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { EmptyLine, ErrorLine, PageHeader, primaryButton, secondaryButton } from "@/components/strategy/page-chrome";
+import { count, dateTime, rupees, shortDate, signTone } from "@/components/strategy/format";
 
 export const Route = createFileRoute("/_app/replay")({
   head: () => ({ meta: [{ title: "Bar Replay — MAET Strategy Lab" }] }),
   component: ReplayPage,
 });
 
+const TIMEFRAMES = ["1m", "5m", "15m", "1h", "1d"];
+
+/** strategy_replay_sessions row as JSON. */
+interface ReplaySession {
+  id: string;
+  symbol: string;
+  timeframe: string;
+  barsRevealed: number;
+  currentEquity: string;
+}
+
+interface ReplayBar {
+  ts: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+const inputClass = "mt-0.5 h-8 w-full rounded border border-border bg-background px-2 text-xs";
+
 function ReplayPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [symbol, setSymbol] = useState("RELIANCE");
   const [timeframe, setTimeframe] = useState("1d");
-  const [startDate, setStartDate] = useState("2023-01-01T00:00:00.000Z");
+  const [startDate, setStartDate] = useState("2023-01-01");
+  const [endOfData, setEndOfData] = useState(false);
 
   const signedIn = useSignedIn();
-  const { data: sessions, refetch: refetchSessions } = trpc.strategyReplay.list.useQuery(undefined, { enabled: signedIn });
+  const { data: sessions, error: listError, refetch: refetchSessions } = trpc.strategyReplay.list.useQuery(undefined, { enabled: signedIn });
 
   const createMutation = trpc.strategyReplay.create.useMutation({
-    onSuccess: (data: any) => {
+    onSuccess: (data: { session: ReplaySession }) => {
       setActiveSessionId(data.session.id);
+      setEndOfData(false);
       refetchSessions();
     },
   });
-
   const stepMutation = trpc.strategyReplay.step.useMutation();
   const resetMutation = trpc.strategyReplay.reset.useMutation();
   const closeMutation = trpc.strategyReplay.close.useMutation({
     onSuccess: () => { setActiveSessionId(null); refetchSessions(); },
   });
+  const actionError = createMutation.error ?? stepMutation.error ?? resetMutation.error ?? closeMutation.error;
 
-  const { data: stateData, refetch: refetchState } = trpc.strategyReplay.getState.useQuery(
+  const { data: stateData, error: stateError, refetch: refetchState } = trpc.strategyReplay.getState.useQuery(
     { sessionId: activeSessionId! },
     { enabled: !!activeSessionId },
   );
 
-  const bars = stateData?.bars ?? [];
-  const session = stateData?.session;
+  const bars: ReplayBar[] = stateData?.bars ?? [];
+  const session: ReplaySession | undefined = stateData?.session;
+  const openSessions: ReplaySession[] = sessions?.sessions ?? [];
+
+  function openSession(id: string) {
+    setActiveSessionId(id);
+    setEndOfData(false);
+  }
 
   function handleStep() {
     if (!activeSessionId) return;
     stepMutation.mutate({ sessionId: activeSessionId }, {
-      onSuccess: () => refetchState(),
+      onSuccess: (result: { endOfData: boolean }) => {
+        setEndOfData(result.endOfData);
+        refetchState();
+      },
     });
   }
 
   function handleReset() {
     if (!activeSessionId) return;
     resetMutation.mutate({ sessionId: activeSessionId }, {
-      onSuccess: () => refetchState(),
+      onSuccess: () => { setEndOfData(false); refetchState(); },
     });
   }
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-5 py-3">
-        <div className="flex items-center gap-3">
-          <Play className="h-5 w-5 text-primary" />
-          <h1 className="text-base font-semibold">Bar Replay</h1>
-          <span className="text-[10px] rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-primary uppercase tracking-wide">
-            Isolated Account
-          </span>
-        </div>
-        {activeSessionId && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleStep}
-              disabled={stepMutation.isPending}
-              className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
-            >
-              <SkipForward className="h-3.5 w-3.5" />
-              Next Bar
-            </button>
-            <button
-              onClick={handleReset}
-              className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Reset
-            </button>
-            <button
-              onClick={() => closeMutation.mutate({ sessionId: activeSessionId })}
-              className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-bear"
-            >
-              <X className="h-3.5 w-3.5" />
-              Close Session
-            </button>
-          </div>
-        )}
-      </div>
+    <div className="flex h-full flex-col overflow-y-auto md:overflow-hidden">
+      <PageHeader
+        title="Bar replay"
+        meta="Step through stored candles one bar at a time. Replay sessions keep their own cash, separate from the paper account."
+        actions={
+          activeSessionId && (
+            <>
+              <button type="button" onClick={handleStep} disabled={stepMutation.isPending || endOfData} className={primaryButton}>Next bar</button>
+              <button type="button" onClick={handleReset} disabled={resetMutation.isPending} className={secondaryButton}>Reset</button>
+              <button type="button" onClick={() => closeMutation.mutate({ sessionId: activeSessionId })} className={secondaryButton}>Close session</button>
+            </>
+          )
+        }
+      />
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left panel */}
-        <div className="w-64 border-r border-border flex-shrink-0 overflow-y-auto p-4 space-y-4">
-          {/* New session form */}
+      <div className="flex flex-col md:min-h-0 md:flex-1 md:flex-row">
+        <aside className="shrink-0 space-y-4 border-b border-border p-4 md:w-64 md:overflow-y-auto md:border-b-0 md:border-r">
           {!activeSessionId && (
-            <div className="space-y-3">
-              <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">New Session</div>
-              <div>
-                <label className="text-xs text-muted-foreground">Symbol</label>
-                <input
-                  className="mt-1 w-full rounded border border-border bg-background px-2 py-1.5 text-xs font-mono"
-                  value={symbol}
-                  onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                  placeholder="RELIANCE"
-                />
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                createMutation.mutate({ symbol, timeframe, startTimestamp: `${startDate}T00:00:00.000Z` });
+              }}
+              className="space-y-2"
+            >
+              <h2 className="text-xs font-medium text-muted-foreground">New session</h2>
+              <div className="grid grid-cols-3 gap-2 md:grid-cols-1">
+                <label className="block text-[11px] text-muted-foreground">
+                  Symbol
+                  <input className={`${inputClass} font-mono text-foreground`} value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
+                </label>
+                <label className="block text-[11px] text-muted-foreground">
+                  Timeframe
+                  <select className={`${inputClass} text-foreground`} value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
+                    {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+                  </select>
+                </label>
+                <label className="block text-[11px] text-muted-foreground">
+                  Start date
+                  <input type="date" className={`${inputClass} text-foreground`} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                </label>
               </div>
-              <div>
-                <label className="text-xs text-muted-foreground">Timeframe</label>
-                <select
-                  className="mt-1 w-full rounded border border-border bg-background px-2 py-1.5 text-xs"
-                  value={timeframe}
-                  onChange={(e) => setTimeframe(e.target.value)}
-                >
-                  {["1m", "5m", "15m", "1h", "1d"].map((tf) => (
-                    <option key={tf} value={tf}>{tf}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground">Start Date</label>
-                <input
-                  type="date"
-                  className="mt-1 w-full rounded border border-border bg-background px-2 py-1.5 text-xs"
-                  value={startDate.split("T")[0]}
-                  onChange={(e) => setStartDate(`${e.target.value}T00:00:00.000Z`)}
-                />
-              </div>
-              <button
-                onClick={() => createMutation.mutate({ symbol, timeframe, startTimestamp: startDate })}
-                disabled={!signedIn || createMutation.isPending}
-                className="w-full flex items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
-              >
-                <Play className="h-3.5 w-3.5" />
-                {createMutation.isPending ? "Starting..." : "Start Replay"}
+              <button type="submit" disabled={!signedIn || createMutation.isPending} className={`${primaryButton} w-full justify-center`}>
+                {createMutation.isPending ? "Starting…" : "Start replay"}
               </button>
               {!signedIn && <SignedOutNotice feature="Replay sessions" />}
-            </div>
+            </form>
           )}
 
-          {/* Session info */}
           {session && (
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Session</div>
-              <div className="rounded-lg border border-border bg-panel p-3 space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Symbol</span>
-                  <span className="font-mono">{session.symbol}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Timeframe</span>
-                  <span className="font-mono">{session.timeframe}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Bars revealed</span>
-                  <span className="font-mono">{session.barsRevealed}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Equity</span>
-                  <span className="font-mono">₹{Number(session.currentEquity).toLocaleString()}</span>
-                </div>
-              </div>
-            </div>
+            <section>
+              <h2 className="mb-1 text-xs font-medium text-muted-foreground">Session</h2>
+              <dl className="divide-y divide-border rounded border border-border text-xs">
+                {[
+                  ["Symbol", session.symbol],
+                  ["Timeframe", session.timeframe],
+                  ["Bars revealed", count(session.barsRevealed)],
+                  ["Cash", rupees(session.currentEquity)],
+                ].map(([label, value]) => (
+                  <div key={label} className="flex justify-between gap-3 px-2.5 py-1.5">
+                    <dt className="text-muted-foreground">{label}</dt>
+                    <dd className="font-mono">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
           )}
 
-          {/* Past sessions */}
-          {(sessions?.sessions?.length ?? 0) > 0 && !activeSessionId && (
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Active Sessions</div>
-              {sessions?.sessions.map((s: any) => (
-                <button
-                  key={s.id}
-                  onClick={() => setActiveSessionId(s.id)}
-                  className="w-full text-left rounded border border-border p-2.5 hover:border-primary/50 transition-colors"
-                >
-                  <div className="text-xs font-mono font-medium">{s.symbol} · {s.timeframe}</div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">{s.barsRevealed} bars revealed</div>
-                </button>
-              ))}
-            </div>
+          {listError && <ErrorLine title="Could not load sessions" error={listError} />}
+          {openSessions.length > 0 && !activeSessionId && (
+            <section>
+              <h2 className="mb-1 text-xs font-medium text-muted-foreground">Open sessions</h2>
+              <ul className="divide-y divide-border rounded border border-border">
+                {openSessions.map((s) => (
+                  <li key={s.id}>
+                    <button type="button" onClick={() => openSession(s.id)} className="flex w-full justify-between gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-accent/40">
+                      <span className="font-mono font-medium">{s.symbol} · {s.timeframe}</span>
+                      <span className="text-muted-foreground">{count(s.barsRevealed)} bars</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
           )}
-        </div>
+        </aside>
 
-        {/* Main area — bar list */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {bars.length === 0 ? (
-            <div className="flex h-full items-center justify-center">
-              <div className="text-center">
-                <BarChart3 className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
-                <p className="text-sm font-medium text-muted-foreground mb-1">No bars revealed yet</p>
-                <p className="text-xs text-muted-foreground">
-                  {activeSessionId ? 'Press "Next Bar" to reveal the first bar' : "Start a new replay session"}
-                </p>
-              </div>
-            </div>
+        <div className="min-w-0 space-y-3 p-4 md:flex-1 md:overflow-y-auto">
+          {actionError && <ErrorLine title="Replay request failed" error={actionError} />}
+          {stateError && <ErrorLine title="Could not load the session" error={stateError} />}
+          {endOfData && <p className="text-xs text-muted-foreground">End of stored data: no later {session?.timeframe ?? ""} candle for {session?.symbol ?? "this symbol"}.</p>}
+          {!activeSessionId ? (
+            signedIn && <EmptyLine>Start a session or open one to reveal bars.</EmptyLine>
+          ) : bars.length === 0 ? (
+            <EmptyLine>{stateData ? "No bars revealed yet. Press Next bar." : "Loading session…"}</EmptyLine>
           ) : (
-            <div className="space-y-1">
-              <div className="mb-3 flex items-center gap-2">
-                <div className="text-sm font-medium">{bars.length} bars revealed</div>
-                <div className="text-xs text-muted-foreground">
-                  through {new Date(bars[bars.length - 1]?.ts).toLocaleDateString()}
-                </div>
-              </div>
-
-              {/* Bar table — most recent first */}
-              <div className="rounded-lg border border-border overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead className="bg-panel border-b border-border sticky top-0">
-                    <tr>
-                      {["#", "Date/Time", "Open", "High", "Low", "Close", "Volume", "Change%"].map((h) => (
-                        <th key={h} className="px-3 py-2 text-left text-muted-foreground font-medium">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {[...bars].reverse().map((bar: any, i: number) => {
-                      const changePct = i < bars.length - 1
-                        ? ((bar.close - [...bars].reverse()[i + 1].close) / [...bars].reverse()[i + 1].close * 100)
-                        : 0;
-                      const isUp = bar.close >= bar.open;
-                      return (
-                        <tr key={bar.ts} className={`hover:bg-panel/60 ${i === 0 ? "bg-primary/5" : ""}`}>
-                          <td className="px-3 py-2 text-muted-foreground">{bars.length - i}</td>
-                          <td className="px-3 py-2 font-mono">{new Date(bar.ts).toLocaleDateString()}</td>
-                          <td className="px-3 py-2 font-mono">₹{bar.open.toFixed(2)}</td>
-                          <td className="px-3 py-2 font-mono text-bull">₹{bar.high.toFixed(2)}</td>
-                          <td className="px-3 py-2 font-mono text-bear">₹{bar.low.toFixed(2)}</td>
-                          <td className={`px-3 py-2 font-mono font-medium ${isUp ? "text-bull" : "text-bear"}`}>
-                            ₹{bar.close.toFixed(2)}
-                          </td>
-                          <td className="px-3 py-2 text-muted-foreground">
-                            {(bar.volume / 1000).toFixed(0)}K
-                          </td>
-                          <td className={`px-3 py-2 font-mono ${changePct >= 0 ? "text-bull" : "text-bear"}`}>
-                            {changePct.toFixed(2)}%
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <BarTable bars={bars} intraday={(session?.timeframe ?? "1d") !== "1d"} />
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+/** Revealed bars, newest first; change is against the previous revealed close. */
+function BarTable({ bars, intraday }: { bars: ReplayBar[]; intraday: boolean }) {
+  const rows = useMemo(
+    () => bars.map((bar, i) => ({ bar, index: i + 1, change: i === 0 ? null : (bar.close - bars[i - 1].close) / bars[i - 1].close })).reverse(),
+    [bars],
+  );
+  const price = (value: number) => rupees(value).replace("₹", "");
+
+  return (
+    <section>
+      <h2 className="mb-1.5 text-xs text-muted-foreground">
+        {count(bars.length)} bars revealed, through {intraday ? dateTime(bars[bars.length - 1].ts) : shortDate(bars[bars.length - 1].ts)} · prices in ₹
+      </h2>
+      <div className="overflow-x-auto rounded border border-border">
+        <table className="w-full whitespace-nowrap text-xs">
+          <thead className="sticky top-0 border-b border-border bg-panel text-muted-foreground">
+            <tr>
+              <th className="px-3 py-1.5 text-right font-medium">#</th>
+              <th className="px-3 py-1.5 text-left font-medium">{intraday ? "Time (IST)" : "Date"}</th>
+              <th className="px-3 py-1.5 text-right font-medium">Open</th>
+              <th className="px-3 py-1.5 text-right font-medium">High</th>
+              <th className="px-3 py-1.5 text-right font-medium">Low</th>
+              <th className="px-3 py-1.5 text-right font-medium">Close</th>
+              <th className="px-3 py-1.5 text-right font-medium">Change</th>
+              <th className="px-3 py-1.5 text-right font-medium">Volume</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border font-mono">
+            {rows.map(({ bar, index, change }, i) => (
+              <tr key={bar.ts} className={i === 0 ? "bg-accent/40" : "hover:bg-accent/30"}>
+                <td className="px-3 py-1.5 text-right text-muted-foreground">{index}</td>
+                <td className="px-3 py-1.5">{intraday ? dateTime(bar.ts) : shortDate(bar.ts)}</td>
+                <td className="px-3 py-1.5 text-right">{price(bar.open)}</td>
+                <td className="px-3 py-1.5 text-right">{price(bar.high)}</td>
+                <td className="px-3 py-1.5 text-right">{price(bar.low)}</td>
+                <td className={`px-3 py-1.5 text-right ${bar.close >= bar.open ? "text-bull" : "text-bear"}`}>{price(bar.close)}</td>
+                <td className={`px-3 py-1.5 text-right ${signTone(change)}`}>
+                  {change === null ? "—" : `${change > 0 ? "+" : ""}${(change * 100).toFixed(2)}%`}
+                </td>
+                <td className="px-3 py-1.5 text-right text-muted-foreground">{count(bar.volume)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }

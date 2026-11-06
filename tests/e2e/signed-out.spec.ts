@@ -79,6 +79,10 @@ const SIGNED_OUT_PAGES = [
   { path: "/journal", notice: "Trade theses and reviews require a signed-in account." },
   { path: "/replay", notice: "Replay sessions require a signed-in account." },
   { path: "/performance", notice: "Backtest results require a signed-in account." },
+  { path: "/backtest", notice: "Backtests require a signed-in account." },
+  { path: "/strategies/00000000-0000-4000-8000-000000000001", notice: "Saved strategies require a signed-in account." },
+  { path: "/strategies/00000000-0000-4000-8000-000000000001/backtests", notice: "Backtests and research jobs require a signed-in account." },
+  { path: "/strategies/00000000-0000-4000-8000-000000000001/deployments", notice: "Strategy deployments require a signed-in account." },
   { path: "/options/NIFTY", notice: "Options chains require a signed-in account." },
   { path: "/admin/data-quality", notice: "Data Quality Centre is available to admin users only." },
 ];
