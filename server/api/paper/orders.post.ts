@@ -15,10 +15,15 @@ import {
   PaperOrderCommandSchema,
   PaperOrderCommand,
 } from "../../modules/paper-trading/contracts";
+import { signedPositionQuantity } from "../../modules/paper-trading/mapper";
 
 const service = createPaperTradingService();
 
 export function toPaperHttpError(error: unknown): H3Error {
+  // Already an HTTP error (e.g. requireAuth's 401/503): keep its status.
+  if (error instanceof H3Error) {
+    return error;
+  }
   if (error instanceof PaperValidationError) {
     return createError({
       statusCode: 400,
@@ -94,8 +99,6 @@ export default defineEventHandler(async (event) => {
       stopPrice: "stopPrice" in input ? input.stopPrice : undefined,
       stopLossPrice: "stopLossPrice" in input ? input.stopLossPrice : undefined,
       takeProfitPrice: "takeProfitPrice" in input ? input.takeProfitPrice : undefined,
-      trailingDistance: "trailingDistance" in input ? input.trailingDistance : undefined,
-      trailingIsPercent: "trailingIsPercent" in input ? input.trailingIsPercent : undefined,
       clientOrderId: input.clientOrderId,
       idempotencyKey: input.idempotencyKey,
     };
@@ -130,7 +133,7 @@ export default defineEventHandler(async (event) => {
       position: result.position
         ? {
             ...result.position,
-            quantity: Number(result.position.totalShares),
+            quantity: signedPositionQuantity(result.position),
             averagePrice: Number(result.position.averageEntryPrice),
           }
         : null,

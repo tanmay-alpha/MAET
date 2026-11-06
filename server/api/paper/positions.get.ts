@@ -1,20 +1,21 @@
 import { defineEventHandler } from "h3";
-import { db } from "../../data/drizzle/client";
-import { paperPositions } from "../../db/schema";
-import { eq } from "drizzle-orm";
 import { requireAuth } from "../trpc/auth";
+import { createPaperTradingService } from "../../modules/paper-trading/service";
+import { signedPositionQuantity } from "../../modules/paper-trading/mapper";
+import { toPaperHttpError } from "./orders.post";
 
 export default defineEventHandler(async (event) => {
   try {
     const auth = await requireAuth(event);
-    const positions = await db
-      .select()
-      .from(paperPositions)
-      .where(eq(paperPositions.userId, auth.userId));
+    const state = await createPaperTradingService().getState({ userId: auth.userId });
 
-    return { positions };
-  } catch (error: any) {
-    console.error("[api/paper/positions.get] Error:", error);
-    throw error;
+    return {
+      positions: state.positions.map((position) => ({
+        ...position,
+        quantity: signedPositionQuantity(position),
+      })),
+    };
+  } catch (error: unknown) {
+    throw toPaperHttpError(error);
   }
 });

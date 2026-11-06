@@ -38,8 +38,6 @@ export const PaperMarketOrderSchema = z
     quantity: z.number().int().positive(),
     stopLossPrice: z.number().positive().optional(),
     takeProfitPrice: z.number().positive().optional(),
-    trailingDistance: z.number().positive().optional(),
-    trailingIsPercent: z.boolean().optional(),
   })
   .strict();
 
@@ -90,8 +88,6 @@ export interface PaperOrderCommand {
   stopPrice?: number;
   stopLossPrice?: number;
   takeProfitPrice?: number;
-  trailingDistance?: number;
-  trailingIsPercent?: boolean;
   clientOrderId?: string;
   idempotencyKey?: string;
 }

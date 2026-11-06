@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { ExecutionQuote } from "../../types/market";
+import { computeIndianEquityCharges } from "../costs/indian-equity-charges";
 import {
-  PAPER_TRANSACTION_FEE_RATE,
   PaperExecutionError,
   createExecutionPlan,
   executePaperFill,
@@ -268,9 +268,40 @@ describe("canonical price protection", () => {
     );
 
     expect(result.fill.slippage).toBeCloseTo(0.01, 8);
-    expect(result.fill.fees).toBeCloseTo(
-      100 * 100 * PAPER_TRANSACTION_FEE_RATE,
-      12
+    expect(result.fill.fees).toBe(
+      computeIndianEquityCharges({
+        exchange: "NSE",
+        product: "DELIVERY",
+        side: "BUY",
+        turnoverInr: 100 * 100,
+      }).total
+    );
+  });
+
+  it("charges the statutory schedule for the requested exchange and side", () => {
+    const paperOrder = order({ side: "SELL", quantity: 50 });
+    const held = position(50, 900);
+    const result = executePaperFill({
+      ...request(
+        paperOrder,
+        liveQuote(1000),
+        account(paperOrder, [held])
+      ),
+      exchange: "BSE",
+    });
+
+    const expected = computeIndianEquityCharges({
+      exchange: "BSE",
+      product: "DELIVERY",
+      side: "SELL",
+      turnoverInr: result.fill.fillPrice * 50,
+    });
+    expect(result.fill.exchange).toBe("BSE");
+    expect(result.fill.fees).toBe(expected.total);
+    expect(result.charges).toEqual(expected);
+    expect(result.account.cash).toBeCloseTo(
+      1_000_000 + result.fill.realisedPnl - expected.total,
+      8
     );
   });
 

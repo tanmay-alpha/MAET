@@ -22,8 +22,9 @@ describe("Paper Trading Integration Test Suite (Database & Repository Contracts)
   function mockService(prices: Record<string, number> = {}) {
     return createPaperTradingService({
       database: getDb(),
-      quoteLoader: async (symbol: string) => ({
-        exchange: "NSE",
+      marketPhase: () => "OPEN",
+      quoteLoader: async (exchange: "NSE" | "BSE", symbol: string) => ({
+        exchange,
         symbol,
         price: prices[symbol] || 2500,
         volume: 100,
