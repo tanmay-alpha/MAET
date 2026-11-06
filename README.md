@@ -191,7 +191,7 @@ MAET/
 │   └── store/                    # Client-side state
 ├── tests/
 │   ├── canonical-indicators.test.ts  # Canonical indicator test suite
-│   └── e2e/                      # Playwright specs (run manually; not part of CI)
+│   └── e2e/                      # Playwright critical-flow specs against a mocked backend (CI job `e2e`)
 ├── scripts/setup-render.sh       # Render setup helper
 ├── playwright.config.ts
 ├── bun.lock
@@ -336,7 +336,12 @@ bun run test:advanced
 bun run test:all
 ```
 
-Playwright specs in `tests/e2e/` need a running frontend and backend and are not part of CI.
+End-to-end tests need no database, broker or secret: `bun run test:e2e` builds the frontend in
+production mode with `VITE_API_URL=https://api.test`, serves it with the node-server preview, and
+answers every backend request from `tests/e2e/support/mock-api.ts` (shaped like the real market,
+tRPC and SSE contracts). Install the browser once with `bunx playwright install chromium`. The specs
+cover the screener, chart, quote freshness labels, the paper terminal (signed in and out) and
+strategy creation, on one desktop and one mobile viewport.
 
 ### Production Builds
 ```bash
