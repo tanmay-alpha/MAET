@@ -39,6 +39,7 @@ const tradingItems = [
   { title: "Terminal", url: "/terminal", icon: CandlestickChart },
   { title: "Orders", url: "/orders", icon: ClipboardList },
   { title: "Portfolio", url: "/portfolio", icon: Briefcase },
+  { title: "Import portfolio", url: "/import", icon: Layers },
 ];
 
 const reviewItems = [

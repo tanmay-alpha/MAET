@@ -1,4 +1,5 @@
 export const rupees = (value: number) => `₹${value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+export const percent = (value: number | null) => value === null ? "—" : `${(value * 100).toFixed(2)}%`;
 
 export function serverMarkLabel(timestamp: string | null): string {
   if (timestamp === null) return "Server mark time unavailable (entry-price valuation).";

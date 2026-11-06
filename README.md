@@ -162,6 +162,11 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 - Server-Sent Events for paper updates: fill, order and account events go to a transactional outbox; `server/workers/paper-outbox-publisher.ts` claims, publishes to Redis and marks each batch in one transaction (at-least-once), and one shared Redis subscriber per process (`server/modules/paper-trading/stream-hub.ts`) fans events out to `/api/paper/stream`. Event names are a shared contract (`shared/domain/paper-trading/stream-events.ts`). When Redis is unavailable the stream answers 503, events stay `PENDING`, and the UI polls (every 3 s while orders are working, else 10 s).
 - The live feed subscribes NSE symbols with an open market stream, an active alert, a working paper order or an open paper position (`server/modules/paper-trading/interest-subscriptions.ts`; refreshed on boot, every 60 s and after order/fill events, capped at 150 symbols with working orders first). BSE symbols get no live ticks, so BSE resting orders do not fill.
 
+### Broker Tradebook Import (`/import`)
+- Reads a Zerodha Console tradebook, a Groww order history or any CSV with mapped columns entirely in the browser; the file is never uploaded. A clearly badged sample tradebook is built in.
+- Every row is accepted, rejected with a reason (bad date, zero quantity, unknown side, F&O segment, non-executed Groww order, sell without prior buy) or marked a duplicate trade id.
+- Results reuse the portfolio page's engines (`shared/domain/investing/`): FIFO holdings with average cost and LTCG-eligible dates, realised round trips classified Intraday/STCG/LTCG with the same per-FY tax estimate, and XIRR once every holding has a price (typed, or filled from MAET quotes, which sends only the symbol list). Each tab exports CSV. Details: [docs/PAPER_TRADING_ENGINE.md §13](docs/PAPER_TRADING_ENGINE.md#13-broker-tradebook-import).
+
 ---
 
 ## 4. Repository Structure

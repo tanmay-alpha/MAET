@@ -18,6 +18,7 @@ import { Route as AppCompareRouteImport } from './routes/_app.compare'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppFuturesRouteImport } from './routes/_app.futures'
 import { Route as AppHeatmapRouteImport } from './routes/_app.heatmap'
+import { Route as AppImportRouteImport } from './routes/_app.import'
 import { Route as AppJournalRouteImport } from './routes/_app.journal'
 import { Route as AppNewsRouteImport } from './routes/_app.news'
 import { Route as AppOrdersRouteImport } from './routes/_app.orders'
@@ -85,6 +86,11 @@ const AppFuturesRoute = AppFuturesRouteImport.update({
 const AppHeatmapRoute = AppHeatmapRouteImport.update({
   id: '/heatmap',
   path: '/heatmap',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppImportRoute = AppImportRouteImport.update({
+  id: '/import',
+  path: '/import',
   getParentRoute: () => AppRoute,
 } as any)
 const AppJournalRoute = AppJournalRouteImport.update({
@@ -220,6 +226,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AppDashboardRoute
   '/futures': typeof AppFuturesRoute
   '/heatmap': typeof AppHeatmapRoute
+  '/import': typeof AppImportRoute
   '/journal': typeof AppJournalRoute
   '/news': typeof AppNewsRoute
   '/orders': typeof AppOrdersRoute
@@ -254,6 +261,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AppDashboardRoute
   '/futures': typeof AppFuturesRoute
   '/heatmap': typeof AppHeatmapRoute
+  '/import': typeof AppImportRoute
   '/journal': typeof AppJournalRoute
   '/news': typeof AppNewsRoute
   '/orders': typeof AppOrdersRoute
@@ -290,6 +298,7 @@ export interface FileRoutesById {
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/futures': typeof AppFuturesRoute
   '/_app/heatmap': typeof AppHeatmapRoute
+  '/_app/import': typeof AppImportRoute
   '/_app/journal': typeof AppJournalRoute
   '/_app/news': typeof AppNewsRoute
   '/_app/orders': typeof AppOrdersRoute
@@ -326,6 +335,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/futures'
     | '/heatmap'
+    | '/import'
     | '/journal'
     | '/news'
     | '/orders'
@@ -360,6 +370,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/futures'
     | '/heatmap'
+    | '/import'
     | '/journal'
     | '/news'
     | '/orders'
@@ -395,6 +406,7 @@ export interface FileRouteTypes {
     | '/_app/dashboard'
     | '/_app/futures'
     | '/_app/heatmap'
+    | '/_app/import'
     | '/_app/journal'
     | '/_app/news'
     | '/_app/orders'
@@ -493,6 +505,13 @@ declare module '@tanstack/react-router' {
       path: '/heatmap'
       fullPath: '/heatmap'
       preLoaderRoute: typeof AppHeatmapRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/import': {
+      id: '/_app/import'
+      path: '/import'
+      fullPath: '/import'
+      preLoaderRoute: typeof AppImportRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/journal': {
@@ -674,6 +693,7 @@ interface AppRouteChildren {
   AppDashboardRoute: typeof AppDashboardRoute
   AppFuturesRoute: typeof AppFuturesRoute
   AppHeatmapRoute: typeof AppHeatmapRoute
+  AppImportRoute: typeof AppImportRoute
   AppJournalRoute: typeof AppJournalRoute
   AppNewsRoute: typeof AppNewsRoute
   AppOrdersRoute: typeof AppOrdersRoute
@@ -704,6 +724,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppDashboardRoute: AppDashboardRoute,
   AppFuturesRoute: AppFuturesRoute,
   AppHeatmapRoute: AppHeatmapRoute,
+  AppImportRoute: AppImportRoute,
   AppJournalRoute: AppJournalRoute,
   AppNewsRoute: AppNewsRoute,
   AppOrdersRoute: AppOrdersRoute,
