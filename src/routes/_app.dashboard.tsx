@@ -6,6 +6,7 @@ import { quoteFeedLabel } from "@/lib/quote-status";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { INDICES } from "@/lib/market-catalog";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
+import { ResetAccountButton } from "@/components/trading/reset-account-button";
 import type { PaperPositionRow, PaperOrderRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
 
@@ -111,13 +112,13 @@ function Dashboard() {
             <PlusCircle className="h-4 w-4" />
             Quick Trade
           </button>
-          <button
-            type="button"
-            onClick={() => window.confirm("Reset paper account to initial cash?") && resetAccount()}
+          <ResetAccountButton
+            onReset={resetAccount}
+            confirmMessage="Reset paper account to initial cash?"
             className="rounded border border-border bg-panel px-3 py-1.5 text-xs hover:bg-accent font-medium transition-all"
           >
             Reset
-          </button>
+          </ResetAccountButton>
         </div>
       </div>
 

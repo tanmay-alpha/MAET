@@ -8,6 +8,7 @@ import { usePaperAccount } from "@/hooks/use-paper-account";
 import { TiltCard } from "@/components/trading/tilt-card";
 import { EquityCurveChart } from "@/components/chart/equity-curve-chart";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
+import { ResetAccountButton } from "@/components/trading/reset-account-button";
 import { PlusCircle } from "lucide-react";
 import type { PaperPositionRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
@@ -112,13 +113,13 @@ function PortfolioPage() {
                 <PlusCircle className="h-4 w-4" />
                 Quick Trade
               </button>
-              <button
-                type="button"
-                onClick={() => window.confirm("Reset all positions and cash to ₹1,000,000?") && resetAccount()}
+              <ResetAccountButton
+                onReset={resetAccount}
+                confirmMessage="Reset all positions and cash to ₹1,000,000?"
                 className="rounded-lg border border-border bg-panel px-3 py-2 text-sm hover:bg-accent transition-all"
               >
                 Reset
-              </button>
+              </ResetAccountButton>
             </div>
           </div>
         </div>

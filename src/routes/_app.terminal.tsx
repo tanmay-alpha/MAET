@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { CandlestickChart } from "@/components/trading/candlestick-chart";
 import { OrderPanel } from "@/components/trading/order-panel";
+import { ResetAccountButton } from "@/components/trading/reset-account-button";
 import { Watchlist } from "@/components/trading/watchlist";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
@@ -188,14 +189,14 @@ function Terminal() {
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => resetAccount()}
+          <ResetAccountButton
+            onReset={resetAccount}
+            confirmMessage="Reset the paper account to its initial cash? Open positions and orders are cleared."
             className="flex items-center gap-1.5 rounded border border-border bg-panel px-2.5 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-accent hover:text-foreground transition"
-            title="Reset paper account balance to initial cash"
           >
             <RefreshCw className="h-3 w-3" />
             Reset Account
-          </button>
+          </ResetAccountButton>
         </div>
       </div>
 
