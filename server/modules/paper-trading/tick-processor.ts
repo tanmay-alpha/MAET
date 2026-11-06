@@ -2,21 +2,14 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../data/drizzle/client";
 import { paperOrders } from "../../db/schema";
 import { PaperExecutionError, closableExitQuantity } from "@shared/domain/paper-trading/execution";
+import { WORKING_ORDER_STATUSES, isWorkingOrderStatus } from "@shared/domain/paper-trading/order-status";
 import { evaluateExecutionQuote, type ExecutionQuote, type Tick } from "@shared/types";
-import type { MatchingReceipt, PaperOrderRow } from "./contracts";
+import type { MatchingReceipt } from "./contracts";
 import { computeQuoteFingerprint } from "./quote-fingerprint";
 import { withSerializablePaperTransaction } from "./transaction-retry";
 import { applyFill, paperExecutionPolicy } from "./fill-writer";
 import { signedPositionQuantity } from "./mapper";
 import { CumulativeVolumeTracker } from "./volume-tracker";
-
-const MATCHABLE_ORDER_STATUSES = ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"] as const;
-const MATCHABLE_STATUS_LOOKUP: Partial<Record<PaperOrderRow["status"], true>> = {
-  PENDING: true,
-  TRIGGER_PENDING: true,
-  TRIGGERED: true,
-  PARTIALLY_FILLED: true,
-};
 
 /** Share of the volume traded since the previous tick a resting order may take. */
 const MAX_TICK_PARTICIPATION = 0.1;
@@ -55,7 +48,7 @@ export class PaperTradingTickProcessor {
         and(
           eq(paperOrders.symbol, symbol),
           eq(paperOrders.exchange, exchange),
-          inArray(paperOrders.status, [...MATCHABLE_ORDER_STATUSES])
+          inArray(paperOrders.status, [...WORKING_ORDER_STATUSES])
         )
       )
       .orderBy(asc(paperOrders.placedAt));
@@ -88,7 +81,7 @@ export class PaperTradingTickProcessor {
           // reset may have committed since. Only the locked row is authoritative.
           if (
             !order ||
-            !MATCHABLE_STATUS_LOOKUP[order.status] ||
+            !isWorkingOrderStatus(order.status) ||
             order.generation !== account.generation ||
             order.lastQuoteFingerprint === fingerprint
           ) {

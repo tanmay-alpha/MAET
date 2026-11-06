@@ -10,7 +10,7 @@ import type { Tick } from "@shared/types";
 import { createPaperTradingService } from "./service";
 import { paperTradingTickProcessor } from "./tick-processor";
 import { PaperRiskMonitor } from "./risk-monitor";
-import { PaperIdempotencyConflictError, PaperValidationError } from "./errors";
+import { PaperIdempotencyConflictError, PaperOrderConflictError, PaperValidationError } from "./errors";
 import { quoteStore } from "../../domain/market/quote-store";
 
 type QuoteOverrides = Partial<Pick<Tick, "price" | "volume" | "ts" | "source" | "quality" | "exchange">>;
@@ -392,6 +392,99 @@ describe("Paper trading engine integrity", () => {
     const receipts = await paperTradingTickProcessor.processTick(tick(symbol, 990, 1000));
     expect(receipts).toHaveLength(0);
     expect(await fillsForOrder(placed.order.id)).toHaveLength(1);
+  });
+
+  describe("cancelling a working order that already traded", () => {
+    async function accountOf(userId: string) {
+      const [account] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
+      return account!;
+    }
+
+    async function ledgerSum(userId: string): Promise<number> {
+      const entries = await getDb().select().from(paperLedgerEntries).where(eq(paperLedgerEntries.userId, userId));
+      return entries.reduce((total, entry) => total + Number(entry.amount), 0);
+    }
+
+    it("cancels the remainder of a PARTIALLY_FILLED order and keeps its fills, position, cash and margin", async () => {
+      const symbol = uniqueSymbol("PFC");
+      const service = makeService({ prices: { [symbol]: 1000 } });
+      const userId = await createTestUser();
+      const placed = await service.placeOrder({
+        userId,
+        command: { symbol, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 1000, qty: 100 },
+      });
+      await primeVolume(symbol, 1001);
+      const [receipt] = await paperTradingTickProcessor.processTick(tick(symbol, 995, 60));
+      expect(receipt?.status).toBe("PARTIALLY_FILLED");
+
+      const [fill] = await fillsForOrder(placed.order.id);
+      const fillPrice = Number(fill!.fillPrice);
+      const before = await accountOf(userId);
+      const versionBefore = before.version;
+
+      const cancelled = await service.cancelOrder({ userId, orderId: placed.order.id });
+      expect(cancelled.status).toBe("CANCELLED");
+      expect(cancelled.filledQty).toBe(6);
+      expect(Number(cancelled.averageFillPrice)).toBeCloseTo(fillPrice, 4);
+      expect(cancelled.cancelledAt).not.toBeNull();
+
+      // The fill and the position it opened are untouched by the cancel.
+      expect((await fillsForOrder(placed.order.id)).map((row) => row.quantity)).toEqual([6]);
+      const [position] = await positionsFor(userId);
+      expect(position?.totalShares).toBe(6);
+      expect(Number(position?.averageEntryPrice)).toBeCloseTo(fillPrice, 4);
+
+      // Resting orders reserve nothing, so the cancel moves no cash or margin; what the fill
+      // charged and locked stays, and the ledger still reconciles to the cash balance.
+      const after = await accountOf(userId);
+      expect(after.version).toBe(versionBefore + 1);
+      expect(after.cashBalance).toBe(before.cashBalance);
+      expect(Number(after.cashBalance)).toBeCloseTo(1_000_000 - Number(fill!.fees), 2);
+      expect(Number(after.allocatedMargin)).toBeCloseTo((6 * fillPrice) / 5, 2);
+      expect(after.allocatedMargin).toBe(before.allocatedMargin);
+      expect(await ledgerSum(userId)).toBeCloseTo(Number(after.cashBalance), 2);
+
+      // The cancelled remainder never fills afterwards, and a second cancel is refused.
+      expect(await paperTradingTickProcessor.processTick(tick(symbol, 990, 10_000))).toHaveLength(0);
+      expect(await fillsForOrder(placed.order.id)).toHaveLength(1);
+      expect(await rejectionOf(service.cancelOrder({ userId, orderId: placed.order.id }))).toBeInstanceOf(
+        PaperOrderConflictError
+      );
+    });
+
+    it("cancels a TRIGGERED stop-limit before it fills, leaving the position it protected intact", async () => {
+      const symbol = uniqueSymbol("TGC");
+      const service = makeService({ prices: { [symbol]: 1000 } });
+      const userId = await createTestUser();
+      const entry = await service.placeOrder({ userId, command: { symbol, exchange: "NSE", side: "BUY", type: "MARKET", qty: 10 } });
+      const stop = await service.placeOrder({
+        userId,
+        command: { symbol, exchange: "NSE", side: "SELL", type: "STOP_LOSS_LIMIT", stopPrice: 990, limitPrice: 985, qty: 10 },
+      });
+      await primeVolume(symbol, 1000);
+      // Gaps through the stop and below the limit: triggered, but not marketable.
+      expect(await paperTradingTickProcessor.processTick(tick(symbol, 970, 1000))).toHaveLength(0);
+      const [triggered] = await getDb().select().from(paperOrders).where(eq(paperOrders.id, stop.order.id));
+      expect(triggered?.status).toBe("TRIGGERED");
+      const before = await accountOf(userId);
+
+      const cancelled = await service.cancelOrder({ userId, orderId: stop.order.id });
+      expect(cancelled.status).toBe("CANCELLED");
+      expect(cancelled.filledQty).toBe(0);
+      expect(cancelled.triggeredAt).not.toBeNull();
+
+      // A tick at the limit would have filled the stop; the cancelled order stays unfilled.
+      expect(await paperTradingTickProcessor.processTick(tick(symbol, 986, 5000))).toHaveLength(0);
+      expect(await fillsForOrder(stop.order.id)).toHaveLength(0);
+      const [position] = await positionsFor(userId);
+      expect(position?.totalShares).toBe(10);
+
+      const after = await accountOf(userId);
+      expect(after.cashBalance).toBe(before.cashBalance);
+      expect(after.allocatedMargin).toBe(before.allocatedMargin);
+      expect(Number(after.cashBalance)).toBeCloseTo(1_000_000 - Number(entry.fill!.fees), 2);
+      expect(await ledgerSum(userId)).toBeCloseTo(Number(after.cashBalance), 2);
+    });
   });
 
   it("A15: new accounts use PAPER_INITIAL_CASH_INR and record an INITIAL_CASH ledger entry", async () => {

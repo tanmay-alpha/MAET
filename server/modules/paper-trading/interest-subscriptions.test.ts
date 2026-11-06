@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { recordDatabaseFailure, resetDatabaseBreakerForTests } from "../../data/drizzle/availability";
 import { PaperInterestSubscriptions, type PaperInterestRow } from "./interest-subscriptions";
+import { paperOrderStatus } from "../../db/schema";
+import { WORKING_ORDER_STATUSES } from "@shared/domain/paper-trading/order-status";
 
 const silent = { info() {}, warn() {}, debug() {} };
 
@@ -161,5 +163,15 @@ describe("PaperInterestSubscriptions", () => {
     await interest.idle();
 
     expect(refs.size).toBe(0);
+  });
+});
+
+describe("working order statuses", () => {
+  it("are exactly the persisted order statuses that are not terminal", () => {
+    // listPaperInterest, the matcher, cancel and bulk cancels all select by this list;
+    // a new enum value must be classified here before any of them can miss it.
+    const terminal = ["FILLED", "CANCELLED", "REJECTED"];
+    const nonTerminal = paperOrderStatus.enumValues.filter((status) => !terminal.includes(status));
+    expect([...WORKING_ORDER_STATUSES].sort()).toEqual(nonTerminal.sort());
   });
 });

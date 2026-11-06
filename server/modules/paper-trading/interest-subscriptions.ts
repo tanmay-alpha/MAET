@@ -10,6 +10,7 @@
  */
 import { sql } from "drizzle-orm";
 import { MAX_STREAM_SYMBOLS } from "@shared/types";
+import { WORKING_ORDER_STATUSES } from "@shared/domain/paper-trading/order-status";
 import { getDb } from "../../data/drizzle/client";
 import { DatabaseUnavailableError, withOptionalDatabase } from "../../data/drizzle/availability";
 
@@ -26,6 +27,9 @@ const STREAMED_EXCHANGES: Record<string, true> = { NSE: true };
 
 export const PAPER_INTEREST_REFRESH_MS = 60_000;
 
+/** `'PENDING', 'TRIGGER_PENDING', …` inlined from the shared constant (fixed enum labels, no user input). */
+const WORKING_STATUS_LIST = sql.raw(WORKING_ORDER_STATUSES.map((status) => `'${status}'`).join(", "));
+
 /**
  * Distinct EXCHANGE:SYMBOL pairs with a working order or an open position in
  * the owning account's current generation. Working orders come first (oldest
@@ -37,7 +41,7 @@ export async function listPaperInterest(): Promise<PaperInterestRow[]> {
       SELECT o.exchange, o.symbol, 'ORDER' AS kind, 0 AS rank, MIN(o.placed_at) AS since
       FROM public.paper_orders o
       JOIN public.paper_accounts a ON a.user_id = o.user_id AND a.generation = o.generation
-      WHERE o.status IN ('PENDING', 'TRIGGER_PENDING', 'TRIGGERED', 'PARTIALLY_FILLED')
+      WHERE o.status IN (${WORKING_STATUS_LIST})
       GROUP BY o.exchange, o.symbol
       UNION ALL
       SELECT p.exchange, p.symbol, 'POSITION' AS kind, 1 AS rank, MIN(p.created_at) AS since

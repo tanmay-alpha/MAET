@@ -9,6 +9,7 @@ import {
   paperOutboxEvents,
   users,
 } from "../../db/schema";
+import { WORKING_ORDER_STATUSES } from "@shared/domain/paper-trading/order-status";
 import { PaperPersistenceError } from "./errors";
 import type {
   PaperAccountRow,
@@ -40,9 +41,6 @@ import {
   mapPaperLedgerEntryRow,
   mapPaperOutboxEventRow,
 } from "./mapper";
-
-/** Orders that can still fill; everything else is terminal. */
-const WORKING_ORDER_STATUSES = ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"] as const;
 
 /**
  * Opens a generation-1 paper account funded with `initialCash` and records the matching

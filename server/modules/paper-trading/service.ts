@@ -30,6 +30,7 @@ import { createPostgresPaperReadRepository } from "./postgres-repository";
 import { applyFill, paperExecutionPolicy, type AppliedFill } from "./fill-writer";
 import { ExchangeSchema, parseExecutionQuote, evaluateExecutionQuote } from "@shared/types/market";
 import { PaperExecutionError } from "@shared/domain/paper-trading/execution";
+import { isWorkingOrderStatus } from "@shared/domain/paper-trading/order-status";
 
 export interface PaperTradingServiceDependencies {
   database?: PaperDatabase;
@@ -49,13 +50,6 @@ export interface PlaceOrderResult {
   idempotentReplay: boolean;
   asOf: Date;
 }
-
-const CANCELLABLE_ORDER_STATUSES: Partial<Record<PaperOrderRow["status"], true>> = {
-  PENDING: true,
-  TRIGGER_PENDING: true,
-  TRIGGERED: true,
-  PARTIALLY_FILLED: true,
-};
 
 /** The persisted terms of an order; an idempotency key may only be replayed with identical terms. */
 interface OrderTerms {
@@ -447,7 +441,7 @@ export class PaperTradingService {
         throw new PaperOrderNotFoundError(`Order ${orderId} not found`);
       }
 
-      if (!CANCELLABLE_ORDER_STATUSES[orderRow.status]) {
+      if (!isWorkingOrderStatus(orderRow.status)) {
         throw new PaperOrderConflictError(`Cannot cancel order in ${orderRow.status} state`);
       }
 
