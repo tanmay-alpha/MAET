@@ -40,7 +40,7 @@ export const EXPOSURE_RULES: readonly ExposureRule[] = [
     sectors: ["Indian ports", "Indian coastal refining"],
     ruleText:
       "Storm coordinates fall in the Bay of Bengal watch box. Indian ports and coastal refiners use these waters for vessel access and cargo transport; this location match does not establish a port closure or refinery interruption.",
-    watchSymbols: ["ADANIPORTS", "BPCL", "RELIANCE"],
+    watchSymbols: ["ADANIPORTS", "RELIANCE"],
   },
   {
     id: "arabian-sea-storm",
@@ -49,7 +49,7 @@ export const EXPOSURE_RULES: readonly ExposureRule[] = [
     sectors: ["Indian ports", "Indian coastal refining"],
     ruleText:
       "Storm coordinates fall in the Arabian Sea watch box. Indian ports and coastal refiners use these waters for vessel access and cargo transport; this location match does not establish a port closure or refinery interruption.",
-    watchSymbols: ["ADANIPORTS", "BPCL", "RELIANCE"],
+    watchSymbols: ["ADANIPORTS", "RELIANCE"],
   },
   {
     id: "taiwan-semiconductor-news",
@@ -71,7 +71,7 @@ export const EXPOSURE_RULES: readonly ExposureRule[] = [
     sectors: ["Indian vehicle manufacturing"],
     ruleText:
       "A semiconductor, chip-production or chip-factory headline mentions Taiwan or has coordinates in the Taiwan watch box. Vehicle electronics use semiconductor inputs, linking this topic to Indian vehicle manufacturers; the match does not establish a supplier relationship or a supply interruption for a watch symbol.",
-    watchSymbols: ["MARUTI", "TATAMOTORS", "M&M"],
+    watchSymbols: ["MARUTI", "TMPV", "M&M"],
   },
   {
     id: "gulf-oil-logistics-news",
@@ -116,7 +116,7 @@ export const EXPOSURE_RULES: readonly ExposureRule[] = [
     sectors: ["Indian oil refining", "Indian petrochemicals", "Indian paints"],
     ruleText:
       "An oil-export, crude-export, oil-terminal, tanker, oil-sanctions, crude-sanctions, oil-production, oil/crude-output-cut or OPEC headline mentions a listed Gulf location or has coordinates in the Gulf watch box. Seaborne crude feeds Indian refining and petrochemical inputs used in paints; the match establishes neither a supply interruption nor an input-price change.",
-    watchSymbols: ["BPCL", "RELIANCE", "ASIANPAINT"],
+    watchSymbols: ["RELIANCE", "ASIANPAINT"],
   },
   {
     id: "red-sea-shipping-news",
@@ -132,7 +132,7 @@ export const EXPOSURE_RULES: readonly ExposureRule[] = [
     sectors: ["Indian ports", "Indian oil refining"],
     ruleText:
       "A shipping, freight, tanker, cargo or vessel headline mentions the Red Sea, Suez Canal or Bab el Mandeb route, or has coordinates in the Red Sea watch box. This route connects Indian maritime trade with European markets; the match does not establish a specific shipment delay, company exposure or freight-price change.",
-    watchSymbols: ["ADANIPORTS", "BPCL", "RELIANCE"],
+    watchSymbols: ["ADANIPORTS", "RELIANCE"],
   },
   {
     id: "russia-crude-trade-news",
@@ -156,7 +156,7 @@ export const EXPOSURE_RULES: readonly ExposureRule[] = [
     sectors: ["Indian oil refining"],
     ruleText:
       "An oil-sanctions, price-cap, crude-trade, tanker or shadow-fleet headline mentions Russia or a Russian oil company. Indian refiners have imported Russian seaborne crude since 2022, so restrictions on that trade concern their crude sourcing; the match establishes neither a supply interruption nor a margin change.",
-    watchSymbols: ["RELIANCE", "BPCL"],
+    watchSymbols: ["RELIANCE"],
   },
   {
     id: "rbi-policy-rate-news",
