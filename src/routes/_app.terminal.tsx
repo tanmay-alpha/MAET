@@ -69,7 +69,7 @@ function Terminal() {
   }, [active]);
 
   const { quoteMap } = useMarketQuotes(quoteSymbols);
-  const { status, account, positions, orders, fills, placeOrder, cancelOrder, resetAccount, isTradingAvailable } = usePaperAccount();
+  const { status, account, positions, orders, fills, placeOrder, cancelOrder, cancelError, resetAccount, isTradingAvailable } = usePaperAccount();
 
   const liveQuote = quoteMap.get(active);
   const intervalConfig = INTERVAL_CONFIG[interval];
@@ -455,6 +455,12 @@ function Terminal() {
               )}
 
               {activeTab === "orders" && (
+                <>
+                {cancelError && (
+                  <p role="alert" className="mb-2 rounded border border-bear/30 bg-bear/10 px-3 py-1.5 text-[11px] text-bear">
+                    Cancel failed: {cancelError}
+                  </p>
+                )}
                 <table className="w-full text-[11px] font-mono tabular-nums text-left">
                   <thead>
                     <tr className="text-[10px] uppercase text-muted-foreground border-b border-border">
@@ -493,7 +499,8 @@ function Terminal() {
                           <td className="px-3 py-2 text-right">
                             <button
                               onClick={() => cancelOrder(o.id)}
-                              className="rounded bg-panel-elevated hover:bg-bear hover:text-white px-2 py-0.5 text-[10px] font-medium transition"
+                              disabled={!isTradingAvailable}
+                              className="rounded bg-panel-elevated hover:bg-bear hover:text-white px-2 py-0.5 text-[10px] font-medium transition disabled:opacity-40 disabled:hover:bg-panel-elevated disabled:hover:text-inherit"
                             >
                               Cancel
                             </button>
@@ -509,6 +516,7 @@ function Terminal() {
                     )}
                   </tbody>
                 </table>
+                </>
               )}
 
               {activeTab === "history" && (

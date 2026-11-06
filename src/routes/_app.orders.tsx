@@ -57,7 +57,7 @@ function OrdersPage() {
   const [activeTab, setActiveTab] = useState<"orders" | "fills">("orders");
   const [activeFilter, setActiveFilter] = useState<OrderFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const { orders, fills, cancelOrder, isTradingAvailable, isLoading, connectionState } = usePaperAccount();
+  const { orders, fills, cancelOrder, cancelError, isTradingAvailable, isLoading, connectionState } = usePaperAccount();
 
   const uniqueSymbols = useMemo(() => [...new Set(orders.map((o) => o.symbol))], [orders]);
   const { quoteMap } = useMarketQuotes(uniqueSymbols);
@@ -143,6 +143,12 @@ function OrdersPage() {
                 className="w-full rounded border border-border bg-panel px-3 py-1.5 text-xs text-foreground focus:border-primary/60 focus:outline-none sm:w-64"
               />
             </div>
+
+            {cancelError && (
+              <p role="alert" className="rounded border border-bear/30 bg-bear/10 px-3 py-2 text-xs text-bear">
+                Cancel failed: {cancelError}
+              </p>
+            )}
 
             <div className="overflow-x-auto rounded border border-border bg-panel">
               <table className="w-full min-w-[52rem] text-left font-mono text-xs tabular-nums">

@@ -1,8 +1,8 @@
 import type { Page, Request } from "@playwright/test";
 import { PaperOrderCommandSchema } from "../../server/modules/paper-trading/contracts";
-import { ACCESS_TOKEN, paperFillRow, paperOrderRow, type PaperOrderWire } from "./support/data";
+import { ACCESS_TOKEN, FIXED_NOW, paperAccountRow, paperFillRow, paperOrderRow, type PaperOrderWire } from "./support/data";
 import { test, expect, signIn } from "./support/fixtures";
-import { API_ORIGIN, type MockApi } from "./support/mock-api";
+import { API_ORIGIN, TrpcError, type MockApi } from "./support/mock-api";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -315,4 +315,67 @@ test("paper dashboard: part-filled and triggered orders count as pending", async
   await signIn(page);
   await page.goto("/dashboard");
   await expect(page.getByText("0 filled · 2 pending", { exact: true })).toBeVisible();
+});
+
+/** The matcher fills the rest of `order` just before the user's cancel reaches the server. */
+function fillBeforeCancel(api: MockApi, order: PaperOrderWire) {
+  api.onMutation("paperTrading.cancelOrder", () => {
+    Object.assign(order, { status: "FILLED", filledQty: order.qty, filledAt: FIXED_NOW });
+    throw new TrpcError("CONFLICT", "Cannot cancel order in FILLED state");
+  });
+}
+
+const REFUSED = "Cancel failed: Cannot cancel order in FILLED state";
+
+test("paper terminal: a refused cancel says why and the reloaded order leaves the working tab", async ({ page, api }) => {
+  const { partFilled } = seedTradedWorkingOrders(api);
+  fillBeforeCancel(api, partFilled);
+  await openSignedInTerminal(page);
+
+  const workingTab = page.getByRole("button", { name: "Pending Orders (2)" });
+  await expect(async () => {
+    await workingTab.click();
+    await expect(page.getByRole("columnheader", { name: "Remaining", exact: true })).toBeVisible({ timeout: 1_000 });
+  }).toPass();
+  const partRow = page.getByRole("row").filter({ hasText: "₹2440.00" });
+  await partRow.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  await expect(page.getByRole("alert").filter({ hasText: REFUSED })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pending Orders (1)" })).toBeVisible();
+  await expect(partRow).toHaveCount(0);
+});
+
+test("/orders: a refused cancel says why and shows the order as the server now has it", async ({ page, api }) => {
+  const { partFilled } = seedTradedWorkingOrders(api);
+  fillBeforeCancel(api, partFilled);
+  await signIn(page);
+  await page.goto("/orders");
+
+  const partRow = page.getByRole("row").filter({ hasText: "RELIANCE" });
+  await expect(partRow).toContainText("Part filled");
+  await expect(async () => {
+    await partRow.getByRole("button", { name: "Cancel", exact: true }).click({ timeout: 1_000 });
+    await expect.poll(() => api.trpcCalls("paperTrading.cancelOrder").length, { timeout: 1_000 }).toBeGreaterThan(0);
+  }).toPass();
+
+  await expect(page.getByRole("alert").filter({ hasText: REFUSED })).toBeVisible();
+  await expect(partRow).toContainText("10/10");
+  await expect(partRow).toContainText("Filled");
+  await expect(partRow.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+});
+
+test("paper terminal: working orders of a locked account cannot be cancelled from the terminal", async ({ page, api }) => {
+  seedTradedWorkingOrders(api);
+  const account = { ...paperAccountRow(), status: "LIQUIDATION_PENDING" as const, isLocked: true, lockReason: "Margin call breach" };
+  api.onQuery("paperTrading.getState", () => ({ account, positions: [], orders: api.orders, fills: api.fills, asOf: FIXED_NOW }));
+  await signIn(page);
+  await page.goto("/terminal");
+
+  await expect(async () => {
+    await page.getByRole("button", { name: "Pending Orders (2)" }).click({ timeout: 1_000 });
+    await expect(page.getByRole("columnheader", { name: "Remaining", exact: true })).toBeVisible({ timeout: 1_000 });
+  }).toPass();
+  const cancels = page.getByRole("button", { name: "Cancel", exact: true });
+  await expect(cancels).toHaveCount(2);
+  for (const cancel of await cancels.all()) await expect(cancel).toBeDisabled();
 });

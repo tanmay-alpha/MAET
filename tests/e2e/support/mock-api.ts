@@ -51,7 +51,8 @@ type TrpcHandler = (input: unknown, request: Request) => unknown;
 
 export type TrpcErrorCode = "BAD_REQUEST" | "UNAUTHORIZED" | "NOT_FOUND" | "CONFLICT" | "INTERNAL_SERVER_ERROR";
 
-class TrpcError extends Error {
+/** Thrown by a handler to answer with a tRPC error envelope. */
+export class TrpcError extends Error {
   constructor(
     readonly code: TrpcErrorCode,
     message: string,

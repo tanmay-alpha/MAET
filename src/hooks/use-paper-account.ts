@@ -42,7 +42,10 @@ export interface UsePaperAccountResult {
   placeOrder: (command: PaperOrderDraft) => Promise<unknown>;
   /** Refetches the account after a failure. */
   retry: () => void;
-  cancelOrder: (orderId: string) => Promise<unknown>;
+  /** Never throws: a refusal lands in `cancelError` once the account has reloaded. */
+  cancelOrder: (orderId: string) => void;
+  /** Why this consumer's last cancel failed (e.g. the order filled first); cleared by the next one. */
+  cancelError: string | null;
   resetAccount: () => Promise<unknown>;
 }
 
@@ -105,10 +108,9 @@ export function usePaperAccount(): UsePaperAccountResult {
       return await trpc.paperTrading.cancelOrder.mutate({ orderId });
     },
     // A refused cancel (the order filled or was cancelled meanwhile) also means the
-    // cached list is stale, so reload it either way.
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["paperTrading"] });
-    },
+    // cached list is stale, so reload it either way; the mutation settles (and any
+    // error shows) only once the reloaded state is in.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["paperTrading"] }),
   });
 
   const resetAccountMutation = useMutation({
@@ -147,7 +149,8 @@ export function usePaperAccount(): UsePaperAccountResult {
     lastSyncedAt: state?.asOf ? new Date(state.asOf).toISOString() : null,
     placeOrder: placeOrderMutation.mutateAsync,
     retry: () => void stateQuery.refetch(),
-    cancelOrder: cancelOrderMutation.mutateAsync,
+    cancelOrder: cancelOrderMutation.mutate,
+    cancelError: cancelOrderMutation.error ? cancelOrderMutation.error.message : null,
     resetAccount: resetAccountMutation.mutateAsync,
   };
 }
