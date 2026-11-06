@@ -22,6 +22,14 @@ export type MarketPhaseEvent = {
   ts: string;
 };
 
+/**
+ * The set of symbols with working paper orders or open positions may have
+ * changed; the live feed's paper-interest subscriptions re-read it.
+ */
+export type PaperInterestChanged = {
+  reason: "order_placed" | "order_cancelled" | "order_filled" | "account_reset";
+};
+
 export type BusEvents = {
   tick: Tick;
   "screener:match": ScreenerMatch;
@@ -29,6 +37,7 @@ export type BusEvents = {
   "user:angelone:ready": UserAngelOneReady;
   "user:angelone:auth_failed": UserAngelOneAuthFailed;
   "market:phase": MarketPhaseEvent;
+  "paper:interest_changed": PaperInterestChanged;
 };
 
 type Listener<K extends keyof BusEvents> = (payload: BusEvents[K]) => void;

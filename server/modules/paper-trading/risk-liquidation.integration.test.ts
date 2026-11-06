@@ -6,6 +6,7 @@ import { applyMigrations } from "../../scripts/apply-migrations";
 import type { Tick } from "@shared/types";
 import { createPaperTradingService } from "./service";
 import { PaperRiskMonitor } from "./risk-monitor";
+import { listPaperInterest } from "./interest-subscriptions";
 
 function liveTick(symbol: string, price: number): Tick {
   return {
@@ -83,5 +84,44 @@ describe("Paper trading margin-call liquidation", () => {
 
     const [restingAfter] = await getDb().select().from(paperOrders).where(eq(paperOrders.id, resting.order.id));
     expect(restingAfter!.status).toBe("CANCELLED");
+  });
+
+  it("re-evaluates a LIQUIDATION_PENDING account once ticks for its positions arrive after a restart", async () => {
+    const symbol = `LIQP${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    const userId = crypto.randomUUID();
+    const sql = getSqlClient();
+    await sql`INSERT INTO auth.users (id) VALUES (${userId}) ON CONFLICT DO NOTHING`;
+    await sql`INSERT INTO public.users (id, email) VALUES (${userId}, ${`test-user-${userId}@example.com`}) ON CONFLICT DO NOTHING`;
+
+    const service = createPaperTradingService({
+      database: getDb(),
+      marketPhase: () => "OPEN",
+      quoteLoader: async () => liveTick(symbol, 1000),
+    });
+    await service.getState({ userId });
+    await getDb().update(paperAccounts).set({ cashBalance: "30000.0000" }).where(eq(paperAccounts.userId, userId));
+    await service.placeOrder({ userId, command: { symbol, exchange: "NSE", side: "SELL", type: "MARKET", qty: 100 } });
+    // A margin call started before the restart but had no quote to close the short with.
+    await getDb()
+      .update(paperAccounts)
+      .set({ status: "LIQUIDATION_PENDING", isLocked: true, lockReason: "MARGIN_CALL_LIQUIDATION", lockedAt: new Date() })
+      .where(eq(paperAccounts.userId, userId));
+
+    // The open position is part of the paper interest set, so the live feed subscribes it.
+    expect(await listPaperInterest()).toContainEqual({ exchange: "NSE", symbol, kind: "POSITION" });
+
+    // A fresh monitor (restart, outside market hours) has no ticks and does nothing yet.
+    const monitor = new PaperRiskMonitor();
+    await monitor.monitorRisk();
+    const [stillPending] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
+    expect(stillPending!.status).toBe("LIQUIDATION_PENDING");
+
+    // The position's first live tick of the session lets the pending liquidation finish.
+    monitor.updateQuote(liveTick(symbol, 1200));
+    await monitor.monitorRisk();
+
+    const [account] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
+    expect(account!.status).toBe("LIQUIDATED");
+    expect(await getDb().select().from(paperPositions).where(eq(paperPositions.userId, userId))).toHaveLength(0);
   });
 });

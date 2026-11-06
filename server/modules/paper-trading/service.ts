@@ -1,6 +1,7 @@
 import { loadExecutionQuote } from "./execution-quote";
 import { computePhase, type MarketPhase } from "../../domain/market/clock";
 import { withSerializablePaperTransaction } from "./transaction-retry";
+import { bus } from "../../infra/bus";
 import { getConfig } from "../../config";
 import {
   PaperValidationError,
@@ -169,9 +170,13 @@ export class PaperTradingService {
       clientOrderId: command.clientOrderId || null,
     };
 
-    return terms.type === "MARKET"
-      ? this.placeMarketOrder(userId, terms, keys)
-      : this.placeRestingOrder(userId, terms, keys);
+    const result =
+      terms.type === "MARKET"
+        ? await this.placeMarketOrder(userId, terms, keys)
+        : await this.placeRestingOrder(userId, terms, keys);
+    // After commit: the live feed must subscribe a resting order's symbol before ticks can fill it.
+    bus.emit("paper:interest_changed", { reason: "order_placed" });
+    return result;
   }
 
   /**
@@ -431,7 +436,7 @@ export class PaperTradingService {
       throw new PaperValidationError("userId and orderId are required");
     }
 
-    return withSerializablePaperTransaction(async (repos) => {
+    const cancelled = await withSerializablePaperTransaction(async (repos) => {
       const accountRow = await repos.write.ensureAccountForUpdate({
         userId,
         initialCash: getConfig().paperInitialCashInr,
@@ -477,6 +482,8 @@ export class PaperTradingService {
 
       return cancelledOrder;
     });
+    bus.emit("paper:interest_changed", { reason: "order_cancelled" });
+    return cancelled;
   }
 
   async resetAccount(params: {
@@ -492,7 +499,7 @@ export class PaperTradingService {
     }
 
     const initialCash = getConfig().paperInitialCashInr;
-    return withSerializablePaperTransaction(async (repos) => {
+    const reset = await withSerializablePaperTransaction(async (repos) => {
       const accountRow = await repos.write.ensureAccountForUpdate({ userId, initialCash });
 
       await repos.write.cancelOpenOrders({
@@ -550,6 +557,8 @@ export class PaperTradingService {
 
       return resetAccountRow;
     });
+    bus.emit("paper:interest_changed", { reason: "account_reset" });
+    return reset;
   }
 
   async listOrders(params: {
