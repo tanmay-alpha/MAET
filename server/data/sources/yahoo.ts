@@ -1,5 +1,6 @@
 import type { Candle, CorporateActionEvent, Tick } from "../../../shared/types";
 import { UpstreamDegradedError, UpstreamPermanentError } from "../../../shared/types";
+import { getConfig } from "../../config";
 import { getCachedJson, setCachedJson } from "../../data/redis/client";
 import { RedisKeys } from "../../data/redis/keys";
 
@@ -75,22 +76,22 @@ type YahooChartResp = {
         regularMarketPrice: number;
         regularMarketVolume: number;
         symbol: string;
-        chartPreviousClose?: number;
-        previousClose?: number;
         marketState?: string;
         currency?: string;
         regularMarketTime?: number;
         gmtoffset?: number;
+        /** Decimals Yahoo publishes prices with (2 for NSE/BSE). */
+        priceHint?: number;
       };
       timestamp?: number[];
       events?: YahooChartEvents;
-      indicators: {
+      indicators?: {
         quote: Array<{
-          open: Array<number | null>;
-          high: Array<number | null>;
-          low: Array<number | null>;
-          close: Array<number | null>;
-          volume: Array<number | null>;
+          open?: Array<number | null>;
+          high?: Array<number | null>;
+          low?: Array<number | null>;
+          close?: Array<number | null>;
+          volume?: Array<number | null>;
         }>;
       };
     }>;
@@ -114,6 +115,130 @@ function positive(value: unknown): value is number {
 /** Exchange-local calendar date of a provider timestamp (seconds). */
 function exchangeDate(seconds: number, gmtOffsetSeconds: number): string {
   return new Date((seconds + gmtOffsetSeconds) * 1000).toISOString().slice(0, 10);
+}
+
+/** Exchange-local date of the Monday that starts the week containing `seconds`. */
+function exchangeWeek(seconds: number, gmtOffsetSeconds: number): string {
+  const local = new Date((seconds + gmtOffsetSeconds) * 1000);
+  const daysSinceMonday = (local.getUTCDay() + 6) % 7;
+  return new Date(local.getTime() - daysSinceMonday * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Yahoo stores OHLC as float32 (24536.599609375); it publishes `priceHint` decimals (24536.6). */
+function publishedPrice(value: number, priceHint: number | undefined): number {
+  const decimals = typeof priceHint === "number" && Number.isInteger(priceHint) && priceHint >= 0 ? priceHint : 2;
+  const scale = 10 ** decimals;
+  return Math.round(value * scale) / scale;
+}
+
+type YahooChartResult = NonNullable<YahooChartResp["chart"]["result"]>[number];
+
+/**
+ * Close of the session before the quote's session: the latest daily bar with a
+ * close, dated strictly before the exchange date of `regularMarketTime`.
+ *
+ * Yahoo's `chartPreviousClose`/`previousClose` are not used. Yahoo leaves the
+ * latest session's daily close empty until well into the next day, and for
+ * indices those fields then skip a session: on 2026-11-07 they were 23960.6
+ * for ^NSEI (4 Nov's close) while NSE published 24536.6 (5 Nov's close) as
+ * the previous close of the 6 Nov session.
+ */
+function previousSessionClose(result: YahooChartResult): number | undefined {
+  const { meta } = result;
+  if (!positive(meta.regularMarketTime)) return undefined;
+  const offset = meta.gmtoffset ?? IST_OFFSET_SECONDS;
+  const session = exchangeDate(meta.regularMarketTime, offset);
+  const timestamps = result.timestamp ?? [];
+  const closes = result.indicators?.quote[0]?.close ?? [];
+  for (let i = timestamps.length - 1; i >= 0; i--) {
+    const close = closes[i];
+    if (positive(close) && exchangeDate(timestamps[i], offset) < session) return publishedPrice(close, meta.priceHint);
+  }
+  return undefined;
+}
+
+/** NSE trading holidays from the server configuration; none when it cannot load. */
+function configuredHolidays(): Date[] {
+  try {
+    return getConfig().nseHolidays;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * OHLCV bars of a Yahoo chart response. Rows without a positive open, high and
+ * low (placeholders for future or empty sessions) are dropped. Three Yahoo
+ * quirks on NSE data are corrected:
+ *
+ * - The daily (or weekly) bar of the quote's own session keeps a null close
+ *   until well into the next day. That bar closes at `regularMarketPrice`, the
+ *   price the quote shows, so the chart does not end a session before the
+ *   quote. It is replaced by Yahoo's final bar once the candle cache expires.
+ * - The current week arrives as the Monday bar (completed sessions) plus a
+ *   partial bar stamped at the last trade time. The two are merged into the
+ *   Monday bar: its open, the combined range and volume, the latest close.
+ * - A flat, zero-volume daily bar dated on an NSE holiday is not a session and
+ *   is dropped. A real trading session on a holiday (Muhurat) keeps its bar.
+ */
+function normalizeYahooCandles(
+  result: YahooChartResult,
+  tf: Candle["tf"],
+  symbol: string,
+  holidays: Date[]
+): Candle[] {
+  const { meta } = result;
+  const quote = result.indicators?.quote[0];
+  const timestamps = result.timestamp ?? [];
+  if (!quote?.open || !quote.high || !quote.low || !quote.close || !quote.volume) return [];
+  const offset = meta.gmtoffset ?? IST_OFFSET_SECONDS;
+  const periodOf =
+    tf === "1d" ? (seconds: number) => exchangeDate(seconds, offset)
+    : tf === "1wk" ? (seconds: number) => exchangeWeek(seconds, offset)
+    : undefined;
+  const livePrice = meta.regularMarketPrice;
+  const livePeriod =
+    periodOf && positive(meta.regularMarketTime) && positive(livePrice) ? periodOf(meta.regularMarketTime) : undefined;
+  const holidayDates = new Set(
+    tf === "1d" ? holidays.map((holiday) => exchangeDate(holiday.getTime() / 1000, IST_OFFSET_SECONDS)) : []
+  );
+
+  const out: Candle[] = [];
+  let lastPeriod: string | undefined;
+  for (let i = 0; i < timestamps.length; i++) {
+    const open = quote.open[i];
+    let high = quote.high[i];
+    let low = quote.low[i];
+    let close = quote.close[i];
+    if (!positive(open) || !positive(high) || !positive(low)) continue;
+    const period = periodOf?.(timestamps[i]);
+    if (!positive(close)) {
+      if (period === undefined || period !== livePeriod) continue;
+      close = livePrice;
+      high = Math.max(high, close);
+      low = Math.min(low, close);
+    }
+    const rawVolume = quote.volume[i];
+    const volume = typeof rawVolume === "number" && Number.isFinite(rawVolume) && rawVolume >= 0 ? rawVolume : 0;
+    if (period !== undefined && holidayDates.has(period) && open === high && high === low && low === close && volume === 0) {
+      continue;
+    }
+
+    const previous = out.at(-1);
+    if (tf === "1wk" && previous && period === lastPeriod) {
+      out[out.length - 1] = {
+        ...previous,
+        high: Math.max(previous.high, high),
+        low: Math.min(previous.low, low),
+        close,
+        volume: previous.volume + volume,
+      };
+      continue;
+    }
+    out.push({ symbol, tf, ts: new Date(timestamps[i] * 1000).toISOString(), open, high, low, close, volume });
+    lastPeriod = period;
+  }
+  return out;
 }
 
 /** numerator:denominator from Yahoo's numeric fields, else from its "2:1" string. */
@@ -200,7 +325,9 @@ export async function getQuote(
 ): Promise<Tick> {
   const ticker = tickerOverride ?? symbolToTicker(symbol);
   return withRetry(async () => {
-    const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`;
+    // Daily bars: the quote itself is in `meta`, the bars give the previous
+    // session's close (see previousSessionClose). A month spans any holiday run.
+    const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1mo`;
     const res = await withRequestSlot(() =>
       fetch(url, {
         headers: { "User-Agent": BROWSER_USER_AGENT },
@@ -223,8 +350,9 @@ export async function getQuote(
       );
     }
     const exchange = exchangeOverride ?? (ticker.endsWith(".BO") ? "BSE" : "NSE");
-    const previousClose = r.meta.chartPreviousClose ?? r.meta.previousClose;
-    const change = previousClose ? r.meta.regularMarketPrice - previousClose : undefined;
+    const previousClose = previousSessionClose(r);
+    const change =
+      previousClose !== undefined ? publishedPrice(r.meta.regularMarketPrice - previousClose, r.meta.priceHint) : undefined;
     return {
       exchange,
       symbol: symbol.replace(/\.(NS|BO)$/, ""),
@@ -248,7 +376,8 @@ export async function getCandles(
   ticker: string,
   from: Date,
   to: Date,
-  tf: Candle["tf"]
+  tf: Candle["tf"],
+  holidays: Date[] = configuredHolidays()
 ): Promise<Candle[]> {
   // --- Redis cache lookup ---
   const cacheSeconds = CANDLE_CACHE_SECONDS[tf];
@@ -290,46 +419,8 @@ export async function getCandles(
     const data = (await res.json()) as YahooChartResp;
     const r = data.chart.result?.[0];
     if (!r) throw new UpstreamPermanentError("yahoo: empty result");
-    const ts = r.timestamp ?? [];
-    const q = r.indicators.quote[0];
-    if (!q) throw new UpstreamPermanentError("yahoo: empty quote data");
-    const out: Candle[] = [];
-    if (q && q.open && q.high && q.low && q.close && q.volume && ts) {
-      for (let i = 0; i < ts.length; i++) {
-        const open = q.open[i];
-        const high = q.high[i];
-        const low = q.low[i];
-        const close = q.close[i];
-        const volume = q.volume[i];
-
-        // Yahoo can include placeholder rows for future or incomplete sessions.
-        // Those rows have null/zero OHLC values and must never reach charts or
-        // strategy calculations as if they were real trades.
-        if (
-          !Number.isFinite(open) ||
-          !Number.isFinite(high) ||
-          !Number.isFinite(low) ||
-          !Number.isFinite(close) ||
-          open! <= 0 ||
-          high! <= 0 ||
-          low! <= 0 ||
-          close! <= 0
-        ) {
-          continue;
-        }
-
-        out.push({
-          symbol: fullTicker.replace(/\.(NS|BO)$/, ""),
-          tf,
-          ts: new Date(ts[i] * 1000).toISOString(),
-          open: open!,
-          high: high!,
-          low: low!,
-          close: close!,
-          volume: Number.isFinite(volume) && volume! >= 0 ? volume! : 0,
-        });
-      }
-    }
+    if (!r.indicators?.quote[0]) throw new UpstreamPermanentError("yahoo: empty quote data");
+    const out = normalizeYahooCandles(r, tf, fullTicker.replace(/\.(NS|BO)$/, ""), holidays);
 
     await setCachedJson(cacheKey, out, cacheSeconds);
 

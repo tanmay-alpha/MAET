@@ -9,6 +9,30 @@ import {
 
 import { spyOn } from "bun:test";
 import * as redisClient from "../../data/redis/client";
+import fixtures from "./fixtures/yahoo-chart-2026-11-06.json";
+
+type FixtureName = keyof typeof fixtures;
+
+/**
+ * Serves trimmed real Yahoo chart responses captured on 2026-11-07 (after the
+ * 6 Nov 2026 session, while Yahoo still had 6 Nov's daily close empty). Each
+ * request gets the fixture for its ticker and interval/range.
+ */
+function serveFixtures(pick: (ticker: string, params: URLSearchParams) => FixtureName): void {
+  globalThis.fetch = (async (input: unknown) => {
+    const url = new URL(String(input));
+    const ticker = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+    return Response.json(fixtures[pick(ticker, url.searchParams)]);
+  }) as unknown as typeof fetch;
+}
+
+function quoteFixture(ticker: string, params: URLSearchParams): FixtureName {
+  const name = `${ticker} ${params.get("interval")} ${params.get("range")}`;
+  if (!(name in fixtures)) throw new Error(`no fixture for ${name}`);
+  return name as FixtureName;
+}
+
+const SESSION_6_NOV = { from: new Date("2026-10-07T00:00:00.000Z"), to: new Date("2026-11-07T06:00:00.000Z") };
 
 const origFetch = globalThis.fetch;
 
@@ -46,29 +70,86 @@ describe("yahoo source", () => {
     await expect(getQuote("RELIANCE.NS")).rejects.toBeInstanceOf(UpstreamPermanentError);
   });
 
-  it("uses Yahoo's market timestamp and previous close metadata", async () => {
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({
-        chart: {
-          result: [{
-            meta: {
-              regularMarketPrice: 105,
-              regularMarketVolume: 10,
-              regularMarketTime: 1_700_000_000,
-              chartPreviousClose: 100,
-              currency: "INR",
-              symbol: "RELIANCE.NS",
-            },
-          }],
-        },
-      }))) as unknown as typeof fetch;
+  // NSE allIndices at 06-Nov-2026 15:30: NIFTY 50 last 25030.35, previousClose
+  // 24536.6, variation 493.75 (2.01%); NIFTY BANK 59086 / 57773.65 / 1312.35
+  // (2.27%). Yahoo's chartPreviousClose for the indices was 4 Nov's close.
+  it.each([
+    ["^NSEI", 25030.35, 24536.6, 493.75, 2.01],
+    ["^NSEBANK", 59086, 57773.65, 1312.35, 2.27],
+    ["^BSESN", 81028.02, 79310.01, 1718.01, 2.17],
+    ["RELIANCE.NS", 1320, 1313.4, 6.6, 0.5],
+  ])("takes %s's previous close from the last complete daily bar before the quote's session", async (ticker, price, previousClose, change, publishedPct) => {
+    serveFixtures(quoteFixture);
 
-    const tick = await getQuote("RELIANCE");
-    expect(tick.ts).toBe(new Date(1_700_000_000 * 1000).toISOString());
-    expect(tick.previousClose).toBe(100);
-    expect(tick.change).toBe(5);
-    expect(tick.changePct).toBe(5);
+    const tick = await getQuote(ticker);
+
+    expect(tick.price).toBe(price);
+    expect(tick.previousClose).toBe(previousClose);
+    expect(tick.change).toBe(change);
+    expect(tick.changePct).toBeCloseTo((change / previousClose) * 100, 10);
+    expect(Math.round(tick.changePct! * 100) / 100).toBe(publishedPct);
     expect(tick.currency).toBe("INR");
+    expect(tick.ts).toBe(new Date(fixtures[`${ticker} 1d 1mo` as FixtureName].chart.result[0].meta.regularMarketTime * 1000).toISOString());
+  });
+
+  it("ends the daily chart on the quote's session while Yahoo's close for it is still empty", async () => {
+    serveFixtures(() => "RELIANCE.NS 1d");
+
+    const candles = await getCandles("RELIANCE", SESSION_6_NOV.from, SESSION_6_NOV.to, "1d");
+
+    expect(candles.map((c) => c.ts)).toEqual([
+      "2026-11-03T03:45:00.000Z",
+      "2026-11-04T03:45:00.000Z",
+      "2026-11-05T03:45:00.000Z",
+      "2026-11-06T03:45:00.000Z",
+    ]);
+    // NSE bhavcopy for 06-Nov-2026: open 1295, high 1320, low 1295, close 1320.
+    expect(candles.at(-1)).toMatchObject({ open: 1295, high: 1320, low: 1295, close: 1320, volume: 22766798 });
+  });
+
+  it("merges Yahoo's partial current-week bar into that week's Monday bar", async () => {
+    serveFixtures(() => "RELIANCE.NS 1wk");
+
+    const candles = await getCandles("RELIANCE", SESSION_6_NOV.from, SESSION_6_NOV.to, "1wk");
+
+    expect(candles.map((c) => c.ts)).toEqual(["2026-10-25T18:30:00.000Z", "2026-11-01T18:30:00.000Z"]);
+    // Week of 2 Nov: Monday's open, the week's range, Friday's close and
+    // Mon-Thu volume (169372037, the sum of those daily bars) plus Friday's.
+    expect(candles[1]).toMatchObject({
+      open: 1228.0999755859375,
+      high: 1325,
+      low: 1214.199951171875,
+      close: 1320,
+      volume: 169372037 + 22766798,
+    });
+  });
+
+  it("drops Yahoo's flat zero-volume bar on an NSE holiday", async () => {
+    serveFixtures(() => "RELIANCE.NS 1d 2026-01");
+
+    const candles = await getCandles(
+      "RELIANCE",
+      new Date("2026-01-10T00:00:00.000Z"),
+      new Date("2026-01-21T00:00:00.000Z"),
+      "1d",
+      [new Date("2026-01-15")]
+    );
+
+    expect(candles.map((c) => c.ts.slice(0, 10))).toEqual(["2026-01-14", "2026-01-16", "2026-01-19", "2026-01-20"]);
+  });
+
+  it("keeps a flat zero-volume bar on a day that is not an NSE holiday", async () => {
+    serveFixtures(() => "RELIANCE.NS 1d 2026-01");
+
+    const candles = await getCandles(
+      "RELIANCE",
+      new Date("2026-01-10T00:00:00.000Z"),
+      new Date("2026-01-21T00:00:00.000Z"),
+      "1d",
+      []
+    );
+
+    expect(candles.map((c) => c.ts.slice(0, 10))).toContain("2026-01-15");
   });
 
   it("drops null and zero-value Yahoo candle placeholders", async () => {
