@@ -6,6 +6,7 @@ import { CandlestickChart, type ChartState } from "@/components/trading/candlest
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { fetchCompanyDetail, type FinancialStatement } from "@/lib/market-api";
+import { quoteSourceLabel, sourceName } from "@/lib/quote-source";
 import { getTradingViewUrl } from "@/lib/tradingview";
 
 export const Route = createFileRoute("/_app/stock/$symbol")({
@@ -140,34 +141,36 @@ function StockDetail() {
   const statements = detail.statements[periodType];
   const availabilityKey = activeTab === "balance_sheet" ? "balanceSheet" : activeTab === "income_statement" ? "incomeStatement" : "cashFlow";
   const statementAvailability = detail.availability[availabilityKey];
+  const liveQuote = quoteMap.get(symbol);
+  const historySource = detail.candles.length ? detail.availability.history?.source : fallbackCandles.data?.source;
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-background">
-      <header className="border-b border-border bg-panel/60 px-5 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <button type="button" onClick={() => navigate({ to: "/screener" })} className="rounded border border-border p-2 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Back to screener"><ArrowLeft className="h-4 w-4" /></button>
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/15 font-semibold text-primary">{symbol[0]}</div>
-            <div><div className="flex items-center gap-2"><h1 className="text-xl font-semibold">{detail.master.name}</h1><span className="rounded bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] text-primary">{symbol}</span></div>
-              <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground"><span>NSE · Equity</span><span>ISIN {detail.master.isin || "—"}</span>{detail.master.sector && <span>{detail.master.sector}</span>}</div>
+      <header className="border-b border-border bg-panel/60 px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="flex min-w-0 basis-full items-center gap-3 sm:basis-0 sm:flex-1">
+            <button type="button" onClick={() => navigate({ to: "/screener" })} className="shrink-0 rounded border border-border p-2 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Back to screener"><ArrowLeft className="h-4 w-4" /></button>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5"><h1 className="text-lg font-semibold leading-tight sm:text-xl">{detail.master.name}</h1><span className="rounded bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] text-primary">{symbol}</span></div>
+              <div className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground"><span>NSE · Equity</span><span>ISIN {detail.master.isin || "—"}</span>{detail.master.sector && <span>{detail.master.sector}</span>}</div>
             </div>
           </div>
-          <div className="flex items-center gap-5">
-            <div className="text-right"><div className="font-mono text-2xl font-semibold tabular-nums">{quote?.price !== undefined ? `₹${quote.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}</div>
-              <div className={`font-mono text-xs ${(quote?.changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>{quote?.changePct === undefined ? "Quote unavailable" : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}% · ${quoteMap.get(symbol)?.delayed === false ? "live" : `${quote.source} · delayed`}`}</div></div>
+          <div className="flex w-full items-center justify-between gap-3 sm:ml-auto sm:w-auto sm:justify-end">
+            <div className="flex items-baseline gap-2 sm:block sm:text-right"><div className="font-mono text-xl font-semibold tabular-nums sm:text-2xl">{quote?.price !== undefined ? `₹${quote.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}</div>
+              <div className={`font-mono text-xs ${quote?.changePct === undefined ? "text-muted-foreground" : quote.changePct >= 0 ? "text-bull" : "text-bear"}`}>{quote?.changePct === undefined ? "Quote unavailable" : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}% · ${quoteSourceLabel(quote.source, liveQuote?.delayed !== false)}`}</div></div>
             <button type="button" onClick={() => void detailQuery.refetch()} className="rounded border border-border p-2 text-muted-foreground hover:bg-accent" aria-label="Refresh company data"><RefreshCw className={`h-4 w-4 ${detailQuery.isFetching ? "animate-spin" : ""}`} /></button>
           </div>
         </div>
       </header>
 
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-border px-5">
+      <div className="flex items-center gap-1 overflow-x-auto border-b border-border px-2 sm:px-5">
         {TABS.map((tab) => <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`whitespace-nowrap border-b-2 px-3 py-3 text-xs font-medium ${activeTab === tab.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>{tab.label}</button>)}
       </div>
 
-      <main className="min-w-0 flex-1 overflow-auto p-5">
+      <main className="min-w-0 flex-1 overflow-auto p-3 sm:p-5">
         {activeTab === "overview" && <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <section className="overflow-hidden rounded-xl border border-border bg-panel/30">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3"><div><h2 className="text-sm font-semibold">Stored price history</h2><p className="text-[11px] text-muted-foreground">DB first · Yahoo delayed fallback</p></div>
+            <div className="flex items-center justify-between border-b border-border px-4 py-3"><div><h2 className="text-sm font-semibold">Price history · 1Y daily</h2><p className="text-[11px] text-muted-foreground">{historySource ? `Source: ${sourceName(historySource)}` : "Loading candles…"}</p></div>
               <button type="button" onClick={() => navigate({ to: `/chart/${symbol}` })} className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-accent"><BarChart3 className="h-3.5 w-3.5" />Full chart</button></div>
             {chartData.length > 1 ? <CandlestickChart data={chartData} height={380} chartState={chartState} onChartStateChange={setChartState} drawingTool={null} indicators={{ sma: false, ema: false, rsi: false, macd: false, volume: true }} /> :
               <div className="flex h-[380px] items-center justify-center text-xs text-muted-foreground">{detail.availability.history.reason}</div>}
@@ -177,7 +180,7 @@ function StockDetail() {
               <dl className="mt-3 space-y-2 text-xs">{[["Sector", detail.master.sector], ["Industry", detail.master.industry], ["Cap bucket", detail.master.marketCapBucket], ["Yahoo symbol", detail.master.yahooSymbol], ["BSE code", detail.master.bseCode]].map(([label, value]) => <div key={label} className="flex justify-between gap-3"><dt className="text-muted-foreground">{label}</dt><dd className="text-right font-mono">{value || <Missing reason={label === "BSE code" ? "BSE code not yet verified" : `${label} unavailable from stored sources`} />}</dd></div>)}</dl>
             </div>
             <div className="rounded-xl border border-border bg-panel/40 p-4"><div className="flex items-center gap-2 text-xs font-semibold"><ShieldCheck className="h-4 w-4 text-bull" />Data provenance</div>
-              <div className="mt-3 space-y-2 text-[11px] text-muted-foreground"><p>Master: NSE official company list</p><p>Quote: {quote?.source ?? "unavailable"}{quoteAsOf ? ` · ${new Date(quoteAsOf).toLocaleString("en-IN")}` : ""}</p><p>Fundamentals: {detail.fundamentals?.source ?? "no verified snapshot"}</p><p>Statements: {detail.availability.balanceSheet.source ?? "no verified snapshot"}</p></div>
+              <div className="mt-3 space-y-2 text-[11px] text-muted-foreground"><p>Master: NSE official company list</p><p>Quote: {quote ? sourceName(quote.source) : "unavailable"}{quoteAsOf ? ` · ${new Date(quoteAsOf).toLocaleString("en-IN")}` : ""}</p><p>Fundamentals: {detail.fundamentals?.source ?? "no verified snapshot"}</p><p>Statements: {detail.availability.balanceSheet.source ?? "no verified snapshot"}</p></div>
             </div>
             <a href={getTradingViewUrl(symbol)} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-xs hover:bg-accent">Open TradingView <ExternalLink className="h-3.5 w-3.5" /></a>
           </aside>
@@ -194,7 +197,7 @@ function StockDetail() {
             const value = detail.fundamentals?.[field];
             return <div key={field} className="rounded-lg border border-border bg-panel/40 p-4"><div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div><div className="mt-2 font-mono text-lg font-semibold">{typeof value === "number" ? formatNumber(value, mode) : <Missing reason={`${label} unavailable: no defensible stored value`} />}</div></div>;
           })}</div>
-          {!detail.fundamentals && <div className="mt-4 rounded border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">Fundamentals unavailable: Yahoo quoteSummary returned HTTP 401 during verification and no normalized database snapshot exists for this company.</div>}
+          {!detail.fundamentals && <div className="mt-4 rounded border border-border bg-panel/40 px-4 py-3 text-xs text-muted-foreground">Fundamentals unavailable: {detail.availability.fundamentals?.reason ?? "no stored snapshot for this company"}.</div>}
         </section>}
       </main>
     </div>
