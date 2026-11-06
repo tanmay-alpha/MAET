@@ -14,6 +14,8 @@ import { PlusCircle } from "lucide-react";
 import type { PaperPositionRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
 import { buildClosePositionOrder } from "@/lib/paper-orders";
+import { ReturnsTaxSection } from "@/components/investing/returns-tax";
+import { rupees } from "@/components/investing/display";
 
 export const Route = createFileRoute("/_app/portfolio")({
   head: () => ({
@@ -90,6 +92,13 @@ function PortfolioPage() {
   }, [positions, metrics.positionsValue, metrics.totalValue, quoteMap]);
 
   const allocationColors = ["#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#6366f1", "#ef4444"];
+  if (!signedIn) {
+    return <div className="mx-auto max-w-7xl px-4 py-6">
+      <h1 className="mb-4 text-xl font-semibold">Portfolio</h1>
+      <ReturnsTaxSection />
+    </div>;
+  }
+
 
   return (
     <div className="min-h-screen bg-background">
@@ -125,7 +134,7 @@ function PortfolioPage() {
               </button>
               <ResetAccountButton
                 onReset={resetAccount}
-                confirmMessage="Reset all positions and cash to ₹1,000,000?"
+                confirmMessage={`Reset all positions and cash to ${rupees(1000000)}?`}
                 className="rounded-lg border border-border bg-panel px-3 py-2 text-sm hover:bg-accent transition-all"
               >
                 Reset
@@ -136,38 +145,39 @@ function PortfolioPage() {
       </div>
 
       <div className="mx-auto max-w-7xl px-6 py-6">
+        <ReturnsTaxSection />
         {/* Portfolio Summary */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <StatCard
             icon={DollarSign}
             label="Total Value"
-            value={`₹${metrics.totalValue.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`}
-            sub={`₹${metrics.cash.toFixed(2)} cash`}
+            value={rupees(metrics.totalValue)}
+            sub={`${rupees(metrics.cash)} cash`}
             trend={metrics.totalPnl >= 0 ? "up" : "down"}
           />
           <StatCard
             icon={TrendingUp}
             label="Unrealized P&L"
-            value={`${metrics.unrealizedPnl >= 0 ? "+" : ""}₹${metrics.unrealizedPnl.toFixed(2)}`}
+            value={`${metrics.unrealizedPnl >= 0 ? "+" : ""}${rupees(metrics.unrealizedPnl)}`}
             trend={metrics.unrealizedPnl >= 0 ? "up" : "down"}
           />
           <StatCard
             icon={TrendingUp}
             label="Realized P&L"
-            value={`${metrics.realizedPnl >= 0 ? "+" : ""}₹${metrics.realizedPnl.toFixed(2)}`}
+            value={`${metrics.realizedPnl >= 0 ? "+" : ""}${rupees(metrics.realizedPnl)}`}
             trend={metrics.realizedPnl >= 0 ? "up" : "down"}
           />
           <StatCard
             icon={TrendingUp}
             label="Total P&L"
-            value={`${metrics.totalPnl >= 0 ? "+" : ""}₹${metrics.totalPnl.toFixed(2)}`}
+            value={`${metrics.totalPnl >= 0 ? "+" : ""}${rupees(metrics.totalPnl)}`}
             sub={`${metrics.totalReturnPct >= 0 ? "+" : ""}${metrics.totalReturnPct.toFixed(2)}%`}
             trend={metrics.totalPnl >= 0 ? "up" : "down"}
           />
           <StatCard
             icon={DollarSign}
             label="Positions Value"
-            value={`₹${metrics.positionsValue.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`}
+            value={rupees(metrics.positionsValue)}
             sub={`${positions.length} active`}
           />
         </div>
@@ -256,7 +266,7 @@ function PortfolioPage() {
                             </span>
                           </div>
                           <div className={`text-sm font-medium ${pnl >= 0 ? "text-bull" : "text-bear"}`}>
-                            {pnl >= 0 ? "+" : ""}₹{pnl.toFixed(2)}
+                            {pnl >= 0 ? "+" : ""}{rupees(pnl)}
                           </div>
                         </div>
                         <div className="grid grid-cols-4 gap-2 text-xs">
@@ -266,15 +276,15 @@ function PortfolioPage() {
                           </div>
                           <div>
                             <div className="text-muted-foreground">Avg</div>
-                            <div className="font-mono">₹{avgPrice.toFixed(2)}</div>
+                            <div className="font-mono">{rupees(avgPrice)}</div>
                           </div>
                           <div>
                             <div className="text-muted-foreground">LTP</div>
-                            <div className="font-mono">₹{ltp.toFixed(2)}</div>
+                            <div className="font-mono">{rupees(ltp)}</div>
                           </div>
                           <div>
                             <div className="text-muted-foreground">Value</div>
-                            <div className="font-mono">₹{totalVal.toFixed(2)}</div>
+                            <div className="font-mono">{rupees(totalVal)}</div>
                           </div>
                         </div>
                         <div className="mt-2 flex justify-between items-center">
@@ -319,7 +329,7 @@ function PortfolioPage() {
                       <div key={item.symbol} className="space-y-1">
                         <div className="flex justify-between text-xs font-medium">
                           <span>{item.symbol}</span>
-                          <span className="font-mono">{item.pct.toFixed(1)}% (₹{item.value.toFixed(2)})</span>
+                          <span className="font-mono">{item.pct.toFixed(1)}% ({rupees(item.value)})</span>
                         </div>
                         <div className="h-2 w-full bg-accent/40 rounded-full overflow-hidden">
                           <div

@@ -25,9 +25,11 @@ import {
   createPaperPortfolioSnapshotService,
   PaperPortfolioSnapshotService,
 } from "../../../modules/paper-trading/portfolio-snapshots";
+import { createPaperInvestingReportService, PaperInvestingReportService } from "../../../modules/paper-trading/investing-report";
 
 const defaultService = createPaperTradingService();
 const defaultSnapshotService = createPaperPortfolioSnapshotService();
+const defaultInvestingReports = createPaperInvestingReportService();
 
 export function toTrpcError(error: unknown): TRPCError {
   if (error instanceof TRPCError) {
@@ -64,9 +66,21 @@ export function toTrpcError(error: unknown): TRPCError {
 
 export function createPaperTradingRouter(
   service: PaperTradingService = defaultService,
-  snapshots: PaperPortfolioSnapshotService = defaultSnapshotService
+  snapshots: PaperPortfolioSnapshotService = defaultSnapshotService,
+  investingReports: PaperInvestingReportService = defaultInvestingReports
 ) {
   return createRouter({
+    investingReport: protectedProcedure
+      .input(z.object({ financialYearStart: z.number().int().min(2018).max(2100).optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        if (!ctx.userId) throw new TRPCError({ code: "UNAUTHORIZED" });
+        try {
+          return await investingReports.getReport(ctx.userId, input);
+        } catch (error) {
+          throw toTrpcError(error);
+        }
+      }),
+
     getState: protectedProcedure.query(async ({ ctx }) => {
       const userId = ctx.userId;
       if (!userId) {
