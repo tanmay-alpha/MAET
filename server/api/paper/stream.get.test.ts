@@ -136,6 +136,8 @@ describe("GET /api/paper/stream wire contract", () => {
 
     const statuses: boolean[] = [];
     let invalidations = 0;
+    // One reload when the subscription is confirmed, then one per outbox event.
+    const expectedInvalidations = PAPER_OUTBOX_EVENT_TYPES.length + 1;
     const allInvalidated = Promise.withResolvers<void>();
     const manager = new PaperStreamManager({
       getToken: async () => "token",
@@ -155,11 +157,12 @@ describe("GET /api/paper/stream wire contract", () => {
       },
       schedule: () => () => {},
       random: () => 1,
+      now: () => Date.now(),
     });
     const unsubscribe = manager.subscribe({
       queryClient: {
         invalidateQueries: async () => {
-          if (++invalidations === PAPER_OUTBOX_EVENT_TYPES.length) allInvalidated.resolve();
+          if (++invalidations === expectedInvalidations) allInvalidated.resolve();
         },
       },
       onStatusChange: (connected) => statuses.push(connected),
@@ -168,7 +171,7 @@ describe("GET /api/paper/stream wire contract", () => {
     await allInvalidated.promise;
 
     expect(statuses.at(-1)).toBe(true);
-    expect(invalidations).toBe(PAPER_OUTBOX_EVENT_TYPES.length);
+    expect(invalidations).toBe(expectedInvalidations);
     unsubscribe();
   });
 });
