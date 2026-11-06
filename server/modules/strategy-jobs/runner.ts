@@ -18,7 +18,8 @@
 
 import { randomUUID } from "node:crypto";
 import * as backtests from "./repository";
-import { isDatabaseAvailable, recordDatabaseFailure } from "../../data/drizzle/availability";
+import { isConnectionError, isDatabaseAvailable, recordDatabaseFailure } from "../../data/drizzle/availability";
+import { DatabaseGate, type DatabaseGateLog } from "../../infra/database-gate";
 import { createJobContext, JobInterruptedError, type JobContext } from "./job-context";
 import * as optimisation from "../strategy-optimisation/repository";
 import { runBacktestJob } from "../../workers/backtest-worker";
@@ -88,6 +89,8 @@ export interface StrategyJobRunnerOptions {
   recoveryIntervalMs?: number;
   /** While false the runner does not query the queues (defaults to the database circuit breaker). */
   isDatabaseAvailable?: () => boolean;
+  /** Receives the one-line outage/recovery messages (defaults to the console). */
+  log?: DatabaseGateLog;
 }
 
 export interface StrategyJobRunner {
@@ -109,6 +112,15 @@ export function createStrategyJobRunner(options: StrategyJobRunnerOptions = {}):
   const recoveryIntervalMs = options.recoveryIntervalMs ?? 60_000;
   const databaseAvailable = options.isDatabaseAvailable ?? isDatabaseAvailable;
   const tag = `[strategy-jobs:${workerId}]`;
+  // Queue polls (and the half-open trial after each breaker cooldown) go through the
+  // circuit; a dead database is reported once per outage, not with a query dump per poll.
+  const database = new DatabaseGate(
+    `strategy-jobs:${workerId}`,
+    options.log ?? {
+      warn: (fields, message) => console.warn(`${tag} ${message}`, fields),
+      info: (fields, message) => console.log(`${tag} ${message}`, fields),
+    },
+  );
 
   let stopping = false;
   let loop: Promise<void> | null = null;
@@ -133,6 +145,8 @@ export function createStrategyJobRunner(options: StrategyJobRunnerOptions = {}):
         const recovered = await STRATEGY_JOB_HANDLERS[kind].recoverStale(staleAfterMs);
         if (recovered > 0) console.warn(`${tag} Requeued ${recovered} stale ${kind} job(s)`);
       } catch (err) {
+        // A dead database fails the whole poll (reported once by the gate).
+        if (isConnectionError(err)) throw err;
         console.error(`${tag} Stale ${kind} recovery failed:`, err);
       }
     }
@@ -195,13 +209,16 @@ export function createStrategyJobRunner(options: StrategyJobRunnerOptions = {}):
         continue;
       }
       try {
-        if (Date.now() >= nextRecoveryAt) {
-          await recoverStale();
-          nextRecoveryAt = Date.now() + recoveryIntervalMs;
-        }
+        const claimed = await database.run(async () => {
+          if (Date.now() >= nextRecoveryAt) {
+            await recoverStale();
+            nextRecoveryAt = Date.now() + recoveryIntervalMs;
+          }
+          return stopping ? null : await claimNext();
+        });
         if (stopping) break;
-        const claimed = await claimNext();
         if (claimed) await execute(claimed.kind, claimed.job);
+        // `undefined`: the circuit is open or the database just failed to connect.
         else await idle(pollIntervalMs);
       } catch (err) {
         console.error(`${tag} Runner loop error:`, err);
