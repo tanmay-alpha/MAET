@@ -29,6 +29,9 @@ __root.tsx                                # App root shell: HTML, meta, theme sc
 │   ├── _app.journal.tsx                  # Research journal & trade theses (/journal)
 │   ├── _app.options.$underlying.tsx      # NSE options chain (/options/:underlying)
 │   ├── _app.futures.tsx                  # Futures placeholder: no futures feed is connected (/futures)
+│   ├── _app.payoff.tsx                   # Options payoff lab: multi-leg Black-Scholes payoff and Greeks (/payoff)
+│   ├── _app.import.tsx                   # Import a portfolio from a broker CSV export (/import)
+│   ├── _app.world.tsx                    # World Monitor: global events, headlines and macro data (/world)
 │   ├── _app.strategies.index.tsx         # Strategy catalog (/strategies)
 │   ├── _app.strategies.$strategyId.index.tsx  # Strategy editor (/strategies/:strategyId)
 │   ├── _app.strategies.$strategyId.backtests.tsx   # Backtest runs (/strategies/:strategyId/backtests)
@@ -57,14 +60,16 @@ __root.tsx                                # App root shell: HTML, meta, theme sc
 
 ## Route Integrity Tests
 
-Automated regression and static integrity tests reside in this folder prefixed with `-*`:
+Regression tests reside in this folder prefixed with `-*` (helpers they test, such as `-news.ts` and `-journal.ts`, use the same prefix so the router ignores them):
 
-- `-alerts-integrity.test.ts`: Validates alert routing, contract isolation, and trigger history.
+- `-alerts-integrity.test.ts`: Renders the alert list, history and notification views; checks creatable conditions against the server schema and the alertsEngine client paths.
+- `-backtest-metrics.test.ts`: Backtest ratio metrics (undefined ratios shown as a dash).
 - `-compare-integrity.test.ts`: Verifies peer comparison routing contracts.
-- `-journal-integrity.test.ts`: Ensures honest metrics and no fabricated trade statistics.
+- `-journal-integrity.test.ts`: Closed-trade selection and P&L formatting for the journal.
 - `-market-intelligence-integrity.test.ts`: Verifies breadth gauge and heatmap provider provenance.
-- `-news-integrity.test.ts`: Enforces explicit UI demo / fixture notices for unintegrated news.
+- `-news-integrity.test.ts`: News samples carry no outlet, time or figures; category filtering; RLS migration policies.
 - `-options-chain-integrity.test.ts`: Guards options chain availability disclosures.
 - `-root-csp.test.ts`: Tests Content Security Policy headers on root document.
 - `-saved-screener-persistence.test.ts`: Asserts database-backed screener preset flows.
+- `-strategies-routing.test.ts`: Strategy Lab route matching.
 - `-watchlists-integrity.test.ts`: Verifies watchlist persistence and migration consistency.

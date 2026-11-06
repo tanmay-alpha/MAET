@@ -68,7 +68,7 @@ const experimentalItems = [
   { title: "Backtest", url: "/backtest", icon: Layers },
   { title: "Options", url: "/options/RELIANCE", icon: LineChart },
   { title: "Futures", url: "/futures", icon: BarChart3 },
-  { title: "News", url: "/news", icon: Newspaper },
+  { title: "News (sample)", url: "/news", icon: Newspaper },
 ];
 
 export function AppSidebar() {
