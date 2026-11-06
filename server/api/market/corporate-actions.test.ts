@@ -42,7 +42,7 @@ describe("GET /api/market/corporate-actions", () => {
 
     expect(body).toMatchObject({ symbol: "EVENTSA", source: "yahoo", stale: false });
     expect(body.events).toEqual([
-      { kind: "dividend", exDate: "2025-08-14", amount: 24, currency: "INR", splitAdjusted: false },
+      { kind: "dividend", exDate: "2025-08-14", amount: 24, currency: "INR", adjusted: false },
     ]);
   });
 
