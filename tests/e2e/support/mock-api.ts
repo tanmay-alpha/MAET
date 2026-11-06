@@ -40,9 +40,11 @@ export interface RecordedRequest {
 
 type TrpcHandler = (input: unknown, request: Request) => unknown;
 
+export type TrpcErrorCode = "BAD_REQUEST" | "UNAUTHORIZED" | "NOT_FOUND" | "CONFLICT" | "INTERNAL_SERVER_ERROR";
+
 class TrpcError extends Error {
   constructor(
-    readonly code: "BAD_REQUEST" | "UNAUTHORIZED" | "NOT_FOUND" | "CONFLICT",
+    readonly code: TrpcErrorCode,
     message: string,
   ) {
     super(message);
@@ -54,12 +56,14 @@ const TRPC_ERROR_STATUS = {
   UNAUTHORIZED: 401,
   NOT_FOUND: 404,
   CONFLICT: 409,
+  INTERNAL_SERVER_ERROR: 500,
 } as const;
 const TRPC_ERROR_CODE = {
   BAD_REQUEST: -32600,
   UNAUTHORIZED: -32001,
   NOT_FOUND: -32004,
   CONFLICT: -32009,
+  INTERNAL_SERVER_ERROR: -32603,
 } as const;
 
 // Sort keys accepted by server/domain/screener/company-query.ts that the fixture rows carry.
@@ -104,6 +108,7 @@ export class MockApi {
 
   private readonly queries = new Map<string, TrpcHandler>();
   private readonly mutations = new Map<string, TrpcHandler>();
+  private readonly failures = new Map<string, { code: TrpcErrorCode; message: string }>();
   private readonly quotesServed = Promise.withResolvers<void>();
 
   constructor(private readonly page: Page) {
@@ -144,6 +149,15 @@ export class MockApi {
 
   onMutation(path: string, handler: TrpcHandler): void {
     this.mutations.set(path, handler);
+  }
+
+  /**
+   * Makes an authenticated call to `path` fail with `code` (e.g. INTERNAL_SERVER_ERROR for a
+   * database outage) until called again with null.
+   */
+  failProcedure(path: string, failure: { code: TrpcErrorCode; message: string } | null): void {
+    if (failure) this.failures.set(path, failure);
+    else this.failures.delete(path);
   }
 
   /** Recorded tRPC calls, optionally for one procedure. */
@@ -364,6 +378,8 @@ export class MockApi {
       if (request.headers().authorization !== `Bearer ${ACCESS_TOKEN}`) {
         throw new TrpcError("UNAUTHORIZED", "UNAUTHORIZED");
       }
+      const failure = this.failures.get(path);
+      if (failure) throw new TrpcError(failure.code, failure.message);
       const rawInput = isMutation
         ? request.postDataJSON()
         : new URL(request.url()).searchParams.get("input");
