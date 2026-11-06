@@ -26,6 +26,16 @@ test("landing exposes public heatmap, one index row and working research links",
   const quoteRequests = api.requests.filter(({ url }) => url.pathname === "/api/market/quotes");
   expect(quoteRequests.every(({ url }) => (url.searchParams.get("symbols") ?? "").split(",").length <= 50)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  if ((page.viewportSize()?.width ?? 1440) < 640) {
+    const tiles = page.getByTestId("heatmap-tile");
+    const first = await tiles.nth(0).boundingBox();
+    const fifth = await tiles.nth(4).boundingBox();
+    const sixth = await tiles.nth(5).boundingBox();
+    expect(first && fifth && sixth).toBeTruthy();
+    expect(fifth!.y).toBe(first!.y);
+    expect(sixth!.y).toBeGreaterThan(first!.y);
+    expect(first!.height).toBeLessThanOrEqual(48);
+  }
   expect(errors).toEqual([]);
 });
 

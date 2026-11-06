@@ -24,7 +24,7 @@ export function NiftyHeatmap({ data, isError, isPending }: { data?: MarketQuotes
         <MarketSource data={data} isError={isError} />
         <span className="font-mono text-[11px] text-muted-foreground">{available}/{nifty50.length} changes available</span>
       </div>
-      <div className="grid grid-cols-3 gap-1 sm:grid-cols-5 lg:grid-cols-10" aria-label="NIFTY 50 constituent price changes" aria-busy={isPending}>
+      <div className="grid grid-cols-5 gap-1 lg:grid-cols-10" aria-label="NIFTY 50 constituent price changes" aria-busy={isPending}>
         {nifty50.map((company) => {
           const quote = quoteMap.get(company.symbol);
           const description = quote
@@ -33,10 +33,10 @@ export function NiftyHeatmap({ data, isError, isPending }: { data?: MarketQuotes
           return (
             <Link key={company.symbol} to="/stock/$symbol" params={{ symbol: company.symbol }}
               title={description} data-testid="heatmap-tile"
-              className={`flex min-h-20 min-w-0 flex-col items-center justify-center gap-1 px-1 py-3 text-center outline-offset-2 transition hover:brightness-125 focus-visible:outline-2 focus-visible:outline-foreground ${heatmapTone(quote?.changePct)}`}>
-              <span className="max-w-full text-[10px] font-semibold tracking-tight sm:text-[11px]">{company.symbol}</span>
-              <span className="font-mono text-xs tabular-nums">{formatChange(quote?.changePct)}</span>
-              {!quote && <span className="text-[9px]">{isPending ? "Loading" : "Unavailable"}</span>}
+              className={`flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 px-1 py-1 text-center outline-offset-2 transition hover:brightness-125 focus-visible:outline-2 focus-visible:outline-foreground sm:min-h-20 sm:gap-1 sm:py-3 ${heatmapTone(quote?.changePct)}`}>
+              <span className="max-w-full truncate text-[10px] font-semibold tracking-tight sm:text-[11px]">{company.symbol}</span>
+              <span className="font-mono text-[10px] tabular-nums sm:text-xs">{formatChange(quote?.changePct)}</span>
+              {!quote && <span className="sr-only text-[9px] sm:not-sr-only">{isPending ? "Loading" : "Unavailable"}</span>}
             </Link>
           );
         })}
