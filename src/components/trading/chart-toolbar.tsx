@@ -10,6 +10,13 @@ import {
   Minus,
   Plus,
 } from "lucide-react";
+import type { CorporateActionsResponse } from "@shared/types";
+import {
+  CORPORATE_ACTION_SOURCE_LABEL,
+  NO_CORPORATE_ACTIONS_MESSAGE,
+  formatExDate,
+  type PlacedCorporateActions,
+} from "./chart-corporate-actions";
 
 export interface DrawingTool {
   id: string;
@@ -34,6 +41,52 @@ interface ChartToolbarProps {
   onResetZoom: () => void;
   selectedTool: string | null;
   fullscreen: boolean;
+  corporateActions?: { enabled: boolean; onToggle: () => void };
+}
+
+/** Shows or hides dividend and split markers on a chart. */
+export function CorporateActionsToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={enabled}
+      onClick={onToggle}
+      className={`whitespace-nowrap rounded border px-2 py-1 text-xs ${
+        enabled ? "border-primary/60 bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:bg-accent"
+      }`}
+    >
+      Dividends &amp; splits
+    </button>
+  );
+}
+
+/** One line under a chart: what the dividend and split markers show, or why there are none. */
+export function CorporateActionsStatus({
+  data,
+  isError,
+  placed,
+}: {
+  data: CorporateActionsResponse | undefined;
+  isError: boolean;
+  placed: PlacedCorporateActions[];
+}) {
+  let text: string;
+  if (!data) {
+    text = isError ? "Dividends & splits unavailable: Yahoo Finance did not respond." : "Loading dividends & splits…";
+  } else if (placed.length === 0) {
+    text = NO_CORPORATE_ACTIONS_MESSAGE;
+  } else {
+    const events = placed.flatMap((bar) => bar.events);
+    const dividends = events.filter((event) => event.kind === "dividend").length;
+    const splits = events.length - dividends;
+    const counts = [
+      dividends > 0 && `${dividends} ${dividends === 1 ? "dividend" : "dividends"}`,
+      splits > 0 && `${splits} ${splits === 1 ? "split" : "splits"}`,
+    ].filter(Boolean);
+    text = `${counts.join(" · ")} in range · ${CORPORATE_ACTION_SOURCE_LABEL[data.source]}`;
+  }
+  if (data?.stale) text += ` · cached ${formatExDate(data.asOf.slice(0, 10))}`;
+  return <p className="border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground">{text}</p>;
 }
 
 const ICON_BUTTON = "rounded p-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground";
@@ -46,12 +99,18 @@ export function ChartToolbar({
   onResetZoom,
   selectedTool,
   fullscreen,
+  corporateActions
 }: ChartToolbarProps) {
   const [showTools, setShowTools] = useState(false);
   const activeTool = DRAWING_TOOLS.find((tool) => tool.id === selectedTool);
 
   return (
     <div className="flex items-center gap-0.5">
+      {corporateActions && (
+        <div className="pl-1">
+          <CorporateActionsToggle enabled={corporateActions.enabled} onToggle={corporateActions.onToggle} />
+        </div>
+      )}
       <div className="relative">
         <button
           type="button"

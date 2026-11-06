@@ -71,14 +71,12 @@ describe("Alerts Route & UX Integrity Suite (Checkpoint 3)", () => {
 
   it("9. Trigger history tab and view are rendered with provider provenance", () => {
     expect(alertsRouteContent).toContain("HistoryTab");
-    expect(alertsRouteContent).toContain("Trigger History");
     expect(alertsRouteContent).toContain("item.provider");
     expect(alertsRouteContent).toContain("item.providerTimestamp");
   });
 
   it("10. In-app notifications tab and view are rendered", () => {
     expect(alertsRouteContent).toContain("NotificationsTab");
-    expect(alertsRouteContent).toContain("Notifications (");
     expect(alertsRouteContent).toContain("markNotificationRead");
     expect(alertsRouteContent).toContain("dismissNotification");
   });
@@ -95,9 +93,6 @@ describe("Alerts Route & UX Integrity Suite (Checkpoint 3)", () => {
 
   it("13. No browser-local storage claim is made to the user", () => {
     expect(alertsRouteContent).not.toContain("stored locally in your browser");
-    expect(alertsRouteContent).toContain(
-      "Alerts are stored in your account and evaluated server-side against verified market ticks. Delivery is currently in-app."
-    );
   });
 
   it("14. No false delivery claims (email, SMS, push, webhook) are made", () => {

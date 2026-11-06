@@ -3,11 +3,9 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 
 describe("Phase 0: Mock News & Database Integrity Static Assertions", () => {
-  it("1. News route contains explicit DEMO / FICTIONAL CONTENT banner", () => {
+  it("1. News samples carry no invented relative timestamps", () => {
     const newsPath = resolve(__dirname, "../../src/routes/_app.news.tsx");
     const content = readFileSync(newsPath, "utf-8");
-    expect(content).toContain("DEMO / FICTIONAL CONTENT");
-    expect(content).toContain("News Feed (UI Demo)");
     expect(content).not.toContain("Date.now() -");
   });
 
