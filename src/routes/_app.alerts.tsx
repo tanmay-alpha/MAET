@@ -1,25 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useMemo } from "react";
-import {
-  Bell,
-  Plus,
-  Trash2,
-  Check,
-  TrendingUp,
-  TrendingDown,
-  Percent,
-  Volume2,
-  Search,
-  AlertTriangle,
-  Zap,
-  RotateCcw,
-  Clock,
-  Inbox,
-  History,
-  CheckCheck,
-} from "lucide-react";
-import { EmptyState } from "@/components/common/empty-state";
-import { ContractPanel } from "@/components/common/contract-panel";
+import { Plus, Trash2, Search } from "lucide-react";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { useSignedIn } from "@/hooks/use-signed-in";
+import { sourceName } from "@/lib/quote-source";
 import {
   useAlerts,
   type AlertView,
@@ -37,6 +21,18 @@ export const Route = createFileRoute("/_app/alerts")({
 type ActiveTab = "definitions" | "history" | "notifications";
 type AlertFilter = "all" | "active" | "triggered" | "price" | "percent" | "volume" | "legacy";
 
+const CONDITIONS: { type: CreatableAlertType; label: string }[] = [
+  { type: "PRICE_ABOVE", label: "Price above" },
+  { type: "PRICE_BELOW", label: "Price below" },
+  { type: "PERCENT_CHANGE_ABOVE", label: "Change % above" },
+  { type: "PERCENT_CHANGE_BELOW", label: "Change % below" },
+  { type: "VOLUME_ABOVE", label: "Volume above" },
+];
+
+const CONDITION_LABEL: Record<string, string> = Object.fromEntries(CONDITIONS.map((c) => [c.type, c.label]));
+
+const INPUT = "w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm focus:border-primary/60 focus:outline-none";
+
 function formatThreshold(type: string, threshold: number | null): string {
   if (threshold === null || Number.isNaN(threshold)) return "—";
   if (type.startsWith("PRICE_")) {
@@ -51,36 +47,11 @@ function formatThreshold(type: string, threshold: number | null): string {
   return String(threshold);
 }
 
-function AlertTypeBadge({ type, supported }: { type: string; supported: boolean }) {
-  if (!supported) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
-        <AlertTriangle className="h-3 w-3" />
-        Unsupported legacy condition
-      </span>
-    );
-  }
-
-  const badgeConfig: Record<string, { label: string; icon: typeof TrendingUp; className: string }> = {
-    PRICE_ABOVE: { label: "Price Above", icon: TrendingUp, className: "border-bull/30 bg-bull/10 text-bull" },
-    PRICE_BELOW: { label: "Price Below", icon: TrendingDown, className: "border-bear/30 bg-bear/10 text-bear" },
-    PERCENT_CHANGE_ABOVE: { label: "Change Above", icon: Percent, className: "border-bull/30 bg-bull/10 text-bull" },
-    PERCENT_CHANGE_BELOW: { label: "Change Below", icon: Percent, className: "border-bear/30 bg-bear/10 text-bear" },
-    VOLUME_ABOVE: { label: "Volume Above", icon: Volume2, className: "border-purple-500/30 bg-purple-500/10 text-purple-400" },
-  };
-
-  const cfg = badgeConfig[type] ?? { label: type, icon: Bell, className: "border-border bg-panel text-muted-foreground" };
-  const Icon = cfg.icon;
-
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${cfg.className}`}>
-      <Icon className="h-3 w-3" />
-      {cfg.label}
-    </span>
-  );
+function shortTime(value: string): string {
+  return new Date(value).toLocaleString("en-IN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function CreateAlertModal({ onClose }: { onClose: () => void }) {
+function CreateAlertForm({ onClose }: { onClose: () => void }) {
   const { createAlert } = useAlerts();
   const [symbol, setSymbol] = useState("");
   const [alertType, setAlertType] = useState<CreatableAlertType>("PRICE_ABOVE");
@@ -97,27 +68,23 @@ function CreateAlertModal({ onClose }: { onClose: () => void }) {
 
     const parsedThreshold = Number(threshold);
     if (!Number.isFinite(parsedThreshold)) {
-      setFormError("Please enter a valid numeric threshold");
+      setFormError("Enter a numeric threshold.");
       return;
     }
 
-    if (alertType === "PRICE_ABOVE" || alertType === "PRICE_BELOW") {
-      if (parsedThreshold <= 0) {
-        setFormError("Price threshold must be a positive number");
-        return;
-      }
+    if ((alertType === "PRICE_ABOVE" || alertType === "PRICE_BELOW") && parsedThreshold <= 0) {
+      setFormError("Price threshold must be above zero.");
+      return;
     }
 
-    if (alertType === "VOLUME_ABOVE") {
-      if (!Number.isInteger(parsedThreshold) || parsedThreshold <= 0) {
-        setFormError("Volume threshold must be a positive whole integer of shares");
-        return;
-      }
+    if (alertType === "VOLUME_ABOVE" && (!Number.isInteger(parsedThreshold) || parsedThreshold <= 0)) {
+      setFormError("Volume threshold must be a whole number of shares above zero.");
+      return;
     }
 
     const parsedCooldown = mode === "repeating" ? parseInt(cooldownMinutes, 10) : 60;
     if (mode === "repeating" && (Number.isNaN(parsedCooldown) || parsedCooldown < 1 || parsedCooldown > 10080)) {
-      setFormError("Cooldown must be between 1 and 10,080 minutes (1 week)");
+      setFormError("Cooldown must be between 1 and 10,080 minutes (one week).");
       return;
     }
 
@@ -144,179 +111,105 @@ function CreateAlertModal({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const thresholdLabel = alertType.startsWith("PRICE_") ? "Price (₹)" : alertType.startsWith("PERCENT_CHANGE_") ? "Change vs previous close (%)" : "Volume (shares)";
+
   return (
-    <div className="rounded-lg border border-border bg-panel p-6 shadow-xl mb-6">
-      <div className="flex items-center justify-between pb-4 border-b border-border">
-        <div>
-          <h3 className="text-base font-semibold">Create Price & Market Alert</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Monitored continuously server-side against live market ticks.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          Cancel
-        </button>
+    <form onSubmit={handleSubmit} aria-labelledby="new-alert-title" className="space-y-3 rounded border border-border bg-panel p-3 sm:p-4">
+      <h2 id="new-alert-title" className="text-sm font-semibold">
+        New alert
+      </h2>
+
+      {formError && (
+        <p role="alert" className="rounded border border-bear/30 bg-bear/10 px-3 py-2 text-xs text-bear">
+          {formError}
+        </p>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="block space-y-1 text-xs">
+          <span className="text-muted-foreground">NSE symbol</span>
+          <input
+            type="text"
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+            placeholder="RELIANCE"
+            className={`${INPUT} font-mono uppercase`}
+            required
+            maxLength={20}
+          />
+        </label>
+        <label className="block space-y-1 text-xs">
+          <span className="text-muted-foreground">Label (optional)</span>
+          <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} className={INPUT} maxLength={100} />
+        </label>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4 pt-4">
-        {formError && (
-          <div className="rounded-md border border-bear/30 bg-bear/10 p-3 text-xs text-bear">
-            {formError}
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">
-              Symbol (NSE)
-            </label>
-            <input
-              type="text"
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-              placeholder="e.g. RELIANCE, TCS"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono uppercase focus:outline-none focus:ring-1 focus:ring-primary"
-              required
-              maxLength={20}
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">
-              Label (Optional)
-            </label>
-            <input
-              type="text"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. Breakout Target"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-              maxLength={100}
-            />
-          </div>
+      <fieldset className="space-y-1 text-xs">
+        <legend className="mb-1 text-muted-foreground">Condition</legend>
+        <div className="flex flex-wrap gap-1">
+          {CONDITIONS.map((item) => (
+            <button
+              key={item.type}
+              type="button"
+              aria-pressed={alertType === item.type}
+              onClick={() => setAlertType(item.type)}
+              className={`rounded border px-2.5 py-1 transition-colors ${
+                alertType === item.type ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
+      </fieldset>
 
-        <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-2">
-            Condition Type
-          </label>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-            {(
-              [
-                { type: "PRICE_ABOVE", label: "Price Above", icon: TrendingUp },
-                { type: "PRICE_BELOW", label: "Price Below", icon: TrendingDown },
-                { type: "PERCENT_CHANGE_ABOVE", label: "Change Above", icon: Percent },
-                { type: "PERCENT_CHANGE_BELOW", label: "Change Below", icon: Percent },
-                { type: "VOLUME_ABOVE", label: "Volume Above", icon: Volume2 },
-              ] as const
-            ).map((item) => {
-              const Icon = item.icon;
-              const isSelected = alertType === item.type;
-              return (
-                <button
-                  key={item.type}
-                  type="button"
-                  onClick={() => setAlertType(item.type)}
-                  className={`flex flex-col items-center gap-1.5 rounded-lg border p-2.5 text-xs font-medium transition-colors ${
-                    isSelected
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-background text-muted-foreground hover:bg-accent/40"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">
-              {alertType.startsWith("PRICE_")
-                ? "Target Price (₹)"
-                : alertType.startsWith("PERCENT_CHANGE_")
-                ? "Target Change (%)"
-                : "Target Volume (Shares)"}
-            </label>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <label className="block space-y-1 text-xs">
+          <span className="text-muted-foreground">{thresholdLabel}</span>
+          <input
+            type="number"
+            value={threshold}
+            onChange={(e) => setThreshold(e.target.value)}
+            step={alertType.startsWith("PRICE_") ? "0.05" : alertType.startsWith("PERCENT_CHANGE_") ? "0.1" : "1"}
+            className={`${INPUT} font-mono`}
+            required
+          />
+        </label>
+        <label className="block space-y-1 text-xs">
+          <span className="text-muted-foreground">When it triggers</span>
+          <select value={mode} onChange={(e) => setMode(e.target.value as "one_time" | "repeating")} className={INPUT}>
+            <option value="one_time">Fire once, then disable</option>
+            <option value="repeating">Repeat after a cooldown</option>
+          </select>
+        </label>
+        {mode === "repeating" && (
+          <label className="block space-y-1 text-xs">
+            <span className="text-muted-foreground">Cooldown (minutes)</span>
             <input
               type="number"
-              value={threshold}
-              onChange={(e) => setThreshold(e.target.value)}
-              step={alertType.startsWith("PRICE_") ? "0.05" : alertType.startsWith("PERCENT_CHANGE_") ? "0.1" : "1"}
-              placeholder={
-                alertType.startsWith("PRICE_")
-                  ? "2500.00"
-                  : alertType.startsWith("PERCENT_CHANGE_")
-                  ? "3.5"
-                  : "1000000"
-              }
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
-              required
+              min="1"
+              max="10080"
+              value={cooldownMinutes}
+              onChange={(e) => setCooldownMinutes(e.target.value)}
+              className={`${INPUT} font-mono`}
             />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">
-              Trigger Behavior
-            </label>
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as "one_time" | "repeating")}
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="one_time">One-time (auto-disables on trigger)</option>
-              <option value="repeating">Repeating (cooldown after trigger)</option>
-            </select>
-          </div>
-        </div>
-
-        {mode === "repeating" && (
-          <div className="rounded-md border border-border bg-background/50 p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="block text-xs font-medium text-foreground">
-                  Cooldown Period (Minutes)
-                </label>
-                <p className="text-[11px] text-muted-foreground mt-0.5">
-                  Repeating alerts can trigger again after the cooldown while the condition remains true.
-                </p>
-              </div>
-              <input
-                type="number"
-                min="1"
-                max="10080"
-                value={cooldownMinutes}
-                onChange={(e) => setCooldownMinutes(e.target.value)}
-                className="w-24 rounded-md border border-border bg-background px-2 py-1 text-sm font-mono text-right"
-              />
-            </div>
-          </div>
+          </label>
         )}
+      </div>
 
-        <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          >
-            {isSubmitting ? "Creating..." : "Save Alert"}
-          </button>
-        </div>
-      </form>
-    </div>
+      <div className="flex justify-end gap-2 border-t border-border pt-3">
+        <button type="button" onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          {isSubmitting ? "Saving…" : "Save alert"}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -331,161 +224,123 @@ function AlertRowItem({
   onRearm: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
-  const isTriggered = alert.triggered || alert.triggerCount > 0;
+  const state = !alert.enabled ? "Disabled" : alert.triggered ? "Triggered" : "Watching";
+  const stateClass = !alert.enabled ? "text-muted-foreground" : alert.triggered ? "text-primary" : "text-bull";
+  const smallButton = "rounded border border-border px-2 py-0.5 text-[11px] transition-colors";
 
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 gap-3 border-b border-border hover:bg-accent/20 transition-colors">
-      <div className="flex items-start sm:items-center gap-3">
-        <div
-          className={`h-2.5 w-2.5 rounded-full mt-1 sm:mt-0 shrink-0 ${
-            alert.enabled ? (isTriggered ? "bg-primary animate-pulse" : "bg-bull") : "bg-muted-foreground/40"
-          }`}
-          title={alert.enabled ? "Active" : "Disabled"}
-        />
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold font-mono text-sm tracking-tight">{alert.symbol}</span>
-            <span className="text-[11px] font-mono text-muted-foreground border border-border px-1.5 py-0.2 rounded">
-              {alert.exchange}
-            </span>
-            <AlertTypeBadge type={alert.type} supported={alert.supported} />
-            {alert.label && (
-              <span className="text-xs text-muted-foreground italic">"{alert.label}"</span>
-            )}
-          </div>
-          <div className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+    <li className="flex flex-col gap-2 px-3 py-2.5 text-xs sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 space-y-1">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className="font-mono text-sm font-semibold">{alert.symbol}</span>
+          <span className="text-[10px] text-muted-foreground">{alert.exchange}</span>
+          {alert.supported ? (
             <span>
-              Target:{" "}
-              <strong className="font-mono text-foreground">
-                {formatThreshold(alert.type, alert.threshold)}
-              </strong>
+              {CONDITION_LABEL[alert.type] ?? alert.type}{" "}
+              <span className="font-mono tabular-nums">{formatThreshold(alert.type, alert.threshold)}</span>
             </span>
-            <span>·</span>
-            <span>
-              {alert.mode === "repeating" ? `Repeating (${alert.cooldownMinutes}m cooldown)` : "One-time"}
-            </span>
-            <span>·</span>
-            <span>
-              Triggered: {alert.triggerCount > 0 ? `${alert.triggerCount} time(s)` : "—"}
-            </span>
-            <span>·</span>
-            <span>
-              Last:{" "}
-              {alert.lastTriggeredAt
-                ? new Date(alert.lastTriggeredAt).toLocaleString("en-IN", {
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })
-                : "—"}
-            </span>
-          </div>
+          ) : (
+            <span className="text-amber-400">Unsupported legacy condition</span>
+          )}
+          <span className={`text-[11px] ${stateClass}`}>{state}</span>
+          {alert.label && <span className="truncate text-muted-foreground">{alert.label}</span>}
+        </div>
+        <div className="flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
+          <span>{alert.mode === "repeating" ? `Repeats, ${alert.cooldownMinutes} min cooldown` : "Fires once"}</span>
+          <span>
+            Fired <span className="font-mono tabular-nums">{alert.triggerCount}</span>×
+          </span>
+          {alert.lastTriggeredAt && <span>Last {shortTime(alert.lastTriggeredAt)}</span>}
         </div>
       </div>
 
-      <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
-        {/* Rearm action for one-time triggered supported alerts */}
+      <div className="flex shrink-0 items-center gap-1.5">
         {alert.supported && alert.mode === "one_time" && alert.triggered && (
           <button
             type="button"
             onClick={() => onRearm(alert.id)}
-            className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/20"
-            title="Re-arm this alert to monitor condition again"
+            className={`${smallButton} border-primary/40 text-primary hover:bg-primary/10`}
+            title="Watch the condition again"
           >
-            <RotateCcw className="h-3 w-3" />
             Re-arm
           </button>
         )}
 
-        {/* Toggle enable / disable */}
         {alert.supported ? (
-          <button
-            type="button"
-            onClick={() => onToggle(alert.id)}
-            className={`rounded-md p-1.5 transition-colors ${
-              alert.enabled ? "text-bull hover:bg-bull/10" : "text-muted-foreground hover:bg-accent"
-            }`}
-            title={alert.enabled ? "Disable alert" : "Enable alert"}
-          >
-            <Zap className="h-4 w-4" fill={alert.enabled ? "currentColor" : "none"} />
+          <button type="button" onClick={() => onToggle(alert.id)} className={`${smallButton} text-muted-foreground hover:text-foreground`}>
+            {alert.enabled ? "Disable" : "Enable"}
           </button>
         ) : (
           <button
             type="button"
             onClick={() => alert.enabled && onToggle(alert.id)}
             disabled={!alert.enabled}
-            className="rounded-md p-1.5 text-muted-foreground/50 cursor-not-allowed"
+            className={`${smallButton} text-muted-foreground disabled:cursor-not-allowed disabled:opacity-40`}
             title="Cannot enable unsupported legacy condition"
           >
-            <Zap className="h-4 w-4" />
+            {alert.enabled ? "Disable" : "Enable"}
           </button>
         )}
 
-        {/* Delete */}
         <button
           type="button"
           onClick={() => onDelete(alert.id)}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-bear/10 hover:text-bear"
+          className="rounded p-1 text-muted-foreground hover:text-bear"
+          aria-label={`Delete ${alert.symbol} alert`}
           title="Delete alert"
         >
-          <Trash2 className="h-4 w-4" />
+          <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
-    </div>
+    </li>
   );
 }
 
+function EmptyLine({ children }: { children: React.ReactNode }) {
+  return <p className="rounded border border-border bg-panel px-3 py-4 text-xs text-muted-foreground">{children}</p>;
+}
+
 function HistoryTab({ history }: { history: AlertTriggerView[] }) {
-  if (history.length === 0) {
-    return (
-      <EmptyState
-        title="No trigger events recorded"
-        description="Trigger events will appear here whenever your active alerts fire against market ticks."
-      />
-    );
-  }
+  if (history.length === 0) return <EmptyLine>No alert has fired yet.</EmptyLine>;
 
   return (
-    <div className="divide-y divide-border rounded-lg border border-border bg-panel">
+    <ul className="divide-y divide-border rounded border border-border bg-panel">
       {history.map((item) => (
-        <div key={item.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-semibold font-mono text-sm">{item.symbol}</span>
-              <span className="text-[11px] font-mono text-muted-foreground border border-border px-1.5 py-0.2 rounded">
-                {item.exchange}
-              </span>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">
-                {item.conditionType}
-              </span>
-              <span className="text-xs text-muted-foreground font-mono">[{item.provider}]</span>
+        <li key={item.id} className="flex flex-col gap-1 px-3 py-2.5 text-xs sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 space-y-0.5">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="font-mono text-sm font-semibold">{item.symbol}</span>
+              <span className="text-[10px] text-muted-foreground">{item.exchange}</span>
+              <span>{CONDITION_LABEL[item.conditionType] ?? item.conditionType}</span>
             </div>
-            <div className="text-xs text-foreground mt-1">{item.message ?? "Alert triggered"}</div>
-            <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-3">
-              <span>Observed: <strong className="font-mono text-foreground">{item.observedValue !== null ? item.observedValue : "—"}</strong></span>
-              <span>Target: <strong className="font-mono text-foreground">{item.targetValue !== null ? item.targetValue : "—"}</strong></span>
+            {item.message && <p className="text-muted-foreground">{item.message}</p>}
+            <div className="flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
+              <span>
+                Observed <span className="font-mono tabular-nums text-foreground">{formatThreshold(item.conditionType, item.observedValue)}</span>
+              </span>
+              <span>
+                Target <span className="font-mono tabular-nums text-foreground">{formatThreshold(item.conditionType, item.targetValue)}</span>
+              </span>
             </div>
           </div>
-          <div className="text-right text-xs text-muted-foreground shrink-0">
+          <div className="shrink-0 text-[11px] text-muted-foreground sm:text-right">
+            <div className="font-mono tabular-nums text-foreground">{shortTime(item.triggeredAt)}</div>
             <div>
-              Triggered:{" "}
-              <strong className="font-mono text-foreground">
-                {new Date(item.triggeredAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-              </strong>
+              {sourceName(item.provider)}
+              {item.providerTimestamp && (
+                <>
+                  {" "}
+                  tick{" "}
+                  <span className="font-mono tabular-nums">
+                    {new Date(item.providerTimestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  </span>
+                </>
+              )}
             </div>
-            {item.providerTimestamp && (
-              <div className="text-[11px]">
-                Market tick:{" "}
-                <span className="font-mono">
-                  {new Date(item.providerTimestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                </span>
-              </div>
-            )}
           </div>
-        </div>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -498,88 +353,54 @@ function NotificationsTab({
   onMarkRead: (id: string) => void;
   onDismiss: (id: string) => void;
 }) {
-  if (notifications.length === 0) {
-    return (
-      <EmptyState
-        title="No active notifications"
-        description="In-app alerts and notifications will appear here when triggered."
-      />
-    );
-  }
+  if (notifications.length === 0) return <EmptyLine>No notifications.</EmptyLine>;
 
   return (
-    <div className="divide-y divide-border rounded-lg border border-border bg-panel">
+    <ul className="divide-y divide-border rounded border border-border bg-panel">
       {notifications.map((item) => {
         const isUnread = !item.readAt;
         return (
-          <div
-            key={item.id}
-            className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-              isUnread ? "bg-primary/5" : ""
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              <div
-                className={`h-2 w-2 rounded-full mt-1.5 shrink-0 ${
-                  isUnread ? "bg-primary animate-pulse" : "bg-muted-foreground/30"
-                }`}
-              />
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-sm">{item.title}</span>
-                  {item.symbol && (
-                    <span className="font-mono text-xs border border-border px-1.5 rounded text-muted-foreground">
-                      {item.symbol}
-                    </span>
-                  )}
-                  {isUnread && (
-                    <span className="text-[10px] uppercase font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                      New
-                    </span>
-                  )}
-                </div>
-                {item.body && <div className="text-xs text-muted-foreground mt-0.5">{item.body}</div>}
-                <div className="text-[11px] text-muted-foreground mt-1">
-                  {new Date(item.createdAt).toLocaleString("en-IN", {
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </div>
+          <li key={item.id} className="flex flex-col gap-2 px-3 py-2.5 text-xs sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className={isUnread ? "font-semibold" : "text-muted-foreground"}>{item.title}</span>
+                {item.symbol && <span className="font-mono text-[11px] text-muted-foreground">{item.symbol}</span>}
+                {isUnread && <span className="text-[10px] font-semibold uppercase text-primary">New</span>}
               </div>
+              {item.body && <p className="text-muted-foreground">{item.body}</p>}
+              <div className="font-mono text-[11px] tabular-nums text-muted-foreground">{shortTime(item.createdAt)}</div>
             </div>
 
-            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+            <div className="flex shrink-0 items-center gap-1.5">
               {isUnread && (
                 <button
                   type="button"
                   onClick={() => onMarkRead(item.id)}
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/40"
-                  title="Mark as read"
+                  className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
                 >
-                  <Check className="h-3.5 w-3.5" />
-                  Mark Read
+                  Mark read
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => onDismiss(item.id)}
-                className="rounded-md border border-border bg-background p-1 text-muted-foreground hover:text-bear hover:bg-bear/10"
+                className="rounded p-1 text-muted-foreground hover:text-bear"
+                aria-label="Dismiss notification"
                 title="Dismiss notification"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
             </div>
-          </div>
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }
 
 function AlertsPage() {
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const signedIn = useSignedIn();
+  const [showCreateForm, setShowCreateForm] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("definitions");
   const [filter, setFilter] = useState<AlertFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -592,6 +413,7 @@ function AlertsPage() {
     triggerHistory,
     notifications,
     isLoading,
+    isError,
     toggleAlert,
     rearmAlert,
     deleteAlert,
@@ -608,225 +430,145 @@ function AlertsPage() {
     else if (filter === "volume") result = alerts.filter((a) => a.type === "VOLUME_ABOVE");
     else if (filter === "legacy") result = unsupportedAlerts;
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(
-        (a) => a.symbol.toLowerCase().includes(q) || (a.label && a.label.toLowerCase().includes(q))
-      );
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      result = result.filter((a) => a.symbol.toLowerCase().includes(q) || (a.label && a.label.toLowerCase().includes(q)));
     }
     return result;
   }, [alerts, activeAlerts, triggeredAlerts, unsupportedAlerts, filter, searchQuery]);
 
-  const stats = useMemo(
-    () => ({
-      total: alerts.length,
-      active: activeAlerts.length,
-      triggered: triggeredAlerts.length,
-      unsupported: unsupportedAlerts.length,
-    }),
-    [alerts, activeAlerts, triggeredAlerts, unsupportedAlerts]
-  );
+  const unreadNotificationCount = useMemo(() => notifications.filter((n) => !n.readAt).length, [notifications]);
 
-  const unreadNotificationCount = useMemo(
-    () => notifications.filter((n) => !n.readAt).length,
-    [notifications]
-  );
+  const ready = signedIn && !isError && !isLoading;
+  const tabs: { id: ActiveTab; label: string; count: number }[] = [
+    { id: "definitions", label: "Alerts", count: alerts.length },
+    { id: "history", label: "Trigger history", count: triggerHistory.length },
+    { id: "notifications", label: "Notifications", count: notifications.length },
+  ];
+  const filters: { id: AlertFilter; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "active", label: "Active" },
+    { id: "triggered", label: "Triggered" },
+    { id: "price", label: "Price" },
+    { id: "percent", label: "Change %" },
+    { id: "volume", label: "Volume" },
+    ...(unsupportedAlerts.length > 0 ? [{ id: "legacy" as const, label: `Legacy ${unsupportedAlerts.length}` }] : []),
+  ];
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur-xl">
-        <div className="mx-auto max-w-7xl px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Bell className="h-5 w-5 text-primary" />
-              <div>
-                <h1 className="text-xl font-semibold tracking-tight">Alerts</h1>
-                <p className="text-xs text-muted-foreground">
-                  {stats.total} total · {stats.active} active · {stats.triggered} triggered
-                </p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowCreateModal(true)}
-              className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              New Alert
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-7xl px-6 py-6 flex-1 w-full">
-        {/* Stat Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-          <div className="rounded-lg border border-border bg-panel p-4">
-            <div className="text-2xl font-bold font-mono">{stats.total}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">Total Definitions</div>
-          </div>
-          <div className="rounded-lg border border-border bg-panel p-4">
-            <div className="text-2xl font-bold font-mono text-bull">{stats.active}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">Active Monitoring</div>
-          </div>
-          <div className="rounded-lg border border-border bg-panel p-4">
-            <div className="text-2xl font-bold font-mono text-primary">{stats.triggered}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">Triggered Alerts</div>
-          </div>
-          {stats.unsupported > 0 ? (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
-              <div className="text-2xl font-bold font-mono text-amber-400">{stats.unsupported}</div>
-              <div className="text-xs text-amber-400/80 mt-0.5">Unsupported Legacy</div>
-            </div>
-          ) : (
-            <div className="rounded-lg border border-border bg-panel p-4">
-              <div className="text-2xl font-bold font-mono text-muted-foreground">
-                {unreadNotificationCount}
-              </div>
-              <div className="text-xs text-muted-foreground mt-0.5">Unread Notifications</div>
-            </div>
-          )}
-        </div>
-
-        {/* Modal / Form */}
-        {showCreateModal && <CreateAlertModal onClose={() => setShowCreateModal(false)} />}
-
-        {/* Navigation Tabs */}
-        <div className="flex items-center gap-2 border-b border-border pb-3 mb-6">
+    <div className="h-full overflow-y-auto bg-background">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3 sm:px-5">
+        <h1 className="text-lg font-semibold tracking-tight sm:text-xl">Alerts</h1>
+        {ready && (
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+            {activeAlerts.length} active · {triggeredAlerts.length} triggered
+            {unreadNotificationCount > 0 && ` · ${unreadNotificationCount} unread`}
+          </span>
+        )}
+        {ready && !showCreateForm && (
           <button
             type="button"
-            onClick={() => setActiveTab("definitions")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              activeTab === "definitions"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-accent/40"
-            }`}
+            onClick={() => setShowCreateForm(true)}
+            className="ml-auto inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
           >
-            <Bell className="h-3.5 w-3.5" />
-            Alert Definitions ({stats.total})
+            <Plus className="h-3.5 w-3.5" />
+            New alert
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("history")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              activeTab === "history"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-accent/40"
-            }`}
-          >
-            <History className="h-3.5 w-3.5" />
-            Trigger History ({triggerHistory.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("notifications")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              activeTab === "notifications"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-accent/40"
-            }`}
-          >
-            <Inbox className="h-3.5 w-3.5" />
-            Notifications ({notifications.length})
-            {unreadNotificationCount > 0 && (
-              <span className="ml-1 rounded-full bg-primary/20 px-1.5 py-0.2 text-[10px] font-bold text-primary">
-                {unreadNotificationCount}
-              </span>
-            )}
-          </button>
-        </div>
+        )}
+      </header>
 
-        {/* Tab Content */}
-        {activeTab === "definitions" && (
-          <div>
-            {/* Search and Filters */}
-            {alerts.length > 0 && (
-              <div className="flex flex-col sm:flex-row gap-3 items-center justify-between mb-4">
-                <div className="relative w-full sm:max-w-xs">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search by symbol or label..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-9 pr-3 py-1.5 rounded-md border border-border bg-panel text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
+      <div className="mx-auto w-full max-w-5xl space-y-3 p-4 sm:p-5">
+        {!signedIn ? (
+          <SignedOutNotice feature="Price alerts" />
+        ) : isError ? (
+          <p role="status" className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+            Alerts could not be loaded right now.
+          </p>
+        ) : isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading alerts…</p>
+        ) : (
+          <>
+            {showCreateForm && <CreateAlertForm onClose={() => setShowCreateForm(false)} />}
 
-                <div className="flex flex-wrap gap-1 w-full sm:w-auto">
-                  {(
-                    [
-                      { id: "all", label: "All" },
-                      { id: "active", label: "Active" },
-                      { id: "triggered", label: "Triggered" },
-                      { id: "price", label: "Price" },
-                      { id: "percent", label: "Change %" },
-                      { id: "volume", label: "Volume" },
-                      ...(stats.unsupported > 0 ? [{ id: "legacy", label: "Legacy" }] : []),
-                    ] as const
-                  ).map((f) => (
-                    <button
-                      key={f.id}
-                      type="button"
-                      onClick={() => setFilter(f.id as AlertFilter)}
-                      className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                        filter === f.id
-                          ? "bg-accent text-foreground font-semibold"
-                          : "text-muted-foreground hover:bg-accent/40"
-                      }`}
-                    >
-                      {f.label}
+            <div className="flex overflow-x-auto border-b border-border" role="tablist" aria-label="Alert views">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-1.5 text-xs transition-colors ${
+                    activeTab === tab.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {tab.label} <span className="font-mono tabular-nums">{tab.count}</span>
+                </button>
+              ))}
+            </div>
+
+            {activeTab === "definitions" &&
+              (alerts.length === 0 ? (
+                <EmptyLine>
+                  No alerts yet.{" "}
+                  {!showCreateForm && (
+                    <button type="button" onClick={() => setShowCreateForm(true)} className="text-primary hover:underline">
+                      Create one
                     </button>
-                  ))}
-                </div>
-              </div>
+                  )}
+                </EmptyLine>
+              ) : (
+                <>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <label className="relative block w-full sm:max-w-xs">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="search"
+                        aria-label="Search alerts"
+                        placeholder="Symbol or label"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-full rounded border border-border bg-panel py-1.5 pl-8 pr-3 text-xs focus:border-primary/60 focus:outline-none"
+                      />
+                    </label>
+                    <div className="flex flex-wrap gap-1">
+                      {filters.map((f) => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          aria-pressed={filter === f.id}
+                          onClick={() => setFilter(f.id)}
+                          className={`shrink-0 rounded border px-2.5 py-1 text-xs transition-colors ${
+                            filter === f.id ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {filteredAlerts.length > 0 ? (
+                    <ul className="divide-y divide-border rounded border border-border bg-panel">
+                      {filteredAlerts.map((alert) => (
+                        <AlertRowItem key={alert.id} alert={alert} onToggle={toggleAlert} onRearm={rearmAlert} onDelete={deleteAlert} />
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyLine>No alerts match this filter.</EmptyLine>
+                  )}
+                </>
+              ))}
+
+            {activeTab === "history" && <HistoryTab history={triggerHistory} />}
+
+            {activeTab === "notifications" && (
+              <NotificationsTab notifications={notifications} onMarkRead={markNotificationRead} onDismiss={dismissNotification} />
             )}
 
-            {/* Alert List */}
-            {isLoading ? (
-              <div className="text-center py-12 text-xs text-muted-foreground">Loading alerts...</div>
-            ) : alerts.length === 0 ? (
-              <EmptyState
-                title="No alert definitions"
-                description="Create price, percentage change, or volume alerts to monitor symbols continuously on the server."
-                action={{ label: "Create First Alert", onClick: () => setShowCreateModal(true) }}
-              />
-            ) : filteredAlerts.length > 0 ? (
-              <div className="rounded-lg border border-border bg-panel divide-y divide-border">
-                {filteredAlerts.map((alert) => (
-                  <AlertRowItem
-                    key={alert.id}
-                    alert={alert}
-                    onToggle={toggleAlert}
-                    onRearm={rearmAlert}
-                    onDelete={deleteAlert}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-12 text-xs text-muted-foreground">
-                No alerts match the selected filter.
-              </div>
-            )}
-          </div>
+            <p className="text-[11px] text-muted-foreground">Checked on the server against each quote tick. Notifications are in-app only.</p>
+          </>
         )}
-
-        {activeTab === "history" && <HistoryTab history={triggerHistory} />}
-
-        {activeTab === "notifications" && (
-          <NotificationsTab
-            notifications={notifications}
-            onMarkRead={markNotificationRead}
-            onDismiss={dismissNotification}
-          />
-        )}
-
-        {/* Truthful Contract Panel */}
-        <div className="mt-8">
-          <ContractPanel message="Alerts are stored in your account and evaluated server-side against verified market ticks. Delivery is currently in-app." />
-        </div>
       </div>
     </div>
   );

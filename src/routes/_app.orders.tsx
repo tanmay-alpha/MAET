@@ -1,8 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Clock, CheckCircle, XCircle, AlertCircle, TrendingUp, TrendingDown } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { usePaperAccount } from "@/hooks/use-paper-account";
+import { useSignedIn } from "@/hooks/use-signed-in";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import type { PaperOrderRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
 
 export const Route = createFileRoute("/_app/orders")({
@@ -12,233 +13,264 @@ export const Route = createFileRoute("/_app/orders")({
   component: OrdersPage,
 });
 
-function OrderStatusBadge({ status, rejectReason }: { status: string; rejectReason?: string | null }) {
-  const variants: Record<string, { icon: React.ElementType; className: string }> = {
-    PENDING: { icon: Clock, className: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20" },
-    TRIGGER_PENDING: { icon: Clock, className: "bg-amber-500/10 text-amber-500 border-amber-500/20" },
-    TRIGGERED: { icon: Clock, className: "bg-blue-500/10 text-blue-500 border-blue-500/20" },
-    FILLED: { icon: CheckCircle, className: "bg-green-500/10 text-green-500 border-green-500/20" },
-    PARTIALLY_FILLED: { icon: CheckCircle, className: "bg-teal-500/10 text-teal-500 border-teal-500/20" },
-    REJECTED: { icon: XCircle, className: "bg-red-500/10 text-red-500 border-red-500/20" },
-    CANCELLED: { icon: AlertCircle, className: "bg-gray-500/10 text-gray-500 border-gray-500/20" },
-  };
+const STATUS: Record<string, { label: string; className: string }> = {
+  PENDING: { label: "Open", className: "text-amber-300" },
+  TRIGGER_PENDING: { label: "Awaiting trigger", className: "text-amber-300" },
+  TRIGGERED: { label: "Triggered", className: "text-primary" },
+  PARTIALLY_FILLED: { label: "Part filled", className: "text-primary" },
+  FILLED: { label: "Filled", className: "text-bull" },
+  REJECTED: { label: "Rejected", className: "text-bear" },
+  CANCELLED: { label: "Cancelled", className: "text-muted-foreground" },
+};
 
-  const variant = variants[status] || variants.PENDING;
-  const Icon = variant.icon;
+const ORDER_TYPE: Record<string, string> = {
+  MARKET: "Market",
+  LIMIT: "Limit",
+  STOP_LOSS_LIMIT: "SL limit",
+  STOP_LOSS_MARKET: "SL market",
+};
 
+const OPEN_STATUSES: Record<string, true> = { PENDING: true, TRIGGER_PENDING: true, TRIGGERED: true, PARTIALLY_FILLED: true };
+
+const FILTERS = [
+  { id: "all", label: "All" },
+  { id: "open", label: "Open" },
+  { id: "FILLED", label: "Filled" },
+  { id: "CANCELLED", label: "Cancelled" },
+  { id: "REJECTED", label: "Rejected" },
+] as const;
+
+type OrderFilter = (typeof FILTERS)[number]["id"];
+
+function rupees(value: number | string | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return `₹${amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function timestamp(value: string | Date): string {
+  return new Date(value).toLocaleString("en-IN", { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+/** Limit and trigger prices as the order was placed; market orders have neither. */
+function orderPrice(order: PaperOrderRow): string {
+  const limit = order.limitPrice ? rupees(order.limitPrice) : null;
+  const trigger = order.stopPrice ? `trig ${rupees(order.stopPrice)}` : null;
+  return [limit, trigger].filter(Boolean).join(" · ") || "Market";
+}
+
+function OrderStatus({ status, rejectReason }: { status: string; rejectReason?: string | null }) {
+  const config = STATUS[status] ?? { label: status, className: "text-muted-foreground" };
   return (
-    <div className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${variant.className}`}>
-      <Icon className="h-3 w-3" />
-      <span>{status}</span>
-      {rejectReason && (
-        <span className="ml-1 text-xs opacity-75">({rejectReason})</span>
-      )}
-    </div>
+    <span className={`font-sans text-[11px] font-medium ${config.className}`} title={rejectReason ?? undefined}>
+      {config.label}
+      {rejectReason && <span className="ml-1 font-normal text-muted-foreground">({rejectReason})</span>}
+    </span>
   );
 }
 
+const TH = "px-3 py-2 font-medium";
+
 function OrdersPage() {
+  const signedIn = useSignedIn();
   const [activeTab, setActiveTab] = useState<"orders" | "fills">("orders");
-  const [activeFilter, setActiveFilter] = useState("all");
+  const [activeFilter, setActiveFilter] = useState<OrderFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const { orders, fills, cancelOrder, isTradingAvailable } = usePaperAccount();
+  const { orders, fills, cancelOrder, isTradingAvailable, isLoading, connectionState } = usePaperAccount();
 
   const uniqueSymbols = useMemo(() => [...new Set(orders.map((o) => o.symbol))], [orders]);
   const { quoteMap } = useMarketQuotes(uniqueSymbols);
 
   const filteredOrders = useMemo(() => {
     let result = orders;
-
-    if (activeFilter !== "all") {
-      result = result.filter((order) => order.status === activeFilter ||
-        (activeFilter === "PENDING" && (order.status === "TRIGGER_PENDING" || order.status === "TRIGGERED" || order.status === "PARTIALLY_FILLED")));
+    if (activeFilter === "open") {
+      result = result.filter((order) => OPEN_STATUSES[order.status]);
+    } else if (activeFilter !== "all") {
+      result = result.filter((order) => order.status === activeFilter);
     }
 
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter((order) =>
-        order.symbol.toLowerCase().includes(query) ||
-        order.side.toLowerCase().includes(query) ||
-        order.type.toLowerCase().includes(query)
+    const query = searchQuery.trim().toLowerCase();
+    if (query) {
+      result = result.filter(
+        (order) =>
+          order.symbol.toLowerCase().includes(query) ||
+          order.side.toLowerCase().includes(query) ||
+          order.type.toLowerCase().includes(query),
       );
     }
 
     return result;
   }, [orders, activeFilter, searchQuery]);
 
-  return (
-    <div className="flex-1 space-y-4 p-6 bg-background">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border pb-4">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Order Execution & History</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Backend authoritative paper trading order book and execution ledger.
-          </p>
-        </div>
+  const unavailable = signedIn && connectionState === "disconnected";
+  const ready = signedIn && !unavailable && !isLoading;
 
-        <div className="flex items-center gap-2">
-          <div className="flex bg-panel rounded-lg border border-border p-1">
-            <button
-              onClick={() => setActiveTab("orders")}
-              className={`px-3 py-1 text-xs font-semibold rounded-md transition ${activeTab === "orders" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              Orders ({orders.length})
+  const tabClass = (active: boolean) =>
+    `px-3 py-1 text-xs font-medium transition-colors ${active ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`;
+
+  return (
+    <div className="h-full overflow-y-auto bg-background">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3 sm:px-5">
+        <h1 className="text-lg font-semibold tracking-tight sm:text-xl">Orders</h1>
+        {ready && (
+          <div className="ml-auto flex overflow-hidden rounded border border-border" role="group" aria-label="Order book view">
+            <button type="button" aria-pressed={activeTab === "orders"} onClick={() => setActiveTab("orders")} className={tabClass(activeTab === "orders")}>
+              Orders <span className="font-mono tabular-nums">{orders.length}</span>
             </button>
-            <button
-              onClick={() => setActiveTab("fills")}
-              className={`px-3 py-1 text-xs font-semibold rounded-md transition ${activeTab === "fills" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              Fills ({fills.length})
+            <button type="button" aria-pressed={activeTab === "fills"} onClick={() => setActiveTab("fills")} className={`border-l border-border ${tabClass(activeTab === "fills")}`}>
+              Fills <span className="font-mono tabular-nums">{fills.length}</span>
             </button>
           </div>
-        </div>
-      </div>
+        )}
+      </header>
 
-      {activeTab === "orders" && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-panel p-3 rounded-lg border border-border">
-            <div className="flex gap-1 flex-wrap">
-              {["all", "PENDING", "FILLED", "CANCELLED", "REJECTED"].map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setActiveFilter(f)}
-                  className={`px-3 py-1 text-xs font-medium rounded-md transition ${activeFilter === f ? "bg-primary text-primary-foreground" : "bg-panel-elevated text-muted-foreground hover:text-foreground"}`}
-                >
-                  {f.toUpperCase()}
-                </button>
-              ))}
+      <div className="space-y-3 p-4 sm:p-5">
+        {!signedIn ? (
+          <SignedOutNotice feature="Paper orders and fills" />
+        ) : unavailable ? (
+          <p role="status" className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+            The paper account could not be loaded, so orders and fills are unavailable right now.
+          </p>
+        ) : isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading paper account…</p>
+        ) : activeTab === "orders" ? (
+          <>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap gap-1">
+                {FILTERS.map((filter) => (
+                  <button
+                    key={filter.id}
+                    type="button"
+                    aria-pressed={activeFilter === filter.id}
+                    onClick={() => setActiveFilter(filter.id)}
+                    className={`shrink-0 rounded border px-2.5 py-1 text-xs transition-colors ${
+                      activeFilter === filter.id
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="search"
+                aria-label="Search orders"
+                placeholder="Symbol, side or type"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full rounded border border-border bg-panel px-3 py-1.5 text-xs text-foreground focus:border-primary/60 focus:outline-none sm:w-64"
+              />
             </div>
 
-            <input
-              type="text"
-              placeholder="Search symbol or side…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="rounded bg-panel-elevated px-3 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-full sm:w-64"
-            />
-          </div>
+            <div className="overflow-x-auto rounded border border-border bg-panel">
+              <table className="w-full min-w-[46rem] text-left font-mono text-xs tabular-nums">
+                <thead>
+                  <tr className="border-b border-border text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <th className={TH}>Placed</th>
+                    <th className={TH}>Symbol</th>
+                    <th className={TH}>Side</th>
+                    <th className={TH}>Type</th>
+                    <th className={`${TH} text-right`}>Filled / qty</th>
+                    <th className={`${TH} text-right`}>Price</th>
+                    <th className={`${TH} text-right`}>Avg fill</th>
+                    <th className={TH}>Status</th>
+                    <th className={TH}><span className="sr-only">Actions</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredOrders.map((o: PaperOrderRow) => {
+                    const quote = quoteMap.get(o.symbol);
+                    const canCancel = o.status === "PENDING" || o.status === "TRIGGER_PENDING";
 
-          <div className="rounded-lg border border-border bg-panel overflow-hidden">
-            <table className="w-full text-xs font-mono tabular-nums text-left">
+                    return (
+                      <tr key={o.id} className="border-b border-border/60 last:border-0 hover:bg-accent/30">
+                        <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{timestamp(o.placedAt)}</td>
+                        <td className="whitespace-nowrap px-3 py-2">
+                          <span className="font-sans font-semibold text-foreground">{o.symbol}</span>
+                          {quote && (
+                            <span className="ml-2 text-[10px] text-muted-foreground" title="Last traded price">
+                              {rupees(quote.price)}
+                            </span>
+                          )}
+                        </td>
+                        <td className={`px-3 py-2 font-semibold ${o.side === "BUY" ? "text-bull" : "text-bear"}`}>{o.side}</td>
+                        <td className="whitespace-nowrap px-3 py-2 font-sans text-muted-foreground">{ORDER_TYPE[o.type] ?? o.type}</td>
+                        <td className="px-3 py-2 text-right">
+                          {o.filledQty}/{o.qty}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right">{orderPrice(o)}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right">{rupees(o.averageFillPrice)}</td>
+                        <td className="px-3 py-2">
+                          <OrderStatus status={o.status} rejectReason={o.rejectReason} />
+                        </td>
+                        <td className="px-3 py-1.5 text-right">
+                          {canCancel && (
+                            <button
+                              type="button"
+                              onClick={() => cancelOrder(o.id)}
+                              disabled={!isTradingAvailable}
+                              className="rounded border border-border px-2 py-0.5 font-sans text-[11px] text-muted-foreground transition-colors hover:border-bear/50 hover:text-bear disabled:opacity-40"
+                            >
+                              Cancel
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredOrders.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="px-3 py-6 text-center font-sans text-muted-foreground">
+                        {orders.length === 0 ? "No paper orders yet. Place one from the terminal." : "No orders match this filter."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <div className="overflow-x-auto rounded border border-border bg-panel">
+            <table className="w-full min-w-[42rem] text-left font-mono text-xs tabular-nums">
               <thead>
-                <tr className="bg-panel-elevated/40 text-[10px] uppercase text-muted-foreground border-b border-border">
-                  <th className="px-4 py-2.5">Placed At</th>
-                  <th className="px-4 py-2.5">Symbol</th>
-                  <th className="px-4 py-2.5 text-right">Side</th>
-                  <th className="px-4 py-2.5 text-right">Type</th>
-                  <th className="px-4 py-2.5 text-right">Quantity</th>
-                  <th className="px-4 py-2.5 text-right">Limit / Stop Price</th>
-                  <th className="px-4 py-2.5 text-right">Status</th>
-                  <th className="px-4 py-2.5 text-right">Actions</th>
+                <tr className="border-b border-border text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <th className={TH}>Executed</th>
+                  <th className={TH}>Symbol</th>
+                  <th className={TH}>Side</th>
+                  <th className={`${TH} text-right`}>Qty</th>
+                  <th className={`${TH} text-right`}>Fill price</th>
+                  <th className={`${TH} text-right`}>Slippage</th>
+                  <th className={`${TH} text-right`}>Charges</th>
+                  <th className={TH}>Reason</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredOrders.map((o: PaperOrderRow) => {
-                  const quote = quoteMap.get(o.symbol);
-                  const isBuy = o.side === "BUY";
-                  const canCancel = o.status === "PENDING" || o.status === "TRIGGER_PENDING";
-
-                  return (
-                    <tr key={o.id} className="border-b border-border hover:bg-accent/40 transition-colors">
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {new Date(o.placedAt).toLocaleString("en-IN", {
-                          month: "short",
-                          day: "2-digit",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </td>
-                      <td className="px-4 py-3 font-sans font-semibold text-foreground">
-                        {o.symbol}
-                        {quote && <span className="ml-2 text-[10px] text-muted-foreground font-mono">₹{quote.price.toFixed(2)}</span>}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold ${isBuy ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>
-                          {isBuy ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                          {o.side}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right">{o.type}</td>
-                      <td className="px-4 py-3 text-right">{o.qty}</td>
-                      <td className="px-4 py-3 text-right">
-                        {o.limitPrice ? `₹${Number(o.limitPrice).toFixed(2)}` : o.stopPrice ? `₹${Number(o.stopPrice).toFixed(2)}` : "MARKET"}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <OrderStatusBadge status={o.status} rejectReason={o.rejectReason} />
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {canCancel && (
-                          <button
-                            onClick={() => cancelOrder(o.id)}
-                            disabled={!isTradingAvailable}
-                            className="rounded bg-panel-elevated hover:bg-bear hover:text-white px-2.5 py-1 text-[11px] font-medium transition disabled:opacity-50"
-                          >
-                            Cancel
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-                {filteredOrders.length === 0 && (
+                {fills.map((f: PaperFillRow) => (
+                  <tr key={f.id} className="border-b border-border/60 last:border-0 hover:bg-accent/30">
+                    <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{timestamp(f.executedAt)}</td>
+                    <td className="px-3 py-2 font-sans font-semibold text-foreground">{f.symbol}</td>
+                    <td className={`px-3 py-2 font-semibold ${f.side === "BUY" ? "text-bull" : "text-bear"}`}>{f.side}</td>
+                    <td className="px-3 py-2 text-right">{f.quantity}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">{rupees(f.fillPrice)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">{rupees(f.slippage)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">{rupees(f.fees)}</td>
+                    <td className="px-3 py-2 font-sans text-muted-foreground">{f.executionReason}</td>
+                  </tr>
+                ))}
+                {fills.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center text-muted-foreground font-sans">
-                      No orders found.
+                    <td colSpan={8} className="px-3 py-6 text-center font-sans text-muted-foreground">
+                      No fills yet.
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {activeTab === "fills" && (
-        <div className="rounded-lg border border-border bg-panel overflow-hidden">
-          <table className="w-full text-xs font-mono tabular-nums text-left">
-            <thead>
-              <tr className="bg-panel-elevated/40 text-[10px] uppercase text-muted-foreground border-b border-border">
-                <th className="px-4 py-2.5">Executed At</th>
-                <th className="px-4 py-2.5">Symbol</th>
-                <th className="px-4 py-2.5 text-right">Side</th>
-                <th className="px-4 py-2.5 text-right">Quantity</th>
-                <th className="px-4 py-2.5 text-right">Fill Price</th>
-                <th className="px-4 py-2.5 text-right">Slippage</th>
-                <th className="px-4 py-2.5 text-right">Fee</th>
-                <th className="px-4 py-2.5 text-right">Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {fills.map((f: PaperFillRow) => (
-                <tr key={f.id} className="border-b border-border hover:bg-accent/40 transition-colors">
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {new Date(f.executedAt).toLocaleString("en-IN", {
-                      month: "short",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </td>
-                  <td className="px-4 py-3 font-sans font-semibold text-foreground">{f.symbol}</td>
-                  <td className="px-4 py-3 text-right">{f.side}</td>
-                  <td className="px-4 py-3 text-right">{f.quantity}</td>
-                  <td className="px-4 py-3 text-right">₹{Number(f.fillPrice).toFixed(2)}</td>
-                  <td className="px-4 py-3 text-right">₹{Number(f.slippage).toFixed(2)}</td>
-                  <td className="px-4 py-3 text-right">₹{Number(f.fees).toFixed(2)}</td>
-                  <td className="px-4 py-3 text-right text-muted-foreground">{f.executionReason}</td>
-                </tr>
-              ))}
-              {fills.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center text-muted-foreground font-sans">
-                    No execution fills recorded.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

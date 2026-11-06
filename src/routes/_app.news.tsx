@@ -1,317 +1,113 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useMemo } from "react";
-import { Newspaper, ExternalLink, Clock, TrendingUp, TrendingDown, Minus, Bookmark, Share2, AlertTriangle } from "lucide-react";
-import { ContractPanel } from "@/components/common/contract-panel";
+import { useState } from "react";
 
 export const Route = createFileRoute("/_app/news")({
-  head: () => ({ meta: [{ title: "News (UI Demo) — MAET" }] }),
+  head: () => ({ meta: [{ title: "News (samples) — MAET" }] }),
   component: News,
 });
 
-type Sentiment = "positive" | "negative" | "neutral";
 type Category = "all" | "markets" | "economy" | "companies";
 
-interface NewsItem {
+/**
+ * No news provider is connected. These are layout placeholders: topics only, with no
+ * outlet, date, figure or sentiment attached, so nothing here can be mistaken for a report.
+ */
+interface SampleHeadline {
   id: string;
-  source: string;
   title: string;
   summary: string;
-  time: string;
-  timestamp: number;
-  sentiment: Sentiment;
-  category: Category;
+  category: Exclude<Category, "all">;
   symbols: string[];
-  readTime?: number;
 }
 
-const MOCK_NEWS: NewsItem[] = [
+const SAMPLE_HEADLINES: SampleHeadline[] = [
   {
-    id: "1",
-    source: "Economic Times (Sample Fixture)",
-    title: "[DEMO FIXTURE] RBI holds repo rate steady at 6.5%; markets react positively",
-    summary: "The Reserve Bank of India maintained the repo rate at 6.5% in its monetary policy meeting, citing controlled inflation and stable growth outlook.",
-    time: "Historical Demo (2026-03-15)",
-    timestamp: 1773532800000,
-    sentiment: "positive",
+    id: "policy",
+    title: "RBI policy decision and the market reaction",
+    summary: "A policy-day story would cover the rate decision, the inflation outlook and how banks and rate-sensitive stocks moved.",
     category: "economy",
-    symbols: ["NIFTY", "BANKNIFTY"],
-    readTime: 3,
+    symbols: ["BANKNIFTY"],
   },
   {
-    id: "2",
-    source: "Bloomberg Quint (Sample Fixture)",
-    title: "[DEMO FIXTURE] Reliance Industries reports Q1 profit jump of 12% YoY",
-    summary: "Reliance Industries' consolidated net profit rose to ₹19,641 crore in Q1 FY2026-27, beating street estimates of ₹18,500 crore. Revenue grew 8% YoY.",
-    time: "Historical Demo (2026-03-14)",
-    timestamp: 1773446400000,
-    sentiment: "positive",
+    id: "results",
+    title: "Quarterly results: Reliance Industries",
+    summary: "An earnings story would compare revenue, profit and margins with the previous quarter and show the stock's reaction.",
     category: "companies",
     symbols: ["RELIANCE"],
-    readTime: 5,
   },
   {
-    id: "3",
-    source: "Moneycontrol (Sample Fixture)",
-    title: "[DEMO FIXTURE] IT sector faces headwinds as global tech spending slows",
-    summary: "Major IT services companies see order book declines as clients in North America cut discretionary spending. Sector down 3% this week.",
-    time: "Historical Demo (2026-03-13)",
-    timestamp: 1773360000000,
-    sentiment: "negative",
+    id: "it-services",
+    title: "IT services stocks and US technology spending",
+    summary: "A sector story would link client spending commentary to order books at the large IT services companies.",
     category: "markets",
     symbols: ["TCS", "INFY", "WIPRO"],
-    readTime: 4,
   },
   {
-    id: "4",
-    source: "Business Standard (Sample Fixture)",
-    title: "[DEMO FIXTURE] Nifty Bank index outperforms broader market; private lenders rally",
-    summary: "Banking stocks led the gains today with HDFC Bank and ICICI Bank up 2%+ each on strong credit growth numbers and improving asset quality.",
-    time: "Historical Demo (2026-03-12)",
-    timestamp: 1773273600000,
-    sentiment: "positive",
+    id: "private-banks",
+    title: "Private bank stocks against the broader index",
+    summary: "A market story would compare the private lenders' moves with the NIFTY 50 and explain the drivers.",
     category: "markets",
-    symbols: ["BANKNIFTY", "HDFCBANK", "ICICIBANK"],
-    readTime: 4,
+    symbols: ["HDFCBANK", "ICICIBANK"],
   },
   {
-    id: "5",
-    source: "LiveMint (Sample Fixture)",
-    title: "[DEMO FIXTURE] FIIs turn net buyers in June; domestic institutions continue selling",
-    summary: "Foreign institutional investors bought ₹4,200 crore worth of Indian equities in the first three weeks of June, reversing three months of outflows.",
-    time: "Historical Demo (2026-03-11)",
-    timestamp: 1773187200000,
-    sentiment: "neutral",
+    id: "flows",
+    title: "Foreign and domestic institutional flows",
+    summary: "A flows story would report net buying and selling by FIIs and DIIs from the exchange's provisional data.",
     category: "markets",
     symbols: ["NIFTY"],
-    readTime: 3,
-  },
-  {
-    id: "6",
-    source: "Financial Express (Sample Fixture)",
-    title: "[DEMO FIXTURE] Nifty 50 breaks above 24,000 resistance; technical analysts bullish",
-    summary: "The Nifty 50 index broke above the key psychological level of 24,000 with strong volumes, signaling potential for further upside. MACD shows bullish crossover.",
-    time: "Historical Demo (2026-03-10)",
-    timestamp: 1773100800000,
-    sentiment: "positive",
-    category: "markets",
-    symbols: ["NIFTY", "NIFTY50"],
-    readTime: 5,
   },
 ];
 
-const SENTIMENT_CONFIG: Record<Sentiment, { icon: typeof TrendingUp; color: string; bg: string; label: string }> = {
-  positive: { icon: TrendingUp, color: "text-bull", bg: "bg-bull/10", label: "Bullish" },
-  negative: { icon: TrendingDown, color: "text-bear", bg: "bg-bear/10", label: "Bearish" },
-  neutral: { icon: Minus, color: "text-muted-foreground", bg: "bg-muted/10", label: "Neutral" },
-};
-
 const CATEGORIES: { value: Category; label: string }[] = [
-  { value: "all", label: "All News" },
+  { value: "all", label: "All" },
   { value: "markets", label: "Markets" },
   { value: "economy", label: "Economy" },
   { value: "companies", label: "Companies" },
 ];
 
-function NewsCard({ item }: { item: NewsItem }) {
-  const sentiment = SENTIMENT_CONFIG[item.sentiment];
-  const SentimentIcon = sentiment.icon;
-
-  return (
-    <div className="px-6 py-5 hover:bg-accent/50 transition-colors group">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1">
-          {/* Meta */}
-          <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-            <span className="font-medium text-foreground">{item.source}</span>
-            <span>·</span>
-            <span className="flex items-center gap-1">
-              <Clock className="h-3 w-3" />
-              {item.time}
-            </span>
-            {item.readTime && (
-              <>
-                <span>·</span>
-                <span>{item.readTime} min read</span>
-              </>
-            )}
-            <span>·</span>
-            <span className={`inline-flex items-center gap-1 ${sentiment.color}`}>
-              <SentimentIcon className="h-3 w-3" />
-              {sentiment.label}
-            </span>
-          </div>
-
-          {/* Title */}
-          <h3 className="mt-2 font-semibold leading-snug group-hover:text-primary transition-colors">
-            {item.title}
-          </h3>
-
-          {/* Summary */}
-          <p className="mt-1.5 text-sm text-muted-foreground line-clamp-2 leading-relaxed">
-            {item.summary}
-          </p>
-
-          {/* Symbols */}
-          <div className="mt-3 flex items-center gap-2 flex-wrap">
-            {item.symbols.map((sym) => (
-              <span
-                key={sym}
-                className="rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20 cursor-pointer transition-colors"
-              >
-                {sym}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
-            type="button"
-            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Bookmark (Demo)"
-          >
-            <Bookmark className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Share (Demo)"
-          >
-            <Share2 className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Open link (Demo)"
-          >
-            <ExternalLink className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function News() {
   const [category, setCategory] = useState<Category>("all");
-  const [sentimentFilter, setSentimentFilter] = useState<Sentiment | "all">("all");
-
-  const filteredNews = useMemo(() => {
-    let result = MOCK_NEWS;
-
-    if (category !== "all") {
-      result = result.filter(item => item.category === category);
-    }
-
-    if (sentimentFilter !== "all") {
-      result = result.filter(item => item.sentiment === sentimentFilter);
-    }
-
-    return result.sort((a, b) => b.timestamp - a.timestamp);
-  }, [category, sentimentFilter]);
-
-  const sentimentCounts = useMemo(() => ({
-    positive: MOCK_NEWS.filter(n => n.sentiment === "positive").length,
-    negative: MOCK_NEWS.filter(n => n.sentiment === "negative").length,
-    neutral: MOCK_NEWS.filter(n => n.sentiment === "neutral").length,
-  }), []);
+  const headlines = category === "all" ? SAMPLE_HEADLINES : SAMPLE_HEADLINES.filter((item) => item.category === category);
 
   return (
-    <div className="flex h-full flex-col">
-      {/* DEMO Disclaimer Banner */}
-      <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-2.5 text-xs text-amber-500 font-medium flex items-center gap-2">
-        <AlertTriangle className="h-4 w-4 shrink-0" />
-        <span>
-          <strong>DEMO / FICTIONAL CONTENT</strong> — Live news feed provider is not connected. The articles below are sample UI fixtures for layout demonstration and do not represent current real-time financial market news.
-        </span>
-      </div>
-
-      {/* Header */}
-      <div className="sticky top-0 z-50 border-b border-border/60 bg-background/70 backdrop-blur-xl">
-        <div className="mx-auto max-w-7xl px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Newspaper className="h-5 w-5 text-primary" />
-              <div>
-                <h1 className="text-xl font-semibold">News Feed (UI Demo)</h1>
-                <p className="text-xs text-muted-foreground">
-                  {MOCK_NEWS.length} static demo fixtures
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4 text-xs">
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1 text-bull">
-                  <TrendingUp className="h-3 w-3" />
-                  {sentimentCounts.positive}
-                </span>
-                <span className="flex items-center gap-1 text-bear">
-                  <TrendingDown className="h-3 w-3" />
-                  {sentimentCounts.negative}
-                </span>
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <Minus className="h-3 w-3" />
-                  {sentimentCounts.neutral}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Category Tabs */}
-          <div className="flex gap-1 mt-3">
-            {CATEGORIES.map((cat) => (
-              <button
-                key={cat.value}
-                type="button"
-                onClick={() => setCategory(cat.value)}
-                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                  category === cat.value
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
-                }`}
-              >
-                {cat.label}
-              </button>
-            ))}
-            <div className="ml-auto flex gap-1">
-              {(["all", "positive", "negative", "neutral"] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSentimentFilter(s)}
-                  className={`px-2 py-1 text-xs rounded-md transition-colors capitalize ${
-                    sentimentFilter === s
-                      ? "bg-accent text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {s === "all" ? "All" : s}
-                </button>
-              ))}
-            </div>
-          </div>
+    <div className="h-full overflow-y-auto bg-background">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3 sm:px-5">
+        <h1 className="text-lg font-semibold tracking-tight sm:text-xl">News</h1>
+        <div className="flex flex-wrap gap-1 sm:ml-auto" role="group" aria-label="Category">
+          {CATEGORIES.map((cat) => (
+            <button
+              key={cat.value}
+              type="button"
+              aria-pressed={category === cat.value}
+              onClick={() => setCategory(cat.value)}
+              className={`shrink-0 rounded border px-2.5 py-1 text-xs transition-colors ${
+                category === cat.value ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {cat.label}
+            </button>
+          ))}
         </div>
-      </div>
+      </header>
 
-      {/* News list */}
-      <div className="flex-1 overflow-auto">
-        {filteredNews.length > 0 ? (
-          <div className="divide-y divide-border bg-panel">
-            {filteredNews.map((item) => (
-              <NewsCard key={item.id} item={item} />
-            ))}
-          </div>
-        ) : (
-          <div className="flex items-center justify-center h-64 text-muted-foreground">
-            No news articles match your filters
-          </div>
-        )}
-      </div>
+      <div className="mx-auto w-full max-w-4xl space-y-3 p-4 sm:p-5">
+        <p role="status" className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+          Sample headlines: no live news feed connected. The items below are placeholders that show the layout; they are not news.
+        </p>
 
-      {/* Bottom panel */}
-      <div className="border-t border-border bg-panel/50 p-3 text-center text-xs text-muted-foreground">
-        <ContractPanel message="Verified news provider pending — showing sample market headlines for UI demonstration" />
+        <ul className="space-y-2" aria-label="Sample headlines">
+          {headlines.map((item) => (
+            <li key={item.id} className="rounded border border-dashed border-border px-3 py-2.5">
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+                <span className="font-mono text-amber-400/80">Sample</span>
+                <span>{item.category}</span>
+              </div>
+              <h2 className="mt-1 text-sm font-medium text-muted-foreground">{item.title}</h2>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground/80">{item.summary}</p>
+              <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">{item.symbols.join(" · ")}</p>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
