@@ -34,11 +34,9 @@ export interface CapitalGainsBucket {
   regime: "old" | "new";
   rate: number;
   grossGains: number;
-  /** Positive magnitude of losses in this bucket. */
+  /** Positive magnitude of losses realised in this bucket. */
   grossLosses: number;
-  /** grossGains - grossLosses, before cross-bucket setoff. */
-  netGain: number;
-  /** Loss transferred from another rate bucket; internal netting is already in netGain. */
+  /** Losses set off against this bucket's gains, from this or any bucket s70 allows. */
   lossOffset: number;
   exemptionUsed: number;
   taxableGain: number;
@@ -200,6 +198,9 @@ export function twelveMonthAnniversary(entryDate: string): string {
  * s2(42A), listed equity twelve-month threshold: https://www.incometaxindia.gov.in/w/section-2-57
  * s43(5), non-delivery/speculation: https://www.incometaxindia.gov.in/w/section-43-5
  * s48, expenses/cost and STT exclusion: https://www.incometaxindia.gov.in/w/section-48-65
+ * Transfers from 2026-04-01 fall under the Income-tax Act 2025, whose ss196/198 keep
+ * 20%, 12.5% and ₹125,000: https://wm.incometaxindia.gov.in/w/section-196-78,
+ * https://wm.incometaxindia.gov.in/w/section-198-76
  *
  * Transfers before 2024-07-23 use 15% ST / 10% LT; that day and later use
  * 20% / 12.5%. The amended s112A(2)(i) proviso explicitly makes ₹125,000
@@ -208,24 +209,24 @@ export function twelveMonthAnniversary(entryDate: string): string {
  * Department rate/cess table (4% on tax plus surcharge; surcharge is omitted here):
  * https://wmstatic-prd.incometaxindia.gov.in/documents/20117/42998/Tax-rates%E2%80%8B_2026-01-22_11-20-48_540e32_en.pdf/021c2f6a-881c-f666-3449-ccf0bcc172b8
  *
- * Deterministic allocation, not a tax-minimisation claim:
- * 1. net positive and negative rounds within each term/rate bucket;
- * 2. pool remaining LT losses and offset LT old then LT new;
- * 3. pool remaining ST losses and offset ST old, ST new, LT old, LT new;
- * 4. consume the annual LT exemption in LT old then LT new.
- * Thus each transfer can be traced: taxable = max(netGain,0) - lossOffset
- * - exemptionUsed. s70 allows STCL against ST/LT and LTCL only against LT;
- * the specific allocation ordering above is an estimator convention, not law.
+ * s70 lets the assessee choose which gain absorbs a loss (K2 Family (P.) Trust v. DCIT,
+ * Bombay HC, WP (L) 38249 of 2025), and the s112A proviso does not order the exemption,
+ * so every reduction goes to the highest-rate gain it may legally reduce:
+ * 1. pool all LT losses and set them off against LT 12.5% then LT 10%;
+ * 2. pool all ST losses and set them off against ST 20%, ST 15%, LT 12.5%, LT 10%;
+ * 3. claim the annual LT exemption against LT 12.5% then LT 10%.
+ * Only FY2024-25 has two rates per term, so elsewhere the order changes nothing.
+ * Each bucket traces as taxable = grossGains - lossOffset - exemptionUsed.
  */
 export function buildCapitalGainsReport(fills: readonly Fill[], financialYearStart: number, generation: number): CapitalGainsReport {
   const startDate = `${financialYearStart}-04-01`;
   const endDate = `${financialYearStart + 1}-03-31`;
   const matchedLots = matchFifoLots(fills, generation).filter((lot) => lot.exitDate >= startDate && lot.exitDate <= endDate);
   const buckets: CapitalGainsBucket[] = [
-    { term: "STCG", regime: "old", rate: 0.15, grossGains: 0, grossLosses: 0, netGain: 0, lossOffset: 0, exemptionUsed: 0, taxableGain: 0, tax: 0 },
-    { term: "STCG", regime: "new", rate: 0.2, grossGains: 0, grossLosses: 0, netGain: 0, lossOffset: 0, exemptionUsed: 0, taxableGain: 0, tax: 0 },
-    { term: "LTCG", regime: "old", rate: 0.1, grossGains: 0, grossLosses: 0, netGain: 0, lossOffset: 0, exemptionUsed: 0, taxableGain: 0, tax: 0 },
-    { term: "LTCG", regime: "new", rate: 0.125, grossGains: 0, grossLosses: 0, netGain: 0, lossOffset: 0, exemptionUsed: 0, taxableGain: 0, tax: 0 },
+    { term: "STCG", regime: "old", rate: 0.15, grossGains: 0, grossLosses: 0, lossOffset: 0, exemptionUsed: 0, taxableGain: 0, tax: 0 },
+    { term: "STCG", regime: "new", rate: 0.2, grossGains: 0, grossLosses: 0, lossOffset: 0, exemptionUsed: 0, taxableGain: 0, tax: 0 },
+    { term: "LTCG", regime: "old", rate: 0.1, grossGains: 0, grossLosses: 0, lossOffset: 0, exemptionUsed: 0, taxableGain: 0, tax: 0 },
+    { term: "LTCG", regime: "new", rate: 0.125, grossGains: 0, grossLosses: 0, lossOffset: 0, exemptionUsed: 0, taxableGain: 0, tax: 0 },
   ];
   let intradayPnl = 0;
   let intradayTurnover = 0;
@@ -248,29 +249,19 @@ export function buildCapitalGainsReport(fills: readonly Fill[], financialYearSta
     else bucket.grossLosses -= lot.grossPnl;
   }
 
-  let unabsorbedStcl = 0;
-  let unabsorbedLtcl = 0;
-  let grossStcg = 0;
-  let grossLtcg = 0;
-  for (const bucket of buckets) {
-    bucket.netGain = bucket.grossGains - bucket.grossLosses;
-    bucket.taxableGain = Math.max(bucket.netGain, 0);
-    if (bucket.term === "STCG") {
-      grossStcg += bucket.netGain;
-      unabsorbedStcl += Math.max(-bucket.netGain, 0);
-    } else {
-      grossLtcg += bucket.netGain;
-      unabsorbedLtcl += Math.max(-bucket.netGain, 0);
-    }
-  }
-  for (const bucket of buckets) {
-    if (bucket.term !== "LTCG") continue;
+  const [stOld, stNew, ltOld, ltNew] = buckets as [CapitalGainsBucket, CapitalGainsBucket, CapitalGainsBucket, CapitalGainsBucket];
+  const grossStcg = stOld.grossGains + stNew.grossGains - stOld.grossLosses - stNew.grossLosses;
+  const grossLtcg = ltOld.grossGains + ltNew.grossGains - ltOld.grossLosses - ltNew.grossLosses;
+  for (const bucket of buckets) bucket.taxableGain = bucket.grossGains;
+  let unabsorbedLtcl = ltOld.grossLosses + ltNew.grossLosses;
+  for (const bucket of [ltNew, ltOld]) {
     const offset = Math.min(unabsorbedLtcl, bucket.taxableGain);
     bucket.lossOffset += offset;
     bucket.taxableGain -= offset;
     unabsorbedLtcl -= offset;
   }
-  for (const bucket of buckets) {
+  let unabsorbedStcl = stOld.grossLosses + stNew.grossLosses;
+  for (const bucket of [stNew, stOld, ltNew, ltOld]) {
     const offset = Math.min(unabsorbedStcl, bucket.taxableGain);
     bucket.lossOffset += offset;
     bucket.taxableGain -= offset;
@@ -278,13 +269,13 @@ export function buildCapitalGainsReport(fills: readonly Fill[], financialYearSta
   }
   const exemptionLimit = financialYearStart < 2024 ? 100000 : 125000;
   let exemptionRemaining = exemptionLimit;
+  for (const bucket of [ltNew, ltOld]) {
+    bucket.exemptionUsed = Math.min(exemptionRemaining, bucket.taxableGain);
+    bucket.taxableGain -= bucket.exemptionUsed;
+    exemptionRemaining -= bucket.exemptionUsed;
+  }
   let baseTax = 0;
   for (const bucket of buckets) {
-    if (bucket.term === "LTCG") {
-      bucket.exemptionUsed = Math.min(exemptionRemaining, bucket.taxableGain);
-      bucket.taxableGain -= bucket.exemptionUsed;
-      exemptionRemaining -= bucket.exemptionUsed;
-    }
     bucket.tax = bucket.taxableGain * bucket.rate;
     baseTax += bucket.tax;
   }
@@ -315,7 +306,7 @@ export function buildCapitalGainsReport(fills: readonly Fill[], financialYearSta
       "Intraday turnover is the sum of absolute matched-round profits and losses, not traded notional or a determination of tax-audit applicability. Intraday and overnight-short business taxes/loss setoffs are not computed.",
       "STCG includes exactly twelve calendar months; LTCG requires more than twelve months. The first anniversary of February 29 is February 28. Unmatched open lots are unrealised and excluded.",
       "Gross price P&L only: supplied fees, brokerage, STT and other charges are not deducted under the requested simplification. This is not a claim that all brokerage or transfer expenses are legally nondeductible; section 48 has its own rules and excludes STT.",
-      "Each term/rate bucket is internally netted first; remaining LTCL offsets LT old then new; remaining STCL offsets ST old, ST new, LT old, LT new. The exemption offsets LT old then new. This deterministic convention is not an optimal tax allocation claim.",
+      "Losses are set off against the highest-rate gains they may legally reduce, as section 70 lets the taxpayer choose: LTCL against LT 12.5% then 10%; STCL against ST 20%, ST 15%, LT 12.5%, LT 10%. The exemption is then claimed against LT 12.5% before 10%. Only FY2024-25 has two rates per term.",
       "The LTCG exemption is shared across the FY: 100000 before FY2024-25, 125000 from FY2024-25, including its pre-July-23 gains. Rates change on July 23, 2024, not at the FY boundary.",
       "Only supplied current-FY capital losses and gains are considered: no external holdings, brought-forward losses, carry-forward eligibility, basic-exemption shortfall, slab computation, section 87A rebate, surcharge, deductions, or treaty relief. Health and education cess is 4% of estimated base tax.",
       "No corporate-action cost adjustments, pre-2018 grandfathered basis, indexation, or foreign/non-qualifying assets are modelled; input prices must already reflect any required basis adjustments. This section-112A estimate is for FY2018-19 onwards, not earlier tax regimes.",

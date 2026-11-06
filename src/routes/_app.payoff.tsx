@@ -17,6 +17,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import {
   MAX_LEGS,
   draftFromSearch,
+  istIsoDate,
   loadStoredSearch,
   parsePayoffSearch,
   searchFromDraft,
@@ -36,12 +37,7 @@ export const Route = createFileRoute("/_app/payoff")({
 let legSequence = 0;
 const newLegId = () => `leg-${++legSequence}`;
 
-function localIsoDate(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
+const DAY_MS = 86_400_000;
 const DEFAULT_EXPIRY_DAYS = 7;
 const MIN_VOLATILITY_PCT = 1;
 
@@ -50,20 +46,20 @@ function PayoffLab() {
   const navigate = useNavigate({ from: Route.fullPath });
   const isMobile = useIsMobile();
   const [draft, setDraft] = useState<LabDraft>(() => draftFromSearch(search, newLegId));
-  // The viewer's date is only known in the browser; null during the server render.
+  // Today's IST date is only known in the browser; null during the server render.
   const [today, setToday] = useState<string | null>(null);
 
   useEffect(() => {
     const now = new Date();
-    setToday(localIsoDate(now));
+    setToday(istIsoDate(now));
     // A shared link wins; an empty URL resumes the last session on this browser.
     const resumed = Object.keys(search).length === 0 ? loadStoredSearch(window.localStorage) : null;
     setDraft((current) => {
       const next = resumed ? draftFromSearch(resumed, newLegId) : current;
       if (next.contract.expiry !== "") return next;
-      const expiry = new Date(now);
-      expiry.setDate(now.getDate() + DEFAULT_EXPIRY_DAYS);
-      return { ...next, contract: { ...next.contract, expiry: localIsoDate(expiry) } };
+      // IST has no daylight saving, so seven 24-hour days are seven IST calendar days.
+      const expiry = istIsoDate(new Date(now.getTime() + DEFAULT_EXPIRY_DAYS * DAY_MS));
+      return { ...next, contract: { ...next.contract, expiry } };
     });
     // Read the URL once on arrival; afterwards the draft drives the URL, not the reverse.
     // eslint-disable-next-line react-hooks/exhaustive-deps
