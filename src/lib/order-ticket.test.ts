@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { BSE_UNSUPPORTED_MESSAGE } from "@shared/domain/paper-trading/order-routing";
 import { buildTicketOrder, type OrderTicketInput } from "./order-ticket";
 
 const base: OrderTicketInput = {
@@ -15,6 +16,14 @@ const base: OrderTicketInput = {
 };
 
 describe("buildTicketOrder", () => {
+  test("a BSE ticket is refused with the reason: there is no live BSE feed to fill it", () => {
+    for (const type of ["MKT", "LMT", "SL"] as const) {
+      expect(
+        buildTicketOrder({ ...base, exchange: "BSE", type, limitPrice: "1312", triggerPrice: "1310" })
+      ).toEqual({ ok: false, error: BSE_UNSUPPORTED_MESSAGE });
+    }
+  });
+
   test("stop-loss limit sends the trigger and limit separately", () => {
     expect(buildTicketOrder({ ...base, triggerPrice: "1310", limitPrice: "1312.5" })).toEqual({
       ok: true,
@@ -71,13 +80,5 @@ describe("buildTicketOrder", () => {
 
   test("market and limit orders still reject invalid bracket prices", () => {
     expect(buildTicketOrder({ ...base, type: "LMT", limitPrice: "1300", stopLoss: "-5" }).ok).toBe(false);
-  });
-
-  test("orders go to the selected exchange", () => {
-    expect(buildTicketOrder({ ...base, exchange: "BSE", type: "MKT" })).toMatchObject({ ok: true, order: { exchange: "BSE" } });
-    expect(buildTicketOrder({ ...base, exchange: "BSE", type: "LMT", limitPrice: "1300" })).toMatchObject({
-      ok: true,
-      order: { type: "LIMIT", exchange: "BSE", limitPrice: 1300 },
-    });
   });
 });

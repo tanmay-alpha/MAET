@@ -448,6 +448,53 @@ describe("projected execution margin", () => {
     );
   });
 
+  it("never blocks a pure reduction of an underwater position on margin", () => {
+    // Long 100 @ 1,000 now at 300 with 20,000 cash: equity is 20,000 - 70,000 < 0. Selling
+    // 50 frees 10,000 of margin; refusing it would only keep the account more exposed.
+    const reduction = order({ side: "SELL", quantity: 50 });
+    const reduced = executePaperFill(
+      request(
+        reduction,
+        liveQuote(300),
+        account(reduction, [position(100, 1000, -70_000)], 20_000)
+      )
+    );
+    expect(reduced.account.positions[0].quantity).toBe(50);
+    expect(reduced.account.allocatedMargin).toBe(10_000);
+
+    // Adding to the same underwater position is still refused.
+    const increase = order({ side: "BUY", quantity: 1 });
+    expectExecutionError(
+      () =>
+        executePaperFill(
+          request(
+            increase,
+            liveQuote(300),
+            account(increase, [position(100, 1000, -70_000)], 20_000)
+          )
+        ),
+      "INSUFFICIENT_MARGIN"
+    );
+  });
+
+  it("marks other positions at the freshest price it is given", () => {
+    // INFY long 100 @ 1,000 was last stored with 0 unrealised P&L; its live mark is 300.
+    const infy = { ...position(100, 1000, 0), symbol: "INFY" };
+    const paperOrder = order({ side: "BUY", quantity: 60 });
+    const paperAccount = account(paperOrder, [infy], 100_000);
+    expect(() =>
+      executePaperFill(request(paperOrder, liveQuote(1000), paperAccount))
+    ).not.toThrow();
+    expectExecutionError(
+      () =>
+        executePaperFill({
+          ...request(paperOrder, liveQuote(1000), paperAccount),
+          marks: { INFY: 300 },
+        }),
+      "INSUFFICIENT_MARGIN"
+    );
+  });
+
   it("includes slippage and fees in post-fill equity", () => {
     const paperOrder = order({
       side: "BUY",

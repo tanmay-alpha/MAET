@@ -1,4 +1,5 @@
 import type { PaperOrderDraft } from "@/hooks/use-paper-account";
+import { BSE_UNSUPPORTED_MESSAGE } from "@shared/domain/paper-trading/order-routing";
 
 export type TicketOrderType = "MKT" | "LMT" | "SL";
 
@@ -26,6 +27,7 @@ function positivePrice(raw: string): number | null {
 /** Validates the ticket and builds the paper order command it describes. */
 export function buildTicketOrder(input: OrderTicketInput): OrderTicketResult {
   const { symbol, exchange, side, type, quantity } = input;
+  if (exchange === "BSE") return { ok: false, error: BSE_UNSUPPORTED_MESSAGE };
   if (!quantity) return { ok: false, error: "Quantity must be a positive integer." };
 
   // Stop-loss limit orders take no bracket and hide its inputs, so leftover values from

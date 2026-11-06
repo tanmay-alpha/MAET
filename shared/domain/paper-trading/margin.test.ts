@@ -191,4 +191,82 @@ describe("projected post-trade margin", () => {
     expect(result.allocatedMarginAfter).toBe(2002);
     expect(result.freeMarginAfter).toBe(97_986);
   });
+
+  describe("marks for the other open positions", () => {
+    // Cash 100,000; INFY long 100 @ 1,000 whose stored unrealised P&L (from its last fill)
+    // is 0, but whose freshest mark is 300. The order buys 60 RELIANCE @ 1,000.
+    const infy = { ...position(100, 1000, 0), symbol: "INFY" };
+    const buy60 = () => ({
+      account: account(100_000, [infy]),
+      symbol: "RELIANCE",
+      quote: quote(1000),
+      reconciliation: reconcilePosition({
+        existingQuantity: 0,
+        existingAveragePrice: 0,
+        side: "BUY",
+        fillQuantity: 60,
+        fillPrice: 1000,
+      }),
+      fillPrice: 1000,
+      fees: 0,
+      projectedPositions: [infy, position(60, 1000)],
+    });
+
+    it("values them at the given mark instead of their stored unrealised P&L", () => {
+      const result = calculateProjectedMarginAfterFill({ ...buy60(), marks: { INFY: 300 } });
+
+      // uPnL 100 x (300 - 1,000) = -70,000, so equity is 30,000 before and after.
+      expect(result.equityBefore).toBe(30_000);
+      expect(result.equityAfter).toBe(30_000);
+      // Margin 100 x 1,000 / 5 + 60 x 1,000 / 5 = 32,000 > 30,000 of equity.
+      expect(result.allocatedMarginAfter).toBe(32_000);
+      expect(result.freeMarginAfter).toBe(-2_000);
+      expect(result.sufficient).toBe(false);
+    });
+
+    it("falls back to the stored unrealised P&L only when no mark is known", () => {
+      const result = calculateProjectedMarginAfterFill(buy60());
+      expect(result.equityAfter).toBe(100_000);
+      expect(result.sufficient).toBe(true);
+    });
+
+    it("marks short positions against the given price", () => {
+      const short = { ...position(-100, 1000, 0), symbol: "INFY" };
+      const result = calculateProjectedMarginAfterFill({
+        ...buy60(),
+        account: account(100_000, [short]),
+        projectedPositions: [short, position(60, 1000)],
+        marks: { INFY: 1200 },
+      });
+      // A short of 100 from 1,000 marked at 1,200 loses 20,000.
+      expect(result.equityAfter).toBe(80_000);
+    });
+  });
+
+  it("flags a fill that only reduces exposure", () => {
+    const underwater = position(100, 1000, -70_000);
+    const sell = (fillQuantity: number) =>
+      calculateProjectedMarginAfterFill({
+        account: account(20_000, [underwater]),
+        symbol: "RELIANCE",
+        quote: quote(300),
+        reconciliation: reconcilePosition({
+          existingQuantity: 100,
+          existingAveragePrice: 1000,
+          side: "SELL",
+          fillQuantity,
+          fillPrice: 300,
+        }),
+        fillPrice: 300,
+        fees: 0,
+        projectedPositions: fillQuantity < 100 ? [position(100 - fillQuantity, 1000)] : fillQuantity > 100 ? [position(100 - fillQuantity, 300)] : [],
+      });
+
+    const half = sell(50);
+    expect(half.sufficient).toBe(false);
+    expect(half.reducesExposure).toBe(true);
+    expect(sell(100).reducesExposure).toBe(true);
+    // A flip opens a new short: not a pure reduction.
+    expect(sell(150).reducesExposure).toBe(false);
+  });
 });

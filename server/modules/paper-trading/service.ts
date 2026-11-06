@@ -27,9 +27,12 @@ import type {
 } from "./contracts";
 import type { PaperDatabase, PaperTradingReadRepository, PaperTradingWriteRepository } from "./repository";
 import { createPostgresPaperReadRepository } from "./postgres-repository";
-import { applyFill, paperExecutionPolicy, type AppliedFill } from "./fill-writer";
+import { applyFill, executableStreamQuote, paperExecutionPolicy, type AppliedFill } from "./fill-writer";
+import { MARGIN_CALL_REASON, paperTradingLiquidationService } from "./liquidation-service";
 import { ExchangeSchema, parseExecutionQuote, evaluateExecutionQuote } from "@shared/types/market";
 import { PaperExecutionError } from "@shared/domain/paper-trading/execution";
+import { getPositionCloseSide } from "@shared/domain/paper-trading/margin";
+import { BSE_UNSUPPORTED_MESSAGE } from "@shared/domain/paper-trading/order-routing";
 
 export interface PaperTradingServiceDependencies {
   database?: PaperDatabase;
@@ -134,6 +137,50 @@ function parseOrderTerms(command: PaperOrderCommand): OrderTerms {
   };
 }
 
+/**
+ * Gate for a new order, under the account lock. A LIQUIDATED account accepts nothing. A
+ * LIQUIDATION_PENDING account, and any BSE instrument, accept only a MARKET order without
+ * brackets that reduces the open position on the same exchange: it executes now or is
+ * rejected now, so it can neither rest unfillable nor add exposure during a margin call.
+ */
+async function assertOrderAllowed(
+  write: PaperTradingWriteRepository,
+  account: PaperAccountRow,
+  terms: OrderTerms
+): Promise<void> {
+  if (account.status === "LIQUIDATED") {
+    throw new PaperAccountLockedError(`Account is in ${account.status} state. Orders disabled.`);
+  }
+  const pending = account.status === "LIQUIDATION_PENDING";
+  const bse = terms.exchange === "BSE";
+  if (!pending && !bse) {
+    return;
+  }
+
+  const position = await write.findPositionForUpdate({
+    userId: account.userId,
+    generation: account.generation,
+    symbol: terms.symbol,
+    exchange: terms.exchange,
+  });
+  const reducesPosition =
+    position !== undefined && terms.side === getPositionCloseSide(position) && terms.qty <= position.totalShares;
+  const closingMarketOrder =
+    reducesPosition && terms.type === "MARKET" && terms.stopLossPrice === null && terms.takeProfitPrice === null;
+  if (bse && !closingMarketOrder) {
+    throw new PaperValidationError(
+      reducesPosition
+        ? `${BSE_UNSUPPORTED_MESSAGE}; an existing BSE position can only be closed with a MARKET order without brackets`
+        : BSE_UNSUPPORTED_MESSAGE
+    );
+  }
+  if (pending && !closingMarketOrder) {
+    throw new PaperAccountLockedError(
+      "Account is in LIQUIDATION_PENDING state: until the margin call is resolved only MARKET orders (without brackets) that reduce an open position are accepted"
+    );
+  }
+}
+
 export class PaperTradingService {
   private readonly quoteLoader: (exchange: "NSE" | "BSE", symbol: string) => Promise<unknown>;
   private readonly marketPhase: (now: Date) => MarketPhase;
@@ -227,15 +274,18 @@ export class PaperTradingService {
     const initialCash = getConfig().paperInitialCashInr;
     const { idempotencyKey } = keys;
 
-    // A retried request must get its original result even once the session or quote is gone.
-    if (idempotencyKey) {
-      const replay = await withSerializablePaperTransaction(async (repos) => {
-        const account = await repos.write.ensureAccountForUpdate({ userId, initialCash });
-        return this.findReplay(repos.write, account, idempotencyKey, terms);
-      });
-      if (replay) {
-        return replay;
+    // A retried request must get its original result even once the session or quote is gone;
+    // an order the account cannot take is refused before any quote is fetched for it.
+    const replay = await withSerializablePaperTransaction(async (repos) => {
+      const account = await repos.write.ensureAccountForUpdate({ userId, initialCash });
+      const existing = idempotencyKey ? await this.findReplay(repos.write, account, idempotencyKey, terms) : null;
+      if (!existing) {
+        await assertOrderAllowed(repos.write, account, terms);
       }
+      return existing;
+    });
+    if (replay) {
+      return replay;
     }
 
     const phase = this.marketPhase(this.now());
@@ -280,9 +330,7 @@ export class PaperTradingService {
 
     return withSerializablePaperTransaction(async (repos) => {
       const accountRow = await repos.write.ensureAccountForUpdate({ userId, initialCash });
-      if (accountRow.status !== "ACTIVE") {
-        throw new PaperAccountLockedError(`Account is in ${accountRow.status} state. Orders disabled.`);
-      }
+      await assertOrderAllowed(repos.write, accountRow, terms);
 
       if (idempotencyKey) {
         const replay = await this.findReplay(repos.write, accountRow, idempotencyKey, terms);
@@ -336,6 +384,13 @@ export class PaperTradingService {
         throw err;
       }
 
+      // A user close during a margin call: re-check the account in this transaction, which
+      // releases it once the marked equity covers maintenance margin again.
+      const account =
+        accountRow.status === "LIQUIDATION_PENDING"
+          ? await this.resettleMarginCall(repos.write, userId, applied.account)
+          : applied.account;
+
       await repos.write.insertOutboxEvents([
         buildOrderAcceptedEvent({
           userId,
@@ -349,12 +404,30 @@ export class PaperTradingService {
       return {
         order: applied.order,
         fill: applied.fill,
-        account: applied.account,
+        account,
         position: applied.position,
         idempotentReplay: false,
         asOf: this.now(),
       };
     });
+  }
+
+  /**
+   * Re-runs the margin-call settlement after a user's closing fill: positions are marked at
+   * their live executable quote, else their last stored mark, so the account is released as
+   * soon as it is healthy, liquidated once flat and still breached, and otherwise left pending.
+   */
+  private async resettleMarginCall(
+    write: PaperTradingWriteRepository,
+    userId: string,
+    afterFill: PaperAccountRow
+  ): Promise<PaperAccountRow> {
+    const outcome = await paperTradingLiquidationService.settleWithinTransaction(write, {
+      userId,
+      reason: afterFill.lockReason ?? MARGIN_CALL_REASON,
+      quoteFor: executableStreamQuote,
+    });
+    return outcome ? ((await write.findAccountForUpdate({ userId })) ?? afterFill) : afterFill;
   }
 
   private async placeRestingOrder(
@@ -368,9 +441,7 @@ export class PaperTradingService {
         initialCash: getConfig().paperInitialCashInr,
       });
 
-      if (accountRow.status !== "ACTIVE") {
-        throw new PaperAccountLockedError(`Account is in ${accountRow.status} state. Orders disabled.`);
-      }
+      await assertOrderAllowed(repos.write, accountRow, terms);
 
       if (keys.idempotencyKey) {
         const replay = await this.findReplay(repos.write, accountRow, keys.idempotencyKey, terms);

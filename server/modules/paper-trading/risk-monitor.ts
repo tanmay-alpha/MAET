@@ -3,9 +3,11 @@ import { getDb } from "../../data/drizzle/client";
 import { paperAccounts } from "../../db/schema";
 import { evaluateExecutionQuote, type ExecutionQuote, type Tick } from "@shared/types";
 import { paperExecutionPolicy } from "./fill-writer";
-import { paperTradingLiquidationService, type PaperTradingLiquidationService } from "./liquidation-service";
-
-const MARGIN_CALL_REASON = "MARGIN_CALL_LIQUIDATION";
+import {
+  MARGIN_CALL_REASON,
+  paperTradingLiquidationService,
+  type PaperTradingLiquidationService,
+} from "./liquidation-service";
 
 function quoteKey(exchange: string, symbol: string): string {
   return `${exchange}:${symbol.trim().toUpperCase()}`;

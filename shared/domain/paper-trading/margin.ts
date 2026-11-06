@@ -13,6 +13,11 @@ export interface ProjectedMarginResult {
   maintenanceMarginAfter: number;
   freeMarginAfter: number;
   sufficient: boolean;
+  /**
+   * The fill opens nothing and lowers allocated margin: a partial or full close. Such a fill
+   * can only shrink exposure, so callers never refuse it for lack of margin.
+   */
+  reducesExposure: boolean;
 }
 
 function isSameSymbol(left: string, right: string): boolean {
@@ -60,6 +65,23 @@ export function calculateAccountMargins(
   };
 }
 
+/**
+ * Freshest known price per position, keyed like `PaperPosition.symbol`. Callers supply the
+ * newest real mark they have (a live quote, else the position's last stored mark); a position
+ * without an entry here keeps its stored unrealised P&L.
+ */
+export type PositionMarks = Readonly<Record<string, number>>;
+
+function markedUnrealisedPnl(position: PaperPosition, symbol: string, quotePrice: number, marks: PositionMarks | undefined): number {
+  if (isSameSymbol(position.symbol, symbol)) {
+    return calculateMarkedUnrealisedPnl(position, quotePrice);
+  }
+  const mark = marks?.[position.symbol];
+  return mark !== undefined && Number.isFinite(mark) && mark > 0
+    ? calculateMarkedUnrealisedPnl(position, mark)
+    : position.unrealisedPnl;
+}
+
 export function calculateProjectedMarginAfterFill(input: {
   account: PaperAccount;
   symbol: string;
@@ -69,6 +91,8 @@ export function calculateProjectedMarginAfterFill(input: {
   fees: number;
   projectedPositions: PaperPosition[];
   leverage?: number;
+  /** Freshest marks for the account's other positions; the filled symbol uses `quote`. */
+  marks?: PositionMarks;
 }): ProjectedMarginResult {
   const leverage = input.leverage ?? DEFAULT_PAPER_LEVERAGE;
   if (!Number.isFinite(input.fillPrice) || input.fillPrice <= 0) {
@@ -83,12 +107,7 @@ export function calculateProjectedMarginAfterFill(input: {
 
   let totalMarkedUnrealisedPnlBefore = 0;
   for (const position of input.account.positions) {
-    totalMarkedUnrealisedPnlBefore += isSameSymbol(
-      position.symbol,
-      input.symbol
-    )
-      ? calculateMarkedUnrealisedPnl(position, input.quote.price)
-      : position.unrealisedPnl;
+    totalMarkedUnrealisedPnlBefore += markedUnrealisedPnl(position, input.symbol, input.quote.price, input.marks);
   }
 
   const equityBefore =
@@ -100,12 +119,7 @@ export function calculateProjectedMarginAfterFill(input: {
 
   let projectedTotalUnrealisedPnl = 0;
   for (const position of input.projectedPositions) {
-    projectedTotalUnrealisedPnl += isSameSymbol(
-      position.symbol,
-      input.symbol
-    )
-      ? calculateMarkedUnrealisedPnl(position, input.quote.price)
-      : position.unrealisedPnl;
+    projectedTotalUnrealisedPnl += markedUnrealisedPnl(position, input.symbol, input.quote.price, input.marks);
   }
 
   const equityAfter =
@@ -126,5 +140,8 @@ export function calculateProjectedMarginAfterFill(input: {
     sufficient:
       allocatedMarginAfter <= equityAfter &&
       freeMarginAfter >= 0,
+    reducesExposure:
+      input.reconciliation.openedQuantity === 0 &&
+      allocatedMarginAfter < allocatedMarginBefore,
   };
 }

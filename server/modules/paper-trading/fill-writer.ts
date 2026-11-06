@@ -1,9 +1,12 @@
 import { getConfig } from "../../config";
 import {
   ExchangeSchema,
+  evaluateExecutionQuote,
   type ExecutionQuote,
   type ExecutionQuotePolicyConfig,
 } from "@shared/types/market";
+import type { PositionMarks } from "@shared/domain/paper-trading/margin";
+import { quoteStore } from "../../domain/market/quote-store";
 import type { EquityChargeBreakdown } from "@shared/domain/costs/indian-equity-charges";
 import { PAPER_CHARGE_PRODUCT, executePaperFill } from "@shared/domain/paper-trading/execution";
 import type {
@@ -37,6 +40,28 @@ export function paperExecutionPolicy(): ExecutionQuotePolicyConfig {
   };
 }
 
+export type LiveQuoteLookup = (exchange: string, symbol: string) => ExecutionQuote | undefined;
+
+/** The streamed tick for the instrument while it is still executable under the paper policy. */
+export const executableStreamQuote: LiveQuoteLookup = (exchange, symbol) => {
+  const tick = quoteStore.get(symbol);
+  if (!tick || tick.exchange !== exchange || !evaluateExecutionQuote(tick, symbol, paperExecutionPolicy()).executable) {
+    return undefined;
+  }
+  return tick;
+};
+
+/**
+ * Freshest mark for a position: its live executable quote, else its last stored mark (the
+ * quote of its latest fill, which is never older than the entry price). Null only for legacy
+ * rows that carry no stored mark at all.
+ */
+export function freshestPositionMark(position: PaperPositionRow, liveQuoteFor: LiveQuoteLookup): number | null {
+  const live = liveQuoteFor(position.exchange, position.symbol);
+  if (live) return live.price;
+  return position.lastQuotePrice === null ? null : Number(position.lastQuotePrice);
+}
+
 const FILLABLE_ORDER_STATUSES: Partial<Record<PaperOrderRow["status"], true>> = {
   PENDING: true,
   TRIGGERED: true,
@@ -60,6 +85,10 @@ function toDomainPosition(row: PaperPositionRow, symbolKey: string): PaperPositi
  * other exchange is a different position, so it gets a distinct key: it still counts towards
  * margin but can never be reconciled against this order's fill.
  */
+function domainSymbolKey(row: PaperPositionRow, order: PaperOrderRow): string {
+  return row.symbol === order.symbol && row.exchange !== order.exchange ? `${row.symbol}@${row.exchange}` : row.symbol;
+}
+
 function toDomainAccount(account: PaperAccountRow, positions: PaperPositionRow[], order: PaperOrderRow): PaperAccount {
   return {
     version: 3,
@@ -69,12 +98,21 @@ function toDomainAccount(account: PaperAccountRow, positions: PaperPositionRow[]
     maintenanceMargin: Number(account.maintenanceMargin),
     realisedPnl: Number(account.realisedPnl),
     status: account.status,
-    positions: positions.map((row) =>
-      toDomainPosition(row, row.symbol === order.symbol && row.exchange !== order.exchange ? `${row.symbol}@${row.exchange}` : row.symbol)
-    ),
+    positions: positions.map((row) => toDomainPosition(row, domainSymbolKey(row, order))),
     orders: [],
     fills: [],
   };
+}
+
+/** Marks for every position other than the order's own instrument, keyed like the domain account. */
+function marksFor(positions: PaperPositionRow[], order: PaperOrderRow, liveQuoteFor: LiveQuoteLookup): PositionMarks {
+  const marks: Record<string, number> = {};
+  for (const row of positions) {
+    if (row.symbol === order.symbol && row.exchange === order.exchange) continue;
+    const mark = freshestPositionMark(row, liveQuoteFor);
+    if (mark !== null) marks[domainSymbolKey(row, order)] = mark;
+  }
+  return marks;
 }
 
 function toDomainOrder(order: PaperOrderRow): PaperOrder {
@@ -115,6 +153,12 @@ export interface ApplyFillInput {
   ledgerSourceType: "FILL" | "LIQUIDATION_FILL";
   now: Date;
   createId: () => string;
+  /**
+   * Live executable quote per instrument, used to mark the account's other positions in the
+   * margin check (default: the streamed tick while executable). Positions without one are
+   * marked at their last stored mark.
+   */
+  liveQuoteFor?: LiveQuoteLookup;
 }
 
 export interface AppliedFill {
@@ -157,6 +201,7 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
     quote: input.quote,
     reason: input.reason,
     exchange,
+    marks: marksFor(input.positions, order, input.liveQuoteFor ?? executableStreamQuote),
     policy: paperExecutionPolicy(),
   });
   const { fill: fillPlan, charges } = execution;

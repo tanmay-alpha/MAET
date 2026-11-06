@@ -201,10 +201,10 @@ describe("paper live feed", () => {
     const cancelled = `LIVC${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
     const service = serviceQuoting(105);
     await service.placeOrder({ userId, command: { symbol: held, exchange: "NSE", side: "BUY", type: "MARKET", qty: 1 } });
-    await service.placeOrder({
-      userId,
-      command: { symbol: resting, exchange: "BSE", side: "BUY", type: "LIMIT", limitPrice: 100, qty: 1 },
-    });
+    // New BSE orders are refused (no BSE feed); a working one placed before that rule is still listed.
+    await getDb()
+      .insert(paperOrders)
+      .values({ userId, symbol: resting, exchange: "BSE", side: "BUY", type: "LIMIT", status: "PENDING", qty: 1, limitPrice: "100.0000" });
     const toCancel = await service.placeOrder({
       userId,
       command: { symbol: cancelled, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 100, qty: 1 },

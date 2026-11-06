@@ -10,6 +10,7 @@ import {
 } from "../costs/indian-equity-charges";
 import {
   calculateProjectedMarginAfterFill,
+  type PositionMarks,
 } from "./margin";
 import {
   reconcilePosition,
@@ -52,6 +53,8 @@ export type PaperExecutionRequest = {
   reason: PaperExecutionReason;
   /** Exchange the order routes to; statutory charges depend on it. Defaults to the quote's exchange. */
   exchange?: EquityExchange;
+  /** Freshest marks for the account's other positions (see `PositionMarks`). */
+  marks?: PositionMarks;
   policy?: {
     allowDelayed?: boolean;
     maxAgeMs?: number;
@@ -498,14 +501,12 @@ export function executePaperFill(
     fees: plan.fees,
     projectedPositions,
     leverage: PAPER_LEVERAGE,
+    marks: request.marks,
   });
-  const forcedLiquidationReduction =
-    request.reason === "MARGIN_LIQUIDATION" &&
-    reconciliation.openedQuantity === 0 &&
-    projectedMargin.allocatedMarginAfter <
-      projectedMargin.allocatedMarginBefore;
 
-  if (!projectedMargin.sufficient && !forcedLiquidationReduction) {
+  // A close or partial close is never refused on margin (a liquidation or a user exit alike):
+  // it only releases margin, and refusing it would keep an underwater account more exposed.
+  if (!projectedMargin.sufficient && !projectedMargin.reducesExposure) {
     throw new PaperExecutionError(
       "INSUFFICIENT_MARGIN",
       "Execution fill rejected: projected free margin is below zero"

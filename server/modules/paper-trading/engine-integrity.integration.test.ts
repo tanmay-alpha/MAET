@@ -7,7 +7,8 @@ import { resetConfigForTests } from "../../config";
 import { computeIndianEquityCharges } from "@shared/domain/costs/indian-equity-charges";
 import type { MarketPhase } from "../../domain/market/clock";
 import type { Tick } from "@shared/types";
-import { createPaperTradingService } from "./service";
+import { BSE_UNSUPPORTED_MESSAGE } from "@shared/domain/paper-trading/order-routing";
+import { createPaperTradingService, type PaperTradingService } from "./service";
 import { paperTradingTickProcessor } from "./tick-processor";
 import { PaperRiskMonitor } from "./risk-monitor";
 import { PaperIdempotencyConflictError, PaperValidationError } from "./errors";
@@ -63,6 +64,34 @@ async function fillsForOrder(orderId: string) {
 
 async function positionsFor(userId: string) {
   return getDb().select().from(paperPositions).where(eq(paperPositions.userId, userId));
+}
+
+/** A position written directly, as one opened before the current order rules existed. */
+async function seedLegacyPosition(
+  service: PaperTradingService,
+  userId: string,
+  position: { symbol: string; exchange: "NSE" | "BSE"; side: "LONG" | "SHORT"; qty: number; price: number }
+): Promise<void> {
+  await service.getState({ userId });
+  const price = position.price.toFixed(4);
+  const margin = (position.qty * position.price) / 5;
+  await getDb().insert(paperPositions).values({
+    userId,
+    symbol: position.symbol,
+    exchange: position.exchange,
+    side: position.side,
+    totalShares: position.qty,
+    averageEntryPrice: price,
+    marginLocked: margin.toFixed(4),
+    lastQuotePrice: price,
+    lastQuoteSource: "angelone",
+    lastQuoteQuality: "live",
+    lastQuoteTimestamp: new Date(),
+  });
+  await getDb()
+    .update(paperAccounts)
+    .set({ allocatedMargin: margin.toFixed(4), maintenanceMargin: (margin * 0.8).toFixed(4) })
+    .where(eq(paperAccounts.userId, userId));
 }
 
 /**
@@ -171,24 +200,29 @@ describe("Paper trading engine integrity", () => {
   });
 
   it("A6: fills charge the statutory Indian equity schedule for the order's exchange", async () => {
+    // New BSE orders are refused (no BSE feed); closing a legacy BSE holding still charges BSE rates.
     const symbol = uniqueSymbol("FEE");
     const service = makeService({ prices: { [symbol]: 1000 } });
     const userId = await createTestUser();
+    await seedLegacyPosition(service, userId, { symbol, exchange: "BSE", side: "LONG", qty: 40, price: 1000 });
 
     const result = await service.placeOrder({
       userId,
-      command: { symbol, exchange: "BSE", side: "BUY", type: "MARKET", qty: 40 },
+      command: { symbol, exchange: "BSE", side: "SELL", type: "MARKET", qty: 40 },
     });
 
     const fillPrice = Number(result.fill?.fillPrice);
     const expected = computeIndianEquityCharges({
       exchange: "BSE",
       product: "DELIVERY",
-      side: "BUY",
+      side: "SELL",
       turnoverInr: fillPrice * 40,
     });
     expect(Number(result.fill?.fees)).toBeCloseTo(expected.total, 2);
-    expect(Number(result.account.cashBalance)).toBeCloseTo(1000000 - expected.total, 2);
+    expect(Number(result.account.cashBalance)).toBeCloseTo(
+      1000000 + Number(result.fill?.realizedPnl) - expected.total,
+      2
+    );
 
     const feeEntries = await getDb()
       .select()
@@ -196,6 +230,93 @@ describe("Paper trading engine integrity", () => {
       .where(and(eq(paperLedgerEntries.userId, userId), eq(paperLedgerEntries.entryType, "EXECUTION_FEE")));
     expect(feeEntries).toHaveLength(1);
     expect(Number(feeEntries[0]?.amount)).toBeCloseTo(-expected.total, 2);
+  });
+
+  it("BSE: new BSE orders are refused before any quote is fetched; legacy BSE orders and positions can still be cancelled and closed", async () => {
+    const symbol = uniqueSymbol("BSE");
+    let quoteCalls = 0;
+    const service = createPaperTradingService({
+      database: getDb(),
+      marketPhase: () => "OPEN",
+      quoteLoader: async (exchange: "NSE" | "BSE", requested: string) => {
+        quoteCalls++;
+        return tick(requested, 1000, 100, { exchange });
+      },
+    });
+    const userId = await createTestUser();
+
+    for (const command of [
+      { symbol, exchange: "BSE", side: "BUY", type: "MARKET", qty: 5 },
+      { symbol, exchange: "BSE", side: "SELL", type: "MARKET", qty: 5 },
+      { symbol, exchange: "BSE", side: "BUY", type: "LIMIT", limitPrice: 990, qty: 5 },
+      { symbol, exchange: "bse", side: "BUY", type: "STOP_LOSS_LIMIT", limitPrice: 1010, stopPrice: 1005, qty: 5 },
+    ] as const) {
+      const error = await rejectionOf(service.placeOrder({ userId, command }));
+      expect(error).toBeInstanceOf(PaperValidationError);
+      expect((error as Error).message).toBe(BSE_UNSUPPORTED_MESSAGE);
+    }
+    expect(quoteCalls).toBe(0);
+
+    // A BSE position and a resting BSE order that predate the rule.
+    await seedLegacyPosition(service, userId, { symbol, exchange: "BSE", side: "LONG", qty: 10, price: 1000 });
+    const [legacyOrder] = await getDb()
+      .insert(paperOrders)
+      .values({ userId, symbol, exchange: "BSE", side: "SELL", type: "LIMIT", status: "PENDING", qty: 10, limitPrice: "1100.0000" })
+      .returning();
+
+    // Adding to it, flipping it, or a resting close (which could never fill) stay refused.
+    for (const command of [
+      { symbol, exchange: "BSE", side: "BUY", type: "MARKET", qty: 1 },
+      { symbol, exchange: "BSE", side: "SELL", type: "MARKET", qty: 11 },
+      { symbol, exchange: "BSE", side: "SELL", type: "LIMIT", limitPrice: 1000, qty: 10 },
+      { symbol, exchange: "BSE", side: "SELL", type: "MARKET", qty: 10, stopLossPrice: 950 },
+    ] as const) {
+      const error = await rejectionOf(service.placeOrder({ userId, command }));
+      expect(error).toBeInstanceOf(PaperValidationError);
+      expect((error as Error).message.startsWith(BSE_UNSUPPORTED_MESSAGE)).toBe(true);
+    }
+
+    const cancelled = await service.cancelOrder({ userId, orderId: legacyOrder!.id });
+    expect(cancelled.status).toBe("CANCELLED");
+
+    const closed = await service.placeOrder({
+      userId,
+      command: { symbol, exchange: "BSE", side: "SELL", type: "MARKET", qty: 10 },
+    });
+    expect(closed.order.status).toBe("FILLED");
+    expect(closed.order.exchange).toBe("BSE");
+    expect(await positionsFor(userId)).toHaveLength(0);
+    const orders = await getDb().select().from(paperOrders).where(eq(paperOrders.userId, userId));
+    expect(orders.map((order) => order.status).sort()).toEqual(["CANCELLED", "FILLED"]);
+  });
+
+  it("the margin check marks other positions at their live quote, else their last stored mark", async () => {
+    const held = uniqueSymbol("MRKH");
+    const other = uniqueSymbol("MRKO");
+    const service = makeService({ prices: { [held]: 1000, [other]: 1000 } });
+    const userId = await createTestUser();
+    await service.placeOrder({ userId, command: { symbol: held, exchange: "NSE", side: "BUY", type: "MARKET", qty: 100 } });
+    // Cash 100,000 with a long of 100 bought at ~1,000 (margin ~20,000).
+    await getDb().update(paperAccounts).set({ cashBalance: "100000.0000" }).where(eq(paperAccounts.userId, userId));
+    const buyOther = { symbol: other, exchange: "NSE", side: "BUY", type: "MARKET", qty: 60 } as const;
+
+    // The held stock now trades at 300: equity ~30,000 < margin ~32,000 after buying 60 more.
+    quoteStore.set(tick(held, 300, 100));
+    const live = await rejectionOf(service.placeOrder({ userId, command: buyOther }));
+    expect(live).toBeInstanceOf(PaperValidationError);
+    expect((live as Error).message).toContain("projected free margin is below zero");
+
+    // Without a live quote the position's last stored mark is used, not its entry price.
+    quoteStore.set(tick(held, 1000, 100, { ts: new Date(Date.now() - 60_000).toISOString() }));
+    await getDb().update(paperPositions).set({ lastQuotePrice: "300.0000" }).where(eq(paperPositions.userId, userId));
+    const stored = await rejectionOf(service.placeOrder({ userId, command: buyOther }));
+    expect(stored).toBeInstanceOf(PaperValidationError);
+    expect((stored as Error).message).toContain("projected free margin is below zero");
+
+    // At a mark of 1,000 the same order fits.
+    await getDb().update(paperPositions).set({ lastQuotePrice: "1000.0000" }).where(eq(paperPositions.userId, userId));
+    const accepted = await service.placeOrder({ userId, command: buyOther });
+    expect(accepted.order.status).toBe("FILLED");
   });
 
   it("A8: MARKET bracket orders persist plain SL/TP children", async () => {

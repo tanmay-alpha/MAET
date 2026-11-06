@@ -3,6 +3,7 @@ import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { WATCHLIST } from "@/lib/market-catalog";
 import { buildTicketOrder } from "@/lib/order-ticket";
+import { BSE_UNSUPPORTED_MESSAGE } from "@shared/domain/paper-trading/order-routing";
 import { X, TrendingUp, TrendingDown } from "lucide-react";
 
 interface QuickTradeModalProps {
@@ -10,8 +11,6 @@ interface QuickTradeModalProps {
   onClose: () => void;
   initialSymbol?: string;
   initialSide?: "BUY" | "SELL";
-  /** Exchange to trade on (e.g. the active symbol's); the user can switch it in the form. */
-  initialExchange?: "NSE" | "BSE";
 }
 
 // The form is only mounted while open, so a closed modal holds no paper-account
@@ -24,12 +23,10 @@ function QuickTradeForm({
   onClose,
   initialSymbol = "",
   initialSide = "BUY",
-  initialExchange = "NSE",
 }: Omit<QuickTradeModalProps, "isOpen">) {
   const { placeOrder, isTradingAvailable } = usePaperAccount();
   const [side, setSide] = useState<"BUY" | "SELL">(initialSide);
   const [symbol, setSymbol] = useState(initialSymbol || WATCHLIST[0].symbol);
-  const [exchange, setExchange] = useState<"NSE" | "BSE">(initialExchange);
   const [qty, setQty] = useState(1);
   const [type, setType] = useState<"MARKET" | "LIMIT">("MARKET");
   const [price, setPrice] = useState("");
@@ -77,7 +74,7 @@ function QuickTradeForm({
     }
     const ticket = buildTicketOrder({
       symbol: symbol.toUpperCase(),
-      exchange,
+      exchange: "NSE",
       side,
       type: type === "MARKET" ? "MKT" : "LMT",
       quantity: qty > 0 ? qty : null,
@@ -181,22 +178,21 @@ function QuickTradeForm({
           <div>
             <label className="block text-xs font-medium text-muted-foreground mb-1">Exchange</label>
             <div className="flex gap-1 p-0.5 bg-accent/30 rounded border border-border/40">
-              {(["NSE", "BSE"] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => setExchange(option)}
-                  aria-pressed={exchange === option}
-                  className={`flex-1 py-1 rounded text-[10px] font-bold transition-all ${
-                    exchange === option
-                      ? "bg-panel text-primary border border-border/60"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {option}
-                </button>
-              ))}
+              <span className="flex-1 py-1 rounded text-center text-[10px] font-bold bg-panel text-primary border border-border/60">
+                NSE
+              </span>
+              <button
+                type="button"
+                disabled
+                aria-describedby="quick-trade-bse-reason"
+                className="flex-1 py-1 rounded text-[10px] font-bold text-muted-foreground opacity-50 cursor-not-allowed"
+              >
+                BSE
+              </button>
             </div>
+            <p id="quick-trade-bse-reason" className="mt-1 text-[10px] text-muted-foreground">
+              {BSE_UNSUPPORTED_MESSAGE}
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
