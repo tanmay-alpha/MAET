@@ -21,9 +21,10 @@ export default defineEventHandler(async (event) => {
     // Without Redis there are no notifications to relay; answer 503 at once so
     // the client switches to polling instead of hanging on SUBSCRIBE.
     if (shared.status !== "ready") throw new Error("redis not ready");
-    // The shared client disables the offline queue; this dedicated subscriber
-    // must queue SUBSCRIBE until its own socket is connected.
-    sub = shared.duplicate({ enableOfflineQueue: true });
+    // The shared client disables the offline queue and caps commands at 1s; this
+    // dedicated subscriber must queue SUBSCRIBE until its own socket (TCP + TLS +
+    // AUTH + ready check) is up, which can exceed 1s on a cross-region Redis.
+    sub = shared.duplicate({ enableOfflineQueue: true, commandTimeout: undefined });
   } catch {
     release();
     throw createError({
@@ -49,9 +50,12 @@ export default defineEventHandler(async (event) => {
 
   try {
     await sub.subscribe(channel);
-  } catch (err) {
+  } catch {
     cleanup();
-    throw err;
+    throw createError({
+      statusCode: 503,
+      statusMessage: "Realtime notification stream temporarily unavailable. Polling active.",
+    });
   }
   if (closed) return;
 
