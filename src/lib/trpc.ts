@@ -33,6 +33,15 @@ import type {
   CreatableAlertType,
   AlertMode,
 } from "../../server/modules/alerts/contracts";
+import type { CreateBacktestJobInput, CreateSweepInput, CreateWalkForwardInput } from "@shared/strategy/contracts";
+import type {
+  BacktestJobView,
+  SweepResultView,
+  SweepView,
+  WalkForwardRunView,
+  WalkForwardWindowView,
+} from "./strategy-jobs";
+import type { SweepRobustness } from "../../server/modules/strategy-optimisation/sweep-robustness";
 
 export type {
   BreadthOverview,
@@ -81,6 +90,19 @@ async function fetchWithAuth(
   return res;
 }
 
+/** A failed tRPC call; `code` is the tRPC error code (e.g. "TOO_MANY_REQUESTS") when the server sent one. */
+export class TrpcRequestError extends Error {
+  constructor(message: string, readonly httpStatus: number, readonly code: string | undefined) {
+    super(message);
+    this.name = "TrpcRequestError";
+  }
+}
+
+async function toRequestError(res: Response, fallback: string): Promise<TrpcRequestError> {
+  const errorData = (await res.json().catch(() => ({}))) as { error?: { message?: string; data?: { code?: string } } };
+  return new TrpcRequestError(errorData.error?.message || `${fallback}: ${res.statusText}`, res.status, errorData.error?.data?.code);
+}
+
 async function trpcQuery<T>(path: string, queryParams?: Record<string, any>): Promise<T> {
   let url = apiUrl(`/api/trpc/${path}`);
   if (queryParams) {
@@ -91,10 +113,7 @@ async function trpcQuery<T>(path: string, queryParams?: Record<string, any>): Pr
   }
 
   const res = await fetchWithAuth(url);
-  if (!res.ok) {
-    const errorData = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    throw new Error(errorData.error?.message || `tRPC query failed: ${res.statusText}`);
-  }
+  if (!res.ok) throw await toRequestError(res, "tRPC query failed");
   const json = (await res.json()) as { result: { data: T } };
   return json.result.data;
 }
@@ -105,10 +124,7 @@ async function trpcMutation<TInput, TOutput>(path: string, input: TInput): Promi
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  if (!res.ok) {
-    const errorData = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    throw new Error(errorData.error?.message || `tRPC mutation failed: ${res.statusText}`);
-  }
+  if (!res.ok) throw await toRequestError(res, "tRPC mutation failed");
   const json = (await res.json()) as { result: { data: TOutput } };
   return json.result.data;
 }
@@ -420,22 +436,23 @@ export const trpc = {
     archive: createMutationProcedure<{ strategyId: string }, { archived: boolean }>("strategyDefinitions.archive"),
   },
   strategyBacktests: {
-    createJob: createMutationProcedure<any, { job: any }>("strategyBacktests.createJob"),
-    getJob: createQueryProcedure<{ jobId: string }, { job: any; snapshot: any | null }>("strategyBacktests.getJob"),
+    createJob: createMutationProcedure<CreateBacktestJobInput, { job: BacktestJobView }>("strategyBacktests.createJob"),
+    getJob: createQueryProcedure<{ jobId: string }, { job: BacktestJobView; snapshot: any | null }>("strategyBacktests.getJob"),
     cancelJob: createMutationProcedure<{ jobId: string }, { requested: boolean }>("strategyBacktests.cancelJob"),
-    listJobs: createQueryProcedure<{ strategyVersionId?: string; limit?: number }, { jobs: any[] }>("strategyBacktests.listJobs"),
+    listJobs: createQueryProcedure<{ strategyVersionId?: string; limit?: number }, { jobs: BacktestJobView[] }>("strategyBacktests.listJobs"),
     getTrades: createQueryProcedure<{ jobId: string }, { trades: any[] }>("strategyBacktests.getTrades"),
     getEquityCurve: createQueryProcedure<{ jobId: string }, { points: any[] }>("strategyBacktests.getEquityCurve"),
     compareJobs: createQueryProcedure<{ jobIds: string[] }, { snapshots: any[] }>("strategyBacktests.compareJobs"),
     getPerformance: createQueryProcedure<{ jobId: string }, { snapshot: any | null }>("strategyBacktests.getPerformance"),
   },
   strategyOptimisation: {
-    createSweep: createMutationProcedure<any, { sweep: any }>("strategyOptimisation.createSweep"),
-    getSweep: createQueryProcedure<{ sweepId: string }, { sweep: any; results: any[] }>("strategyOptimisation.getSweep"),
-    listSweeps: createQueryProcedure<{ strategyId: string }, { sweeps: any[] }>("strategyOptimisation.listSweeps"),
+    createSweep: createMutationProcedure<CreateSweepInput, { sweep: SweepView }>("strategyOptimisation.createSweep"),
+    getSweep: createQueryProcedure<{ sweepId: string }, { sweep: SweepView; results: SweepResultView[]; robustness: SweepRobustness | null }>("strategyOptimisation.getSweep"),
+    listSweeps: createQueryProcedure<{ strategyId: string }, { sweeps: SweepView[] }>("strategyOptimisation.listSweeps"),
     cancelSweep: createMutationProcedure<{ sweepId: string }, { cancelled: boolean }>("strategyOptimisation.cancelSweep"),
-    createWalkForward: createMutationProcedure<any, { run: any }>("strategyOptimisation.createWalkForward"),
-    getWalkForward: createQueryProcedure<{ runId: string }, { run: any; windows: any[] }>("strategyOptimisation.getWalkForward"),
+    createWalkForward: createMutationProcedure<CreateWalkForwardInput, { run: WalkForwardRunView }>("strategyOptimisation.createWalkForward"),
+    getWalkForward: createQueryProcedure<{ runId: string }, { run: WalkForwardRunView; windows: WalkForwardWindowView[] }>("strategyOptimisation.getWalkForward"),
+    listWalkForwards: createQueryProcedure<{ strategyId: string }, { runs: WalkForwardRunView[] }>("strategyOptimisation.listWalkForwards"),
   },
   strategyReplay: {
     create: createMutationProcedure<{ symbol: string; timeframe: string; startTimestamp: string; initialCapital?: number }, { session: any }>("strategyReplay.create"),

@@ -159,7 +159,7 @@ export function RobustnessHeatmapView({
                               isBest ? "ring-2 ring-primary font-bold shadow-lg" : ""
                             }`}
                             style={{ backgroundColor: getHeatmapColor(cell.sharpe) }}
-                            title={`${paramXName}: ${x}, ${paramYName}: ${y}\nSharpe: ${cell.sharpe.toFixed(2)}\nReturn: ${(cell.totalReturn * 100).toFixed(1)}%`}
+                            title={`${paramXName}: ${x}, ${paramYName}: ${y}\nSharpe: ${cell.sharpe.toFixed(2)}\nReturn: ${cell.totalReturn.toFixed(1)}%`}
                           >
                             <span className={cell.sharpe > 0 ? "text-foreground" : "text-bear font-bold"}>
                               {cell.sharpe.toFixed(2)}

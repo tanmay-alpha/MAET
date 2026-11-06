@@ -1,7 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { Code2, FlaskConical, GitBranch, Play, Save, CheckCircle, AlertCircle, Clock } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { RunJobDialog } from "@/components/strategy/run-job-dialog";
+import { RESEARCH_TAB_FOR_KIND, type JobKind } from "@/lib/strategy-jobs";
 
 export const Route = createFileRoute("/_app/strategies/$strategyId/")({
   head: () => ({ meta: [{ title: "Strategy Editor — MAET" }] }),
@@ -13,12 +15,15 @@ type WorkspaceTab = "editor" | "preview" | "versions";
 function StrategyWorkspace() {
   const { strategyId } = Route.useParams();
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("editor");
+  const [dialogKind, setDialogKind] = useState<JobKind | null>(null);
+  const navigate = useNavigate();
 
-  const { data, isLoading } = trpc.strategyDefinitions.get.useQuery({ strategyId });
+  const { data, isLoading, refetch } = trpc.strategyDefinitions.get.useQuery({ strategyId });
   const strategy = data?.strategy;
   const versions = data?.versions ?? [];
 
-  const createVersionMutation = trpc.strategyDefinitions.createVersion.useMutation();
+  // Jobs run the latest saved version, so a new version must show up immediately.
+  const createVersionMutation = trpc.strategyDefinitions.createVersion.useMutation({ onSuccess: () => refetch() });
 
   if (isLoading) {
     return (
@@ -96,15 +101,36 @@ function StrategyWorkspace() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === "editor" && <RuleEditorTab strategy={strategy} />}
+        {activeTab === "editor" && (
+          <RuleEditorTab strategy={strategy} latestVersionNumber={versions[0]?.versionNumber} onRunJob={setDialogKind} />
+        )}
         {activeTab === "preview" && <PreviewTab strategy={strategy} />}
         {activeTab === "versions" && <VersionsTab versions={versions} strategyId={strategyId} />}
       </div>
+
+      <RunJobDialog
+        kind={dialogKind}
+        onOpenChange={(open) => !open && setDialogKind(null)}
+        strategyId={strategyId}
+        version={versions[0]}
+        onCreated={(kind, id) => {
+          setDialogKind(null);
+          void navigate({
+            to: "/strategies/$strategyId/backtests",
+            params: { strategyId },
+            search: { tab: kind === "backtest" ? undefined : RESEARCH_TAB_FOR_KIND[kind], job: id },
+          });
+        }}
+      />
     </div>
   );
 }
 
-function RuleEditorTab({ strategy }: { strategy: any }) {
+function RuleEditorTab({ strategy, latestVersionNumber, onRunJob }: {
+  strategy: any;
+  latestVersionNumber: number | undefined;
+  onRunJob: (kind: JobKind) => void;
+}) {
   const definition = strategy.currentDraft as any;
 
   return (
@@ -170,26 +196,43 @@ function RuleEditorTab({ strategy }: { strategy: any }) {
       <div className="w-60 border-l border-border p-4 flex-shrink-0 overflow-y-auto">
         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">Quick Actions</div>
         <div className="space-y-2">
-          {[
-            { label: "Run Backtest", icon: FlaskConical, color: "text-primary" },
-            { label: "Parameter Sweep", icon: Play, color: "text-amber-400" },
-            { label: "Walk-Forward Test", icon: GitBranch, color: "text-purple-400" },
-          ].map((a) => (
+          {([
+            { kind: "backtest", label: "Run Backtest", icon: FlaskConical, color: "text-primary" },
+            { kind: "sweep", label: "Parameter Sweep", icon: Play, color: "text-amber-400" },
+            { kind: "walk-forward", label: "Walk-Forward Test", icon: GitBranch, color: "text-purple-400" },
+          ] as const).map((a) => (
             <button
               key={a.label}
-              className="w-full flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors"
+              onClick={() => onRunJob(a.kind)}
+              disabled={latestVersionNumber === undefined}
+              className="w-full flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground"
             >
               <a.icon className={`h-3.5 w-3.5 ${a.color}`} />
               {a.label}
             </button>
           ))}
         </div>
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          {latestVersionNumber === undefined
+            ? "Create a version first: jobs run a saved version, not the draft."
+            : `Jobs run the latest saved version (v${latestVersionNumber}).`}
+        </p>
 
         <div className="mt-6 text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">Deployments</div>
-        <button className="w-full flex items-center gap-2 rounded-md bg-primary/10 border border-primary/30 px-3 py-2 text-xs text-primary hover:bg-primary/20 transition-colors">
-          <Play className="h-3.5 w-3.5" />
-          Deploy Strategy
-        </button>
+        {/* Live trading is not supported, and the paper signal evaluator does not run on the server yet. */}
+        <span title="Live deployment is disabled; paper only." className="block">
+          <button
+            disabled
+            aria-describedby="deploy-disabled-reason"
+            className="w-full flex items-center gap-2 rounded-md bg-primary/10 border border-primary/30 px-3 py-2 text-xs text-primary opacity-50 cursor-not-allowed"
+          >
+            <Play className="h-3.5 w-3.5" />
+            Deploy Strategy
+          </button>
+        </span>
+        <p id="deploy-disabled-reason" className="mt-2 text-[10px] text-muted-foreground">
+          Live deployment is disabled; paper only. Automated paper deployment is not available yet.
+        </p>
       </div>
     </div>
   );
