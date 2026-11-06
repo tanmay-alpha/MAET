@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { WorldPanel } from "./panel";
 
+// The free embed shows no data for NASDAQ:NDX or TVC:US10Y, so those use the FOREXCOM index CFD
+// and FRED's daily 10-year Treasury yield instead.
 const SYMBOLS = [
   ["FOREXCOM:SPXUSD", "S&P 500"],
-  ["NASDAQ:NDX", "Nasdaq 100"],
+  ["FOREXCOM:NSXUSD", "Nasdaq 100"],
   ["FOREXCOM:UKXGBP", "FTSE 100"],
   ["INDEX:NKY", "Nikkei 225"],
   ["INDEX:HSI", "Hang Seng"],
   ["TVC:UKOIL", "Brent"],
   ["TVC:GOLD", "Gold"],
   ["FX_IDC:USDINR", "USD/INR"],
-  ["TVC:US10Y", "US 10Y"],
+  ["FRED:DGS10", "US 10Y yield (daily)"],
 ] as const;
 
 export function MarketStrip() {
@@ -34,7 +36,8 @@ export function MarketStrip() {
         symbols: SYMBOLS.map(([proName, title]) => ({ proName, title })),
         showSymbolLogo: false,
         isTransparent: true,
-        displayMode: "adaptive",
+        // "adaptive" switches to a two-line layout on wide panels that the embed's iframe clips.
+        displayMode: "regular",
         colorTheme: "dark",
         locale: "en",
       });
@@ -64,7 +67,9 @@ export function MarketStrip() {
         </a>
       }
     >
-      <div className="tradingview-widget-container min-h-12" ref={host}>
+      {/* Chrome paints an opaque backdrop behind an iframe whose colour scheme differs from its
+          owner's; the widget document is light-scheme, so match it to keep the dark tape transparent. */}
+      <div className="tradingview-widget-container min-h-12 [color-scheme:light]" ref={host}>
         <div className="tradingview-widget-container__widget" />
         <div className="tradingview-widget-copyright">
           <a href="https://www.tradingview.com/markets/" target="_blank" rel="noreferrer">

@@ -1,9 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { Map as LibreMap, NavigationControl, Popup, type GeoJSONSource } from "maplibre-gl";
+import {
+  Map as LibreMap,
+  NavigationControl,
+  Popup,
+  setWorkerUrl,
+  type GeoJSONSource,
+} from "maplibre-gl";
+import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { EventCategory, WorldEvent } from "@shared/world/contracts";
 import { CATEGORY_LABEL, CATEGORY_TOKEN, eventMeasure } from "./event-tables";
 import { formatIST, formatISTDate } from "./panel";
+
+// MapLibre resolves its worker next to its own module URL, which bundling moves; ship it as an asset.
+setWorkerUrl(workerUrl);
 
 interface MapProps {
   events: readonly WorldEvent[];
