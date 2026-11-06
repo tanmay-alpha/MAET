@@ -9,6 +9,7 @@ import {
 } from "@shared/world/contracts";
 import { matchExposure } from "@shared/world/exposure-rules";
 import { apiUrl } from "@/lib/api-url";
+import { useWorldBrowserFallback } from "@/hooks/use-world-browser-fallback";
 import {
   CategoryToggles,
   EventRow,
@@ -77,23 +78,26 @@ function WorldMonitor() {
     queryFn: ({ signal }) => fetchWorld<WorldMacroResponse>("macro", signal),
     staleTime: 24 * 60 * 60_000,
   });
+  // Render cannot reach EONET or GDELT; when the server has nothing for them the page asks them.
+  const eonet = useWorldBrowserFallback("NASA EONET", natural);
+  const gdelt = useWorldBrowserFallback("GDELT", news);
   const [layers, toggleLayer] = useCategories();
   const [categories, toggleCategory] = useCategories();
   const [selectedId, select] = useState<string | null>(null);
   const events = useMemo(
     () =>
-      [...(natural.data?.events ?? []), ...(news.data?.events ?? [])].sort((left, right) =>
+      [...eonet.events, ...gdelt.events].sort((left, right) =>
         right.occurredAt.localeCompare(left.occurredAt),
       ),
-    [natural.data, news.data],
+    [eonet.events, gdelt.events],
   );
   const exposure = useMemo(() => matchExposure(events), [events]);
   const visibleEvents = events.filter((event) => categories.has(event.category));
-  const sources = [...(natural.data?.sources ?? []), ...(news.data?.sources ?? [])];
+  const sources = [...eonet.sources, ...gdelt.sources];
   const loading = (natural.isPending || news.isPending) && events.length === 0;
   const retryEvents = () => {
-    void natural.refetch();
-    void news.refetch();
+    void eonet.retry();
+    void gdelt.retry();
   };
   const warnings = (
     <>
@@ -112,7 +116,7 @@ function WorldMonitor() {
       </header>
       <MarketStrip />
       <div className="grid items-start gap-2 lg:grid-cols-[minmax(0,65fr)_minmax(0,35fr)]">
-        <WorldPanel title="World map" sources={natural.data?.sources ?? []}>
+        <WorldPanel title="World map" sources={eonet.sources}>
           <CategoryToggles
             label="Map layers"
             selected={layers}
@@ -123,10 +127,7 @@ function WorldMonitor() {
             M4.5+ earthquakes · past 24h / Open natural events · past 7 days
           </p>
           <QueryError error={natural.error} retry={() => void natural.refetch()} />
-          <SourceWarnings
-            sources={natural.data?.sources ?? []}
-            retry={() => void natural.refetch()}
-          />
+          <SourceWarnings sources={eonet.sources} retry={() => void eonet.retry()} />
           <div className="h-[260px] md:h-[420px]">
             <ClientOnly fallback={mapSkeleton}>
               <Suspense fallback={mapSkeleton}>

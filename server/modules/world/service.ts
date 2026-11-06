@@ -6,31 +6,25 @@ import type {
   WorldMacroResponse,
   WorldSource,
 } from "../../../shared/world/contracts";
+import { normalizeEonet, normalizeGdelt } from "../../../shared/world/normalize";
 import {
-  normalizeEonet,
-  normalizeGdelt,
-  normalizeUsgs,
-  normalizeWorldBank,
-  WORLD_BANK_INDICATORS,
-} from "./adapters";
+  EONET_EVENTS_URL,
+  GDELT_SPACING_MS,
+  GDELT_TOPICS,
+  gdeltQuery,
+  gdeltUrl,
+} from "../../../shared/world/upstreams";
+import { normalizeUsgs, normalizeWorldBank, WORLD_BANK_INDICATORS } from "./adapters";
 import { createSourceCache } from "./cache";
 import { createSpacedQueue, requestJson, sleep, type WorldFetch } from "./http";
 
 export const WORLD_URLS = {
   usgs: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson",
-  eonet: "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=7",
+  eonet: EONET_EVENTS_URL,
   worldBank: "https://api.worldbank.org/v2/country/IN;US;CN;EMU;JP;GB/indicator/",
 };
-export const GDELT_QUERIES = [
-  '(sanctions OR "trade embargo") sourcelang:english',
-  '(OPEC OR "oil supply" OR "oil production") sourcelang:english',
-  '(shipping OR "Red Sea" OR "Strait of Hormuz" OR "Taiwan Strait") sourcelang:english',
-  '("rate decision" OR "interest rate" OR "central bank") sourcelang:english',
-  '("export ban" OR "export restrictions") sourcelang:english',
-  '(conflict OR war OR "military escalation") sourcelang:english',
-] as const;
+export const GDELT_QUERIES = GDELT_TOPICS.map(gdeltQuery);
 export const GDELT_INTERVAL_MS = 15 * 60_000;
-export const GDELT_SPACING_MS = 5_000;
 
 function aggregateStatus(source: WorldSource, components: SourceStatus[]): SourceStatus {
   // Queries still waiting for their first attempt have neither data nor a failure to report.
@@ -88,21 +82,11 @@ export function createWorldService(
       cooldownMs: GDELT_INTERVAL_MS,
       now,
       load: () =>
-        queue(async () => {
-          const params = new URLSearchParams({
-            query,
-            mode: "artlist",
-            format: "json",
-            maxrecords: "40",
-            timespan: "24h",
-            sort: "datedesc",
-          });
-          return normalizeGdelt(
-            await requestJson(fetcher, `https://api.gdeltproject.org/api/v2/doc/doc?${params}`, {
-              maxBytes: 1024 * 1024,
-            }),
-          );
-        }),
+        queue(async () =>
+          normalizeGdelt(
+            await requestJson(fetcher, gdeltUrl(query, 40), { maxBytes: 1024 * 1024 }),
+          ),
+        ),
     }),
   );
   const macro = (Object.keys(WORLD_BANK_INDICATORS) as MacroPoint["indicator"][]).map((indicator) =>

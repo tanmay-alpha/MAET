@@ -31,6 +31,11 @@ import {
   type PaperOrderWire,
 } from "./data";
 
+const WORLD_UPSTREAM_HOSTS = {
+  "eonet.gsfc.nasa.gov": "eonet",
+  "api.gdeltproject.org": "gdelt",
+} as const;
+
 export const API_ORIGIN = "https://api.test";
 
 export interface RecordedRequest {
@@ -121,6 +126,13 @@ export class MockApi {
   worldEvents = structuredClone(WORLD_EVENTS);
   worldNews = structuredClone(WORLD_NEWS);
   worldMacro = structuredClone(WORLD_MACRO);
+  /**
+   * What NASA EONET and GDELT answer when the page asks them directly (the browser fallback).
+   * `null` leaves the host blocked like every other third party.
+   */
+  worldUpstreams: { eonet: unknown; gdelt: unknown } = { eonet: null, gdelt: null };
+  /** Every request the page sent to NASA EONET or GDELT, answered or not. */
+  readonly upstreamRequests: URL[] = [];
 
   private readonly queries = new Map<string, TrpcHandler>();
   private readonly mutations = new Map<string, TrpcHandler>();
@@ -151,6 +163,23 @@ export class MockApi {
     await this.page.route(
       (url) => !appOrigin(url) && url.origin !== API_ORIGIN,
       (route) => route.abort("blockedbyclient"),
+    );
+    // Registered after the blanket refusal so it is consulted first; unset payloads fall back to it.
+    await this.page.route(
+      (url) => Object.hasOwn(WORLD_UPSTREAM_HOSTS, url.hostname),
+      async (route, request) => {
+        const url = new URL(request.url());
+        this.upstreamRequests.push(url);
+        const payload =
+          this.worldUpstreams[WORLD_UPSTREAM_HOSTS[url.hostname as keyof typeof WORLD_UPSTREAM_HOSTS]];
+        if (payload === null) return route.fallback();
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          headers: { "access-control-allow-origin": "*" },
+          body: JSON.stringify(payload),
+        });
+      },
     );
     await this.page.route(
       (url) => url.origin === API_ORIGIN || (appOrigin(url) && url.pathname.startsWith("/api/")),

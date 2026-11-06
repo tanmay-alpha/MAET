@@ -5,7 +5,8 @@ import eonet from "./__fixtures__/eonet.json";
 import gdelt from "./__fixtures__/gdelt.json";
 import gdp from "./__fixtures__/world-bank-gdp.json";
 import cpi from "./__fixtures__/world-bank-cpi.json";
-import { createWorldService, GDELT_INTERVAL_MS, GDELT_QUERIES, GDELT_SPACING_MS } from "./service";
+import { GDELT_SPACING_MS } from "../../../shared/world/upstreams";
+import { createWorldService, GDELT_INTERVAL_MS, GDELT_QUERIES } from "./service";
 
 const epoch = Date.parse("2026-11-07T00:00:00Z");
 
