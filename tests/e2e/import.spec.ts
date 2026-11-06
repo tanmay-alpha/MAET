@@ -8,8 +8,11 @@ test("sample tradebook: row counts, realised gains per FY, quote-filled prices a
   await page.goto("/import");
   await expect(page.getByText("Your file is read in this browser tab only. Nothing is sent or stored.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Load sample tradebook" }).click();
-  await expect(page.getByText("Sample data", { exact: true })).toBeVisible();
+  // The page is server-rendered, so the first click can land before React attaches its handler.
+  await expect(async () => {
+    await page.getByRole("button", { name: "Load sample tradebook" }).click();
+    await expect(page.getByText("Sample data", { exact: true })).toBeVisible({ timeout: 1_000 });
+  }).toPass();
   await expect(page.getByLabel("File format")).toHaveValue("zerodha");
   await page.getByRole("button", { name: "Review rows" }).click();
 
@@ -49,6 +52,12 @@ test("sample tradebook: row counts, realised gains per FY, quote-filled prices a
 
 test("uploads a Groww order history with BOM, CRLF and quoted values", async ({ page }) => {
   await page.goto("/import");
+  // A change event fired before hydration is lost. Wait until React has attached its props to
+  // the input (re-selecting instead would restart the chunked read on every retry).
+  await page.waitForFunction(() => {
+    const input = document.querySelector('input[type="file"]');
+    return input !== null && Object.keys(input).some((key) => key.startsWith("__reactProps"));
+  });
   await page.getByLabel("Tradebook CSV file").setInputFiles(GROWW_FIXTURE);
   await expect(page.getByText("groww-orders.csv", { exact: true })).toBeVisible();
   await expect(page.getByLabel("File format")).toHaveValue("groww");
