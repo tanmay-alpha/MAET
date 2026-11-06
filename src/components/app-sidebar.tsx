@@ -1,5 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter,
@@ -68,6 +69,7 @@ const experimentalItems = [
 ];
 
 export function AppSidebar() {
+  const signedIn = useSignedIn();
   const pathname = useRouterState({ select: (r) => r.location.pathname });
   const [showExperimental, setShowExperimental] = useState(false);
 
@@ -212,7 +214,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">
-        <div className="flex items-center gap-2 px-2 py-1.5 group-data-[collapsible=icon]:hidden">
+        {signedIn ? <div className="flex items-center gap-2 px-2 py-1.5 group-data-[collapsible=icon]:hidden">
           <div className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-bull flex items-center justify-center text-white text-xs font-bold">
             M
           </div>
@@ -220,7 +222,7 @@ export function AppSidebar() {
             <div className="font-medium">Paper Workstation</div>
             <div className="text-muted-foreground">NSE Equity</div>
           </div>
-        </div>
+        </div> : <p className="px-2 py-1.5 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">Sign-in coming soon</p>}
       </SidebarFooter>
     </Sidebar>
   );
