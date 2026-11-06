@@ -31,12 +31,7 @@ async function openSignedInTerminal(page: Page) {
 test("paper terminal: a LIMIT order sends the contract payload, lists the fixture order and cancels it", async ({
   page,
   api,
-  isMobile,
 }) => {
-  test.fixme(
-    isMobile,
-    "Known layout defect: at phone width the fixed watchlist and order-ticket columns squeeze the order tabs to 0px, so the order list cannot be opened.",
-  );
   const ticket = await openSignedInTerminal(page);
 
   await ticket.getByRole("button", { name: "LMT", exact: true }).click();

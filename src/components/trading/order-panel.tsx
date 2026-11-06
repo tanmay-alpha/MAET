@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useSignedIn } from "@/hooks/use-signed-in";
+import { SIGN_IN_REQUIRED_MESSAGE } from "@/components/common/sign-in-required";
 import { buildTicketOrder, type TicketOrderType } from "@/lib/order-ticket";
 import { AlertCircle, CheckCircle2, ShieldAlert } from "lucide-react";
 
@@ -128,7 +129,7 @@ export function OrderPanel({
 
       {!signedIn && (
         <p role="status" className="mx-2 mt-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-400">
-          Paper trading requires a signed-in account. Sign-in is coming soon.
+          {SIGN_IN_REQUIRED_MESSAGE}
         </p>
       )}
 

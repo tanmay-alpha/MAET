@@ -22,12 +22,7 @@ async function expectLastCandle(page: Page, tf: MarketCandle["tf"]) {
 test("chart: renders fixture candles, requests the selected timeframe and restores the layout after reload", async ({
   page,
   api,
-  isMobile,
 }) => {
-  test.fixme(
-    isMobile,
-    "Known layout defect: at phone width the fixed w-80 sidebar leaves the chart a 0px-wide canvas.",
-  );
   await page.goto("/chart/RELIANCE");
   await expect(page.getByRole("heading", { level: 1, name: "RELIANCE" })).toBeVisible();
 
