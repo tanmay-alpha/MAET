@@ -54,6 +54,11 @@ export function mapPaperPositionRow(row: PaperPositionRow): PaperPositionRow {
   return row;
 }
 
+/** Positions store absolute shares plus a side; the signed quantity is negative for shorts. */
+export function signedPositionQuantity(row: Pick<PaperPositionRow, "side" | "totalShares">): number {
+  return row.side === "SHORT" ? -row.totalShares : row.totalShares;
+}
+
 export function mapPaperFillRow(row: PaperFillRow): PaperFillRow {
   parseFiniteDatabaseNumber(row.referencePrice, "referencePrice");
   parseFiniteDatabaseNumber(row.fillPrice, "fillPrice");

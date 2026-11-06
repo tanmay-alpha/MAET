@@ -89,8 +89,6 @@ export function createPaperTradingRouter(service: PaperTradingService = defaultS
             stopPrice: "stopPrice" in input ? input.stopPrice : undefined,
             stopLossPrice: "stopLossPrice" in input ? input.stopLossPrice : undefined,
             takeProfitPrice: "takeProfitPrice" in input ? input.takeProfitPrice : undefined,
-            trailingDistance: "trailingDistance" in input ? input.trailingDistance : undefined,
-            trailingIsPercent: "trailingIsPercent" in input ? input.trailingIsPercent : undefined,
             clientOrderId: input.clientOrderId,
             idempotencyKey: input.idempotencyKey,
           };

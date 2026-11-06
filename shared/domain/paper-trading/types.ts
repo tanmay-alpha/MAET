@@ -16,10 +16,15 @@ export type PaperAccountStatus = z.infer<typeof PaperAccountStatusSchema>;
 export const PaperOrderSideSchema = z.enum(["BUY", "SELL"]);
 export type PaperOrderSide = z.infer<typeof PaperOrderSideSchema>;
 
+/**
+ * STOP_LOSS_MARKET is the protective exit of a bracket: once the stop trades it fills at
+ * the triggering price, so a gap through the stop still exits. It is not user-placeable.
+ */
 export const PaperOrderTypeSchema = z.enum([
   "MARKET",
   "LIMIT",
   "STOP_LOSS_LIMIT",
+  "STOP_LOSS_MARKET",
 ]);
 export type PaperOrderType = z.infer<typeof PaperOrderTypeSchema>;
 
@@ -135,7 +140,7 @@ export const PaperOrderSchema = z
         message: "Limit price is required",
       });
     }
-    if (order.type === "STOP_LOSS_LIMIT" && order.stopPrice === undefined) {
+    if ((order.type === "STOP_LOSS_LIMIT" || order.type === "STOP_LOSS_MARKET") && order.stopPrice === undefined) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["stopPrice"],
