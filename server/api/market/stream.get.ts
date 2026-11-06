@@ -9,7 +9,11 @@ import { MAX_STREAM_SYMBOLS, type Tick } from "@shared/types";
 
 let activeConnections = 0;
 const MAX_CONNECTIONS = 100;
-const MAX_CONNECTIONS_PER_IP = 5;
+/**
+ * Streams one address may hold: one per open tab. Several users behind one office or
+ * college NAT share an address, so this is a cap against abuse, not a per-user limit.
+ */
+export const MAX_MARKET_STREAMS_PER_IP = Number.parseInt(process.env.MARKET_STREAM_MAX_PER_IP ?? "20", 10);
 const connectionsByIp = new Map<string, number>();
 
 export function getActiveStreamConnections(): number {
@@ -39,7 +43,7 @@ export default defineEventHandler(async (event) => {
   // present, otherwise the leftmost X-Forwarded-For hop (spoofable; the global cap still holds).
   const ip = getClientIp(event);
   const ipConnections = connectionsByIp.get(ip) ?? 0;
-  if (ipConnections >= MAX_CONNECTIONS_PER_IP) {
+  if (ipConnections >= MAX_MARKET_STREAMS_PER_IP) {
     throw createError({ statusCode: 429, statusMessage: "Too many market streams from this address" });
   }
 

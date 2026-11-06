@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { MAX_STREAM_SYMBOLS } from "@shared/types";
 import { EventEmitter } from "node:events";
 import { getSubscriptionRefCount, resetSubscriptionRefsForTesting } from "../../orchestrator";
-import streamHandler, { getActiveStreamConnections } from "./stream.get";
+import streamHandler, { getActiveStreamConnections, MAX_MARKET_STREAMS_PER_IP } from "./stream.get";
 
 const realFetch = globalThis.fetch;
 
@@ -65,15 +65,17 @@ describe("GET /api/market/stream", () => {
     expect(res.written.some((chunk) => chunk.startsWith("event: snapshot"))).toBe(false);
   }, 2_000);
 
-  it("caps concurrent streams per client address", async () => {
+  it("lets one address hold a stream per open tab, and caps it beyond that", async () => {
+    // A trader with several tabs, or several users behind one office/college NAT, share an address.
+    expect(MAX_MARKET_STREAMS_PER_IP).toBeGreaterThanOrEqual(10);
     const yahoo = holdYahoo();
-    const open = Array.from({ length: 5 }, () => fakeStreamEvent("SSECAP", "203.0.113.7"));
+    const open = Array.from({ length: MAX_MARKET_STREAMS_PER_IP }, () => fakeStreamEvent("SSECAP", "203.0.113.7"));
     const handled = open.map(({ event }) => handler(event));
 
     await expect(handler(fakeStreamEvent("SSECAP", "203.0.113.7").event)).rejects.toMatchObject({ statusCode: 429 });
     const other = fakeStreamEvent("SSECAP", "203.0.113.8");
     const otherHandled = handler(other.event);
-    expect(getActiveStreamConnections()).toBe(6);
+    expect(getActiveStreamConnections()).toBe(MAX_MARKET_STREAMS_PER_IP + 1);
 
     for (const { req } of [...open, other]) req.emit("close");
     yahoo.release();

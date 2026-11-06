@@ -5,6 +5,8 @@ import {
   ChevronRight, BarChart3, Clock, DollarSign,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
 
 export const Route = createFileRoute("/_app/replay")({
   head: () => ({ meta: [{ title: "Bar Replay — MAET Strategy Lab" }] }),
@@ -17,7 +19,8 @@ function ReplayPage() {
   const [timeframe, setTimeframe] = useState("1d");
   const [startDate, setStartDate] = useState("2023-01-01T00:00:00.000Z");
 
-  const { data: sessions, refetch: refetchSessions } = trpc.strategyReplay.list.useQuery();
+  const signedIn = useSignedIn();
+  const { data: sessions, refetch: refetchSessions } = trpc.strategyReplay.list.useQuery(undefined, { enabled: signedIn });
 
   const createMutation = trpc.strategyReplay.create.useMutation({
     onSuccess: (data: any) => {
@@ -132,12 +135,13 @@ function ReplayPage() {
               </div>
               <button
                 onClick={() => createMutation.mutate({ symbol, timeframe, startTimestamp: startDate })}
-                disabled={createMutation.isPending}
+                disabled={!signedIn || createMutation.isPending}
                 className="w-full flex items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
               >
                 <Play className="h-3.5 w-3.5" />
                 {createMutation.isPending ? "Starting..." : "Start Replay"}
               </button>
+              {!signedIn && <SignedOutNotice feature="Replay sessions" />}
             </div>
           )}
 

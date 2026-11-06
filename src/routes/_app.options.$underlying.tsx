@@ -7,6 +7,8 @@ import type {
 } from "../../server/modules/options/contracts";
 import { GreekDisplay } from "@/components/options/greek-display";
 import { trpc } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
 
 const UNAVAILABLE = "—";
 
@@ -109,7 +111,8 @@ function OptionsChain() {
   const { underlying } = Route.useParams();
   const symbol = underlying.trim().toUpperCase();
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
-  const expiriesQuery = trpc.options.listExpiries.useQuery({ underlying: symbol });
+  const signedIn = useSignedIn();
+  const expiriesQuery = trpc.options.listExpiries.useQuery({ underlying: symbol }, { enabled: signedIn });
   const expiries = useMemo(() => expiriesQuery.data ?? [], [expiriesQuery.data]);
   const selectedExpiryIsPersisted =
     selectedExpiry !== null && expiries.some((expiry) => expiry.expiryDate === selectedExpiry);
@@ -175,7 +178,8 @@ function OptionsChain() {
       </div>
 
       <div className="flex flex-1 flex-col gap-4 overflow-auto p-5">
-        {expiriesQuery.isLoading && (
+        {!signedIn && <SignedOutNotice feature="Options chains" />}
+        {signedIn && expiriesQuery.isLoading && (
           <div className="rounded border border-border bg-panel p-4 text-sm text-muted-foreground">
             Loading persisted option expiries…
           </div>
@@ -185,7 +189,7 @@ function OptionsChain() {
             Unable to load persisted expiries: {expiriesQuery.error.message}
           </div>
         )}
-        {!expiriesQuery.isLoading && !expiriesQuery.isError && expiries.length === 0 && (
+        {signedIn && !expiriesQuery.isLoading && !expiriesQuery.isError && expiries.length === 0 && (
           <section className="flex max-w-2xl items-start gap-3 rounded-lg border border-border bg-panel p-5">
             <Database className="mt-0.5 h-5 w-5 text-primary" />
             <div>

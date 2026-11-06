@@ -2,6 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { BarChart3, TrendingUp, TrendingDown, FlaskConical, ChevronRight, Layers } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import { usePortfolioPerformance } from "@/hooks/use-portfolio-analytics";
 import { curveToHistory } from "@/lib/portfolio-curve";
 import { EquityCurveChart } from "@/components/chart/equity-curve-chart";
@@ -13,7 +15,8 @@ export const Route = createFileRoute("/_app/performance")({
 });
 
 function PerformancePage() {
-  const { data: jobsData, isLoading } = trpc.strategyBacktests.listJobs.useQuery({ limit: 50 });
+  const signedIn = useSignedIn();
+  const { data: jobsData, isLoading } = trpc.strategyBacktests.listJobs.useQuery({ limit: 50 }, { enabled: signedIn });
   const jobs = jobsData?.jobs ?? [];
   const completedJobs = jobs.filter((j: any) => j.status === "COMPLETED");
 
@@ -49,7 +52,9 @@ function PerformancePage() {
       <div className="flex-1 overflow-y-auto p-5">
         <PaperPortfolioSection />
 
-        {isLoading ? (
+        {!signedIn ? (
+          <SignedOutNotice feature="Backtest results" />
+        ) : isLoading ? (
           <div className="space-y-2">
             {[1, 2, 3].map((i) => (
               <div key={i} className="h-20 rounded-lg border border-border bg-panel animate-pulse" />
