@@ -73,4 +73,23 @@ describe("placeCorporateActions", () => {
     // The chart labels that bar with the ex-date and its 09:15 IST open.
     expect(formatIstCrosshairTime(sessionOpen("2025-08-14") / 1000, true)).toBe("14 Aug '25 09:15");
   });
+
+  // NSE was shut on Friday 15 Aug 2025 (Independence Day): the first session trading ex is Monday 18 Aug.
+  test("an ex-date on a holiday or weekend goes on the next session's bar, never the one before", () => {
+    const bars = ["2025-08-13", "2025-08-14", "2025-08-18", "2025-08-19"].map(sessionOpen);
+    const placed = placeCorporateActions(bars, [dividend("2025-08-15"), dividend("2025-08-16"), split("2025-08-17", 2, 1)]);
+    expect(placed).toEqual([
+      { time: bars[2] / 1000, events: [dividend("2025-08-15"), dividend("2025-08-16"), split("2025-08-17", 2, 1)] },
+    ]);
+
+    const fiveMinute = ["2025-08-14", "2025-08-18"].flatMap((day) => [0, 1].map((i) => sessionOpen(day) + i * 300_000));
+    expect(placeCorporateActions(fiveMinute, [dividend("2025-08-15")])).toEqual([
+      { time: sessionOpen("2025-08-18") / 1000, events: [dividend("2025-08-15")] },
+    ]);
+  });
+
+  test("a holiday ex-date before the first bar or after the last is dropped", () => {
+    const bars = ["2025-08-18", "2025-08-19"].map(sessionOpen);
+    expect(placeCorporateActions(bars, [dividend("2025-08-15"), dividend("2025-08-23")])).toEqual([]);
+  });
 });

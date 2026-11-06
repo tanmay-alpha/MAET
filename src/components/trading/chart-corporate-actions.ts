@@ -54,10 +54,12 @@ export function corporateActionTooltip(event: CorporateActionEvent, source: Corp
 }
 
 /**
- * Puts each event on the bar that contains its ex-date: the first bar of that
- * IST day (daily and intraday), otherwise the latest earlier bar if the ex-date
- * falls inside its period (weekly bars). Events outside the bars are dropped.
- * `candleTimes` are ascending bar starts in ms or s; the result is ascending.
+ * Puts each event on the first bar that trades ex: the first bar of its IST
+ * ex-date (daily and intraday), the earlier bar whose period contains it
+ * (weekly bars), or, when no bar covers the ex-date (an exchange holiday or a
+ * weekend), the next bar. Events before the first bar or after the last bar's
+ * period are dropped. `candleTimes` are ascending bar starts in ms or s; the
+ * result is ascending.
  */
 export function placeCorporateActions(candleTimes: number[], events: CorporateActionEvent[]): PlacedCorporateActions[] {
   if (candleTimes.length === 0 || events.length === 0) return [];
@@ -69,13 +71,14 @@ export function placeCorporateActions(candleTimes: number[], events: CorporateAc
   const byBar = new Map<number, CorporateActionEvent[]>();
   for (const event of events) {
     let index = days.findIndex((day) => day >= event.exDate);
-    if (index === -1) index = days.length;
     if (days[index] !== event.exDate) {
-      // No bar on the ex-date: it belongs to the previous bar only if that bar's period covers it.
-      const previous = index - 1;
+      // A bar spanning several days (weekly) may contain the ex-date.
+      const previous = (index === -1 ? days.length : index) - 1;
       const exDateMs = Date.parse(`${event.exDate}T00:00:00Z`) - IST_OFFSET_MS;
-      if (previous < 0 || exDateMs >= barsMs[previous] + barMs) continue;
-      index = previous;
+      if (previous < 0) continue;
+      if (barMs > 86_400_000 && exDateMs < barsMs[previous] + barMs) index = previous;
+      // Otherwise the ex-date had no session: the stock first trades ex on the next bar.
+      else if (index === -1) continue;
     }
     const time = Math.floor(barsMs[index] / 1000);
     byBar.set(time, [...(byBar.get(time) ?? []), event]);
