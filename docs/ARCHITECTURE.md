@@ -125,6 +125,7 @@ Details (all `server/domain/market/quote-service.ts` unless noted):
 - Yahoo reports an NSE bonus issue as a split (a 1:1 bonus is `2:1`), so the UI labels these "Split/bonus" and shows the bonus reading next to the ratio; a ratio below 1 is a reverse split.
 - `server/domain/market/corporate-action-service.ts` caches each symbol in process memory for 24 h (at most 500 symbols, oldest evicted), coalesces concurrent refreshes, and when a refresh fails serves the last good copy with `stale: true`; with no copy the route answers 503. Nothing is synthesised on failure.
 - The stock page and the full chart place the events on the bar containing each ex-date (`placeCorporateActions` in `src/components/trading/chart-corporate-actions.ts`) and draw them as lightweight-charts series markers (D below the bar, S above), with a hover tooltip naming the amount or ratio, the ex-date and the source. A "Dividends & splits" toggle sits in the chart toolbar (on by default on the stock page, off on the full chart); the stock page Overview also lists the last 10 events.
+- Chart bars keep their UTC timestamps; `src/components/trading/chart-time.ts` prints the time axis and crosshair in IST (`Asia/Kolkata`), with a time of day only for intraday bars, so NSE's 03:45 UTC open reads 09:15. Paper fills and backtest trades are moved onto the bar that contains them (`snapTradeMarkersToBars`) before they are drawn.
 
 ### 2.2 A paper MARKET order, end to end
 
