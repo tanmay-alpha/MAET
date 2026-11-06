@@ -7,7 +7,8 @@ async function main() {
   // Load config to initialize environment variables
   getConfig();
   
-  const sqlFilePath = path.join(import.meta.dirname, "../../insert_baselines.sql");
+  // Table DDL lives in server/db/migrations/0024_ingestion_storage_tables.sql.
+  const sqlFilePath = path.join(import.meta.dirname, "../db/seeds/market_baseline_metrics.sql");
   console.log(`Reading SQL file from: ${sqlFilePath}`);
   
   const sql = fs.readFileSync(sqlFilePath, "utf8");

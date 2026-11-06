@@ -57,17 +57,18 @@ export function calculatePositionSize(
       break;
     }
     case "RISK_PER_TRADE": {
-      // Stop must be defined or stopLossPercent must be set
+      // Stop must be defined or stopLossPercent must be set. Shorts pass a stop above entry;
+      // the risk per share is the distance to the stop on either side.
       const stop = stopPrice ?? (risk.stopLossPercent != null
         ? entryPrice * (1 - risk.stopLossPercent / 100)
         : undefined);
-      if (!stop || stop >= entryPrice) {
+      if (!stop || stop === entryPrice) {
         return {
           quantity: 0, capitalRequired: 0, method: risk.sizingMethod,
-          warning: "RISK_PER_TRADE requires a valid stop price below entry",
+          warning: "RISK_PER_TRADE requires a valid stop price away from entry",
         };
       }
-      const riskPerShare = entryPrice - stop;
+      const riskPerShare = Math.abs(entryPrice - stop);
       quantity = Math.floor(risk.sizeValue / riskPerShare);
       break;
     }

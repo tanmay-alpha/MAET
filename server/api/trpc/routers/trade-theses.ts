@@ -16,15 +16,15 @@ export const tradeThesesRouter = router({
   create: protectedProcedure
     .input(
       z.object({
-        symbol: z.string().min(1),
+        symbol: z.string().min(1).max(30),
         exchange: z.enum(["NSE", "BSE"]).default("NSE"),
-        screenerRunId: z.string().optional(),
+        screenerRunId: z.string().max(100).optional(),
         workspaceId: z.string().uuid().optional(),
         title: z.string().min(1).max(120),
-        setupType: z.string().min(1),
+        setupType: z.string().min(1).max(50),
         direction: z.enum(["LONG", "SHORT", "WATCH"]),
-        hypothesis: z.string().min(1),
-        entryPlan: z.string().optional(),
+        hypothesis: z.string().min(1).max(10_000),
+        entryPlan: z.string().max(10_000).optional(),
         stopPrice: z.number().positive().optional(),
         targetPrice: z.number().positive().optional(),
         riskAmount: z.number().nonnegative().optional(),
@@ -40,9 +40,9 @@ export const tradeThesesRouter = router({
       z.object({
         thesisId: z.string().uuid(),
         quotePrice: z.number().positive(),
-        quoteSource: z.string(),
-        quoteQuality: z.string(),
-        timeframe: z.string(),
+        quoteSource: z.string().max(30),
+        quoteQuality: z.string().max(30),
+        timeframe: z.string().max(10),
       })
     )
     .mutation(async ({ ctx, input }) => {

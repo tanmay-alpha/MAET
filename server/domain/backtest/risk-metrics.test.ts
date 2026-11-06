@@ -287,7 +287,7 @@ describe("Risk Metrics — Payoff Ratio & Win/Loss Streaks", () => {
     expect(metrics.payoffRatio).toBeCloseTo(4.0, 4);
   });
 
-  it("handles zero loss trades with Infinity payoff ratio", () => {
+  it("reports payoff ratio and profit factor as undefined (null) without losing trades", () => {
     const equityCurve: EquityPoint[] = [
       { timestamp: 1, equity: 100 },
       { timestamp: 2, equity: 110 },
@@ -296,7 +296,9 @@ describe("Risk Metrics — Payoff Ratio & Win/Loss Streaks", () => {
       { entryTimestamp: 1, exitTimestamp: 2, entryPrice: 100, exitPrice: 110, side: "long", return: 0.10, netPnl: 5_000 },
     ];
     const metrics = computeMetrics(equityCurve, trades, undefined, "1d");
-    expect(metrics.payoffRatio).toBe(Infinity);
+    // Infinity does not survive JSON or numeric columns; null states "no losses to divide by".
+    expect(metrics.payoffRatio).toBeNull();
+    expect(metrics.profitFactor).toBeNull();
   });
 
   it("tracks maximum consecutive wins and losses streaks accurately", () => {
@@ -319,5 +321,34 @@ describe("Risk Metrics — Payoff Ratio & Win/Loss Streaks", () => {
     const metrics = computeMetrics(equityCurve, trades, undefined, "1d");
     expect(metrics.maxConsecutiveWins).toBe(3);
     expect(metrics.maxConsecutiveLosses).toBe(4);
+  });
+});
+
+describe("Risk Metrics — Sharpe & Sortino definitions", () => {
+  // Periodic returns +1%, -2%, +3%, -1%, +2% on daily bars.
+  const periodic = [0.01, -0.02, 0.03, -0.01, 0.02];
+  const equityCurve: EquityPoint[] = [{ timestamp: 0, equity: 100 }];
+  for (const r of periodic) {
+    const last = equityCurve[equityCurve.length - 1];
+    equityCurve.push({ timestamp: last.timestamp + 86_400_000, equity: last.equity * (1 + r) });
+  }
+  const meanReturn = 0.006;
+  const sampleStd = Math.sqrt(0.00172 / 4);
+
+  it("Sharpe = mean(periodic excess return) / std × √periodsPerYear, rf = 0 by default", () => {
+    const metrics = computeMetrics(equityCurve, [], undefined, "1d");
+    expect(metrics.sharpe).toBeCloseTo((meanReturn / sampleStd) * Math.sqrt(252), 8);
+  });
+
+  it("Sharpe subtracts the per-period equivalent of an annual risk-free rate", () => {
+    const rfPeriodic = 1.065 ** (1 / 252) - 1;
+    const metrics = computeMetrics(equityCurve, [], undefined, "1d", { riskFreeRate: 0.065 });
+    expect(metrics.sharpe).toBeCloseTo(((meanReturn - rfPeriodic) / sampleStd) * Math.sqrt(252), 8);
+  });
+
+  it("Sortino divides by the downside deviation over all N periods", () => {
+    // Downside deviation = sqrt((0.02² + 0.01²) / 5) = 0.01
+    const metrics = computeMetrics(equityCurve, [], undefined, "1d");
+    expect(metrics.sortino).toBeCloseTo((meanReturn / 0.01) * Math.sqrt(252), 8);
   });
 });

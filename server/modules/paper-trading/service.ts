@@ -1,4 +1,5 @@
-import { loadQuote } from "../../domain/market/quote-service";
+import { loadExecutionQuote } from "./execution-quote";
+import { computePhase, type MarketPhase } from "../../domain/market/clock";
 import { withSerializablePaperTransaction } from "./transaction-retry";
 import { getConfig } from "../../config";
 import {
@@ -6,12 +7,11 @@ import {
   PaperAccountLockedError,
   PaperOrderNotFoundError,
   PaperOrderConflictError,
+  PaperIdempotencyConflictError,
 } from "./errors";
 import {
   buildOrderAcceptedEvent,
   buildOrderCancelledEvent,
-  buildOrderFilledEvent,
-  buildPositionUpdatedEvent,
   buildAccountUpdatedEvent,
   buildAccountResetEvent,
 } from "./outbox";
@@ -24,17 +24,18 @@ import type {
   PaperOrderCommand,
   PaperTradingState,
 } from "./contracts";
-import type { PaperDatabase, PaperTradingReadRepository } from "./repository";
+import type { PaperDatabase, PaperTradingReadRepository, PaperTradingWriteRepository } from "./repository";
 import { createPostgresPaperReadRepository } from "./postgres-repository";
-import { parseExecutionQuote, evaluateExecutionQuote } from "@shared/types/market";
-import { executePaperFill } from "@shared/domain/paper-trading/execution";
-import type { PaperAccount, PaperOrder, PaperExecutionReason } from "@shared/domain/paper-trading/types";
-
-export const PAPER_INITIAL_CASH_INR = Number(process.env.PAPER_INITIAL_CASH_INR || 1000000);
+import { applyFill, paperExecutionPolicy, type AppliedFill } from "./fill-writer";
+import { ExchangeSchema, parseExecutionQuote, evaluateExecutionQuote } from "@shared/types/market";
+import { PaperExecutionError } from "@shared/domain/paper-trading/execution";
 
 export interface PaperTradingServiceDependencies {
   database?: PaperDatabase;
-  quoteLoader?: (symbol: string, force?: boolean) => Promise<unknown>;
+  /** Quote for the order's exchange and symbol (default: live tick feed, then the market-data layer). */
+  quoteLoader?: (exchange: "NSE" | "BSE", symbol: string) => Promise<unknown>;
+  /** Session phase at a given instant; MARKET orders only execute while it is OPEN. */
+  marketPhase?: (now: Date) => MarketPhase;
   now?: () => Date;
   createId?: () => string;
 }
@@ -48,24 +49,110 @@ export interface PlaceOrderResult {
   asOf: Date;
 }
 
+const CANCELLABLE_ORDER_STATUSES: Partial<Record<PaperOrderRow["status"], true>> = {
+  PENDING: true,
+  TRIGGER_PENDING: true,
+  TRIGGERED: true,
+  PARTIALLY_FILLED: true,
+};
+
+/** The persisted terms of an order; an idempotency key may only be replayed with identical terms. */
+interface OrderTerms {
+  symbol: string;
+  exchange: "NSE" | "BSE";
+  side: "BUY" | "SELL";
+  type: "MARKET" | "LIMIT" | "STOP_LOSS_LIMIT";
+  qty: number;
+  limitPrice: string | null;
+  stopPrice: string | null;
+  stopLossPrice: string | null;
+  takeProfitPrice: string | null;
+}
+
+/** Prices are stored as numeric(18,4); normalise requests the same way so replays compare equal. */
+function toPrice(value: number | undefined): string | null {
+  return value === undefined ? null : value.toFixed(4);
+}
+
+function samePrice(stored: string | null, requested: string | null): boolean {
+  return stored === null || requested === null ? stored === requested : Number(stored) === Number(requested);
+}
+
+function hasSameTerms(order: PaperOrderRow, terms: OrderTerms): boolean {
+  return (
+    order.symbol === terms.symbol &&
+    order.exchange === terms.exchange &&
+    order.side === terms.side &&
+    order.type === terms.type &&
+    order.qty === terms.qty &&
+    samePrice(order.limitPrice, terms.limitPrice) &&
+    samePrice(order.stopPrice, terms.stopPrice) &&
+    samePrice(order.stopLossPrice, terms.stopLossPrice) &&
+    samePrice(order.takeProfitPrice, terms.takeProfitPrice)
+  );
+}
+
+function parseOrderTerms(command: PaperOrderCommand): OrderTerms {
+  if (!command || !command.symbol || !command.side || !command.type || !command.qty) {
+    throw new PaperValidationError("Invalid order command parameters");
+  }
+  if (!["BUY", "SELL"].includes(command.side)) {
+    throw new PaperValidationError(`Invalid order side: ${command.side}`);
+  }
+  if (!["MARKET", "LIMIT", "STOP_LOSS_LIMIT"].includes(command.type)) {
+    throw new PaperValidationError(`Invalid order type: ${command.type}`);
+  }
+  if (command.qty <= 0 || !Number.isInteger(command.qty)) {
+    throw new PaperValidationError("Order quantity must be a positive integer");
+  }
+  const exchange = ExchangeSchema.safeParse((command.exchange || "NSE").trim().toUpperCase());
+  if (!exchange.success) {
+    throw new PaperValidationError(`Invalid exchange: ${command.exchange}`);
+  }
+  if (command.type !== "MARKET" && (!command.limitPrice || command.limitPrice <= 0)) {
+    throw new PaperValidationError(`${command.type} order requires a positive limitPrice`);
+  }
+
+  const isStopLimit = command.type === "STOP_LOSS_LIMIT";
+  const stopPrice = command.stopPrice ?? command.stopLossPrice;
+  if (isStopLimit && (!stopPrice || stopPrice <= 0)) {
+    throw new PaperValidationError("STOP_LOSS_LIMIT order requires a positive stopPrice");
+  }
+
+  return {
+    symbol: command.symbol.trim().toUpperCase(),
+    exchange: exchange.data,
+    side: command.side,
+    type: command.type,
+    qty: command.qty,
+    limitPrice: command.type === "MARKET" ? null : toPrice(command.limitPrice),
+    stopPrice: isStopLimit ? toPrice(stopPrice) : null,
+    // A stop-limit is itself an exit; only MARKET and LIMIT entries carry bracket exits.
+    stopLossPrice: isStopLimit ? null : toPrice(command.stopLossPrice),
+    takeProfitPrice: isStopLimit ? null : toPrice(command.takeProfitPrice),
+  };
+}
+
 export class PaperTradingService {
-  private readonly quoteLoader: (symbol: string, force?: boolean) => Promise<unknown>;
+  private readonly quoteLoader: (exchange: "NSE" | "BSE", symbol: string) => Promise<unknown>;
+  private readonly marketPhase: (now: Date) => MarketPhase;
   private readonly readRepo: PaperTradingReadRepository;
   private readonly now: () => Date;
   private readonly createId: () => string;
 
   constructor(deps: PaperTradingServiceDependencies = {}) {
-    this.quoteLoader = deps.quoteLoader || loadQuote;
+    this.quoteLoader = deps.quoteLoader || loadExecutionQuote;
+    this.marketPhase = deps.marketPhase || ((now) => computePhase(now, getConfig().nseHolidays));
     this.now = deps.now || (() => new Date());
     this.createId = deps.createId || (() => crypto.randomUUID());
-    this.readRepo = createPostgresPaperReadRepository(deps.database as any);
+    this.readRepo = createPostgresPaperReadRepository(deps.database);
   }
 
   async getState(params: { userId: string }): Promise<PaperTradingState> {
     if (!params.userId) {
       throw new PaperValidationError("userId is required");
     }
-    return this.readRepo.getState({ userId: params.userId });
+    return this.readRepo.getState({ userId: params.userId, initialCash: getConfig().paperInitialCashInr });
   }
 
   async placeOrder(params: {
@@ -73,432 +160,231 @@ export class PaperTradingService {
     command: PaperOrderCommand;
   }): Promise<PlaceOrderResult> {
     const { userId, command } = params;
-
     if (!userId) {
       throw new PaperValidationError("userId is required");
     }
-    if (!command || !command.symbol || !command.side || !command.type || !command.qty) {
-      throw new PaperValidationError("Invalid order command parameters");
+    const terms = parseOrderTerms(command);
+    const keys = {
+      idempotencyKey: command.idempotencyKey || null,
+      clientOrderId: command.clientOrderId || null,
+    };
+
+    return terms.type === "MARKET"
+      ? this.placeMarketOrder(userId, terms, keys)
+      : this.placeRestingOrder(userId, terms, keys);
+  }
+
+  /**
+   * Returns the original result when the idempotency key was already used with the same
+   * terms, and rejects the request when the key was used for a different order.
+   */
+  private async findReplay(
+    write: PaperTradingWriteRepository,
+    account: PaperAccountRow,
+    idempotencyKey: string,
+    terms: OrderTerms
+  ): Promise<PlaceOrderResult | null> {
+    const existing = await write.findOrderByIdempotencyKeyForUpdate({
+      userId: account.userId,
+      generation: account.generation,
+      idempotencyKey,
+    });
+    if (!existing) {
+      return null;
     }
-    if (!["BUY", "SELL"].includes(command.side)) {
-      throw new PaperValidationError(`Invalid order side: ${command.side}`);
+    if (!hasSameTerms(existing, terms)) {
+      throw new PaperIdempotencyConflictError(
+        `Idempotency key ${idempotencyKey} was already used for a different order`
+      );
     }
-    if (!["MARKET", "LIMIT", "STOP_LOSS_LIMIT"].includes(command.type)) {
-      throw new PaperValidationError(`Invalid order type: ${command.type}`);
-    }
-    if (command.qty <= 0 || !Number.isInteger(command.qty)) {
-      throw new PaperValidationError("Order quantity must be a positive integer");
+    const fill = await write.findLatestFillForOrder(existing.id);
+    const position = await write.findPositionForUpdate({
+      userId: account.userId,
+      generation: account.generation,
+      symbol: existing.symbol,
+      exchange: existing.exchange,
+    });
+    return {
+      order: existing,
+      fill: fill ?? null,
+      account,
+      position: position ?? null,
+      idempotentReplay: true,
+      asOf: this.now(),
+    };
+  }
+
+  private async placeMarketOrder(
+    userId: string,
+    terms: OrderTerms,
+    keys: { idempotencyKey: string | null; clientOrderId: string | null }
+  ): Promise<PlaceOrderResult> {
+    const initialCash = getConfig().paperInitialCashInr;
+    const { idempotencyKey } = keys;
+
+    // A retried request must get its original result even once the session or quote is gone.
+    if (idempotencyKey) {
+      const replay = await withSerializablePaperTransaction(async (repos) => {
+        const account = await repos.write.ensureAccountForUpdate({ userId, initialCash });
+        return this.findReplay(repos.write, account, idempotencyKey, terms);
+      });
+      if (replay) {
+        return replay;
+      }
     }
 
-    const symbol = command.symbol.trim().toUpperCase();
-    const exchange = (command.exchange || "NSE").trim().toUpperCase();
-    const idempotencyKey = command.idempotencyKey || null;
-    const clientOrderId = command.clientOrderId || null;
+    const phase = this.marketPhase(this.now());
+    if (phase !== "OPEN") {
+      throw new PaperValidationError(
+        `Market is ${phase}: MARKET orders execute only during the regular session (09:15-15:30 IST)`
+      );
+    }
 
-    if (command.type === "MARKET") {
-      let rawQuote: unknown;
+    let rawQuote: unknown;
+    try {
+      rawQuote = await this.quoteLoader(terms.exchange, terms.symbol);
+    } catch (err: unknown) {
+      throw new PaperValidationError(`Failed to load execution quote for ${terms.symbol}`, undefined, err);
+    }
+
+    const parsedQuoteResult = parseExecutionQuote(rawQuote, terms.symbol);
+    if (!parsedQuoteResult.ok) {
+      throw new PaperValidationError(`Invalid quote for ${terms.symbol}: ${parsedQuoteResult.reason}`);
+    }
+    const quote = parsedQuoteResult.quote;
+    if (quote.exchange !== terms.exchange) {
+      throw new PaperValidationError(
+        `Quote for ${terms.symbol} is from ${quote.exchange}, but the order routes to ${terms.exchange}`
+      );
+    }
+
+    const policy = evaluateExecutionQuote(quote, terms.symbol, paperExecutionPolicy());
+    if (!policy.executable) {
+      throw new PaperValidationError(`Quote for ${terms.symbol} cannot be executed: ${policy.reason}`);
+    }
+
+    const fingerprint = computeQuoteFingerprint({
+      exchange: quote.exchange,
+      symbol: quote.symbol,
+      source: quote.source,
+      quality: quote.quality,
+      ts: quote.ts,
+      price: quote.price,
+      volume: quote.volume,
+    });
+
+    return withSerializablePaperTransaction(async (repos) => {
+      const accountRow = await repos.write.ensureAccountForUpdate({ userId, initialCash });
+      if (accountRow.status !== "ACTIVE") {
+        throw new PaperAccountLockedError(`Account is in ${accountRow.status} state. Orders disabled.`);
+      }
+
+      if (idempotencyKey) {
+        const replay = await this.findReplay(repos.write, accountRow, idempotencyKey, terms);
+        if (replay) {
+          return replay;
+        }
+      }
+
+      const positions = await repos.write.findPositionsForUpdate({
+        userId,
+        generation: accountRow.generation,
+      });
+
+      const now = this.now();
+      const order = await repos.write.insertOrder({
+        id: this.createId(),
+        userId,
+        ...keys,
+        ...terms,
+        generation: accountRow.generation,
+        status: "PENDING",
+        filledQty: 0,
+        quoteSource: quote.source,
+        quoteQuality: quote.quality,
+        quoteTimestamp: new Date(quote.ts),
+        referencePrice: String(quote.price),
+        version: 1,
+        placedAt: now,
+        updatedAt: now,
+      });
+
+      let applied: AppliedFill;
       try {
-        rawQuote = await this.quoteLoader(symbol, true);
-      } catch (err: unknown) {
-        throw new PaperValidationError(`Failed to load execution quote for ${symbol}`, undefined, err);
-      }
-
-      const parsedQuoteResult = parseExecutionQuote(rawQuote, symbol);
-      if (!parsedQuoteResult.ok) {
-        throw new PaperValidationError(`Invalid quote for ${symbol}: ${parsedQuoteResult.reason}`);
-      }
-      const quote = parsedQuoteResult.quote;
-
-      const appConfig = getConfig();
-      const policy = evaluateExecutionQuote(quote, symbol, {
-        allowDelayed: appConfig.paperExecutionAllowDelayed,
-        maxAgeMs: appConfig.paperExecutionMaxQuoteAgeMs,
-      });
-      if (!policy.executable) {
-        throw new PaperValidationError(`Quote for ${symbol} cannot be executed: ${policy.reason}`);
-      }
-
-      const fingerprint = computeQuoteFingerprint({
-        exchange: quote.exchange,
-        symbol: quote.symbol,
-        source: quote.source,
-        quality: quote.quality,
-        ts: quote.ts,
-        price: quote.price,
-        volume: quote.volume,
-      });
-
-      return withSerializablePaperTransaction(async (repos) => {
-        const accountRow = await repos.write.ensureAccountForUpdate({
-          userId,
-          initialCash: PAPER_INITIAL_CASH_INR,
-        });
-
-        if (accountRow.status !== "ACTIVE") {
-          throw new PaperAccountLockedError(`Account is in ${accountRow.status} state. Orders disabled.`);
-        }
-
-        if (idempotencyKey) {
-          const existingOrder = await repos.write.findOrderByIdempotencyKeyForUpdate({
-            userId,
-            idempotencyKey,
-          });
-          if (existingOrder) {
-            return {
-              order: existingOrder,
-              fill: null,
-              account: accountRow,
-              position: null,
-              idempotentReplay: true,
-              asOf: this.now(),
-            };
-          }
-        }
-
-        const currentPositions = await repos.write.findPositionsForUpdate({
-          userId,
-          generation: accountRow.generation,
-        });
-
-        const orderId = this.createId();
-        const orderRowInput = {
-          id: orderId,
-          userId,
-          clientOrderId,
-          idempotencyKey,
-          generation: accountRow.generation,
-          symbol,
-          exchange,
-          side: command.side,
-          type: command.type,
-          status: "PENDING" as const,
-          qty: command.qty,
-          filledQty: 0,
-          quoteSource: quote.source,
-          quoteQuality: quote.quality,
-          quoteTimestamp: new Date(quote.ts),
-          referencePrice: String(quote.price),
-          lastQuoteFingerprint: fingerprint,
-          version: 1,
-          placedAt: this.now(),
-          updatedAt: this.now(),
-        };
-
-        const initialOrderRow = await repos.write.insertOrder(orderRowInput);
-
-        const domainAccount: PaperAccount = {
-          version: 3,
-          initialCash: Number(accountRow.initialCash),
-          cash: Number(accountRow.cashBalance),
-          allocatedMargin: Number(accountRow.allocatedMargin),
-          maintenanceMargin: Number(accountRow.maintenanceMargin),
-          realisedPnl: Number(accountRow.realisedPnl),
-          status: accountRow.status as any,
-          positions: currentPositions.map((p) => ({
-              symbol: p.symbol,
-              // P0-E fix: restore signed quantity from side + totalShares.
-              // side='SHORT' => negative quantity; side='LONG' => positive.
-              quantity: (p.side === "SHORT" ? -1 : 1) * p.totalShares,
-              averagePrice: Number(p.averageEntryPrice),
-              marginLocked: Number(p.marginLocked),
-              realisedPnl: Number(p.realizedPnl),
-              unrealisedPnl: Number(p.unrealizedPnl || 0),
-              updatedAt: p.updatedAt.toISOString(),
-            })),
-          orders: [],
-          fills: [],
-        };
-
-        const domainOrder: PaperOrder = {
-          id: orderId,
-          symbol,
-          side: command.side,
-          type: command.type,
-          status: "PENDING",
-          quantity: command.qty,
-          filledQuantity: 0,
-          createdAt: initialOrderRow.placedAt.toISOString(),
-          updatedAt: initialOrderRow.updatedAt.toISOString(),
-        };
-
-        const reason: PaperExecutionReason = "USER_ORDER";
-
-        let fillResult: ReturnType<typeof executePaperFill>;
-        try {
-          fillResult = executePaperFill({
-            account: domainAccount,
-            order: domainOrder,
-            fillQuantity: command.qty,
-            quote,
-            reason,
-            policy: {
-              allowDelayed: appConfig.paperExecutionAllowDelayed,
-              maxAgeMs: appConfig.paperExecutionMaxQuoteAgeMs,
-            },
-          });
-        } catch (err: unknown) {
-          throw new PaperValidationError(`Order execution failed: ${err instanceof Error ? err.message : String(err)}`, undefined, err);
-        }
-
-        const fillRowId = this.createId();
-        const updatedOrderRow = await repos.write.updateOrder(orderId, {
-          status: "FILLED",
-          filledQty: command.qty,
-          lastFillAt: this.now(),
-        });
-
-        const fillRow = await repos.write.insertFill({
-          id: fillRowId,
-          orderId,
-          userId,
-          generation: accountRow.generation,
-          symbol,
-          exchange,
-          side: command.side,
-          quantity: command.qty,
-          referencePrice: String(fillResult.fill.referencePrice),
-          fillPrice: String(fillResult.fill.fillPrice),
-          slippage: String(fillResult.fill.slippage),
-          fees: String(fillResult.fill.fees),
-          realizedPnl: String(fillResult.fill.realisedPnl),
-          quoteSource: quote.source,
-          quoteQuality: quote.quality,
-          quoteTimestamp: new Date(quote.ts),
+        applied = await applyFill({
+          write: repos.write,
+          account: accountRow,
+          order,
+          positions,
+          quote,
           quoteFingerprint: fingerprint,
-          executionReason: fillResult.fill.reason,
-          executionSequence: 1,
-          executedAt: this.now(),
+          fillQuantity: terms.qty,
+          reason: "USER_ORDER",
+          ledgerSourceType: "FILL",
+          now,
+          createId: this.createId,
         });
-
-        const existingPos = currentPositions.find(
-          (p) => p.symbol === symbol && p.exchange === exchange
-        );
-
-        let finalPositionRow: PaperPositionRow | null = null;
-        const updatedDomainPos = fillResult.account.positions.find(
-          (p) => p.symbol === symbol
-        );
-
-        if (existingPos) {
-          if (updatedDomainPos && updatedDomainPos.quantity !== 0) {
-            // P0-E fix: derive side from signed quantity; always store totalShares as absolute.
-            const posSide = updatedDomainPos.quantity < 0 ? "SHORT" : "LONG";
-            finalPositionRow = await repos.write.upsertPosition({
-              id: existingPos.id,
-              userId,
-              generation: accountRow.generation,
-              symbol,
-              exchange,
-              averageEntryPrice: String(updatedDomainPos.averagePrice),
-              totalShares: Math.abs(updatedDomainPos.quantity),
-              side: posSide,
-              realizedPnl: String(updatedDomainPos.realisedPnl),
-              unrealizedPnl: String(updatedDomainPos.unrealisedPnl),
-              marginLocked: String(updatedDomainPos.marginLocked),
-              version: existingPos.version + 1,
-              updatedAt: this.now(),
-            });
-          } else {
-            await repos.write.deletePosition({
-              userId,
-              generation: accountRow.generation,
-              symbol,
-              exchange,
-            });
-          }
-        } else if (updatedDomainPos && updatedDomainPos.quantity !== 0) {
-          // P0-E fix: derive side from signed quantity; always store totalShares as absolute.
-          const posSide = updatedDomainPos.quantity < 0 ? "SHORT" : "LONG";
-          finalPositionRow = await repos.write.upsertPosition({
-            id: this.createId(),
-            userId,
-            generation: accountRow.generation,
-            symbol,
-            exchange,
-            averageEntryPrice: String(updatedDomainPos.averagePrice),
-            totalShares: Math.abs(updatedDomainPos.quantity),
-            side: posSide,
-            realizedPnl: String(updatedDomainPos.realisedPnl),
-            unrealizedPnl: String(updatedDomainPos.unrealisedPnl),
-            marginLocked: String(updatedDomainPos.marginLocked),
-            version: 1,
-            createdAt: this.now(),
-            updatedAt: this.now(),
-          });
+      } catch (err: unknown) {
+        if (err instanceof PaperExecutionError) {
+          throw new PaperValidationError(`Order execution failed: ${err.message}`, undefined, err);
         }
+        throw err;
+      }
 
-        const newAccountVersion = Number(accountRow.version) + 1;
-        const updatedAccountRow = await repos.write.updateAccount(userId, {
-          cashBalance: String(fillResult.account.cash),
-          realisedPnl: String(fillResult.account.realisedPnl),
-          version: newAccountVersion,
-          updatedAt: this.now(),
-        });
+      await repos.write.insertOutboxEvents([
+        buildOrderAcceptedEvent({
+          userId,
+          generation: accountRow.generation,
+          aggregateType: "PaperOrder",
+          aggregateId: order.id,
+          payload: { orderId: order.id },
+        }),
+      ]);
 
-        await repos.write.insertLedgerEntries([
-          {
-            id: this.createId(),
-            userId,
-            generation: accountRow.generation,
-            fillId: fillRowId,
-            entryType: "EXECUTION_FEE",
-            amount: String(-fillResult.fill.fees),
-            balanceAfter: String(fillResult.account.cash),
-            currency: "INR",
-            sourceType: "FILL",
-            sourceId: fillRowId,
-            // P0-G fix: compute actual feeRate from fill data, not a hardcoded constant.
-            metadata: {
-              feeRate: fillResult.fill.fees > 0
-                ? fillResult.fill.fees / (fillResult.fill.fillPrice * command.qty)
-                : 0,
-              fillPrice: fillResult.fill.fillPrice,
-              qty: command.qty,
-            },
-            createdAt: this.now(),
-          },
-          // P0-G fix: separate ledger entry for realized P&L to make ledger reconcilable.
-          {
-            id: this.createId(),
-            userId,
-            generation: accountRow.generation,
-            fillId: fillRowId,
-            entryType: "TRADE_REALIZED_PNL",
-            amount: String(fillResult.fill.realisedPnl),
-            balanceAfter: String(fillResult.account.cash),
-            currency: "INR",
-            sourceType: "FILL",
-            sourceId: fillRowId,
-            metadata: { fillPrice: fillResult.fill.fillPrice, qty: command.qty, side: command.side },
-            createdAt: this.now(),
-          },
-        ]);
+      return {
+        order: applied.order,
+        fill: applied.fill,
+        account: applied.account,
+        position: applied.position,
+        idempotentReplay: false,
+        asOf: this.now(),
+      };
+    });
+  }
 
-        // P0-F fix: Persist child bracket/OCO orders that were created in-memory by executePaperFill.
-        // Previously these orders only lived in the domain account object and were discarded
-        // when the transaction ended. They MUST be persisted for durable SL/TP behavior.
-        const childOrders = fillResult.account.orders.filter(
-          (o) => o.parentOrderId === orderId && o.status === "PENDING"
-        );
-        for (const child of childOrders) {
-          await repos.write.insertOrder({
-            id: child.id,
-            userId,
-            parentOrderId: orderId,
-            generation: accountRow.generation,
-            symbol,
-            exchange,
-            side: child.side,
-            type: child.type,
-            status: child.type === "STOP_LOSS_LIMIT" ? "TRIGGER_PENDING" : "PENDING",
-            qty: child.quantity,
-            limitPrice: child.limitPrice ? String(child.limitPrice) : null,
-            stopPrice: child.stopPrice ? String(child.stopPrice) : null,
-            stopLossPrice: child.stopPrice ? String(child.stopPrice) : null,
-            takeProfitPrice: child.limitPrice && child.type === "LIMIT" ? String(child.limitPrice) : null,
-            version: 1,
-            placedAt: this.now(),
-            updatedAt: this.now(),
-          });
-        }
-
-        await repos.write.insertOutboxEvents([
-          buildOrderAcceptedEvent({
-            userId,
-            generation: accountRow.generation,
-            aggregateType: "PaperOrder",
-            aggregateId: orderId,
-            payload: { orderId },
-          }),
-          buildOrderFilledEvent({
-            userId,
-            generation: accountRow.generation,
-            aggregateType: "PaperOrder",
-            aggregateId: orderId,
-            payload: { fillId: fillRowId, fillPrice: fillResult.fill.fillPrice, qty: command.qty },
-          }),
-          buildPositionUpdatedEvent({
-            userId,
-            generation: accountRow.generation,
-            aggregateType: "PaperPosition",
-            aggregateId: `${userId}:${symbol}`,
-            payload: { symbol },
-          }),
-          buildAccountUpdatedEvent({
-            userId,
-            generation: accountRow.generation,
-            aggregateType: "PaperAccount",
-            aggregateId: userId,
-            payload: { version: newAccountVersion },
-          }),
-        ]);
-
-        return {
-          order: updatedOrderRow,
-          fill: fillRow,
-          account: updatedAccountRow,
-          position: finalPositionRow,
-          idempotentReplay: false,
-          asOf: this.now(),
-        };
-      });
-    }
-
-    // LIMIT and STOP_LOSS_LIMIT queued orders
-    if (command.type === "LIMIT" && (!command.limitPrice || command.limitPrice <= 0)) {
-      throw new PaperValidationError("LIMIT order requires a positive limitPrice");
-    }
-    if (command.type === "STOP_LOSS_LIMIT" && (!command.stopPrice && !command.stopLossPrice)) {
-      throw new PaperValidationError("STOP_LOSS_LIMIT order requires stopPrice or stopLossPrice");
-    }
-
+  private async placeRestingOrder(
+    userId: string,
+    terms: OrderTerms,
+    keys: { idempotencyKey: string | null; clientOrderId: string | null }
+  ): Promise<PlaceOrderResult> {
     return withSerializablePaperTransaction(async (repos) => {
       const accountRow = await repos.write.ensureAccountForUpdate({
         userId,
-        initialCash: PAPER_INITIAL_CASH_INR,
+        initialCash: getConfig().paperInitialCashInr,
       });
 
       if (accountRow.status !== "ACTIVE") {
         throw new PaperAccountLockedError(`Account is in ${accountRow.status} state. Orders disabled.`);
       }
 
-      if (idempotencyKey) {
-        const existingOrder = await repos.write.findOrderByIdempotencyKeyForUpdate({
-          userId,
-          idempotencyKey,
-        });
-        if (existingOrder) {
-          return {
-            order: existingOrder,
-            fill: null,
-            account: accountRow,
-            position: null,
-            idempotentReplay: true,
-            asOf: this.now(),
-          };
+      if (keys.idempotencyKey) {
+        const replay = await this.findReplay(repos.write, accountRow, keys.idempotencyKey, terms);
+        if (replay) {
+          return replay;
         }
       }
 
       const orderId = this.createId();
-      const initialStatus = command.type === "STOP_LOSS_LIMIT" ? "TRIGGER_PENDING" : "PENDING";
+      const initialStatus = terms.type === "STOP_LOSS_LIMIT" ? "TRIGGER_PENDING" : "PENDING";
 
       const orderRow = await repos.write.insertOrder({
         id: orderId,
         userId,
-        clientOrderId,
-        idempotencyKey,
+        ...keys,
+        ...terms,
         generation: accountRow.generation,
-        symbol,
-        exchange,
-        side: command.side,
-        type: command.type,
         status: initialStatus,
-        qty: command.qty,
         filledQty: 0,
-        limitPrice: command.limitPrice ? String(command.limitPrice) : null,
-        stopPrice: command.stopPrice ? String(command.stopPrice) : command.stopLossPrice ? String(command.stopLossPrice) : null,
-        stopLossPrice: command.stopLossPrice ? String(command.stopLossPrice) : null,
-        takeProfitPrice: command.takeProfitPrice ? String(command.takeProfitPrice) : null,
         version: 1,
         placedAt: this.now(),
         updatedAt: this.now(),
@@ -538,6 +424,7 @@ export class PaperTradingService {
     });
   }
 
+  /** Cancels a working order; any quantity already filled stays filled. */
   async cancelOrder(params: { userId: string; orderId: string }): Promise<PaperOrderRow> {
     const { userId, orderId } = params;
     if (!userId || !orderId) {
@@ -545,14 +432,17 @@ export class PaperTradingService {
     }
 
     return withSerializablePaperTransaction(async (repos) => {
-      const accountRow = await repos.write.ensureAccountForUpdate({ userId });
+      const accountRow = await repos.write.ensureAccountForUpdate({
+        userId,
+        initialCash: getConfig().paperInitialCashInr,
+      });
       const orderRow = await repos.write.findOrderForUpdate({ userId, orderId });
 
       if (!orderRow) {
         throw new PaperOrderNotFoundError(`Order ${orderId} not found`);
       }
 
-      if (!["PENDING", "TRIGGER_PENDING"].includes(orderRow.status)) {
+      if (!CANCELLABLE_ORDER_STATUSES[orderRow.status]) {
         throw new PaperOrderConflictError(`Cannot cancel order in ${orderRow.status} state`);
       }
 
@@ -574,7 +464,7 @@ export class PaperTradingService {
           generation: accountRow.generation,
           aggregateType: "PaperOrder",
           aggregateId: orderId,
-          payload: { orderId, cancelledAt: this.now().toISOString() },
+          payload: { orderId, cancelledAt: this.now().toISOString(), filledQty: cancelledOrder.filledQty },
         }),
         buildAccountUpdatedEvent({
           userId,
@@ -601,11 +491,9 @@ export class PaperTradingService {
       throw new PaperValidationError("Account reset requires explicit confirmation");
     }
 
+    const initialCash = getConfig().paperInitialCashInr;
     return withSerializablePaperTransaction(async (repos) => {
-      const accountRow = await repos.write.ensureAccountForUpdate({
-        userId,
-        initialCash: PAPER_INITIAL_CASH_INR,
-      });
+      const accountRow = await repos.write.ensureAccountForUpdate({ userId, initialCash });
 
       await repos.write.cancelOpenOrders({
         userId,
@@ -614,12 +502,14 @@ export class PaperTradingService {
       });
 
       const nextGen = accountRow.generation + 1;
-      const initialCashStr = String(PAPER_INITIAL_CASH_INR);
+      const initialCashStr = initialCash.toFixed(4);
 
       const resetAccountRow = await repos.write.updateAccount(userId, {
         cashBalance: initialCashStr,
         initialCash: initialCashStr,
         realisedPnl: "0.0000",
+        allocatedMargin: "0.0000",
+        maintenanceMargin: "0.0000",
         status: "ACTIVE",
         isLocked: false,
         lockReason: null,

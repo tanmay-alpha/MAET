@@ -1,28 +1,27 @@
 /**
  * Leakage-Free 3-Phase Walk-Forward Analysis Engine — MAET P2.
  *
- * Implements an institutional-grade 3-phase rolling/anchored walk-forward engine:
- * 1. Window Partitioning:
- *    - Training: parameter optimization
- *    - Validation: parameter selection / overfit rejection
- *    - Test: out-of-sample performance evaluation
- * 2. Strict Zero-Leakage Invariants:
- *    - Training end timestamp <= Validation start timestamp
- *    - Validation end timestamp <= Test start timestamp
- *    - No test candle can ever enter training or validation indicator caches or parameter sweeps.
- * 3. In-Sample vs Out-of-Sample Reporting:
- *    - IS return vs OOS return
- *    - IS Sharpe vs OOS Sharpe
- *    - IS drawdown vs OOS drawdown
- *    - Performance retention ratio (OOS Sharpe / IS Sharpe)
- *    - Walk-Forward Efficiency (WFE) ratio
- * 4. Aggregate OOS concatenated equity curve.
+ * 1. Window Partitioning: each window is split into
+ *    - Training: parameter optimisation (best Sharpe across the sweep grid)
+ *    - Validation: overfit rejection of the selected parameters
+ *    - Test: out-of-sample evaluation, only for windows that pass validation
+ * 2. Zero-leakage invariants:
+ *    - Training end <= Validation start; Validation end <= Test start.
+ *    - Each phase sees only candles up to its own end. Up to `warmupBars` earlier candles warm up
+ *      indicators (they are in the past, so no leakage) but are never traded.
+ * 3. Reporting:
+ *    - Per-window IS / validation / OOS metrics.
+ *    - Walk-Forward Efficiency WFE = mean OOS annualised return / mean IS annualised return over
+ *      tested windows (annualised so phases of different lengths compare). Undefined (null, with a
+ *      reason) when the in-sample return is <= 0 or no window was tested.
+ *    - Performance retention = mean OOS Sharpe / mean IS Sharpe, undefined when IS Sharpe <= 0.
+ * 4. Aggregate OOS equity curve: tested windows compound; a rejected window sits in cash.
  */
 
 import type { Candle } from "@shared/types";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
-import { runBacktestV3 } from "./runner-v3";
-import { generateCombinations, injectParametersIntoAST, type SweepParameterRange } from "../../workers/sweep-worker";
+import { runBacktestV3, type V3BacktestRunResult } from "./runner-v3";
+import { applyParameters, generateCombinations, type SweepParameter } from "./parameter-sweep";
 import type { EquityPoint } from "../backtest/risk-metrics";
 
 // ============================================================
@@ -41,6 +40,7 @@ export interface WalkForward3PhaseWindow {
 
 export interface WindowMetricsSummary {
   totalReturn: number;
+  annualisedReturn: number;
   sharpe: number;
   maxDrawdown: number;
   tradeCount: number;
@@ -54,9 +54,12 @@ export interface WalkForwardWindowResult {
   testDates: { from: string; to: string };
   selectedParameters: Record<string, number>;
   validationAccepted: boolean;
+  /** Why validation rejected the window (threshold breach or validation run error). */
+  rejectionReason: string | null;
   isMetrics: WindowMetricsSummary;
-  valMetrics: WindowMetricsSummary;
-  oosMetrics: WindowMetricsSummary;
+  valMetrics: WindowMetricsSummary | null;
+  /** null when the window was not tested out of sample (rejected, or the test run failed). */
+  oosMetrics: WindowMetricsSummary | null;
   oosEquityCurve: EquityPoint[];
 }
 
@@ -65,13 +68,15 @@ export interface WalkForwardAnalysisInput {
   definition: StrategyDefinition;
   symbol: string;
   candles: Candle[];
-  parameterRanges: SweepParameterRange[];
+  parameters: SweepParameter[];
   numWindows?: number;
   windowType?: "ANCHORED" | "ROLLING";
   trainRatio?: number; // e.g. 0.6
   valRatio?: number;   // e.g. 0.2
   timeframe?: string;
   initialCapital?: number;
+  /** Earlier candles used only to warm up indicators at the start of each phase. Default 250. */
+  warmupBars?: number;
 }
 
 export interface WalkForwardAnalysisResult {
@@ -87,13 +92,23 @@ export interface WalkForwardAnalysisResult {
     oosSharpeAvg: number;
     isDrawdownAvg: number;
     oosDrawdownMax: number;
-    performanceRetention: number; // oosSharpe / isSharpe
-    walkForwardEfficiency: number; // oosReturn / isReturn
+    /** mean OOS Sharpe / mean IS Sharpe; null when IS Sharpe <= 0 or nothing was tested. */
+    performanceRetention: number | null;
+    performanceRetentionReason: string | null;
+    /** mean OOS annualised return / mean IS annualised return; null when undefined. */
+    walkForwardEfficiency: number | null;
+    walkForwardEfficiencyReason: string | null;
     acceptedWindowsCount: number;
+    testedWindowsCount: number;
     totalWindowsCount: number;
   };
   warnings: string[];
 }
+
+/** Validation Sharpe below this rejects the window's parameters as overfit. */
+const VALIDATION_SHARPE_FLOOR = -1.0;
+const DEFAULT_WARMUP_BARS = 250;
+const MAX_COMBINATIONS = 100;
 
 // ============================================================
 // Window Generator
@@ -110,7 +125,6 @@ export function generate3PhaseWalkForwardWindows(
   const totalMs = endDate.getTime() - startDate.getTime();
   if (totalMs <= 0 || numWindows <= 0) return [];
 
-  const testRatio = Math.max(0.1, 1 - trainRatio - valRatio);
   const windowSpanMs = Math.floor(totalMs / numWindows);
   const windows: WalkForward3PhaseWindow[] = [];
 
@@ -179,9 +193,24 @@ export function assertNoDataLeakage(
 // Walk-Forward Execution Engine
 // ============================================================
 
+function summarise(result: V3BacktestRunResult): WindowMetricsSummary {
+  return {
+    totalReturn: result.metrics.totalReturn,
+    annualisedReturn: result.metrics.annualisedReturn,
+    sharpe: result.metrics.sharpe,
+    maxDrawdown: result.metrics.maxDrawdown,
+    tradeCount: result.tradeCount,
+    winRate: result.metrics.winRate,
+  };
+}
+
+const average = (values: number[]) => (values.length > 0 ? values.reduce((s, v) => s + v, 0) / values.length : 0);
+const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
 export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkForwardAnalysisResult {
-  const { definition, candles, symbol, parameterRanges } = input;
+  const { definition, candles, symbol, parameters } = input;
   const sorted = [...candles].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+  const sortedMs = sorted.map((c) => new Date(c.ts).getTime());
   const warnings: string[] = [];
 
   if (sorted.length < 90) {
@@ -192,19 +221,37 @@ export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkFor
   const windowType = input.windowType ?? "ROLLING";
   const trainRatio = input.trainRatio ?? 0.6;
   const valRatio = input.valRatio ?? 0.2;
+  const warmupBars = input.warmupBars ?? DEFAULT_WARMUP_BARS;
   const initialCap = input.initialCapital ?? definition.execution?.initialCapital ?? 100000;
 
-  const startDate = new Date(sorted[0].ts);
-  const endDate = new Date(sorted[sorted.length - 1].ts);
+  const startDate = new Date(sortedMs[0]);
+  const endDate = new Date(sortedMs[sortedMs.length - 1]);
   const windows = generate3PhaseWalkForwardWindows(startDate, endDate, windowType, numWindows, trainRatio, valRatio);
-  const combinations = generateCombinations(parameterRanges, 100);
+  const combinations = generateCombinations(parameters, MAX_COMBINATIONS);
+  // Invalid parameter paths throw here, before any window runs.
+  const candidates = combinations.map((combo) => ({ combo, definition: applyParameters(definition, parameters, combo) }));
+
+  /** Backtests [fromMs, toMs) (or [fromMs, toMs] when `inclusiveEnd`) with up to warmupBars of history. */
+  const runPhase = (def: StrategyDefinition, fromMs: number, toMs: number, inclusiveEnd: boolean, capital?: number) => {
+    const firstIdx = sortedMs.findIndex((t) => t >= fromMs);
+    const endIdx = sortedMs.findIndex((t) => (inclusiveEnd ? t > toMs : t >= toMs));
+    const phaseCandles = sorted.slice(Math.max(0, firstIdx - warmupBars), endIdx === -1 ? sorted.length : endIdx);
+    return runBacktestV3({
+      strategyVersionId: input.strategyVersionId,
+      definition: def,
+      symbol,
+      candles: phaseCandles,
+      overrideCapital: capital,
+      timeframe: input.timeframe,
+      tradeFrom: sortedMs[firstIdx],
+    });
+  };
 
   const windowResults: WalkForwardWindowResult[] = [];
   const allOosPoints: EquityPoint[] = [];
   let runningOosEquity = initialCap;
 
-  for (let i = 0; i < windows.length; i++) {
-    const w = windows[i];
+  for (const w of windows) {
     const trainStartMs = w.trainStart.getTime();
     const trainEndMs = w.trainEnd.getTime();
     const valStartMs = w.valStart.getTime();
@@ -212,21 +259,9 @@ export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkFor
     const testStartMs = w.testStart.getTime();
     const testEndMs = w.testEnd.getTime();
 
-    // Slice candles strictly
-    const trainCandles = sorted.filter((c) => {
-      const t = new Date(c.ts).getTime();
-      return t >= trainStartMs && t < trainEndMs;
-    });
-
-    const valCandles = sorted.filter((c) => {
-      const t = new Date(c.ts).getTime();
-      return t >= valStartMs && t < valEndMs;
-    });
-
-    const testCandles = sorted.filter((c) => {
-      const t = new Date(c.ts).getTime();
-      return t >= testStartMs && t <= testEndMs;
-    });
+    const trainCandles = sorted.filter((_, i) => sortedMs[i] >= trainStartMs && sortedMs[i] < trainEndMs);
+    const valCandles = sorted.filter((_, i) => sortedMs[i] >= valStartMs && sortedMs[i] < valEndMs);
+    const testCandles = sorted.filter((_, i) => sortedMs[i] >= testStartMs && sortedMs[i] <= testEndMs);
 
     // Guard against look-ahead data leakage
     assertNoDataLeakage(trainCandles, valCandles, testCandles);
@@ -236,101 +271,52 @@ export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkFor
       continue;
     }
 
-    // 1. Training Phase: Sweep and optimize parameters on trainCandles only
-    let bestTrainSharpe = -Infinity;
-    let bestParams: Record<string, number> = {};
-    let bestTrainMetrics: WindowMetricsSummary = { totalReturn: 0, sharpe: 0, maxDrawdown: 0, tradeCount: 0, winRate: 0 };
-
-    for (const combo of combinations) {
-      const modDef = injectParametersIntoAST(definition, combo);
+    // 1. Training: pick the parameter set with the best in-sample Sharpe
+    let best: { combo: Record<string, number>; definition: StrategyDefinition; metrics: WindowMetricsSummary } | null = null;
+    const trainErrors: string[] = [];
+    for (const candidate of candidates) {
       try {
-        const trainRes = runBacktestV3({
-          strategyVersionId: input.strategyVersionId,
-          definition: modDef,
-          symbol,
-          candles: trainCandles,
-          timeframe: input.timeframe,
-        });
-
-        if (trainRes.metrics.sharpe > bestTrainSharpe) {
-          bestTrainSharpe = trainRes.metrics.sharpe;
-          bestParams = combo;
-          bestTrainMetrics = {
-            totalReturn: trainRes.metrics.totalReturn,
-            sharpe: trainRes.metrics.sharpe,
-            maxDrawdown: trainRes.metrics.maxDrawdown,
-            tradeCount: trainRes.tradeCount,
-            winRate: trainRes.metrics.winRate,
-          };
-        }
-      } catch {
-        // Skip combo if insufficient history inside window
+        const metrics = summarise(runPhase(candidate.definition, trainStartMs, trainEndMs, false));
+        if (!best || metrics.sharpe > best.metrics.sharpe) best = { ...candidate, metrics };
+      } catch (err) {
+        trainErrors.push(errorMessage(err));
       }
     }
+    if (!best) {
+      warnings.push(`Window ${w.windowNumber} skipped: every training run failed (${trainErrors[0] ?? "no parameter combinations"})`);
+      continue;
+    }
+    if (trainErrors.length > 0) {
+      warnings.push(`Window ${w.windowNumber}: ${trainErrors.length} of ${candidates.length} training runs failed (${trainErrors[0]})`);
+    }
 
-    // 2. Validation Phase: Evaluate selected bestParams on valCandles
-    const selectedDef = injectParametersIntoAST(definition, bestParams);
-    let valMetrics: WindowMetricsSummary = { totalReturn: 0, sharpe: 0, maxDrawdown: 0, tradeCount: 0, winRate: 0 };
-    let validationAccepted = true;
-
+    // 2. Validation: reject parameters that collapse on unseen data
+    let valMetrics: WindowMetricsSummary | null = null;
+    let rejectionReason: string | null = null;
     try {
-      const valRes = runBacktestV3({
-        strategyVersionId: input.strategyVersionId,
-        definition: selectedDef,
-        symbol,
-        candles: valCandles,
-        timeframe: input.timeframe,
-      });
-
-      valMetrics = {
-        totalReturn: valRes.metrics.totalReturn,
-        sharpe: valRes.metrics.sharpe,
-        maxDrawdown: valRes.metrics.maxDrawdown,
-        tradeCount: valRes.tradeCount,
-        winRate: valRes.metrics.winRate,
-      };
-
-      // Overfit rejection: if validation performance is catastrophically negative, reject window
-      if (valRes.metrics.sharpe < -1.0) {
-        validationAccepted = false;
-        warnings.push(`Window ${w.windowNumber} rejected: validation Sharpe (${valRes.metrics.sharpe.toFixed(2)}) failed threshold`);
+      valMetrics = summarise(runPhase(best.definition, valStartMs, valEndMs, false));
+      if (valMetrics.sharpe < VALIDATION_SHARPE_FLOOR) {
+        rejectionReason = `validation Sharpe ${valMetrics.sharpe.toFixed(2)} is below ${VALIDATION_SHARPE_FLOOR}`;
       }
-    } catch {
-      validationAccepted = false;
+    } catch (err) {
+      rejectionReason = `validation run failed: ${errorMessage(err)}`;
     }
+    if (rejectionReason) warnings.push(`Window ${w.windowNumber} rejected: ${rejectionReason}`);
 
-    // 3. Test Phase: Evaluate strictly out-of-sample on testCandles
-    let oosMetrics: WindowMetricsSummary = { totalReturn: 0, sharpe: 0, maxDrawdown: 0, tradeCount: 0, winRate: 0 };
+    // 3. Test: only accepted parameters trade out of sample; a rejected window stays in cash
+    let oosMetrics: WindowMetricsSummary | null = null;
     let oosCurve: EquityPoint[] = [];
-
-    try {
-      const testRes = runBacktestV3({
-        strategyVersionId: input.strategyVersionId,
-        definition: selectedDef,
-        symbol,
-        candles: testCandles,
-        overrideCapital: runningOosEquity,
-        timeframe: input.timeframe,
-      });
-
-      oosMetrics = {
-        totalReturn: testRes.metrics.totalReturn,
-        sharpe: testRes.metrics.sharpe,
-        maxDrawdown: testRes.metrics.maxDrawdown,
-        tradeCount: testRes.tradeCount,
-        winRate: testRes.metrics.winRate,
-      };
-
-      oosCurve = testRes.equityCurve;
-      if (oosCurve.length > 0) {
+    if (!rejectionReason) {
+      try {
+        const testRes = runPhase(best.definition, testStartMs, testEndMs, true, runningOosEquity);
+        oosMetrics = summarise(testRes);
+        oosCurve = testRes.equityCurve;
         runningOosEquity = oosCurve[oosCurve.length - 1].equity;
-        // Append points for aggregate OOS equity curve
-        for (const pt of oosCurve) {
-          allOosPoints.push(pt);
-        }
+        // The first point is the as-of mark before the window; later windows continue the curve.
+        allOosPoints.push(...(allOosPoints.length === 0 ? oosCurve : oosCurve.slice(1)));
+      } catch (err) {
+        warnings.push(`Window ${w.windowNumber}: out-of-sample run failed (${errorMessage(err)})`);
       }
-    } catch {
-      // Test window error
     }
 
     windowResults.push({
@@ -338,36 +324,46 @@ export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkFor
       trainDates: { from: w.trainStart.toISOString(), to: w.trainEnd.toISOString() },
       valDates: { from: w.valStart.toISOString(), to: w.valEnd.toISOString() },
       testDates: { from: w.testStart.toISOString(), to: w.testEnd.toISOString() },
-      selectedParameters: bestParams,
-      validationAccepted,
-      isMetrics: bestTrainMetrics,
+      selectedParameters: best.combo,
+      validationAccepted: rejectionReason === null,
+      rejectionReason,
+      isMetrics: best.metrics,
       valMetrics,
       oosMetrics,
       oosEquityCurve: oosCurve,
     });
   }
 
-  // Summary aggregation
-  const validWindows = windowResults.filter((w) => w.oosMetrics.tradeCount > 0 || w.oosMetrics.totalReturn !== 0);
-  const isReturnAvg = validWindows.length > 0
-    ? validWindows.reduce((s, w) => s + w.isMetrics.totalReturn, 0) / validWindows.length
-    : 0;
-  const oosReturnTotal = runningOosEquity > 0 ? (runningOosEquity - initialCap) / initialCap : 0;
-  const isSharpeAvg = validWindows.length > 0
-    ? validWindows.reduce((s, w) => s + w.isMetrics.sharpe, 0) / validWindows.length
-    : 0;
-  const oosSharpeAvg = validWindows.length > 0
-    ? validWindows.reduce((s, w) => s + w.oosMetrics.sharpe, 0) / validWindows.length
-    : 0;
-  const isDrawdownAvg = validWindows.length > 0
-    ? validWindows.reduce((s, w) => s + w.isMetrics.maxDrawdown, 0) / validWindows.length
-    : 0;
-  const oosDrawdownMax = validWindows.length > 0
-    ? Math.max(...validWindows.map((w) => w.oosMetrics.maxDrawdown))
-    : 0;
+  // Summary over windows that were actually tested out of sample
+  const tested = windowResults.filter((w): w is WalkForwardWindowResult & { oosMetrics: WindowMetricsSummary } => w.oosMetrics !== null);
+  const isReturnAvg = average(tested.map((w) => w.isMetrics.totalReturn));
+  const isAnnualisedAvg = average(tested.map((w) => w.isMetrics.annualisedReturn));
+  const oosAnnualisedAvg = average(tested.map((w) => w.oosMetrics.annualisedReturn));
+  const isSharpeAvg = average(tested.map((w) => w.isMetrics.sharpe));
+  const oosSharpeAvg = average(tested.map((w) => w.oosMetrics.sharpe));
+  const isDrawdownAvg = average(tested.map((w) => w.isMetrics.maxDrawdown));
+  const oosDrawdownMax = tested.length > 0 ? Math.max(...tested.map((w) => w.oosMetrics.maxDrawdown)) : 0;
+  const oosReturnTotal = (runningOosEquity - initialCap) / initialCap;
 
-  const performanceRetention = isSharpeAvg !== 0 ? oosSharpeAvg / Math.max(0.01, isSharpeAvg) : 0;
-  const walkForwardEfficiency = isReturnAvg !== 0 ? oosReturnTotal / Math.max(0.001, isReturnAvg) : 0;
+  let walkForwardEfficiency: number | null = null;
+  let walkForwardEfficiencyReason: string | null = null;
+  let performanceRetention: number | null = null;
+  let performanceRetentionReason: string | null = null;
+  if (tested.length === 0) {
+    walkForwardEfficiencyReason = "No window passed validation and was tested out of sample";
+    performanceRetentionReason = walkForwardEfficiencyReason;
+  } else {
+    if (isAnnualisedAvg > 0) {
+      walkForwardEfficiency = oosAnnualisedAvg / isAnnualisedAvg;
+    } else {
+      walkForwardEfficiencyReason = `In-sample annualised return is ${(isAnnualisedAvg * 100).toFixed(2)}% (<= 0): efficiency is undefined`;
+    }
+    if (isSharpeAvg > 0) {
+      performanceRetention = oosSharpeAvg / isSharpeAvg;
+    } else {
+      performanceRetentionReason = `In-sample Sharpe is ${isSharpeAvg.toFixed(2)} (<= 0): retention is undefined`;
+    }
+  }
 
   return {
     strategyVersionId: input.strategyVersionId,
@@ -383,8 +379,11 @@ export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkFor
       isDrawdownAvg,
       oosDrawdownMax,
       performanceRetention,
+      performanceRetentionReason,
       walkForwardEfficiency,
+      walkForwardEfficiencyReason,
       acceptedWindowsCount: windowResults.filter((w) => w.validationAccepted).length,
+      testedWindowsCount: tested.length,
       totalWindowsCount: windowResults.length,
     },
     warnings,

@@ -1,6 +1,5 @@
 import { createRouter } from "./core";
 import { marketRouter } from "./routers/market";
-import { ordersRouter } from "./routers/orders";
 import { screenerRouter } from "./routers/screener";
 import { portfolioRouter } from "./routers/portfolio";
 import { companiesRouter } from "./routers/companies";
@@ -25,7 +24,6 @@ import { optionsRouter } from "./routers/options";
 
 export const appRouter = createRouter({
   market: marketRouter,
-  orders: ordersRouter,
   screener: screenerRouter,
   portfolio: portfolioRouter,
   companies: companiesRouter,

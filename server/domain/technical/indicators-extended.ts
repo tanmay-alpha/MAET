@@ -1,17 +1,26 @@
 /**
  * Advanced Technical Analysis Indicators Engine (100+ Indicators)
  * Server-side computation of 100+ technical, momentum, volatility, volume, support/resistance, and statistical indicators.
+ *
+ * Indicators that exist in the canonical engine (@shared/indicators — SMA, EMA, RSI, MACD, ATR,
+ * Bollinger, Donchian, VWAP, Stochastic, …) are consumed from there, never re-implemented here.
+ * Every series below has one entry per input bar and is null until the indicator is defined.
  */
 
 import type { Candle } from "@shared/types";
+import {
+  computeATR,
+  computeBollingerBands,
+  computeDonchian,
+  computeEMA,
+  computeMACD,
+  computeRSI,
+  computeSMA,
+  computeStochastic,
+  computeVWAP,
+} from "@shared/indicators";
 
-export interface OHLCV {
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
+type Series = (number | null)[];
 
 // Helper: safe division to prevent NaN/Infinity
 function safeDiv(num: number, den: number, fallback: number = 0): number {
@@ -20,123 +29,96 @@ function safeDiv(num: number, den: number, fallback: number = 0): number {
   return isNaN(res) || !isFinite(res) ? fallback : res;
 }
 
-// Helper: standard deviations
-export function calculateStdDev(data: number[], period: number): number[] {
-  const result: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      result.push(0);
-      continue;
-    }
+/**
+ * Apply a canonical moving average to a derived series whose leading entries are null
+ * (warm-up of an upstream indicator), re-aligning the result to the input bars.
+ */
+function applyToDefined(series: Series, period: number, ma: (values: number[], period: number) => Series): Series {
+  const out: Series = new Array(series.length).fill(null);
+  const start = series.findIndex((v) => v !== null);
+  if (start === -1) return out;
+  const smoothed = ma(series.slice(start).map((v) => v ?? NaN), period);
+  for (let i = 0; i < smoothed.length; i++) out[start + i] = smoothed[i];
+  return out;
+}
+
+// Helper: rolling population standard deviation
+function calculateStdDev(data: number[], period: number): Series {
+  return data.map((_, i) => {
+    if (i < period - 1) return null;
     const slice = data.slice(i - period + 1, i + 1);
     const mean = slice.reduce((sum, v) => sum + v, 0) / period;
     const variance = slice.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / period;
-    result.push(Math.sqrt(variance));
-  }
-  return result;
+    return Math.sqrt(variance);
+  });
 }
 
 // ---------------------------------------------------------------------------
 // 1. TREND INDICATORS (25+ indicators)
 // ---------------------------------------------------------------------------
 
-export function calculateSMA(data: number[], period: number): number[] {
-  const result: number[] = [];
-  let sum = 0;
-  for (let i = 0; i < data.length; i++) {
-    sum += data[i];
-    if (i >= period) sum -= data[i - period];
-    if (i < period - 1) {
-      result.push(0);
-    } else {
-      result.push(sum / period);
-    }
-  }
-  return result;
-}
-
-export function calculateEMA(data: number[], period: number): number[] {
-  const result: number[] = [];
-  if (data.length === 0) return result;
-  const k = 2 / (period + 1);
-  let ema = data[0];
-  result.push(ema);
-  for (let i = 1; i < data.length; i++) {
-    ema = data[i] * k + ema * (1 - k);
-    result.push(ema);
-  }
-  return result;
-}
-
-export function calculateWMA(data: number[], period: number): number[] {
-  const result: number[] = [];
+export function calculateWMA(data: Series, period: number): Series {
   const weightSum = (period * (period + 1)) / 2;
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      result.push(0);
-      continue;
-    }
+  return data.map((_, i) => {
+    if (i < period - 1) return null;
     let sum = 0;
     for (let j = 0; j < period; j++) {
-      sum += data[i - j] * (period - j);
+      const v = data[i - j];
+      if (v === null) return null;
+      sum += v * (period - j);
     }
-    result.push(sum / weightSum);
-  }
-  return result;
+    return sum / weightSum;
+  });
 }
 
-export function calculateHMA(data: number[], period: number): number[] {
+export function calculateHMA(data: number[], period: number): Series {
   const halfPeriod = Math.floor(period / 2);
   const sqrtPeriod = Math.floor(Math.sqrt(period));
-  
+
   const wmaHalf = calculateWMA(data, halfPeriod);
   const wmaFull = calculateWMA(data, period);
-  
-  const diff: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    diff.push(2 * wmaHalf[i] - wmaFull[i]);
-  }
-  
+
+  const diff: Series = data.map((_, i) => {
+    const h = wmaHalf[i];
+    const f = wmaFull[i];
+    return h === null || f === null ? null : 2 * h - f;
+  });
+
   return calculateWMA(diff, sqrtPeriod);
 }
 
-export function calculateDEMA(data: number[], period: number): number[] {
-  const ema1 = calculateEMA(data, period);
-  const ema2 = calculateEMA(ema1, period);
-  const dema: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    dema.push(2 * ema1[i] - ema2[i]);
-  }
-  return dema;
+export function calculateDEMA(data: number[], period: number): Series {
+  const ema1 = computeEMA(data, period);
+  const ema2 = applyToDefined(ema1, period, computeEMA);
+  return data.map((_, i) => {
+    const e1 = ema1[i];
+    const e2 = ema2[i];
+    return e1 === null || e2 === null ? null : 2 * e1 - e2;
+  });
 }
 
-export function calculateTEMA(data: number[], period: number): number[] {
-  const ema1 = calculateEMA(data, period);
-  const ema2 = calculateEMA(ema1, period);
-  const ema3 = calculateEMA(ema2, period);
-  const tema: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    tema.push(3 * ema1[i] - 3 * ema2[i] + ema3[i]);
-  }
-  return tema;
+export function calculateTEMA(data: number[], period: number): Series {
+  const ema1 = computeEMA(data, period);
+  const ema2 = applyToDefined(ema1, period, computeEMA);
+  const ema3 = applyToDefined(ema2, period, computeEMA);
+  return data.map((_, i) => {
+    const e1 = ema1[i];
+    const e2 = ema2[i];
+    const e3 = ema3[i];
+    return e1 === null || e2 === null || e3 === null ? null : 3 * e1 - 3 * e2 + e3;
+  });
 }
 
-export function calculateKAMA(data: number[], period: number = 10, fastSpan: number = 2, slowSpan: number = 30): number[] {
-  const result: number[] = [];
-  if (data.length === 0) return result;
-  
+export function calculateKAMA(data: number[], period: number = 10, fastSpan: number = 2, slowSpan: number = 30): Series {
+  const result: Series = new Array(data.length).fill(null);
+  if (data.length <= period) return result;
+
   const fastAlpha = 2 / (fastSpan + 1);
   const slowAlpha = 2 / (slowSpan + 1);
-  
-  let kama = data[0];
-  result.push(kama);
-  
-  for (let i = 1; i < data.length; i++) {
-    if (i < period) {
-      kama = data[i];
-      result.push(kama);
-      continue;
-    }
+
+  let kama = data[period - 1];
+
+  for (let i = period; i < data.length; i++) {
     const change = Math.abs(data[i] - data[i - period]);
     let volatility = 0;
     for (let j = i - period + 1; j <= i; j++) {
@@ -145,80 +127,66 @@ export function calculateKAMA(data: number[], period: number = 10, fastSpan: num
     const er = volatility === 0 ? 0 : change / volatility;
     const sc = Math.pow(er * (fastAlpha - slowAlpha) + slowAlpha, 2);
     kama = kama + sc * (data[i] - kama);
-    result.push(kama);
+    result[i] = kama;
   }
   return result;
 }
 
-export function calculateALMA(data: number[], period: number = 9, offset: number = 0.85, sigma: number = 6): number[] {
-  const result: number[] = [];
+export function calculateALMA(data: number[], period: number = 9, offset: number = 0.85, sigma: number = 6): Series {
   const m = offset * (period - 1);
   const s = period / sigma;
   const weights: number[] = [];
   let weightSum = 0;
-  
+
   for (let i = 0; i < period; i++) {
     const w = Math.exp(-Math.pow(i - m, 2) / (2 * s * s));
     weights.push(w);
     weightSum += w;
   }
-  
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      result.push(0);
-      continue;
-    }
+
+  return data.map((_, i) => {
+    if (i < period - 1) return null;
     let sum = 0;
     for (let j = 0; j < period; j++) {
       sum += data[i - (period - 1 - j)] * weights[j];
     }
-    result.push(sum / weightSum);
-  }
-  return result;
+    return sum / weightSum;
+  });
 }
 
-export function calculateVWMA(prices: number[], volumes: number[], period: number): number[] {
-  const result: number[] = [];
+export function calculateVWMA(prices: number[], volumes: number[], period: number): Series {
+  const result: Series = [];
   let pvSum = 0;
   let volSum = 0;
-  
+
   for (let i = 0; i < prices.length; i++) {
-    const pv = prices[i] * volumes[i];
-    pvSum += pv;
+    pvSum += prices[i] * volumes[i];
     volSum += volumes[i];
-    
+
     if (i >= period) {
       pvSum -= prices[i - period] * volumes[i - period];
       volSum -= volumes[i - period];
     }
-    
-    if (i < period - 1) {
-      result.push(0);
-    } else {
-      result.push(safeDiv(pvSum, volSum, prices[i]));
-    }
+
+    result.push(i < period - 1 ? null : safeDiv(pvSum, volSum, prices[i]));
   }
   return result;
 }
 
-export function calculateZLEMA(data: number[], period: number): number[] {
+export function calculateZLEMA(data: number[], period: number): Series {
   const lag = Math.floor((period - 1) / 2);
-  const adjustedData: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    const val = i < lag ? data[i] : data[i] + (data[i] - data[i - lag]);
-    adjustedData.push(val);
-  }
-  return calculateEMA(adjustedData, period);
+  const deLagged: Series = data.map((v, i) => (i < lag ? null : v + (v - data[i - lag])));
+  return applyToDefined(deLagged, period, computeEMA);
 }
 
-export function calculateMcGinleyDynamic(data: number[], period: number): number[] {
-  const result: number[] = [];
-  if (data.length === 0) return result;
-  let mcG = data[0];
-  result.push(mcG);
-  for (let i = 1; i < data.length; i++) {
+export function calculateMcGinleyDynamic(data: number[], period: number): Series {
+  // Seeded with the canonical EMA's first value (SMA of the first `period` closes).
+  const result: Series = computeEMA(data, period).map((v, i) => (i === period - 1 ? v : null));
+  let mcG = result[period - 1];
+  if (mcG == null) return result;
+  for (let i = period; i < data.length; i++) {
     mcG = mcG + (data[i] - mcG) / (period * Math.pow(data[i] / mcG, 4));
-    result.push(mcG);
+    result[i] = mcG;
   }
   return result;
 }
@@ -226,17 +194,17 @@ export function calculateMcGinleyDynamic(data: number[], period: number): number
 export function calculateParabolicSAR(high: number[], low: number[], acceleration: number = 0.02, maxAcceleration: number = 0.2): number[] {
   const sar: number[] = [];
   if (high.length === 0) return sar;
-  
+
   let isLong = true;
   let ep = high[0];
   let af = acceleration;
   let currentSar = low[0];
-  
+
   sar.push(currentSar);
-  
+
   for (let i = 1; i < high.length; i++) {
     let nextSar = currentSar + af * (ep - currentSar);
-    
+
     if (isLong) {
       if (low[i] < nextSar) {
         isLong = false;
@@ -270,7 +238,7 @@ export function calculateParabolicSAR(high: number[], low: number[], acceleratio
         nextSar = Math.max(nextSar, priorHigh1, priorHigh2);
       }
     }
-    
+
     currentSar = nextSar;
     sar.push(currentSar);
   }
@@ -281,206 +249,84 @@ export function calculateParabolicSAR(high: number[], low: number[], acceleratio
 // 2. MOMENTUM OSCILLATORS (25+ indicators)
 // ---------------------------------------------------------------------------
 
-export function calculateRSI(data: number[], period: number = 14): number[] {
-  const result: number[] = [];
-  if (data.length === 0) return result;
-  
-  let avgGain = 0;
-  let avgLoss = 0;
-  
-  result.push(50);
-  
-  for (let i = 1; i < data.length; i++) {
-    const diff = data[i] - data[i - 1];
-    const gain = diff > 0 ? diff : 0;
-    const loss = diff < 0 ? -diff : 0;
-    
-    if (i <= period) {
-      avgGain += gain;
-      avgLoss += loss;
-      if (i === period) {
-        avgGain /= period;
-        avgLoss /= period;
-        const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-        result.push(100 - 100 / (1 + rs));
-      } else {
-        result.push(50);
-      }
-    } else {
-      avgGain = (avgGain * (period - 1) + gain) / period;
-      avgLoss = (avgLoss * (period - 1) + loss) / period;
-      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-      result.push(100 - 100 / (1 + rs));
-    }
-  }
-  return result;
-}
-
-export function calculateStochastic(high: number[], low: number[], close: number[], period: number = 14, kSlowing: number = 3, dPeriod: number = 3) {
-  const fastK: number[] = [];
-  const slowK: number[] = [];
-  
-  for (let i = 0; i < close.length; i++) {
-    if (i < period - 1) {
-      fastK.push(50);
-      continue;
-    }
-    const highSlice = high.slice(i - period + 1, i + 1);
-    const lowSlice = low.slice(i - period + 1, i + 1);
-    const highestHigh = Math.max(...highSlice);
-    const lowestLow = Math.min(...lowSlice);
-    
-    const den = highestHigh - lowestLow;
-    const k = den === 0 ? 50 : ((close[i] - lowestLow) / den) * 100;
-    fastK.push(k);
-  }
-  
-  slowK.push(...calculateSMA(fastK, kSlowing));
-  const slowD = calculateSMA(slowK, dPeriod);
-  
-  return { fastK, slowK, slowD };
-}
-
-export function calculateStochRSI(rsiValues: number[], period: number = 14, kPeriod: number = 3, dPeriod: number = 3) {
-  const stochRsi: number[] = [];
-  
-  for (let i = 0; i < rsiValues.length; i++) {
-    if (i < period - 1) {
-      stochRsi.push(50);
-      continue;
-    }
-    const rsiSlice = rsiValues.slice(i - period + 1, i + 1);
-    const maxRsi = Math.max(...rsiSlice);
-    const minRsi = Math.min(...rsiSlice);
-    
+export function calculateStochRSI(rsiValues: Series, period: number = 14, kPeriod: number = 3, dPeriod: number = 3) {
+  const stochRsi: Series = rsiValues.map((rsi, i) => {
+    if (rsi === null || i < period - 1) return null;
+    const values = rsiValues.slice(i - period + 1, i + 1).filter((v): v is number => v !== null);
+    if (values.length < period) return null;
+    const maxRsi = Math.max(...values);
+    const minRsi = Math.min(...values);
     const den = maxRsi - minRsi;
-    const val = den === 0 ? 50 : ((rsiValues[i] - minRsi) / den) * 100;
-    stochRsi.push(val);
-  }
-  
-  const k = calculateSMA(stochRsi, kPeriod);
-  const d = calculateSMA(k, dPeriod);
+    return den === 0 ? 50 : ((rsi - minRsi) / den) * 100;
+  });
+
+  const k = applyToDefined(stochRsi, kPeriod, computeSMA);
+  const d = applyToDefined(k, dPeriod, computeSMA);
   return { k, d };
 }
 
-export function calculateMACD(data: number[], fastPeriod: number = 12, slowPeriod: number = 26, signalPeriod: number = 9) {
-  const fastEMA = calculateEMA(data, fastPeriod);
-  const slowEMA = calculateEMA(data, slowPeriod);
-  
-  const macd: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    macd.push(fastEMA[i] - slowEMA[i]);
-  }
-  
-  const signal = calculateEMA(macd, signalPeriod);
-  const histogram: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    histogram.push(macd[i] - signal[i]);
-  }
-  
-  return { macd, signal, histogram };
-}
+export function calculateCCI(high: number[], low: number[], close: number[], period: number = 20): Series {
+  const tp = close.map((c, i) => (high[i] + low[i] + c) / 3);
+  const smaTP = computeSMA(tp, period);
 
-export function calculateCCI(high: number[], low: number[], close: number[], period: number = 20): number[] {
-  const result: number[] = [];
-  const tp: number[] = [];
-  
-  for (let i = 0; i < close.length; i++) {
-    tp.push((high[i] + low[i] + close[i]) / 3);
-  }
-  
-  const smaTP = calculateSMA(tp, period);
-  
-  for (let i = 0; i < close.length; i++) {
-    if (i < period - 1) {
-      result.push(0);
-      continue;
-    }
-    const slice = tp.slice(i - period + 1, i + 1);
+  return tp.map((typical, i) => {
     const mean = smaTP[i];
-    const meanDev = slice.reduce((sum, val) => sum + Math.abs(val - mean), 0) / period;
-    
-    const cci = meanDev === 0 ? 0 : (tp[i] - mean) / (0.015 * meanDev);
-    result.push(cci);
-  }
-  return result;
+    if (mean === null) return null;
+    let meanDev = 0;
+    for (let j = i - period + 1; j <= i; j++) meanDev += Math.abs(tp[j] - mean);
+    meanDev /= period;
+    return meanDev === 0 ? 0 : (typical - mean) / (0.015 * meanDev);
+  });
 }
 
-export function calculateWilliamsR(high: number[], low: number[], close: number[], period: number = 14): number[] {
-  const result: number[] = [];
-  for (let i = 0; i < close.length; i++) {
-    if (i < period - 1) {
-      result.push(-50);
-      continue;
-    }
-    const highSlice = high.slice(i - period + 1, i + 1);
-    const lowSlice = low.slice(i - period + 1, i + 1);
-    const highestHigh = Math.max(...highSlice);
-    const lowestLow = Math.min(...lowSlice);
-    
+export function calculateWilliamsR(high: number[], low: number[], close: number[], period: number = 14): Series {
+  return close.map((c, i) => {
+    if (i < period - 1) return null;
+    const highestHigh = Math.max(...high.slice(i - period + 1, i + 1));
+    const lowestLow = Math.min(...low.slice(i - period + 1, i + 1));
     const den = highestHigh - lowestLow;
-    const r = den === 0 ? -50 : ((highestHigh - close[i]) / den) * -100;
-    result.push(r);
-  }
-  return result;
+    return den === 0 ? -50 : ((highestHigh - c) / den) * -100;
+  });
 }
 
-export function calculateAwesomeOscillator(high: number[], low: number[]): number[] {
-  const medianPrices: number[] = [];
-  for (let i = 0; i < high.length; i++) {
-    medianPrices.push((high[i] + low[i]) / 2);
-  }
-  const sma5 = calculateSMA(medianPrices, 5);
-  const sma34 = calculateSMA(medianPrices, 34);
-  const ao: number[] = [];
-  for (let i = 0; i < high.length; i++) {
-    ao.push(sma5[i] - sma34[i]);
-  }
-  return ao;
+export function calculateAwesomeOscillator(high: number[], low: number[]): Series {
+  const medianPrices = high.map((h, i) => (h + low[i]) / 2);
+  const sma5 = computeSMA(medianPrices, 5);
+  const sma34 = computeSMA(medianPrices, 34);
+  return medianPrices.map((_, i) => {
+    const fast = sma5[i];
+    const slow = sma34[i];
+    return fast === null || slow === null ? null : fast - slow;
+  });
 }
 
-export function calculateFisherTransform(high: number[], low: number[], period: number = 9): number[] {
-  const result: number[] = [];
-  const value: number[] = [];
-  const fisher: number[] = [];
-  
-  if (high.length === 0) return result;
-  
-  value.push(0);
-  fisher.push(0);
-  
-  for (let i = 1; i < high.length; i++) {
-    if (i < period - 1) {
-      value.push(0);
-      fisher.push(0);
-      continue;
-    }
-    const highSlice = high.slice(i - period + 1, i + 1);
-    const lowSlice = low.slice(i - period + 1, i + 1);
-    const highestHigh = Math.max(...highSlice);
-    const lowestLow = Math.min(...lowSlice);
-    
+export function calculateFisherTransform(high: number[], low: number[], period: number = 9): Series {
+  const result: Series = new Array(high.length).fill(null);
+  let prevValue = 0;
+  let prevFisher = 0;
+
+  for (let i = Math.max(1, period - 1); i < high.length; i++) {
+    const highestHigh = Math.max(...high.slice(i - period + 1, i + 1));
+    const lowestLow = Math.min(...low.slice(i - period + 1, i + 1));
+
     const price = (high[i] + low[i]) / 2;
     const den = highestHigh - lowestLow;
-    
-    let rawValue = den === 0 ? 0 : 0.33 * 2 * ((price - lowestLow) / den - 0.5) + 0.67 * (value[i - 1] || 0);
+
+    let rawValue = den === 0 ? 0 : 0.33 * 2 * ((price - lowestLow) / den - 0.5) + 0.67 * prevValue;
     if (rawValue > 0.99) rawValue = 0.999;
     if (rawValue < -0.99) rawValue = -0.999;
-    value.push(rawValue);
-    
-    const f = 0.5 * Math.log((1 + rawValue) / (1 - rawValue)) + 0.5 * (fisher[i - 1] || 0);
-    fisher.push(f);
+
+    const fisher = 0.5 * Math.log((1 + rawValue) / (1 - rawValue)) + 0.5 * prevFisher;
+    result[i] = fisher;
+    prevValue = rawValue;
+    prevFisher = fisher;
   }
-  return fisher;
+  return result;
 }
 
-export function calculateChandeMomentumOscillator(close: number[], period: number = 9): number[] {
-  const cmo: number[] = [];
-  for (let i = 0; i < close.length; i++) {
-    if (i < period) {
-      cmo.push(0);
-      continue;
-    }
+export function calculateChandeMomentumOscillator(close: number[], period: number = 9): Series {
+  return close.map((_, i) => {
+    if (i < period) return null;
     let gains = 0;
     let losses = 0;
     for (let j = i - period + 1; j <= i; j++) {
@@ -489,99 +335,25 @@ export function calculateChandeMomentumOscillator(close: number[], period: numbe
       else losses += -diff;
     }
     const den = gains + losses;
-    cmo.push(den === 0 ? 0 : ((gains - losses) / den) * 100);
-  }
-  return cmo;
+    return den === 0 ? 0 : ((gains - losses) / den) * 100;
+  });
 }
 
 // ---------------------------------------------------------------------------
 // 3. VOLATILITY INDICATORS (15+ indicators)
 // ---------------------------------------------------------------------------
 
-export function calculateATR(high: number[], low: number[], close: number[], period: number = 14): number[] {
-  const atr: number[] = [];
-  if (close.length === 0) return atr;
-  
-  const tr: number[] = [];
-  tr.push(high[0] - low[0]);
-  
-  for (let i = 1; i < close.length; i++) {
-    const tr1 = high[i] - low[i];
-    const tr2 = Math.abs(high[i] - close[i - 1]);
-    const tr3 = Math.abs(low[i] - close[i - 1]);
-    tr.push(Math.max(tr1, tr2, tr3));
-  }
-  
-  let currentAtr = tr.slice(0, period).reduce((sum, v) => sum + v, 0) / period;
-  
-  for (let i = 0; i < close.length; i++) {
-    if (i < period - 1) {
-      atr.push(tr[i]);
-    } else if (i === period - 1) {
-      atr.push(currentAtr);
-    } else {
-      currentAtr = (currentAtr * (period - 1) + tr[i]) / period;
-      atr.push(currentAtr);
-    }
-  }
-  return atr;
-}
-
-export function calculateBollingerBands(close: number[], period: number = 20, multiplier: number = 2) {
-  const middle = calculateSMA(close, period);
-  const stdDevs = calculateStdDev(close, period);
-  const upper: number[] = [];
-  const lower: number[] = [];
-  const bandwidth: number[] = [];
-  const percentB: number[] = [];
-  
-  for (let i = 0; i < close.length; i++) {
-    const u = middle[i] + multiplier * stdDevs[i];
-    const l = middle[i] - multiplier * stdDevs[i];
-    upper.push(u);
-    lower.push(l);
-    
-    const den = u - l;
-    bandwidth.push(middle[i] === 0 ? 0 : (u - l) / middle[i]);
-    percentB.push(den === 0 ? 50 : ((close[i] - l) / den) * 100);
-  }
-  return { upper, middle, lower, bandwidth, percentB };
-}
-
 export function calculateKeltnerChannels(high: number[], low: number[], close: number[], atrPeriod: number = 10, emaPeriod: number = 20, multiplier: number = 1.5) {
-  const middle = calculateEMA(close, emaPeriod);
-  const atr = calculateATR(high, low, close, atrPeriod);
-  const upper: number[] = [];
-  const lower: number[] = [];
-  
-  for (let i = 0; i < close.length; i++) {
-    upper.push(middle[i] + multiplier * atr[i]);
-    lower.push(middle[i] - multiplier * atr[i]);
-  }
-  return { upper, middle, lower };
-}
+  const middle = computeEMA(close, emaPeriod);
+  const atr = computeATR(close.map((c, i) => ({ high: high[i], low: low[i], close: c })), atrPeriod);
+  const upper: Series = [];
+  const lower: Series = [];
 
-export function calculateDonchianChannels(high: number[], low: number[], period: number = 20) {
-  const upper: number[] = [];
-  const lower: number[] = [];
-  const middle: number[] = [];
-  
-  for (let i = 0; i < high.length; i++) {
-    if (i < period - 1) {
-      upper.push(high[i]);
-      lower.push(low[i]);
-      middle.push((high[i] + low[i]) / 2);
-      continue;
-    }
-    const highSlice = high.slice(i - period + 1, i + 1);
-    const lowSlice = low.slice(i - period + 1, i + 1);
-    
-    const maxHigh = Math.max(...highSlice);
-    const minLow = Math.min(...lowSlice);
-    
-    upper.push(maxHigh);
-    lower.push(minLow);
-    middle.push((maxHigh + minLow) / 2);
+  for (let i = 0; i < close.length; i++) {
+    const m = middle[i];
+    const a = atr[i];
+    upper.push(m === null || a === null ? null : m + multiplier * a);
+    lower.push(m === null || a === null ? null : m - multiplier * a);
   }
   return { upper, middle, lower };
 }
@@ -593,10 +365,10 @@ export function calculateDonchianChannels(high: number[], low: number[], period:
 export function calculateOBV(close: number[], volume: number[]): number[] {
   const obv: number[] = [];
   if (close.length === 0) return obv;
-  
+
   let currentObv = 0;
   obv.push(currentObv);
-  
+
   for (let i = 1; i < close.length; i++) {
     if (close[i] > close[i - 1]) {
       currentObv += volume[i];
@@ -608,58 +380,29 @@ export function calculateOBV(close: number[], volume: number[]): number[] {
   return obv;
 }
 
-export function calculateVWAP(high: number[], low: number[], close: number[], volume: number[]): number[] {
-  const vwap: number[] = [];
-  let cumPV = 0;
-  let cumVol = 0;
-  
-  for (let i = 0; i < close.length; i++) {
-    const typicalPrice = (high[i] + low[i] + close[i]) / 3;
-    cumPV += typicalPrice * volume[i];
-    cumVol += volume[i];
-    vwap.push(safeDiv(cumPV, cumVol, close[i]));
-  }
-  return vwap;
-}
-
-export function calculateChaikinMoneyFlow(high: number[], low: number[], close: number[], volume: number[], period: number = 21): number[] {
-  const cmf: number[] = [];
-  const mfv: number[] = [];
-  
-  for (let i = 0; i < close.length; i++) {
+export function calculateChaikinMoneyFlow(high: number[], low: number[], close: number[], volume: number[], period: number = 21): Series {
+  const mfv = close.map((c, i) => {
     const den = high[i] - low[i];
-    const multiplier = den === 0 ? 0 : ((close[i] - low[i]) - (high[i] - close[i])) / den;
-    mfv.push(multiplier * volume[i]);
-  }
-  
-  for (let i = 0; i < close.length; i++) {
-    if (i < period - 1) {
-      cmf.push(0);
-      continue;
-    }
+    const multiplier = den === 0 ? 0 : ((c - low[i]) - (high[i] - c)) / den;
+    return multiplier * volume[i];
+  });
+
+  return close.map((_, i) => {
+    if (i < period - 1) return null;
     const mfvSum = mfv.slice(i - period + 1, i + 1).reduce((sum, v) => sum + v, 0);
     const volSum = volume.slice(i - period + 1, i + 1).reduce((sum, v) => sum + v, 0);
-    cmf.push(safeDiv(mfvSum, volSum, 0));
-  }
-  return cmf;
+    return safeDiv(mfvSum, volSum, 0);
+  });
 }
 
-export function calculateMFI(high: number[], low: number[], close: number[], volume: number[], period: number = 14): number[] {
-  const mfi: number[] = [];
-  const tp: number[] = [];
-  
-  for (let i = 0; i < close.length; i++) {
-    tp.push((high[i] + low[i] + close[i]) / 3);
-  }
-  
-  for (let i = 0; i < close.length; i++) {
-    if (i < period) {
-      mfi.push(50);
-      continue;
-    }
+export function calculateMFI(high: number[], low: number[], close: number[], volume: number[], period: number = 14): Series {
+  const tp = close.map((c, i) => (high[i] + low[i] + c) / 3);
+
+  return tp.map((_, i) => {
+    if (i < period) return null;
     let posFlow = 0;
     let negFlow = 0;
-    
+
     for (let j = i - period + 1; j <= i; j++) {
       const moneyFlow = tp[j] * volume[j];
       if (tp[j] > tp[j - 1]) {
@@ -668,15 +411,9 @@ export function calculateMFI(high: number[], low: number[], close: number[], vol
         negFlow += moneyFlow;
       }
     }
-    
-    if (negFlow === 0) {
-      mfi.push(100);
-    } else {
-      const ratio = posFlow / negFlow;
-      mfi.push(100 - 100 / (1 + ratio));
-    }
-  }
-  return mfi;
+
+    return negFlow === 0 ? 100 : 100 - 100 / (1 + posFlow / negFlow);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -685,7 +422,7 @@ export function calculateMFI(high: number[], low: number[], close: number[], vol
 
 export function calculatePivotPoints(high: number, low: number, close: number) {
   const p = (high + low + close) / 3;
-  
+
   // Standard (Classic)
   const r1 = 2 * p - low;
   const s1 = 2 * p - high;
@@ -693,7 +430,7 @@ export function calculatePivotPoints(high: number, low: number, close: number) {
   const s2 = p - (high - low);
   const r3 = high + 2 * (p - low);
   const s3 = low - 2 * (high - p);
-  
+
   // Camarilla
   const range = high - low;
   const cr1 = close + range * 1.1 / 12;
@@ -704,7 +441,7 @@ export function calculatePivotPoints(high: number, low: number, close: number) {
   const cs3 = close - range * 1.1 / 4;
   const cr4 = close + range * 1.1 / 2;
   const cs4 = close - range * 1.1 / 2;
-  
+
   // Fibonacci
   const fr1 = p + range * 0.382;
   const fs1 = p - range * 0.382;
@@ -712,7 +449,7 @@ export function calculatePivotPoints(high: number, low: number, close: number) {
   const fs2 = p - range * 0.618;
   const fr3 = p + range * 1.000;
   const fs3 = p - range * 1.000;
-  
+
   return {
     standard: { pivot: p, r1, r2, r3, s1, s2, s3 },
     camarilla: { pivot: p, r1: cr1, r2: cr2, r3: cr3, r4: cr4, s1: cs1, s2: cs2, s3: cs3, s4: cs4 },
@@ -725,60 +462,58 @@ export function calculatePivotPoints(high: number, low: number, close: number) {
 // ---------------------------------------------------------------------------
 
 export function calculateLinearRegression(data: number[], period: number) {
-  const slope: number[] = [];
-  const intercept: number[] = [];
-  const r2: number[] = [];
-  
+  const slope: Series = [];
+  const intercept: Series = [];
+  const r2: Series = [];
+
   const n = period;
   const sumX = (n * (n - 1)) / 2;
   const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
   const denominator = n * sumX2 - sumX * sumX;
-  
+
   for (let i = 0; i < data.length; i++) {
     if (i < period - 1) {
-      slope.push(0);
-      intercept.push(0);
-      r2.push(0);
+      slope.push(null);
+      intercept.push(null);
+      r2.push(null);
       continue;
     }
-    
+
     let sumY = 0;
     let sumXY = 0;
-    let sumY2 = 0;
-    
+
     for (let j = 0; j < period; j++) {
       const y = data[i - (period - 1 - j)];
       sumY += y;
       sumXY += j * y;
-      sumY2 += y * y;
     }
-    
+
     const m = safeDiv(n * sumXY - sumX * sumY, denominator, 0);
     const b = (sumY - m * sumX) / n;
-    
+
     slope.push(m);
     intercept.push(b);
-    
+
     // R-Squared (R2)
     const meanY = sumY / n;
     const ssTot = data.slice(i - period + 1, i + 1).reduce((sum, y) => sum + Math.pow(y - meanY, 2), 0);
     const ssRes = data.slice(i - period + 1, i + 1).map((y, idx) => y - (m * idx + b)).reduce((sum, err) => sum + err * err, 0);
     r2.push(ssTot === 0 ? 0 : 1 - ssRes / ssTot);
   }
-  
+
   return { slope, intercept, r2 };
 }
 
-export function calculateZScore(data: number[], period: number): number[] {
-  const result: number[] = [];
-  const sma = calculateSMA(data, period);
+export function calculateZScore(data: number[], period: number): Series {
+  const sma = computeSMA(data, period);
   const std = calculateStdDev(data, period);
-  
-  for (let i = 0; i < data.length; i++) {
-    const diff = data[i] - sma[i];
-    result.push(std[i] === 0 ? 0 : diff / std[i]);
-  }
-  return result;
+
+  return data.map((v, i) => {
+    const mean = sma[i];
+    const sd = std[i];
+    if (mean === null || sd === null) return null;
+    return sd === 0 ? 0 : (v - mean) / sd;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -789,26 +524,25 @@ export function calculateAllIndicators(candles: Candle[]): Record<string, any> {
   const close = candles.map(c => Number(c.close));
   const high = candles.map(c => Number(c.high));
   const low = candles.map(c => Number(c.low));
-  const open = candles.map(c => Number(c.open));
   const volume = candles.map(c => Number(c.volume));
-  
+  const ohlcv = candles.map((c, i) => ({ high: high[i], low: low[i], close: close[i], volume: volume[i], ts: c.ts }));
+
   const len = close.length;
   if (len === 0) return {};
-  
+
   const lastIndex = len - 1;
-  const lastClose = close[lastIndex];
-  
-  // Helpers to safely fetch index
-  const getVal = (arr: number[], idx: number, fallback: number): number => {
+
+  // Latest value of a series; null while the indicator is still warming up.
+  const getVal = (arr: Series, idx: number): number | null => {
     const val = arr[idx];
-    return val === undefined || isNaN(val) || !isFinite(val) ? fallback : val;
+    return val == null || !Number.isFinite(val) ? null : val;
   };
 
   // Helper for batch mapping periods
-  const mapPeriods = (fn: (p: number) => number[], periods: number[]): Record<string, number> => {
-    const obj: Record<string, number> = {};
+  const mapPeriods = (fn: (p: number) => Series, periods: number[]): Record<string, number | null> => {
+    const obj: Record<string, number | null> = {};
     for (const p of periods) {
-      obj[p] = getVal(fn(p), lastIndex, lastClose);
+      obj[p] = getVal(fn(p), lastIndex);
     }
     return obj;
   };
@@ -826,8 +560,8 @@ export function calculateAllIndicators(candles: Candle[]): Record<string, any> {
   const mcGinleyPeriods = [5, 10, 20, 30, 50, 100, 200];
   const vwmaPeriods = [5, 10, 20, 30, 50, 100, 200];
 
-  const sma = mapPeriods((p) => calculateSMA(close, p), smaPeriods);
-  const ema = mapPeriods((p) => calculateEMA(close, p), emaPeriods);
+  const sma = mapPeriods((p) => computeSMA(close, p), smaPeriods);
+  const ema = mapPeriods((p) => computeEMA(close, p), emaPeriods);
   const wma = mapPeriods((p) => calculateWMA(close, p), wmaPeriods);
   const hma = mapPeriods((p) => calculateHMA(close, p), hmaPeriods);
   const dema = mapPeriods((p) => calculateDEMA(close, p), demaPeriods);
@@ -838,75 +572,81 @@ export function calculateAllIndicators(candles: Candle[]): Record<string, any> {
   const mcGinley = mapPeriods((p) => calculateMcGinleyDynamic(close, p), mcGinleyPeriods);
   const vwma = mapPeriods((p) => calculateVWMA(close, volume, p), vwmaPeriods);
 
-  const vwap = getVal(calculateVWAP(high, low, close, volume), lastIndex, lastClose);
-  const parabolicSar = getVal(calculateParabolicSAR(high, low), lastIndex, lastClose);
-  
+  const vwap = getVal(computeVWAP(ohlcv), lastIndex);
+  const parabolicSar = getVal(calculateParabolicSAR(high, low), lastIndex);
+
   // 2. Oscillators (Momentum) - 30 indicators
   const rsiPeriods = [5, 7, 9, 14, 21, 25, 50, 100];
   const cciPeriods = [5, 10, 14, 20, 30, 50, 100];
   const williamsPeriods = [5, 10, 14, 20, 30, 50, 100];
 
-  const rsi = mapPeriods((p) => calculateRSI(close, p), rsiPeriods);
+  const rsi = mapPeriods((p) => computeRSI(close, p), rsiPeriods);
   const cci = mapPeriods((p) => calculateCCI(high, low, close, p), cciPeriods);
   const williamsR = mapPeriods((p) => calculateWilliamsR(high, low, close, p), williamsPeriods);
 
-  const macdVal = calculateMACD(close, 12, 26, 9);
-  const macdLine = getVal(macdVal.macd, lastIndex, 0);
-  const macdSignal = getVal(macdVal.signal, lastIndex, 0);
-  const macdHist = getVal(macdVal.histogram, lastIndex, 0);
-  
-  const stochVal = calculateStochastic(high, low, close, 14, 3, 3);
-  const stochK = getVal(stochVal.slowK, lastIndex, 50);
-  const stochD = getVal(stochVal.slowD, lastIndex, 50);
-  
-  const stochRsiVal = calculateStochRSI(calculateRSI(close, 14), 14, 3, 3);
-  const stochRsiK = getVal(stochRsiVal.k, lastIndex, 50);
-  const stochRsiD = getVal(stochRsiVal.d, lastIndex, 50);
-  
-  const awesomeOsc = getVal(calculateAwesomeOscillator(high, low), lastIndex, 0);
-  const fisherTransform = getVal(calculateFisherTransform(high, low, 9), lastIndex, 0);
-  const cmo9 = getVal(calculateChandeMomentumOscillator(close, 9), lastIndex, 0);
-  
+  const macdVal = computeMACD(close, 12, 26, 9);
+  const macdLine = getVal(macdVal.macd, lastIndex);
+  const macdSignal = getVal(macdVal.signal, lastIndex);
+  const macdHist = getVal(macdVal.histogram, lastIndex);
+
+  // Slow stochastic (14,3,3): slow %K = SMA3 of fast %K (canonical %D), slow %D = SMA3 of slow %K.
+  const slowK = computeStochastic(ohlcv, 14, 3).d;
+  const stochK = getVal(slowK, lastIndex);
+  const stochD = getVal(applyToDefined(slowK, 3, computeSMA), lastIndex);
+
+  const stochRsiVal = calculateStochRSI(computeRSI(close, 14), 14, 3, 3);
+  const stochRsiK = getVal(stochRsiVal.k, lastIndex);
+  const stochRsiD = getVal(stochRsiVal.d, lastIndex);
+
+  const awesomeOsc = getVal(calculateAwesomeOscillator(high, low), lastIndex);
+  const fisherTransform = getVal(calculateFisherTransform(high, low, 9), lastIndex);
+  const cmo9 = getVal(calculateChandeMomentumOscillator(close, 9), lastIndex);
+
   // 3. Volatility Indicators - 22 indicators
   const atrPeriods = [5, 10, 14, 20, 30, 50, 100];
-  const atr = mapPeriods((p) => calculateATR(high, low, close, p), atrPeriods);
-  
-  const bb = calculateBollingerBands(close, 20, 2);
-  const bbUpper = getVal(bb.upper, lastIndex, lastClose);
-  const bbMiddle = getVal(bb.middle, lastIndex, lastClose);
-  const bbLower = getVal(bb.lower, lastIndex, lastClose);
-  const bbWidth = getVal(bb.bandwidth, lastIndex, 0);
-  const bbPctB = getVal(bb.percentB, lastIndex, 50);
-  
+  const atr = mapPeriods((p) => computeATR(ohlcv, p), atrPeriods);
+
+  const bb = computeBollingerBands(close, 20, 2);
+  const bbUpper = getVal(bb.upper, lastIndex);
+  const bbMiddle = getVal(bb.middle, lastIndex);
+  const bbLower = getVal(bb.lower, lastIndex);
+  const bbWidth = getVal(bb.width, lastIndex);
+  const bbPctB =
+    bbUpper === null || bbLower === null
+      ? null
+      : bbUpper === bbLower
+        ? 50
+        : ((close[lastIndex] - bbLower) / (bbUpper - bbLower)) * 100;
+
   const kc = calculateKeltnerChannels(high, low, close, 10, 20, 1.5);
-  const kcUpper = getVal(kc.upper, lastIndex, lastClose);
-  const kcMiddle = getVal(kc.middle, lastIndex, lastClose);
-  const kcLower = getVal(kc.lower, lastIndex, lastClose);
-  
-  const dc = calculateDonchianChannels(high, low, 20);
-  const dcUpper = getVal(dc.upper, lastIndex, lastClose);
-  const dcMiddle = getVal(dc.middle, lastIndex, lastClose);
-  const dcLower = getVal(dc.lower, lastIndex, lastClose);
-  
+  const kcUpper = getVal(kc.upper, lastIndex);
+  const kcMiddle = getVal(kc.middle, lastIndex);
+  const kcLower = getVal(kc.lower, lastIndex);
+
+  const dc = computeDonchian(ohlcv, 20);
+  const dcUpper = getVal(dc.upper, lastIndex);
+  const dcMiddle = getVal(dc.middle, lastIndex);
+  const dcLower = getVal(dc.lower, lastIndex);
+
   // 4. Volume & Money Flow - 5 indicators
-  const obv = getVal(calculateOBV(close, volume), lastIndex, 0);
-  const cmf21 = getVal(calculateChaikinMoneyFlow(high, low, close, volume, 21), lastIndex, 0);
-  const mfi14 = getVal(calculateMFI(high, low, close, volume, 14), lastIndex, 50);
-  
+  const obv = getVal(calculateOBV(close, volume), lastIndex);
+  const cmf21 = getVal(calculateChaikinMoneyFlow(high, low, close, volume, 21), lastIndex);
+  const mfi14 = getVal(calculateMFI(high, low, close, volume, 14), lastIndex);
+
   // 5. Support / Resistance & Pivots (Yesterday's parameters) - 19 indicators
   const prevHigh = high[lastIndex - 1] || high[lastIndex];
   const prevLow = low[lastIndex - 1] || low[lastIndex];
   const prevClose = close[lastIndex - 1] || close[lastIndex];
   const pivots = calculatePivotPoints(prevHigh, prevLow, prevClose);
-  
+
   // 6. Statistics - 10 indicators
   const stats = calculateLinearRegression(close, 20);
-  const linRegSlope = getVal(stats.slope, lastIndex, 0);
-  const linRegR2 = getVal(stats.r2, lastIndex, 0);
-  
+  const linRegSlope = getVal(stats.slope, lastIndex);
+  const linRegR2 = getVal(stats.r2, lastIndex);
+
   const zScorePeriods = [5, 10, 20, 30, 50, 100, 200];
   const zScore = mapPeriods((p) => calculateZScore(close, p), zScorePeriods);
-  
+
   return {
     sma,
     ema,

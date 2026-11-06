@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { computePhase, MarketClock } from "./clock";
+import { computePhase, istDateKey, MarketClock, nextIstTime } from "./clock";
 
 const HOLIDAYS = [new Date("2026-08-15T00:00:00.000Z")];
 
@@ -42,6 +42,22 @@ describe("computePhase", () => {
   it("16:00 IST is AFTER_HOURS", () => {
     const t = new Date("2026-06-19T10:30:00.000Z");
     expect(computePhase(t, HOLIDAYS)).toBe("AFTER_HOURS");
+  });
+});
+
+describe("IST helpers", () => {
+  it("istDateKey uses the IST calendar date", () => {
+    // 2026-11-05 19:00 UTC is already 2026-11-06 00:30 IST.
+    expect(istDateKey(new Date("2026-11-05T19:00:00.000Z"))).toBe("2026-11-06");
+    expect(istDateKey(new Date("2026-11-05T18:29:00.000Z"))).toBe("2026-11-05");
+  });
+
+  it("nextIstTime returns today's slot if still ahead, else tomorrow's", () => {
+    // 08:30 IST = 03:00 UTC.
+    expect(nextIstTime(new Date("2026-11-05T02:00:00.000Z"), 8, 30).toISOString()).toBe("2026-11-05T03:00:00.000Z");
+    expect(nextIstTime(new Date("2026-11-05T03:00:00.000Z"), 8, 30).toISOString()).toBe("2026-11-06T03:00:00.000Z");
+    // 23:00 UTC is 04:30 IST the next day; the slot is that same IST morning.
+    expect(nextIstTime(new Date("2026-11-05T23:00:00.000Z"), 8, 30).toISOString()).toBe("2026-11-06T03:00:00.000Z");
   });
 });
 

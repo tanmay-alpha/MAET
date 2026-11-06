@@ -1,4 +1,5 @@
 import { z } from "zod";
+import bundledNseHolidays from "../shared/symbols/nse-holidays.json";
 
 const isTest = process.env.BUN_TEST === "1" || process.env.NODE_ENV === "test";
 
@@ -17,8 +18,10 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   PORT: z.string().default("3000"),
   ENABLE_MARKET_SIMULATOR: z.string().transform((v) => v === "true" || v === "1").default("false"),
-  PAPER_EXECUTION_MAX_QUOTE_AGE_MS: z.string().transform((v) => Number(v) || 86400000).default("86400000"),
-  PAPER_EXECUTION_ALLOW_DELAYED: z.string().transform((v) => v !== "false" && v !== "0").default("true"),
+  // Paper fills must use a fresh exchange quote: at most 15s old and not a delayed (e.g. Yahoo) feed.
+  PAPER_EXECUTION_MAX_QUOTE_AGE_MS: z.string().transform((v) => Number(v) || 15000).default("15000"),
+  PAPER_EXECUTION_ALLOW_DELAYED: z.string().transform((v) => v === "true" || v === "1").default("false"),
+  PAPER_INITIAL_CASH_INR: z.string().transform((v) => Number(v) || 1000000).default("1000000"),
 });
 
 export type AppConfig = {
@@ -38,6 +41,7 @@ export type AppConfig = {
   enableMarketSimulator: boolean;
   paperExecutionMaxQuoteAgeMs: number;
   paperExecutionAllowDelayed: boolean;
+  paperInitialCashInr: number;
 };
 
 let cached: AppConfig | undefined;
@@ -45,6 +49,18 @@ let cached: AppConfig | undefined;
 function requireEnv(name: string, value: string | undefined): string {
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+/**
+ * NSE trading holidays: the bundled calendar plus any extra YYYY-MM-DD dates
+ * from NSE_HOLIDAYS_JSON (e.g. an ad-hoc closure, or next year's list before
+ * the bundle is updated). An empty or unset variable adds nothing, so the
+ * shipped `NSE_HOLIDAYS_JSON=[]` cannot disable the calendar.
+ */
+export function parseNseHolidays(json: string | undefined): Date[] {
+  const extra = json ? (JSON.parse(json) as string[]) : [];
+  const dates = new Set([...bundledNseHolidays.map((holiday) => holiday.date), ...extra]);
+  return [...dates].map((date) => new Date(date));
 }
 
 export function getConfig(): AppConfig {
@@ -74,13 +90,12 @@ export function getConfig(): AppConfig {
       enableMarketSimulator: d.ENABLE_MARKET_SIMULATOR,
       paperExecutionMaxQuoteAgeMs: d.PAPER_EXECUTION_MAX_QUOTE_AGE_MS,
       paperExecutionAllowDelayed: d.PAPER_EXECUTION_ALLOW_DELAYED,
+      paperInitialCashInr: d.PAPER_INITIAL_CASH_INR,
     };
     return cached;
   }
   // Production / development — all values required.
-  const holidays = d.NSE_HOLIDAYS_JSON
-    ? (JSON.parse(d.NSE_HOLIDAYS_JSON) as string[]).map((s) => new Date(s))
-    : [];
+  const holidays = parseNseHolidays(d.NSE_HOLIDAYS_JSON);
   cached = {
     supabaseUrl: requireEnv("SUPABASE_URL", d.SUPABASE_URL),
     supabaseAnonKey: requireEnv("SUPABASE_ANON_KEY", d.SUPABASE_ANON_KEY),
@@ -98,6 +113,7 @@ export function getConfig(): AppConfig {
     enableMarketSimulator: d.ENABLE_MARKET_SIMULATOR,
     paperExecutionMaxQuoteAgeMs: d.PAPER_EXECUTION_MAX_QUOTE_AGE_MS,
     paperExecutionAllowDelayed: d.PAPER_EXECUTION_ALLOW_DELAYED,
+    paperInitialCashInr: d.PAPER_INITIAL_CASH_INR,
   };
   return cached;
 }

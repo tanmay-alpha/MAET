@@ -1,13 +1,16 @@
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { defineEventHandler, toWebRequest, createError } from "h3";
 import { appRouter } from "./index";
-import { tryAuth } from "./auth";
+import { tryAuth, type AuthContext } from "./auth";
+import { reportTrpcError } from "./core";
 
 // Nitro route handler for tRPC
 export default defineEventHandler(async (event) => {
-  // Try to authenticate user, but allow unauthenticated access too
-  // Individual procedures use protectedProcedure for auth checks
-  const authCtx = await tryAuth(event).catch(() => null);
+  // Reuse the auth context the rate-limit middleware already resolved (when it
+  // ran); otherwise verify here. Unauthenticated calls are allowed:
+  // protectedProcedure enforces auth per procedure.
+  const authCtx: AuthContext | null =
+    event.context.auth !== undefined ? event.context.auth : await tryAuth(event).catch(() => null);
 
   try {
     const webReq = toWebRequest(event) as unknown as Request;
@@ -19,12 +22,9 @@ export default defineEventHandler(async (event) => {
       req: timedReq,
       router: appRouter,
       createContext: () => ({ userId: authCtx?.userId, email: authCtx?.email ?? null, role: authCtx?.role ?? "user" }),
-      onError:
-        process.env.NODE_ENV === "development"
-          ? ({ path, error }) => {
-              console.error(`tRPC error on ${path ?? "<no-path>"}:`, error);
-            }
-          : undefined,
+      // The frontend never batches; refusing batches blocks request amplification.
+      allowBatching: false,
+      onError: reportTrpcError,
     });
   } catch (error: any) {
     if (

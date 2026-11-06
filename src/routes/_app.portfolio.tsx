@@ -3,13 +3,15 @@ import { ArrowLeft, DollarSign, TrendingUp, TrendingDown, type LucideIcon } from
 import { useMemo, useState } from "react";
 import { usePortfolioAnalytics } from "@/hooks/use-portfolio-analytics";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { quoteFeedLabel } from "@/lib/quote-status";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { TiltCard } from "@/components/trading/tilt-card";
 import { EquityCurveChart } from "@/components/chart/equity-curve-chart";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
 import { PlusCircle } from "lucide-react";
 import type { PaperPositionRow } from "../../server/modules/paper-trading/contracts";
-import { calculateMarkedUnrealisedPnl, getPositionCloseSide } from "@shared/domain/paper-trading/margin";
+import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
+import { buildClosePositionOrder } from "@/lib/paper-orders";
 
 export const Route = createFileRoute("/_app/portfolio")({
   head: () => ({
@@ -57,7 +59,7 @@ function PortfolioPage() {
     [positions]
   );
 
-  const { quoteMap, streamConnected, isError } = useMarketQuotes(positionSymbols);
+  const { quoteMap, isError, delayed, marketPhase } = useMarketQuotes(positionSymbols);
 
   const totalAllocation = useMemo(() => {
     if (metrics.positionsValue === 0) return [];
@@ -98,11 +100,7 @@ function PortfolioPage() {
                 <p className="text-xs text-muted-foreground">Paper trading performance</p>
               </div>
               <span className="text-sm text-muted-foreground">
-                {isError
-                  ? "Quote service unavailable"
-                  : streamConnected
-                  ? "Real-time quotes active"
-                  : "Connecting to market data"}
+                {quoteFeedLabel({ isError, delayed, marketPhase })}
               </span>
             </div>
             <div className="flex gap-2">
@@ -218,7 +216,6 @@ function PortfolioPage() {
                     const signedQty = isShort ? -Math.abs(position.totalShares) : Math.abs(position.totalShares);
                     const totalVal = ltp * Math.abs(position.totalShares);
                     const pnl = calculateMarkedUnrealisedPnl({ quantity: signedQty, averagePrice: avgPrice }, ltp);
-                    const closeSide = getPositionCloseSide(position);
 
                     return (
                       <div key={position.id} className="border border-border bg-panel rounded-lg p-4 hover:bg-accent/50 transition-colors">
@@ -261,13 +258,7 @@ function PortfolioPage() {
                           <button
                             onClick={() => {
                               if (window.confirm(`Are you sure you want to close position in ${position.symbol}?`)) {
-                                placeOrder({
-                                  symbol: position.symbol,
-                                  exchange: "NSE",
-                                  side: closeSide,
-                                  type: "MARKET",
-                                  quantity: Math.abs(position.totalShares),
-                                });
+                                void placeOrder(buildClosePositionOrder(position));
                               }
                             }}
                             disabled={!isTradingAvailable}

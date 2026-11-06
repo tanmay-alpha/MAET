@@ -24,10 +24,10 @@
 
 import { describe, expect, it } from "bun:test";
 import {
-  PAPER_TRANSACTION_FEE_RATE,
   executePaperFill,
   settlePaperAccount,
 } from "@shared/domain/paper-trading/execution";
+import { computeIndianEquityCharges } from "@shared/domain/costs/indian-equity-charges";
 import { reconcilePosition } from "@shared/domain/paper-trading/reconcile-position";
 import type {
   PaperAccount,
@@ -325,7 +325,7 @@ describe("Paper Trading Financial Invariants — Bracket / OCO Behavior (P0-F)",
     expect(childOrders.length).toBe(2);
 
     const tpOrder = childOrders.find((o) => o.type === "LIMIT");
-    const slOrder = childOrders.find((o) => o.type === "STOP_LOSS_LIMIT");
+    const slOrder = childOrders.find((o) => o.type === "STOP_LOSS_MARKET");
 
     expect(tpOrder).toBeDefined();
     expect(tpOrder!.side).toBe("SELL"); // Child side opposite to parent
@@ -337,6 +337,7 @@ describe("Paper Trading Financial Invariants — Bracket / OCO Behavior (P0-F)",
     expect(slOrder!.side).toBe("SELL");
     expect(slOrder!.quantity).toBe(100);
     expect(slOrder!.stopPrice).toBe(90);
+    expect(slOrder!.limitPrice).toBeUndefined();
     expect(slOrder!.status).toBe("PENDING");
   });
 
@@ -509,8 +510,12 @@ describe("Paper Trading Financial Invariants — Execution Accuracy & Reconcilia
       reason: "USER_ORDER",
     });
 
-    const expectedFees =
-      fillResult.fill.fillPrice * fillResult.fill.quantity * PAPER_TRANSACTION_FEE_RATE;
+    const expectedFees = computeIndianEquityCharges({
+      exchange: "NSE",
+      product: "DELIVERY",
+      side: "BUY",
+      turnoverInr: fillResult.fill.fillPrice * fillResult.fill.quantity,
+    }).total;
     expect(fillResult.fill.fees).toBe(expectedFees);
     // Cash must be decremented by exactly the fees:
     expect(fillResult.account.cash).toBe(initialCash - expectedFees);

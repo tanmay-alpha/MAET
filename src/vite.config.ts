@@ -19,6 +19,16 @@ type MutableResolvedConfig = {
   environments?: Record<string, { resolve?: { alias?: MutableAliasRule[] | MutableAliasRule } }>;
 };
 
+const nitroPreset = process.env.MAET_NITRO_PRESET ?? "vercel";
+
+// Framing and MIME-sniffing protections only work as HTTP headers (a <meta> tag is
+// ignored), and Vercel ignores vercel.json `headers` for Build Output API deployments.
+const SECURITY_HEADERS = {
+  "x-frame-options": "DENY",
+  "x-content-type-options": "nosniff",
+  "content-security-policy": "frame-ancestors 'none'",
+};
+
 export default defineConfig({
   root: "..",
   css: { transformer: "lightningcss" },
@@ -60,11 +70,18 @@ export default defineConfig({
     }),
     viteReact(),
     nitro({
-      preset: process.env.MAET_NITRO_PRESET ?? "vercel",
+      preset: nitroPreset,
       rootDir: ".",
       externals: {
         inline: [/^@tanstack/],
       },
+      // Nitro's Vercel preset turns header route rules into config.json routes without
+      // `continue: true`, and Vercel stops routing at such a match, so a "/**" rule would
+      // keep pages from reaching the SSR function. On Vercel, declare the route with
+      // `continue`; other presets (the node-server preview) apply the route rule at runtime.
+      ...(nitroPreset === "vercel"
+        ? { vercel: { config: { routes: [{ src: "/(.*)", headers: SECURITY_HEADERS, continue: true }] } } }
+        : { routeRules: { "/**": { headers: SECURITY_HEADERS } } }),
     } as any),
     {
       name: "force-virtual-client-entry-and-aliases",

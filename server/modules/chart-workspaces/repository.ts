@@ -1,6 +1,7 @@
 import { db } from "../../data/drizzle/client";
 import { chartWorkspaces, chartPanes, chartDrawings } from "../../db/schema";
 import { eq, and, desc, asc } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 
 export class ChartWorkspaceRepository {
   async listWorkspaces(userId: string) {
@@ -68,13 +69,18 @@ export class ChartWorkspaceRepository {
   }
 
   async saveLayout(userId: string, workspaceId: string, layoutType: string, panes: any[]) {
-    await db
+    const updated = await db
       .update(chartWorkspaces)
       .set({
         layoutType,
         updatedAt: new Date(),
       })
-      .where(and(eq(chartWorkspaces.id, workspaceId), eq(chartWorkspaces.userId, userId)));
+      .where(and(eq(chartWorkspaces.id, workspaceId), eq(chartWorkspaces.userId, userId)))
+      .returning({ id: chartWorkspaces.id });
+    // Without this, a foreign workspaceId would still get panes inserted under it.
+    if (updated.length === 0) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
+    }
 
     // Upsert panes
     for (let i = 0; i < Math.min(panes.length, 4); i++) {
@@ -91,7 +97,9 @@ export class ChartWorkspaceRepository {
             settings: { indicators: pane.indicators || [] },
             updatedAt: new Date(),
           })
-          .where(and(eq(chartPanes.id, pane.id), eq(chartPanes.userId, userId)));
+          .where(
+            and(eq(chartPanes.id, pane.id), eq(chartPanes.workspaceId, workspaceId), eq(chartPanes.userId, userId))
+          );
       } else {
         await db.insert(chartPanes).values({
           workspaceId,

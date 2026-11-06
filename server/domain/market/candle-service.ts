@@ -4,6 +4,14 @@ import { db } from "../../data/drizzle/client";
 import { candles as candleTable } from "../../db/schema";
 import { getCandles } from "../../data/sources/yahoo";
 import { resolveMarketSymbol } from "./symbol";
+import { getLogger } from "../../infra/logger";
+
+function logDatabaseFallback(operation: string, symbol: string, error: unknown): void {
+  getLogger().warn(
+    { symbol, operation, err: error instanceof Error ? error.message : String(error) },
+    "candle store unavailable; continuing without it"
+  );
+}
 
 const FRESHNESS_MS: Record<Candle["tf"], number> = {
   "1m": 3 * 60_000,
@@ -54,8 +62,9 @@ export async function loadMarketCandles(
     if (stored.length >= 2 && latest && to.getTime() - new Date(latest.ts).getTime() <= FRESHNESS_MS[timeframe]) {
       return { candles: stored, source: "database", persisted: true };
     }
-  } catch {
+  } catch (error) {
     // Database is optional for the public fallback path.
+    logDatabaseFallback("read", resolved.symbol, error);
   }
 
   try {
@@ -80,8 +89,9 @@ export async function loadMarketCandles(
           },
         });
         persisted = true;
-      } catch {
+      } catch (error) {
         // Returning verified Yahoo history is preferable to failing when DB is offline.
+        logDatabaseFallback("write", resolved.symbol, error);
       }
     }
     return { candles: fetched, source: "yahoo", persisted };

@@ -3,6 +3,10 @@ import nifty50 from "../../../shared/symbols/nifty50.json";
 
 export const SYMBOLS: readonly Quote[] = (nifty50 as Quote[]).filter((q) => q.isActive);
 
+/** Symbols accepted by the public market endpoints (covers M&M, BAJAJ-AUTO, indices). */
+export const MARKET_SYMBOL_PATTERN = /^[A-Z0-9&.-]+$/;
+export const MAX_SYMBOLS_PER_REQUEST = 50;
+
 export type MarketSymbol = {
   symbol: string;
   ticker: string;
