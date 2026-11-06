@@ -7,83 +7,98 @@
 [![Database](https://img.shields.io/badge/PostgreSQL-Supabase-3ecf8e.svg)](https://supabase.com/)
 [![Warehouse](https://img.shields.io/badge/Analytics-Google%20BigQuery-4285f4.svg)](https://cloud.google.com/bigquery)
 
-> **MAET** is an institutional-grade quantitative research, market intelligence, and paper-trading terminal tailored for Indian financial markets (NSE & BSE).  
-> Built with zero financial look-ahead bias, deterministic cross-system indicator equality, realistic market microstructure execution models, and automated multi-source ingestion.
+> **MAET** is a quantitative research, market-data and paper-trading terminal for Indian equities (NSE & BSE).  
+> Backtests evaluate rules on bar *i−1* and fill at bar *i*'s open; paper fills require a fresh live quote and pay the statutory Indian equity charges. [docs/RESEARCH_ENGINE.md](docs/RESEARCH_ENGINE.md) states exactly what is and is not guaranteed.
 
 - **Live Web Frontend**: [https://maet-pi.vercel.app/](https://maet-pi.vercel.app/)
 - **Backend Service Target**: Render (`https://maet.onrender.com`)
 - **Operational Database**: Supabase PostgreSQL (via Drizzle ORM)
-- **Analytics Data Warehouse**: Google BigQuery (`maet_warehouse`)
-- **Cache & Real-time Layer**: Upstash Redis & Server-Sent Events (SSE)
+- **Analytics Data Warehouse (optional)**: Google BigQuery, written only by the ingestion engine; the dataset comes from `BIGQUERY_DATASET` (no default)
+- **Cache & Real-time Layer**: in-process quote cache and tick bus; Redis (`UPSTASH_REDIS_URL`) for the Yahoo candle cache, the optional shared rate-limit store, the daily-processor lock and paper-notification pub/sub; Server-Sent Events (SSE)
+- **Code-grounded engineering docs**: [Architecture](docs/ARCHITECTURE.md), [Paper trading engine](docs/PAPER_TRADING_ENGINE.md), [Research engine](docs/RESEARCH_ENGINE.md), [Interview notes](docs/INTERVIEW_NOTES.md) (these follow the code; where this README differs, they win)
 
 ---
 
 ## 1. System Overview & Core Capabilities
 
-MAET unites advanced technical screening, quantitative strategy research, multi-asset portfolio simulation, and real-time market data into a unified, high-performance web terminal.
+MAET combines technical screening, strategy research, paper trading and market data in one web terminal.
 
 ```mermaid
 flowchart TB
     subgraph Providers["Market Data Sources"]
-        NSE["NSE Master\n(Universe & Corporate Actions)"]
-        Angel["Angel One SmartAPI\n(Live Quotes, Greeks, NFO)"]
-        Yahoo["Yahoo Finance\n(OHLCV & Fallback Candles)"]
+        NSE["NSE Master\n(Company & Index Universe)"]
+        Angel["Angel One SmartAPI\n(Live NSE Quotes: REST + WebSocket; Option Chains)"]
+        Yahoo["Yahoo Finance\n(Delayed Quotes & Historical Candles)"]
     end
 
-    subgraph Ingestion["Ingestion & Validation Engine"]
-        Orchestrator["Daily Orchestrator"]
-        DLQ["Dead Letter Queue & Retries"]
+    subgraph Ingestion["Ingestion & Validation"]
+        Daily["Daily Processor\n(in-process, after 18:30 IST)"]
+        Pipelines["Ingestion Pipelines\n(admin-triggered; validation, retries, dead-letter queue)"]
         CalcEngine["Calculation Engine\n(70 registered calculators)"]
     end
 
-    subgraph Storage["Persistence & Analytical Tier"]
+    subgraph Storage["Persistence"]
         DB[("Supabase PostgreSQL\n(Drizzle ORM)")]
-        BQ[("Google BigQuery\n(maet_warehouse)")]
-        Redis[("Upstash Redis\n(Candle & Quote Cache)")]
+        BQ[("Google BigQuery\n(optional analytics sink)")]
+        Redis[("Redis\n(Candle Cache, Locks, Rate Limits, Paper Pub/Sub)")]
     end
 
-    subgraph Backend["Backend Application (Render / Nitro)"]
+    subgraph Backend["Backend Application (Render / Nitro, one web service)"]
+        Live["In-process Quote Cache & Tick Bus"]
         API["REST & SSE Endpoints"]
         TRPC["Type-Safe tRPC Routers"]
-        Research["P2 Research & Walk-Forward Engine"]
+        Research["Backtest Runner & Walk-Forward\n(job workers run as separate processes)"]
         Paper["Paper Trading Matcher & Margin Engine"]
     end
 
     subgraph Frontend["Interactive Terminal UI (Vercel / React 19)"]
         ScreenerUI["Screener & DSL Query Builder"]
         ChartUI["Candlestick & Technical Charts"]
-        PortfolioUI["Portfolio Analytics & Attribution"]
+        PortfolioUI["Portfolio Views"]
         WFOUI["Walk-Forward & Heatmap Explorer"]
         TradingUI["Paper Trading & Order Books"]
     end
 
-    Providers --> Orchestrator
-    Orchestrator --> DLQ
-    DLQ --> CalcEngine
+    Angel --> Live
+    Yahoo --> Live
+    Live --> Paper
+    Live --> API
+    NSE --> Daily
+    Yahoo --> Daily
+    Daily --> DB
+    Providers --> Pipelines
+    Pipelines --> DB
+    Pipelines --> BQ
     CalcEngine --> DB
     CalcEngine --> BQ
-    CalcEngine --> Redis
 
     DB --> TRPC
-    BQ --> TRPC
     Redis --> API
     Research --> TRPC
-    Paper --> API
     Paper --> TRPC
+    Paper --> DB
 
     API --> Frontend
     TRPC --> Frontend
 ```
 
+The calculation engine (`server/domain/calculations/engine/CalculationEngine.ts`) has no scheduled caller yet; quotes are served from the in-process cache, not Redis. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the request flows.
+
 ---
 
-## 2. Quantitative Research Engine (P2 Flagship)
+## 2. Quantitative Research Engine
 
-MAET includes a research and simulation toolkit built to avoid the pitfalls of naive backtesting (overfitting, look-ahead bias, survivorship bias, and zero-cost assumptions).
+MAET includes a research and simulation toolkit aimed at the usual pitfalls of naive backtesting (look-ahead bias, overfitting, survivorship bias and zero-cost assumptions). Not all of it is wired into production backtests yet; the status of each part is stated below.
 
-> **Wiring status.** Production backtests (the `backtestV2` tRPC router and the backtest, sweep and walk-forward job workers in `server/workers/`) run `server/domain/strategy/runner-v3.ts`, which applies statutory Indian equity charges (`shared/domain/costs`) and slippage. The execution model (A), point-in-time fundamentals (C), shared-capital portfolio engine (D), walk-forward analysis module (E) and robustness analysis (F) below are **research modules covered by tests** (for example `server/domain/strategy/p2-research-invariants.test.ts`); they are not yet called by production backtests.
+> **Wiring status.** Production backtests run `server/domain/strategy/runner-v3.ts`: the synchronous `backtestV2` tRPC router and the queued backtest, sweep and walk-forward job workers in `server/workers/`.
+>
+> - **Look-ahead:** with the default `NEXT_BAR_OPEN` policy, rules are evaluated on bar *i−1* and filled at bar *i*'s open. `server/domain/strategy/truncated-history.test.ts` checks that a run which never saw bars after time *T* agrees with the full-history run on every trade and equity point before *T*. `fill-bar-look-ahead.test.ts` checks that changing the fill bar's high/low/close/volume does not change anything decided at its open. Indicators are trailing and `null` during warm-up. Corporate actions and point-in-time fundamentals are not applied (B, C), so results use the candles as stored.
+> - **Costs:** fees follow the strategy's `feeModel`. `backtestV2` presets use a flat 10 bps per leg (`FIXED_BPS`, `feeBps` default 10; no fee when 0). Strategy Lab definitions can select `VOLUME_AWARE`, the statutory Indian schedule in `shared/domain/costs`. Slippage is a per-leg bps debit (default 5 bps).
+> - **Modules:** walk-forward analysis (E) runs in production through `server/workers/walk-forward-worker.ts`. The execution model (A), point-in-time fundamentals (C), shared-capital portfolio engine (D) and robustness analysis (F) are **research modules covered by tests** (for example `server/domain/strategy/p2-research-invariants.test.ts`); production backtests do not call them.
+> - **In progress:** the Render web service does not start the job workers (`render.yaml` declares only the web service), so queued backtests, sweeps and walk-forward runs execute only where `bun run worker:backtest`, `worker:sweep` or `worker:walk-forward` is running.
 
-### A. Realistic Execution & Market Microstructure (`server/domain/strategy/execution-model.ts`)
+### A. Execution Model: Spread, Impact and Participation (`server/domain/strategy/execution-model.ts`, research module)
+- **Status**: Exists as a research module used only by the portfolio engine (D). Production backtests do not use it: they charge slippage as a flat bps debit and model neither spread nor market impact.
 - **Square-Root Market Impact**: Price impact scales nonlinearly with market participation:
   $$\text{impactBps} = \text{impactCoeff} \times \sqrt{\frac{\text{OrderVolume}}{\text{BarVolume}}} \times \sigma_{\text{vol}}$$
 - **Bid-Ask Spread Models**: Configurable spread dynamics: `NONE`, `FIXED_BPS`, `VOLATILITY_BASED`, and `LIQUIDITY_BASED`.
@@ -94,34 +109,37 @@ MAET includes a research and simulation toolkit built to avoid the pitfalls of n
 ### B. Corporate Actions & Price Adjustments (`server/domain/data/corporate-actions.ts`)
 - **Three Data Series**: Generates `RAW`, `SPLIT_ADJUSTED`, and `TOTAL_RETURN_ADJUSTED` price series.
 - **Backward-Adjusted OHLCV**: Split factors backward-applied to historical candles strictly prior to ex-date.
-- **Dividend Reinvestment Model**: Continuous total return compounding factor ($k = 1 - \frac{D}{P_{\text{close}}}$).
-- **Mathematical Invariant**: A 2:1 stock split **never** triggers an artificial 50% drawdown in strategy simulation.
-- **Status**: The adjustment code exists and `runner-v3` accepts corporate actions, but no corporate-action data is ingested, so production backtests use stored candles (Yahoo prices are split-adjusted, not dividend-adjusted).
+- **Dividend Adjustment**: In the total-return series each dividend scales earlier prices by $k = 1 - \frac{D}{P_{\text{close}}}$, using the raw close before the ex-date.
+- **Invariant**: When a 2:1 split is supplied, it does not produce an artificial 50% drawdown (`p2-research-invariants.test.ts`).
+- **Status**: The adjustment code exists and `runner-v3` accepts corporate actions, but no caller passes any and no corporate-action data is ingested, so production backtests use stored candles. `server/data/sources/yahoo.ts` stores Yahoo's quote OHLC arrays (not `adjclose`); the code does not establish how Yahoo adjusts them.
 
 ### C. Point-in-Time Fundamentals & Survivorship Bias Prevention (`server/domain/fundamentals/point-in-time.ts`)
-- **Strict Availability Boundary**: Zero look-ahead bias invariant:
+- **Availability Boundary**: A statement is visible only once it is available:
   $$\text{availableFrom} \le T_{\text{simulation}}$$
 - **Full Restatement Tracking**: Backtests evaluated before an accounting restatement see Revision 1; evaluations after see Revision 2.
-- **Survivorship-Bias-Free Universe**: Point-in-time index constituent queries (`getActiveUniverseConstituents()`), preventing backtest distortion from delisted or excluded companies.
+- **Universe Membership**: Point-in-time index constituent queries (`getActiveUniverseConstituents()`) intended to keep delisted or excluded companies in their historical windows and so avoid survivorship bias once wired.
 - **Status**: Not yet used by any backtest.
 
-### D. Multi-Symbol Shared Capital Portfolio Engine (`server/domain/strategy/portfolio-engine.ts`)
+### D. Multi-Symbol Shared Capital Portfolio Engine (`server/domain/strategy/portfolio-engine.ts`, research module)
 - **Synchronized Timeline**: Bar-by-bar multi-asset evaluation across instrument universes.
 - **Shared Capital Pool**: Instruments compete for shared cash—preventing capital double-spending.
-- **Deterministic Priority Ranking**: Priority resolution via `MOMENTUM`, `RELATIVE_VOLUME`, `SCORECARD_SCORE`, or `SYMBOL_ASCENDING`.
-- **Institutional Risk Limits**: Max open positions, max position %, gross exposure caps, sector exposure limits, and minimum cash reserve requirements.
-- **Performance & Attribution Metrics**: CAGR, Sharpe, Sortino, Max Drawdown, Calmar Ratio, Turnover, Benchmark Beta, Alpha, and Tracking Error. Sharpe is the mean excess periodic return divided by its standard deviation, times $\sqrt{\text{periods per year}}$ (risk-free rate configurable, default 0); Sortino uses downside deviation over all $N$ periods.
+- **Deterministic Priority Ranking**: `MOMENTUM` (10-bar return), `RELATIVE_VOLUME` (currently raw signal-bar volume), `SCORECARD_SCORE` (currently volume × momentum) or `SYMBOL_ASCENDING`, all computed from the signal bar.
+- **Risk Limits**: Max open positions, max position %, gross exposure caps, sector exposure limits (checked on existing positions), and minimum cash reserve.
+- **Performance & Attribution Metrics**: CAGR, Sharpe, Sortino, Max Drawdown, Calmar, win rate, profit factor, cost drag, raw turnover (traded notional in INR), average gross exposure, and P&L attribution by symbol, sector, month and exit reason. It does not compute beta, alpha or tracking error. Sharpe is the mean excess periodic return divided by its standard deviation, times $\sqrt{\text{periods per year}}$ (risk-free rate configurable, default 0); Sortino uses downside deviation over all $N$ periods.
+- **Status**: No endpoint or worker calls it; it runs only in tests. `rebalanceSchedule` is accepted but not implemented.
 
 ### E. Walk-Forward Analysis & Optimization (`server/domain/strategy/walk-forward.ts`)
-- **Three-Phase Windowing**: Parameter training $\to$ validation $\to$ out-of-sample (OOS) testing.
-- **Strict Leakage Isolation**: Future test candles never enter training/validation indicator caches.
-- **Walk-Forward Efficiency (WFE)**: Out-of-sample vs in-sample performance retention; `null` when in-sample performance is $\le 0$.
-- **Continuous OOS Curve**: Stitches out-of-sample equity curves across consecutive rolling windows.
+- **Three-Phase Windowing**: Each window is split into training, validation and out-of-sample (OOS) phases. Parameters are chosen by the best training Sharpe; validation only rejects a window whose Sharpe is below −1; accepted windows are then tested OOS.
+- **Leakage Isolation**: Each phase's candles are sliced to end at the phase boundary, so test candles never enter training/validation indicator caches; `assertNoDataLeakage` throws on overlapping timestamps.
+- **Walk-Forward Efficiency (WFE)**: Mean OOS annualised return divided by mean in-sample annualised return over the tested windows; `null` with a reason when the in-sample mean is $\le 0$. Performance retention is the same ratio of Sharpe ratios.
+- **Continuous OOS Curve**: Stitches out-of-sample equity curves across consecutive windows, compounding equity.
+- **Status**: Used in production by `server/workers/walk-forward-worker.ts` (a separate process; see wiring status above).
 
 ### F. Parameter Robustness & Overfit Detection (`server/domain/strategy/robustness.ts`)
 - **2D Parameter Sensitivity Heatmap**: Identifies parameter plateaus vs overfit fragile spikes.
 - **Neighbor Stability Scoring**: Penalises isolated parameter spikes where adjacent settings collapse.
-- **Institutional Safeguard Flags**: Automated triggers for `OVERFIT_RISK`, `PARAMETER_INSTABILITY`, `LOW_SAMPLE_SIZE`, and `HIGH_COST_DRAG`.
+- **Safeguard Flags**: `OVERFIT_RISK`, `PARAMETER_INSTABILITY`, `LOW_SAMPLE_SIZE` and `HIGH_COST_DRAG`.
+- **Status**: Research module; only tests call it.
 
 ---
 
@@ -132,16 +150,17 @@ MAET includes a research and simulation toolkit built to avoid the pitfalls of n
 - Batch runner that processes symbols in parallel chunks of 50 (`server/domain/calculations/engine/batch-runner.ts`).
 - Canonical indicator implementations live in `shared/indicators/canonical.ts`; `tests/canonical-indicators.test.ts` checks them against the strategy engine's indicator cache. Bars inside an indicator's warm-up window have `null` values, not `0`.
 
-### Dual-Database Storage Architecture
-- **Supabase PostgreSQL**: Operational persistence for companies, historical OHLCV candles, technical snapshots, paper trading orders, fills, margin logs, and alert rules.
-- **Google BigQuery (`maet_warehouse`)**: Scalable analytical warehouse streaming structured time-series data, historical statements, and bulk screener snapshots.
-- **Upstash Redis**: Sub-millisecond candle cache and active quote distribution layer.
+### Storage
+- **Supabase PostgreSQL**: Operational persistence for companies, historical OHLCV candles, technical snapshots, paper trading accounts, orders, fills, ledger, and alert rules.
+- **Google BigQuery (optional)**: Analytics sink of the ingestion engine; the dataset comes from `BIGQUERY_DATASET` (no default). When it is unset or fails, the Postgres write still happens.
+- **Redis**: Yahoo candle cache, optional shared rate-limit buckets (`RATE_LIMIT_STORE=redis`), the daily-processor lock and paper-notification pub/sub. Quotes are cached in process memory, not in Redis.
 
 ### Paper Trading & Margin Safety
-- Realistic paper execution matching Market, Limit, Stop-Loss, and Stop-Loss-Limit orders.
+- Users place `MARKET`, `LIMIT` and `STOP_LOSS_LIMIT` orders. `MARKET` and `LIMIT` entries can carry stop-loss and take-profit prices, which become a take-profit `LIMIT` and a `STOP_LOSS_MARKET` exit (OCO) on the first fill.
 - Paper MARKET orders only fill while the NSE session is OPEN, against quotes no older than `PAPER_EXECUTION_MAX_QUOTE_AGE_MS` (delayed quotes are rejected unless `PAPER_EXECUTION_ALLOW_DELAYED=true`). The starting balance is `PAPER_INITIAL_CASH_INR`.
-- Formal protection against short-selling violations, TOCTOU order-placement races, and invalid margin states.
-- Server-Sent Events (SSE) streaming real-time trade fills, margin updates, and portfolio metrics.
+- Fills lock the account row and run in SERIALIZABLE transactions with retry. Unique constraints on fills block double fills, idempotency keys de-duplicate retried requests, and a fill that would exceed margin (5× leverage) is refused. Short selling is allowed; margin calls liquidate positions when equity falls below maintenance margin.
+- **In progress:** Server-Sent Events for paper updates. `/api/paper/stream` exists and fill/order/account events are written to a transactional outbox, but the outbox publisher is not started yet. The stream therefore sends only its connection frame and heartbeats, and the UI polls (every 3 s while orders are working, else 10 s).
+- **In progress:** the live feed streams only NSE symbols that have an open market stream or an active alert. Resting paper orders and open positions do not subscribe their own symbols yet.
 
 ---
 
@@ -155,23 +174,23 @@ MAET/
 │   ├── ci.yml                    # Typecheck, lint, test wiring check, unit/integration/concurrency/advanced suites, builds
 │   └── deploy-render.yml         # Verifies the Render deployment serves the pushed commit and reports healthy
 ├── server/                       # Backend (Nitro / H3 / tRPC), deployed to Render
-│   ├── api/                      # File-based REST/SSE routes (/api/*), health.get.ts, tRPC entry & routers
+│   ├── api/                      # File-based REST/SSE routes (/api/*), health.get.ts, tRPC entry, auth (trpc/auth.ts) & routers
 │   ├── data/                     # Clients & adapters: Drizzle/Postgres, Redis, BigQuery, Angel One, Yahoo, NSE
 │   ├── db/
-│   │   ├── migrations/           # Numbered SQL migrations (0001–0024) + upgrade tests
+│   │   ├── migrations/           # Numbered SQL migrations (0001–0026) + upgrade tests
 │   │   ├── seeds/                # Reference data loads (market_baseline_metrics.sql)
 │   │   └── schema.ts             # Drizzle table definitions
 │   ├── domain/                   # Business logic: analysis, backtest, calculations, company, data
 │   │                             # (corporate actions), fundamentals, market, portfolio, screener,
 │   │                             # strategy (runner-v3, execution model, portfolio engine, walk-forward), technical
-│   ├── http/sse/                 # Server-Sent Events hub
-│   ├── infra/                    # Auth (JWT), event bus, encryption, health, idempotency, logger, rate limit
-│   ├── middleware/cors.ts        # Global CORS (FRONTEND_ORIGIN)
+│   ├── http/sse/                 # Alternate SSE hub, not wired (live streams: api/market/stream.get.ts, api/paper/stream.get.ts)
+│   ├── infra/                    # Event bus, encryption, health, logger, client IP, DB diagnostics; unused idempotency/rate-limit/shutdown helpers
+│   ├── middleware/               # CORS (FRONTEND_ORIGIN), token-bucket rate limiting, request body size limit
 │   ├── modules/                  # Feature services (alerts, paper-trading, screener-dsl, strategy jobs, ...)
 │   ├── plugins/orchestrator.ts   # Starts/stops the orchestrator with the Nitro server
 │   ├── routes/health/            # Admin-only /health/detailed report
 │   ├── scripts/                  # Migrations, seeds, DB checks, backfills, test wiring check
-│   ├── workers/                  # Background jobs, ingestion engine, quote pollers, job workers
+│   ├── workers/                  # In-process market workers (Angel One feed, order matcher, alerts, daily processor), job workers run separately, ingestion engine
 │   ├── config.ts                 # Environment validation
 │   ├── orchestrator.ts           # Worker/market-data orchestration
 │   └── nitro.config.ts           # Nitro build configuration
@@ -207,7 +226,8 @@ MAET/
 - [Bun](https://bun.sh/) $\ge$ 1.3.14 (primary runtime and package manager)
 - Node.js $\ge$ 20.x (supported fallback)
 - PostgreSQL $\ge$ 16 (local or Supabase cloud instance)
-- Optional: Redis / Upstash Redis, Google Cloud BigQuery service account
+- Redis (Upstash or local; `UPSTASH_REDIS_URL` is required outside tests)
+- Optional: Google Cloud BigQuery service account
 
 ### 1. Installation
 Clone the repository and install dependencies using Bun:
@@ -237,19 +257,22 @@ SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 SUPABASE_DB_URL=postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
 
-# Redis Cache (Upstash or Local)
+# Redis (Upstash or local; required outside tests)
 UPSTASH_REDIS_URL=redis://default:[password]@[endpoint]:6379
 
-# Market Data Providers (Optional for demo/fallback mode)
+# Market Data Providers. server/config.ts requires these (and ANGELONE_MASTER_KEY,
+# at least 32 chars, used to encrypt broker credentials) whenever NODE_ENV is not
+# "test". If the Angel One login fails, quotes fall back to delayed Yahoo data.
+ANGELONE_MASTER_KEY=at-least-32-characters-long-secret
 ANGELONE_API_KEY=your-smartapi-key
 ANGELONE_CLIENT_ID=your-client-id
 ANGELONE_PIN=your-pin
 ANGELONE_TOTP_SECRET=your-totp-secret
 
 # Google BigQuery Analytics (Optional). When unset, warehouse writes fail and
-# are logged; Postgres persistence is unaffected.
+# are logged; Postgres persistence is unaffected. There is no default dataset.
 BIGQUERY_PROJECT=your-gcp-project
-BIGQUERY_DATASET=maet_warehouse
+BIGQUERY_DATASET=your_dataset
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
 
 # Paper trading execution
@@ -272,7 +295,7 @@ VITE_SUPABASE_URL=https://<project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon key, public by design>
 ```
 
-On Render, set the server variables in the dashboard (`render.yaml` lists them, including the optional BigQuery ones); on Vercel, set the `VITE_*` variables.
+Outside tests, `server/config.ts` refuses to start without `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `UPSTASH_REDIS_URL`, `ANGELONE_MASTER_KEY` and the four `ANGELONE_*` credentials; the server also needs a database URL (`SUPABASE_DB_URL` or `DATABASE_URL`). On Render, set the server variables in the dashboard (`render.yaml` lists them, including the optional BigQuery ones); on Vercel, set the `VITE_*` variables.
 
 ### 3. Running Locally
 Run the backend and frontend in two terminals:
@@ -300,7 +323,7 @@ Tests never fall back to a default database either: with `NODE_ENV=test` the ser
 ### 5. Production Migrations
 Run from a trusted machine, never from CI:
 
-1. Check the target with `bun run verify:db` (read-only restore/connectivity check).
+1. Check connectivity with `bun run check:db` (uses `.env`). After restoring the database, run `bun run verify:db` (`server/scripts/verify-db-restore.ts`), a read-only verifier: it checks the migration history, the schema against Drizzle, key-table row counts, paper invariants (ledger sums to cash, no fills on another user's or generation's order, no non-positive positions) and RLS on `paper_*` tables inside a read-only transaction that is always rolled back. It reads `SUPABASE_DB_URL`/`DATABASE_URL` (or `--url-env=VAR`), never `.env`; exit codes are 0 pass, 1 failure, 2 cannot connect, 3 usage error.
 2. Apply pending migrations against Supabase's **direct** connection (not the transaction pooler):
    ```bash
    MIGRATION_DATABASE_URL="<supabase direct connection url>" bun run server/scripts/apply-migrations.ts
@@ -356,16 +379,17 @@ bun run --cwd server build
 
 ## 7. Financial & Research Invariants Checked in CI
 
-CI runs tests for these invariants on every pull request and push to `main`. Items 1–7 exercise the research modules from section 2, which are not yet wired into production backtests.
+CI runs tests for these invariants on every pull request and push to `main`. Items 1–5 and 7 exercise research modules from section 2 that production backtests do not call; item 6 covers the walk-forward engine the production worker uses, and item 9 the production runner.
 
 1. **Deterministic Execution**: Market impact strictly scales with $\sqrt{\text{participation}}$, increasing buy fill prices and decreasing sell fill prices.
 2. **Corporate Action Split Invariant**: Stock splits (e.g. 2:1) adjust historical series without creating artificial drawdown anomalies.
 3. **Look-Ahead Isolation**: Historical fundamentals queries strictly reject any revisions published after simulation timestamp $T$.
 4. **Survivorship Bias Guard**: Index constituent membership queries accurately reflect historical reality (e.g., delisted companies exist in their historical active windows).
-5. **Shared Capital Conservation**: Multiple concurrent trading strategies competing for a shared capital pool cannot double-spend or violate allocation limits.
-6. **Walk-Forward Partitioning**: Test data is strictly sealed during training and validation window evaluations.
+5. **Shared Capital Conservation**: Multiple symbols competing for one shared cash pool cannot double-spend it or exceed allocation limits.
+6. **Walk-Forward Partitioning**: Test candles are excluded from the training and validation runs of each window.
 7. **Robustness Overfit Detection**: Fragile parameter spikes (e.g., high Sharpe with zero neighbor support) are flagged with `OVERFIT_RISK`.
 8. **RBAC & Security Boundaries**: Ingestion and administrative mutations strictly require authenticated admin claims derived from verified JWT `app_metadata`.
+9. **Look-Ahead (runner-v3)**: A run truncated at time $T$ reproduces the full run's trades and equity before $T$, and fill-bar high/low/close/volume cannot influence decisions made at the open (`truncated-history.test.ts`, `fill-bar-look-ahead.test.ts`).
 
 ---
 
