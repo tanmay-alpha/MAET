@@ -19,6 +19,18 @@ async function expectAccountActionsBlocked(page: Page, path: string) {
     await expect(page.getByText("Net Asset Value (NAV)", { exact: true })).toHaveCount(0);
     return;
   }
+  if (path === "/dashboard") {
+    // No account actions, but the public market workspace stays useful below the notice.
+    await expect(page.getByRole("button", { name: "Quick Trade", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reset", exact: true })).toHaveCount(0);
+    await expect(page.getByText("Portfolio equity", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "NIFTY 50 movers" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Top 5 gainers" }).getByRole("row")).toHaveCount(6);
+    await expect(page.getByRole("heading", { name: "Guest watchlist" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Research shortcuts" }).getByRole("link")).toHaveText(["Screener", "Charts", "Strategy Lab"]);
+    await expect(page.getByText("Paper account requires sign-in.")).toHaveCount(0);
+    return;
+  }
   await expect(page.getByRole("button", { name: "Quick Trade", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Reset", exact: true })).toBeDisabled();
 }
@@ -72,6 +84,14 @@ test("backend down: Retry loads the account once the server answers again", asyn
   await expect(page.getByText(`Cash: ${FIXTURE_CASH}.00`, { exact: true })).toBeVisible();
   await expect(notice).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Quick Trade", exact: true })).toBeEnabled();
+});
+
+test("valid session: the /portfolio header keeps Quick Trade and Reset on screen at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  await page.goto("/portfolio");
+  await expect(page.getByRole("button", { name: "Quick Trade", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole("button", { name: "Reset", exact: true })).toBeInViewport({ ratio: 1 });
 });
 
 test("valid session: /portfolio shows the server's account figures and enabled actions", async ({ page }) => {

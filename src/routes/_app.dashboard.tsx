@@ -88,9 +88,12 @@ function Dashboard() {
   const { quoteMap, isError, delayed, marketPhase } = useMarketQuotes(symbols);
 
   if (!signedIn) return <GuestMarketDashboard />;
+  // No account to show or act on: keep the public market workspace useful under the notice.
+  if (status === "unauthorized" || status === "unavailable") {
+    return <GuestMarketDashboard accountNotice={<PaperAccountNotice status={status} onRetry={retry} className="mt-2" />} />;
+  }
 
   const blockedReason = paperAccountBlockedReason(status);
-  const failed = status === "unauthorized" || status === "unavailable";
 
   const unrealizedPnl = positions.reduce((total, position: PaperPositionRow) => {
     const avgPrice = Number(position.averageEntryPrice);
@@ -141,9 +144,7 @@ function Dashboard() {
         </div>
       </div>
 
-      <PaperAccountNotice status={status} onRetry={retry} />
-
-      {!failed && <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <StatCard
           icon={Wallet}
           label="Portfolio equity"
@@ -172,9 +173,9 @@ function Dashboard() {
           sub={figures && `${filledOrders} filled · ${pendingOrders} pending`}
           trend="flat"
         />
-      </div>}
+      </div>
 
-      {!failed && <div className="mt-6 rounded-lg border border-border bg-panel p-4">
+      <div className="mt-6 rounded-lg border border-border bg-panel p-4">
         <h2 className="mb-3 font-semibold text-sm">Positions overview</h2>
         {!figures ? (
           <div className="space-y-2" aria-busy="true">
@@ -233,7 +234,7 @@ function Dashboard() {
             No active positions.
           </div>
         )}
-      </div>}
+      </div>
 
       <QuickTradeModal
         isOpen={tradeModal.isOpen}
