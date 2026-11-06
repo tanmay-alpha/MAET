@@ -1,4 +1,5 @@
-import { createError, defineEventHandler, getQuery, getRequestIP } from "h3";
+import { createError, defineEventHandler, getQuery } from "h3";
+import { getClientIp } from "../../infra/client-ip";
 import { bus } from "../../infra/bus";
 import { buildQuotesPayload, loadQuotes } from "../../domain/market/quote-service";
 import { toMarketQuote } from "../../domain/market/quote-quality";
@@ -32,9 +33,9 @@ export default defineEventHandler(async (event) => {
   if (activeConnections >= MAX_CONNECTIONS) {
     throw createError({ statusCode: 503, statusMessage: "Market stream capacity reached" });
   }
-  // Behind Render's proxy the client address is the first X-Forwarded-For hop.
-  // A client can spoof that header to dodge this cap, but not the global one.
-  const ip = getRequestIP(event, { xForwardedFor: true }) ?? "unknown";
+  // Same client identity as the API rate limiter: Cloudflare's connecting IP when
+  // present, otherwise the leftmost X-Forwarded-For hop (spoofable; the global cap still holds).
+  const ip = getClientIp(event);
   const ipConnections = connectionsByIp.get(ip) ?? 0;
   if (ipConnections >= MAX_CONNECTIONS_PER_IP) {
     throw createError({ statusCode: 429, statusMessage: "Too many market streams from this address" });

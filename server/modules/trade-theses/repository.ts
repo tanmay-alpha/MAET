@@ -1,6 +1,7 @@
 import { db } from "../../data/drizzle/client";
-import { tradeTheses, thesisSignals, thesisSnapshots, thesisOrderLinks } from "../../db/schema";
+import { tradeTheses, thesisSignals, thesisSnapshots, thesisOrderLinks, chartWorkspaces, paperOrders } from "../../db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import type { CreateThesisInput, LinkOrderToThesisInput } from "@shared/research/contracts";
 
 export class TradeThesisRepository {
@@ -45,6 +46,13 @@ export class TradeThesisRepository {
   }
 
   async createThesis(userId: string, input: CreateThesisInput) {
+    if (input.workspaceId) {
+      const [workspace] = await db
+        .select({ id: chartWorkspaces.id })
+        .from(chartWorkspaces)
+        .where(and(eq(chartWorkspaces.id, input.workspaceId), eq(chartWorkspaces.userId, userId)));
+      if (!workspace) throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
+    }
     const [created] = await db
       .insert(tradeTheses)
       .values({
@@ -85,7 +93,12 @@ export class TradeThesisRepository {
     return snapshot;
   }
 
-  async linkOrder(thesisId: string, input: LinkOrderToThesisInput) {
+  async linkOrder(userId: string, thesisId: string, input: LinkOrderToThesisInput) {
+    const [order] = await db
+      .select({ id: paperOrders.id })
+      .from(paperOrders)
+      .where(and(eq(paperOrders.id, input.paperOrderId), eq(paperOrders.userId, userId)));
+    if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Paper order not found" });
     const [link] = await db
       .insert(thesisOrderLinks)
       .values({
