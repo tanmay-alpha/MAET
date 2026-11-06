@@ -49,7 +49,7 @@ With `fillPolicy: ON_CLOSE`, `signalIdx = i`, fills are at `close[i]`, a rule ex
 2. Position sizing uses ATR at `signalIdx`; the only bar-$i$ input is the open, which is known at the moment of the fill.
 3. The indicator cache is precomputed over the whole series, so correctness relies on every indicator being causal (trailing). The canonical implementations are trailing windows or recursive filters (`shared/indicators/canonical.ts`). Donchian channels include the current bar, which is still causal at `signalIdx`.
 4. A position closed on a bar cannot re-enter on that bar (`canEnter` is captured first).
-5. Tests: `server/domain/strategy/look-ahead.test.ts`, `fill-bar-look-ahead.test.ts`, `same-bar-exit-order.test.ts`, `truncated-history.test.ts`, `reproducibility.test.ts` (`package.json` `test:strategy-engine`, `test:portfolio-backtest`).
+5. Tests: `truncated-history.test.ts` is the strongest check: a run that never saw bars after time $T$ must agree with the full-history run on every trade closed and every equity point marked before $T$ (for runner-v3 and the portfolio engine, long and short, both fill policies). `fill-bar-look-ahead.test.ts` perturbs the fill bar's high/low/close/volume and checks that sizing and fills decided at its open do not change. Also `look-ahead.test.ts`, `same-bar-exit-order.test.ts` and `reproducibility.test.ts` (all in `server/domain/strategy/`, run by `test:unit`).
 
 `server/domain/strategy/look-ahead-detector.ts` offers an empirical check: it overwrites all OHLCV after a pivot with absurd values (99999.99) and asserts that signal timestamps up to the pivot do not change. It compares signal timestamps only, and only tests call it.
 
