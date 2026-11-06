@@ -126,6 +126,16 @@ function splitRatio(split: NonNullable<YahooChartEvents["splits"]>[string]): [nu
 }
 
 /**
+ * Yahoo restates past dividends for later splits, bonuses and rights issues,
+ * but reports only splits and bonuses as events. A declared rate has at most
+ * three decimals (37.5% of a ₹1 face value is ₹0.375); Yahoo's restated figures
+ * carry six (BHARTIARTL's ₹2 of August 2020 arrives as 1.963142).
+ */
+function restatedAmount(amount: number): boolean {
+  return Math.abs(amount * 1000 - Math.round(amount * 1000)) > 1e-6;
+}
+
+/**
  * Dividends and splits from a Yahoo chart response, newest first (same-day
  * dividends before splits), without duplicates or malformed rows. Nothing is
  * inferred: a dividend without a currency or a 1:1 "split" is dropped.
@@ -160,8 +170,8 @@ export function normalizeYahooCorporateActions(
       exDate,
       amount: dividend.amount,
       currency,
-      // Yahoo restates a dividend for every later split or bonus.
-      splitAdjusted: splits.some((split) => split.exDate > exDate),
+      // Restated for a later split or bonus, or for a rights issue Yahoo does not list.
+      adjusted: splits.some((split) => split.exDate > exDate) || restatedAmount(dividend.amount),
     });
   }
 

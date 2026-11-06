@@ -122,10 +122,10 @@ export class MockApi {
    * first. The first two fall inside the 60 daily fixture candles (7 Sep – 5 Nov 2026).
    */
   corporateActions: CorporateActionEvent[] = [
-    { kind: "dividend", exDate: "2026-10-14", amount: 24, currency: "INR", splitAdjusted: false },
+    { kind: "dividend", exDate: "2026-10-14", amount: 24, currency: "INR", adjusted: false },
     { kind: "split", exDate: "2026-09-21", numerator: 2, denominator: 1 },
-    { kind: "dividend", exDate: "2025-08-14", amount: 5.5, currency: "INR", splitAdjusted: true },
-    { kind: "dividend", exDate: "2024-08-19", amount: 5, currency: "INR", splitAdjusted: true },
+    { kind: "dividend", exDate: "2025-08-14", amount: 5.5, currency: "INR", adjusted: true },
+    { kind: "dividend", exDate: "2024-08-19", amount: 5, currency: "INR", adjusted: true },
     { kind: "split", exDate: "2017-09-07", numerator: 1, denominator: 10 },
   ];
   worldEvents = structuredClone(WORLD_EVENTS);
