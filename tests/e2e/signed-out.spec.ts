@@ -75,6 +75,7 @@ test("signed out: dashboard restores the device watchlist and links each quote t
 });
 
 const SIGNED_OUT_PAGES = [
+  { path: "/portfolio", notice: "Portfolio returns and tax estimates require a signed-in account." },
   { path: "/journal", notice: "Trade theses and reviews require a signed-in account." },
   { path: "/replay", notice: "Replay sessions require a signed-in account." },
   { path: "/performance", notice: "Backtest results require a signed-in account." },
