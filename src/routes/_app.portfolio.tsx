@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, DollarSign, TrendingUp, TrendingDown, type LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { usePortfolioAnalytics } from "@/hooks/use-portfolio-analytics";
@@ -101,6 +101,8 @@ function PortfolioPage() {
     return <div className="mx-auto max-w-7xl px-4 py-6">
       <h1 className="mb-4 text-xl font-semibold">Portfolio</h1>
       <ReturnsTaxSection />
+      <p className="text-xs text-muted-foreground">No account needed to review real trades: import a Zerodha or Groww tradebook; it is analysed in this browser tab.</p>
+      <Link to="/import" className="mt-2 inline-block rounded border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90">Analyse a broker tradebook</Link>
     </div>;
   }
 
@@ -123,7 +125,7 @@ function PortfolioPage() {
               </button>
               <div>
                 <h1 className="text-xl font-semibold">Portfolio</h1>
-                <p className="text-xs text-muted-foreground">Paper trading performance</p>
+                <p className="text-xs text-muted-foreground">Paper trading performance · <Link to="/import" className="text-primary hover:underline">Analyse a broker tradebook</Link></p>
               </div>
               <span className="text-sm text-muted-foreground">
                 {quoteFeedLabel({ isError, delayed, marketPhase })}
