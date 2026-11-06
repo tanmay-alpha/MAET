@@ -42,6 +42,7 @@ test("signed out: /watchlists edits the guest watchlist kept in this browser", a
   await page.goto("/watchlists");
   const watchlist = page.getByRole("region", { name: "Guest watchlist" });
   await expect(watchlist.getByRole("row").filter({ hasText: "TCS" })).toContainText("₹3,890.55");
+  await expect(watchlist.getByText("Angel One · live", { exact: true })).toBeVisible();
 
   await expect(async () => {
     await watchlist.getByRole("textbox", { name: "Add a symbol or company" }).fill("elxsi");

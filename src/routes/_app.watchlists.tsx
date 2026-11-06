@@ -7,7 +7,7 @@ import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { useWatchlist } from "@/hooks/use-watchlist";
-import { sourceName } from "@/lib/quote-source";
+import { quoteSourceLabel, sourceName } from "@/lib/quote-source";
 import type { MarketCatalogItem } from "@/lib/market-catalog";
 
 export const Route = createFileRoute("/_app/watchlists")({
@@ -59,6 +59,15 @@ function GuestRows({ items, onRemove }: { items: MarketCatalogItem[]; onRemove: 
   );
 }
 
+/** One source label for the list, from the first batch's response (shares its query). */
+function QuoteSource({ items }: { items: MarketCatalogItem[] }) {
+  const symbols = useMemo(() => items.map((item) => item.symbol), [items]);
+  const { data, isError, delayed, marketPhase } = useMarketQuotes(symbols);
+  if (isError && !data) return <span className="text-[11px] text-amber-400">Quotes unavailable</span>;
+  if (!data) return null;
+  return <span className="text-[11px] text-muted-foreground">{quoteSourceLabel(data.source, delayed, marketPhase)}</span>;
+}
+
 /** The browser-stored list signed-out visitors keep (the same one the dashboard shows). */
 function GuestWatchlist() {
   const { items, addItem, removeItem } = useWatchlist();
@@ -76,6 +85,11 @@ function GuestWatchlist() {
           Guest watchlist
         </h2>
         <span className="text-[11px] text-muted-foreground">Saved in this browser · {items.length} symbols</span>
+        {batches[0] && (
+          <span className="ml-auto">
+            <QuoteSource items={batches[0]} />
+          </span>
+        )}
       </div>
       <div className="border-b border-border p-2">
         <CompanySearchInput placeholder="Add a symbol or company" onSelect={(company) => void addItem({ symbol: company.symbol, name: company.name })} />
