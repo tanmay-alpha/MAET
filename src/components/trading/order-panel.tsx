@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import { buildTicketOrder, type TicketOrderType } from "@/lib/order-ticket";
 import { AlertCircle, CheckCircle2, ShieldAlert } from "lucide-react";
 
@@ -13,6 +14,7 @@ export function OrderPanel({
   price?: number;
 }) {
   const { placeOrder, isTradingAvailable } = usePaperAccount();
+  const signedIn = useSignedIn();
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [qtyRaw, setQtyRaw] = useState<string>("10");
   const [limit, setLimit] = useState(price?.toFixed(2) ?? "");
@@ -123,6 +125,12 @@ export function OrderPanel({
           </div>
         </div>
       </div>
+
+      {!signedIn && (
+        <p role="status" className="mx-2 mt-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-400">
+          Paper trading requires a signed-in account. Sign-in is coming soon.
+        </p>
+      )}
 
       {/* Side Toggle */}
       <div className="grid grid-cols-2 gap-1 p-2">
