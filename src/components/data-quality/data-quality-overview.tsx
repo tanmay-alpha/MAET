@@ -1,10 +1,17 @@
-import React from "react";
+export interface IngestionBatch {
+  id: string;
+  batchId: string;
+  source: string;
+  dataType: string;
+  startedAt: string;
+  status: string;
+}
 
 export interface DataQualityOverviewProps {
   overview: {
     totalAudits: number;
     openAnomalies: number;
-    recentBatches: any[];
+    recentBatches: IngestionBatch[];
   } | null;
   coverage: {
     companiesWithQuotes: number;
@@ -14,62 +21,57 @@ export interface DataQualityOverviewProps {
   onRetryBatch?: (batchId: string) => void;
 }
 
-export function DataQualityOverviewComponent({ overview, coverage, onRetryBatch }: DataQualityOverviewProps) {
-  return (
-    <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-4">
-        <div className="rounded-lg border bg-card p-4 shadow-sm">
-          <p className="text-xs text-muted-foreground font-medium">Total Ingestion Audits</p>
-          <p className="text-2xl font-bold">{overview?.totalAudits ?? 0}</p>
-        </div>
-        <div className="rounded-lg border bg-card p-4 shadow-sm">
-          <p className="text-xs text-muted-foreground font-medium">Open Anomalies</p>
-          <p className="text-2xl font-bold text-amber-500">{overview?.openAnomalies ?? 0}</p>
-        </div>
-        <div className="rounded-lg border bg-card p-4 shadow-sm">
-          <p className="text-xs text-muted-foreground font-medium">Companies with Quotes</p>
-          <p className="text-2xl font-bold">{coverage?.companiesWithQuotes ?? 0}</p>
-        </div>
-        <div className="rounded-lg border bg-card p-4 shadow-sm">
-          <p className="text-xs text-muted-foreground font-medium">Companies with Fundamentals</p>
-          <p className="text-2xl font-bold">{coverage?.companiesWithFundamentals ?? 0}</p>
-        </div>
-      </div>
+const STATUS_CLASS: Record<string, string> = {
+  succeeded: "text-bull",
+  failed: "text-bear",
+};
 
-      <div className="rounded-lg border bg-card p-6 shadow-sm">
-        <h3 className="text-lg font-semibold mb-4">Recent Ingestion Batches</h3>
-        <div className="space-y-3">
-          {overview?.recentBatches?.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No recent ingestion batches found.</p>
-          ) : (
-            overview?.recentBatches?.map((batch: any) => (
-              <div key={batch.id} className="flex items-center justify-between border-b pb-3 text-xs">
-                <div>
-                  <span className="font-mono font-bold">{batch.batchId}</span>
-                  <span className="ml-2 text-muted-foreground">({batch.source} / {batch.dataType})</span>
-                  <p className="text-muted-foreground text-[10px]">{new Date(batch.startedAt).toLocaleString()}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className={`px-2 py-0.5 rounded uppercase font-semibold text-[10px] ${
-                    batch.status === "succeeded" ? "bg-emerald-500/15 text-emerald-600" :
-                    batch.status === "failed" ? "bg-rose-500/15 text-rose-600" : "bg-amber-500/15 text-amber-600"
-                  }`}>
-                    {batch.status}
-                  </span>
-                  {batch.status === "failed" && onRetryBatch && (
-                    <button
-                      onClick={() => onRetryBatch(batch.batchId)}
-                      className="text-xs text-primary underline"
-                    >
-                      Retry
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
+function count(value: number | undefined): string {
+  return value === undefined ? "—" : value.toLocaleString("en-IN");
+}
+
+export function DataQualityOverviewComponent({ overview, coverage, onRetryBatch }: DataQualityOverviewProps) {
+  const batches = overview?.recentBatches ?? [];
+  return (
+    <div className="space-y-3">
+      <p className="font-mono text-xs tabular-nums text-muted-foreground">
+        {count(overview?.totalAudits)} audits · <span className={overview?.openAnomalies ? "text-amber-400" : undefined}>{count(overview?.openAnomalies)} open anomalies</span> · quotes for {count(coverage?.companiesWithQuotes)} companies · fundamentals for {count(coverage?.companiesWithFundamentals)}
+        {coverage?.lastIngestion ? ` · last ingestion ${new Date(coverage.lastIngestion).toLocaleString("en-IN")}` : ""}
+      </p>
+
+      {batches.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No recent ingestion batches.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[520px] text-xs">
+            <thead className="text-left text-muted-foreground">
+              <tr className="border-b border-border">
+                <th className="py-1.5 pr-3 font-medium">Batch</th>
+                <th className="py-1.5 pr-3 font-medium">Source / type</th>
+                <th className="py-1.5 pr-3 font-medium">Started</th>
+                <th className="py-1.5 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {batches.map((batch) => (
+                <tr key={batch.id} className="border-b border-border/60 last:border-0">
+                  <td className="py-1.5 pr-3 font-mono">{batch.batchId}</td>
+                  <td className="py-1.5 pr-3 text-muted-foreground">{batch.source} / {batch.dataType}</td>
+                  <td className="py-1.5 pr-3 font-mono text-muted-foreground">{new Date(batch.startedAt).toLocaleString("en-IN")}</td>
+                  <td className="py-1.5">
+                    <span className={STATUS_CLASS[batch.status] ?? "text-amber-400"}>{batch.status}</span>
+                    {batch.status === "failed" && onRetryBatch && (
+                      <button type="button" onClick={() => onRetryBatch(batch.batchId)} className="ml-3 text-primary hover:underline">
+                        Retry
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      </div>
+      )}
     </div>
   );
 }

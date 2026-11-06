@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { trpc, type HeatmapCell } from "@/lib/trpc";
-import { useSignedIn } from "@/hooks/use-signed-in";
 
 function shadeFor(chg?: number) {
   if (chg === undefined) return "var(--color-panel)";
@@ -69,77 +69,35 @@ function computeLayout(cells: HeatmapCell[], totalW: number, totalH: number): La
   return out.map((r) => ({ ...r, y: r.y * k, h: r.h * k }));
 }
 
-export function MarketHeatmap({ height = 500 }: { height?: number }) {
-  // marketBreadth procedures require a session on the server; don't poll them signed out.
-  const signedIn = useSignedIn();
-  const { data, isLoading, isError } = useQuery({
+/** ALL_NSE heatmap cells; marketBreadth procedures require a session, so pass `enabled: signedIn`. */
+export function useHeatmapCells(enabled: boolean) {
+  return useQuery({
     queryKey: ["marketBreadth", "heatmap", "ALL_NSE"],
     queryFn: () => trpc.marketBreadth.getHeatmapCells.query({ universe: "ALL_NSE" }),
-    enabled: signedIn,
+    enabled,
     refetchInterval: 30_000,
+    retry: false,
   });
+}
 
-  const cells = data?.cells ?? [];
-
-  if (!signedIn) {
-    return (
-      <div
-        className="flex w-full items-center justify-center rounded-lg border border-border bg-panel text-xs text-muted-foreground"
-        style={{ height }}
-      >
-        Sign in to see the verified market heatmap.
-      </div>
-    );
-  }
-
-  if (isLoading) {
-    return (
-      <div
-        className="flex w-full items-center justify-center rounded-lg border border-border bg-panel text-xs text-muted-foreground"
-        style={{ height }}
-      >
-        Loading verified market cells…
-      </div>
-    );
-  }
-
-  if (isError || !data?.available) {
-    return (
-      <div
-        className="flex w-full items-center justify-center rounded-lg border border-border bg-panel text-xs text-muted-foreground"
-        style={{ height }}
-      >
-        {data?.reason || "Verified market intelligence temporarily unavailable"}
-      </div>
-    );
-  }
-
-  if (cells.length === 0) {
-    return (
-      <div
-        className="flex w-full items-center justify-center rounded-lg border border-border bg-panel text-xs text-muted-foreground"
-        style={{ height }}
-      >
-        No verified quotes available for ALL_NSE
-      </div>
-    );
-  }
-
+export function MarketHeatmap({ cells, height = 500 }: { cells: HeatmapCell[]; height?: number }) {
   const rects = computeLayout(cells, 100, height);
 
   return (
-    <div className="relative w-full overflow-hidden rounded-lg border border-border bg-panel" style={{ height }}>
+    <div className="relative w-full overflow-hidden bg-panel" style={{ height }}>
       {rects.map((r) => {
         const mCapStr = r.marketCap
-          ? `₹${(r.marketCap / 1e7).toLocaleString("en-IN", { maximumFractionDigits: 0 })}Cr`
-          : "MCap: —";
-        const tooltip = `${r.symbol} (${r.name})\nSector: ${r.sector}\nPrice: ₹${r.price.toFixed(2)}\nChange: ${r.changePct >= 0 ? "+" : ""}${r.changePct.toFixed(2)}%\n${mCapStr}\nWeight: ${r.weight.toFixed(2)}%`;
+          ? `₹${(r.marketCap / 1e7).toLocaleString("en-IN", { maximumFractionDigits: 0 })} Cr`
+          : "Market cap —";
+        const tooltip = `${r.symbol} (${r.name})\nSector: ${r.sector}\nPrice: ₹${r.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nChange: ${r.changePct >= 0 ? "+" : ""}${r.changePct.toFixed(2)}%\n${mCapStr}\nWeight: ${r.weight.toFixed(2)}%`;
 
         return (
-          <div
+          <Link
             key={r.symbol}
+            to="/stock/$symbol"
+            params={{ symbol: r.symbol }}
             title={tooltip}
-            className="absolute flex flex-col items-center justify-center border border-background/40 px-1 text-center transition-opacity hover:opacity-90 cursor-pointer select-none"
+            className="absolute flex flex-col items-center justify-center overflow-hidden border border-background/40 px-1 text-center select-none hover:brightness-125"
             style={{
               left: `${r.x}%`,
               top: r.y,
@@ -167,7 +125,7 @@ export function MarketHeatmap({ height = 500 }: { height?: number }) {
                 {r.weight > 0 ? `${r.weight.toFixed(1)}%` : ""}
               </span>
             )}
-          </div>
+          </Link>
         );
       })}
     </div>

@@ -1,4 +1,5 @@
 import { test, expect } from "./support/fixtures";
+import { API_ORIGIN } from "./support/mock-api";
 
 test("signed out: /terminal makes no protected calls and asks the visitor to sign in", async ({
   page,
@@ -84,7 +85,8 @@ const SIGNED_OUT_PAGES = [
   { path: "/strategies/00000000-0000-4000-8000-000000000001/backtests", notice: "Backtests and research jobs require a signed-in account." },
   { path: "/strategies/00000000-0000-4000-8000-000000000001/deployments", notice: "Strategy deployments require a signed-in account." },
   { path: "/options/NIFTY", notice: "Options chains require a signed-in account." },
-  { path: "/admin/data-quality", notice: "Data Quality Centre is available to admin users only." },
+  { path: "/admin/data-quality", notice: "Ingestion audits and anomalies are visible to admin accounts." },
+  { path: "/workspace", notice: "Watchlists, saved screeners and screener runs require a signed-in account." },
 ];
 
 for (const { path, notice } of SIGNED_OUT_PAGES) {
@@ -109,5 +111,24 @@ test("signed out: /compare charts prices without requesting protected peer funda
       timeout: 1_000,
     });
   }).toPass();
+  await expect(page.getByRole("columnheader", { name: "Peer median" })).toHaveCount(0);
   expect(api.requests.some(({ url }) => url.pathname.includes("getPeerComparison"))).toBe(false);
+});
+
+test("signed out: Data status shows backend health and the quote source the APIs report", async ({ page, api }) => {
+  await page.route(`${API_ORIGIN}/api/health`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "degraded", version: "587e24fa6a1a", checks: { database: false, redis: true, orchestrator: true, marketData: true } }),
+    }),
+  );
+  await page.goto("/admin/data-quality");
+  await expect(page.getByRole("heading", { level: 1, name: "Data status" })).toBeVisible();
+  await expect(page.getByRole("row", { name: /^Database down/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /^Redis up/ })).toBeVisible();
+  await expect(page.getByText(/^Database offline:/)).toBeVisible();
+  await expect(page.getByText("build 587e24f", { exact: true })).toBeVisible();
+  await expect(page.locator("main").getByText(/^(Angel One|Yahoo) · (live|delayed)/)).toBeVisible();
+  expect(api.requests.filter(({ url }) => url.pathname.startsWith("/api/trpc/"))).toEqual([]);
 });
