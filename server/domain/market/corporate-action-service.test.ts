@@ -7,7 +7,7 @@ const DIVIDEND: CorporateActionEvent = {
   exDate: "2025-08-14",
   amount: 5.5,
   currency: "INR",
-  splitAdjusted: false,
+  adjusted: false,
 };
 const SPLIT: CorporateActionEvent = { kind: "split", exDate: "2024-10-28", numerator: 2, denominator: 1 };
 
