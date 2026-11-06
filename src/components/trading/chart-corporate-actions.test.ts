@@ -3,12 +3,12 @@ import type { CorporateActionEvent } from "@shared/types";
 import { corporateActionTooltip, describeCorporateAction, placeCorporateActions } from "./chart-corporate-actions";
 import { formatIstCrosshairTime } from "./chart-time";
 
-const dividend = (exDate: string, amount = 24, splitAdjusted = false): CorporateActionEvent => ({
+const dividend = (exDate: string, amount = 24, adjusted = false): CorporateActionEvent => ({
   kind: "dividend",
   exDate,
   amount,
   currency: "INR",
-  splitAdjusted,
+  adjusted,
 });
 const split = (exDate: string, numerator: number, denominator: number): CorporateActionEvent => ({
   kind: "split",
@@ -24,7 +24,7 @@ describe("corporate action text", () => {
   test("dividend tooltip names amount, ex-date and source", () => {
     expect(corporateActionTooltip(dividend("2025-08-12"))).toBe("Dividend ₹24.00 · ex-date 12 Aug 2025 · Yahoo Finance");
     expect(corporateActionTooltip(dividend("2024-08-19", 5, true))).toBe(
-      "Dividend ₹5.00 (split-adjusted) · ex-date 19 Aug 2024 · Yahoo Finance",
+      "Dividend ₹5.00 (adjusted by provider) · ex-date 19 Aug 2024 · Yahoo Finance",
     );
   });
 

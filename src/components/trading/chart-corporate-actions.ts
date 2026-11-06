@@ -36,7 +36,7 @@ function formatAmount(amount: number, currency: string): string {
 export function describeCorporateAction(event: CorporateActionEvent): { label: string; detail: string } {
   if (event.kind === "dividend") {
     const amount = formatAmount(event.amount, event.currency);
-    return { label: "Dividend", detail: event.splitAdjusted ? `${amount} per share (split-adjusted)` : `${amount} per share` };
+    return { label: "Dividend", detail: event.adjusted ? `${amount} per share (adjusted by provider)` : `${amount} per share` };
   }
   const { numerator, denominator } = event;
   if (numerator < denominator) return { label: "Reverse split", detail: `${numerator} for ${denominator}` };
@@ -48,7 +48,7 @@ export function describeCorporateAction(event: CorporateActionEvent): { label: s
 export function corporateActionTooltip(event: CorporateActionEvent, source: CorporateActionsResponse["source"] = "yahoo"): string {
   const what =
     event.kind === "dividend"
-      ? `Dividend ${formatAmount(event.amount, event.currency)}${event.splitAdjusted ? " (split-adjusted)" : ""}`
+      ? `Dividend ${formatAmount(event.amount, event.currency)}${event.adjusted ? " (adjusted by provider)" : ""}`
       : `${describeCorporateAction(event).label} ${event.numerator} for ${event.denominator}`;
   return `${what} · ex-date ${formatExDate(event.exDate)} · ${CORPORATE_ACTION_SOURCE_LABEL[source]}`;
 }
