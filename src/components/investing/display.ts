@@ -1,4 +1,8 @@
-export const rupees = (value: number) => `₹${value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** Indian-grouped rupees; negatives read "−₹1,250.00" (U+2212 before the symbol), and amounts that round to zero carry no sign. */
+export function rupees(value: number): string {
+  const digits = Math.abs(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return value < 0 && digits !== "0.00" ? `−₹${digits}` : `₹${digits}`;
+}
 export const percent = (value: number | null) => value === null ? "—" : `${(value * 100).toFixed(2)}%`;
 
 export function serverMarkLabel(timestamp: string | null): string {
