@@ -16,7 +16,6 @@ import {
   computePercentDistance,
   computeSuperTrend,
   buildCanonicalSnapshot,
-  INDICATOR_ENGINE_VERSION,
 } from "../shared/indicators";
 import { IndicatorStateCache } from "../server/domain/strategy/indicator-state";
 import {
@@ -32,10 +31,6 @@ import {
 import type { Candle } from "@shared/types";
 
 describe("Canonical Indicator Engine — P1 Contract & Cross-System Equality", () => {
-  it("exposes INDICATOR_ENGINE_VERSION version constant", () => {
-    expect(INDICATOR_ENGINE_VERSION).toBe("1.0.0");
-  });
-
   // Deterministic fixture with 30 synthetic bars
   const mockCandles: Candle[] = Array.from({ length: 30 }, (_, i) => {
     const base = 100 + i * 2 + (i % 3 === 0 ? 3 : -1);

@@ -9,11 +9,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { candles, companies, screenerRuns, technicalSnapshots, users } from "../../../db/schema";
-import { desc, sql, and, or, gte, lte, eq, gt, lt, ilike, like, inArray } from "drizzle-orm";
-import { calculateAllIndicators } from "../../../domain/technical/indicators";
-import type { AllIndicators } from "../../../domain/technical/indicators";
-import { getCandles } from "../../../data/sources/yahoo";
-import { resolveMarketSymbol } from "../../../domain/market/symbol";
+import { desc, sql, and, or, gte, lte, eq, gt, lt, ilike, like, inArray, type SQL } from "drizzle-orm";
 
 // Extended filter fields including fundamentals and technical indicators
 const ALLOWED_FILTER_FIELDS = [
@@ -92,20 +88,38 @@ async function getNSESymbols(): Promise<string[]> {
   }
 }
 
-// Map of screener filter field → calculation_results indicator_name column value
+// Screener filter field → calculation_results row written by the calculation engine
+// (server/domain/calculations/calculators/indicators). `value` is the SQL expression
+// filtered on; `columns` are the stored columns it reads.
 // Keys match ALLOWED_FILTER_FIELDS technical indicator entries.
-const INDICATOR_NAME_MAP: Record<string, string> = {
-  sma_20: "SMA_20",
-  ema_20: "EMA_20",
-  rsi_14: "RSI_14",
-  macd_value: "MACD_LINE",
-  bollinger_width: "BOLLINGER_WIDTH",
-  atr_14: "ATR_14",
-  stoch_k: "STOCH_K",
-  williams_r: "WILLIAMS_R",
-  adx_14: "ADX_14",
-  cci_20: "CCI_20",
-  mfi_14: "MFI_14",
+interface CalculationResultsFilterSource {
+  indicatorName: string;
+  columns: ("value" | "signal" | "hist")[];
+  value: SQL;
+}
+const storedValue = (indicatorName: string): CalculationResultsFilterSource => ({
+  indicatorName,
+  columns: ["value"],
+  value: sql`indicator_value`,
+});
+export const CALCULATION_RESULTS_FILTERS: Record<string, CalculationResultsFilterSource> = {
+  sma_20: storedValue("SMA_20"),
+  ema_20: storedValue("EMA_20"),
+  rsi_14: storedValue("RSI_14"),
+  macd_value: storedValue("MACD"),
+  // BB_20 stores value = middle, signal = upper, hist = lower; width matches the
+  // canonical (upper - lower) / middle used by technical_snapshots.bb_width.
+  bollinger_width: {
+    indicatorName: "BB_20",
+    columns: ["value", "signal", "hist"],
+    value: sql`((indicator_signal - indicator_hist) / NULLIF(indicator_value, 0))`,
+  },
+  atr_14: storedValue("ATR_14"),
+  stoch_k: storedValue("STOCH_14_3"),
+  williams_r: storedValue("WILLIAMS_R_14"),
+  adx_14: storedValue("ADX_14"),
+  cci_20: storedValue("CCI_20"),
+  mfi_14: storedValue("MFI_14"),
 };
 
 // Fields whose latest value lives on the companies (fundamentals) table
@@ -118,79 +132,6 @@ const FUNDAMENTAL_COMPANY_FIELDS: Record<string, keyof typeof companies> = {
   eps: "eps",
   debt_to_equity: "debtToEquity",
 };
-
-/**
- * Apply technical indicator filters to candle data
- */
-function applyTechnicalFilters(
-  candleData: Array<{
-    symbol: string;
-    close: number;
-    volume: number;
-    indicators: AllIndicators;
-  }>,
-  filters: Array<{
-    field: string;
-    operator: string;
-    value: number;
-  }>
-): typeof candleData {
-  return candleData.filter(item => {
-    for (const filter of filters) {
-      const { field, operator, value } = filter;
-
-      // Skip non-indicator fields
-      if (!FIELD_MAP[field as keyof typeof FIELD_MAP]) continue;
-
-      let indicatorValue: number | undefined;
-
-      switch (field) {
-        case 'rsi_14':
-          indicatorValue = item.indicators.rsi.values[item.indicators.rsi.values.length - 1];
-          break;
-        case 'macd_value':
-          indicatorValue = item.indicators.macd.macd[item.indicators.macd.macd.length - 1];
-          break;
-        case 'bollinger_width':
-          const lastBB = item.indicators.bollinger;
-          if (lastBB.upper.length > 0 && lastBB.middle.length > 0) {
-            const lastIdx = lastBB.upper.length - 1;
-            indicatorValue = (lastBB.upper[lastIdx] - lastBB.lower[lastIdx]) / lastBB.middle[lastIdx];
-          }
-          break;
-        case 'atr_14':
-          indicatorValue = item.indicators.atr.values[item.indicators.atr.values.length - 1];
-          break;
-        case 'stoch_k':
-          indicatorValue = item.indicators.stochastic.k[item.indicators.stochastic.k.length - 1];
-          break;
-        case 'williams_r':
-          indicatorValue = item.indicators.williamsR.values[item.indicators.williamsR.values.length - 1];
-          break;
-        case 'adx_14':
-          indicatorValue = item.indicators.adx.adx[item.indicators.adx.adx.length - 1];
-          break;
-        case 'cci_20':
-          indicatorValue = item.indicators.cci.values[item.indicators.cci.values.length - 1];
-          break;
-        case 'mfi_14':
-          indicatorValue = item.indicators.mfi.values[item.indicators.mfi.values.length - 1];
-          break;
-      }
-
-      if (indicatorValue === undefined) continue;
-
-      switch (operator) {
-        case 'gt': if (!(indicatorValue > value)) return false; break;
-        case 'gte': if (!(indicatorValue >= value)) return false; break;
-        case 'lt': if (!(indicatorValue < value)) return false; break;
-        case 'lte': if (!(indicatorValue <= value)) return false; break;
-        case 'eq': if (Math.abs(indicatorValue - value) > 0.01) return false; break;
-      }
-    }
-    return true;
-  });
-}
 
 /**
  * FIX 1: Implemented technical screener using calculation_results table.
@@ -265,16 +206,16 @@ async function runTechnicalScreen(params: {
     // 2. Fallback to calculation_results if no snapshots matched or table empty
     if (matchingSymbols.length === 0) {
       const indicatorFilters: Array<{
-        indicatorName: string;
+        source: CalculationResultsFilterSource;
         operator: string;
         value: number;
       }> = [];
 
       for (const f of params.filters) {
-        const indicatorName = INDICATOR_NAME_MAP[f.field];
-        if (!indicatorName) continue;
+        const source = CALCULATION_RESULTS_FILTERS[f.field];
+        if (!source) continue;
         indicatorFilters.push({
-          indicatorName,
+          source,
           operator: f.operator,
           value: f.value,
         });
@@ -292,18 +233,19 @@ async function runTechnicalScreen(params: {
 
       matchingSymbols = params.symbols;
       for (const f of indicatorFilters) {
+        const v = f.source.value;
         const symbolRows = await db.execute(sql`
           SELECT DISTINCT symbol
           FROM calculation_results
           WHERE symbol = ANY(${params.symbols}::text[])
-            AND indicator_name = ${f.indicatorName}
+            AND indicator_name = ${f.source.indicatorName}
             AND date = ${latestDate}::date
-            AND indicator_value IS NOT NULL
-            ${f.operator === "gt" ? sql`AND indicator_value > ${f.value}::numeric` : ""}
-            ${f.operator === "gte" ? sql`AND indicator_value >= ${f.value}::numeric` : ""}
-            ${f.operator === "lt" ? sql`AND indicator_value < ${f.value}::numeric` : ""}
-            ${f.operator === "lte" ? sql`AND indicator_value <= ${f.value}::numeric` : ""}
-            ${f.operator === "eq" ? sql`AND ABS(indicator_value - ${f.value}::numeric) < 0.01` : ""}
+            AND ${v} IS NOT NULL
+            ${f.operator === "gt" ? sql`AND ${v} > ${f.value}::numeric` : ""}
+            ${f.operator === "gte" ? sql`AND ${v} >= ${f.value}::numeric` : ""}
+            ${f.operator === "lt" ? sql`AND ${v} < ${f.value}::numeric` : ""}
+            ${f.operator === "lte" ? sql`AND ${v} <= ${f.value}::numeric` : ""}
+            ${f.operator === "eq" ? sql`AND ABS(${v} - ${f.value}::numeric) < 0.01` : ""}
         `);
 
         const filteredSymbols = (symbolRows as any[]).map((r) => r.symbol);

@@ -53,7 +53,7 @@ describe("rate limit middleware", () => {
     expect((await request("/api/paper/orders", { "cf-connecting-ip": "198.51.100.1" })).status).toBe(200);
 
     clock.now += 2_000;
-    expect((await request("/api/backtest/run")).status).toBe(200);
+    expect((await request("/api/market/candles?symbol=TCS")).status).toBe(200);
   });
 
   it("exposes Retry-After to browsers on cross-origin 429s", async () => {

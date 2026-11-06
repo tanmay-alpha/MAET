@@ -5,10 +5,10 @@ import {
   findNeighbors,
   type SweepPointResult,
 } from "./robustness";
-import type { SweepParameterRange } from "../../workers/sweep-worker";
+import type { ParameterStep } from "./robustness";
 
 describe("P2 Parameter Robustness & Stability Analysis (Commit 8)", () => {
-  const ranges: SweepParameterRange[] = [
+  const ranges: ParameterStep[] = [
     { name: "fastMa", min: 10, max: 30, step: 5 },
     { name: "slowMa", min: 40, max: 80, step: 10 },
   ];

@@ -16,7 +16,11 @@
  * 4. Parameter heatmap / 2D matrix projection for UI visualization.
  */
 
-import type { SweepParameterRange } from "../../workers/sweep-worker";
+/** Grid spacing of one swept parameter; neighbours differ from the best point by about one step. */
+export interface ParameterStep {
+  name: string;
+  step: number;
+}
 
 export interface SweepPointResult {
   params: Record<string, number>;
@@ -63,7 +67,7 @@ export interface ParameterStabilityAnalysis {
 export function findNeighbors(
   targetParams: Record<string, number>,
   allPoints: SweepPointResult[],
-  ranges?: SweepParameterRange[],
+  ranges?: ParameterStep[],
 ): SweepPointResult[] {
   const stepMap: Record<string, number> = {};
   if (ranges) {
@@ -105,7 +109,7 @@ export function findNeighbors(
  */
 export function analyzeParameterStability(
   points: SweepPointResult[],
-  ranges?: SweepParameterRange[],
+  ranges?: ParameterStep[],
 ): ParameterStabilityAnalysis {
   if (!points || points.length === 0) {
     return {

@@ -1,8 +1,22 @@
 /**
- * Backtest V2 risk-aware metrics.
+ * Backtest risk-aware metrics.
  *
- * All formulas use verified daily price history. Never synthesize values.
+ * All formulas use verified price history. Never synthesize values.
+ *
+ * Definitions (r_t = periodic equity return over N periods, P = periods per year for the timeframe,
+ * rf = annual risk-free rate, default 0, converted to a per-period rate rf_p = (1 + rf)^(1/P) - 1):
+ * - volatility = sample std(r) × √P
+ * - Sharpe     = mean(r - rf_p) / sample std(r - rf_p) × √P
+ * - Sortino    = mean(r - rf_p) / DD × √P, DD = sqrt(Σ min(0, r_t - rf_p)² / N) over all N periods
+ * - Calmar     = CAGR / max drawdown
+ * - profitFactor = gross profit / gross loss; payoffRatio = average win / average loss.
+ *   Both are null when there are no losing trades (the ratio is undefined, not infinite).
  */
+
+export interface MetricsOptions {
+  /** Annual risk-free rate as a decimal (0.065 = 6.5%). Default 0. */
+  riskFreeRate?: number;
+}
 
 export interface BacktestMetrics {
   totalReturn: number;
@@ -15,14 +29,14 @@ export interface BacktestMetrics {
   maxDrawdown: number;
   calmar: number;
   winRate: number;
-  profitFactor: number;
+  profitFactor: number | null;
   expectancy: number;
   averageHoldingPeriod: number;
   exposure: number;
   turnover: number;
   ulcerIndex?: number;
   ulcerPerformanceIndex?: number;
-  payoffRatio?: number;
+  payoffRatio?: number | null;
   maxConsecutiveWins?: number;
   maxConsecutiveLosses?: number;
 }
@@ -173,11 +187,11 @@ export function stddev(values: number[]): number {
   return Math.sqrt(variance);
 }
 
+/** Downside deviation below `target`: sqrt(Σ min(0, r - target)² / N), N = all periods. */
 export function downsideDeviation(returns: number[], target = 0): number {
-  const downside = returns.filter((r) => r < target);
-  if (downside.length === 0) return 0;
-  const sumSq = downside.reduce((s, r) => s + r ** 2, 0);
-  return Math.sqrt(sumSq / downside.length);
+  if (returns.length === 0) return 0;
+  const sumSq = returns.reduce((s, r) => s + Math.min(0, r - target) ** 2, 0);
+  return Math.sqrt(sumSq / returns.length);
 }
 
 export function computeMaxDrawdown(equity: number[]): number {
@@ -198,6 +212,7 @@ export function computeMetrics(
   trades: TradeRecord[],
   benchmarkCurve?: EquityPoint[],
   timeframe: string | number = "1d",
+  options: MetricsOptions = {},
 ): BacktestMetrics {
   const empty: BacktestMetrics = {
     totalReturn: 0, annualisedReturn: 0, benchmarkReturn: 0, alpha: 0,
@@ -223,10 +238,15 @@ export function computeMetrics(
     : (totalReturn <= -1 ? -1 : 0);
 
   const returns = computeReturns(equityValues);
-  const vol = returns.length >= 2 ? stddev(returns) * Math.sqrt(periodsPerYear) : 0;
-  const downside = returns.length >= 2 ? downsideDeviation(returns, 0) * Math.sqrt(periodsPerYear) : 0;
-  const sharpe = vol > 0 ? annualisedReturn / vol : 0;
-  const sortino = downside > 0 ? annualisedReturn / downside : 0;
+  const rfPeriodic = (1 + (options.riskFreeRate ?? 0)) ** (1 / periodsPerYear) - 1;
+  const excessReturns = returns.map((r) => r - rfPeriodic);
+  const annualisation = Math.sqrt(periodsPerYear);
+  const vol = returns.length >= 2 ? stddev(returns) * annualisation : 0;
+  const excessStd = returns.length >= 2 ? stddev(excessReturns) : 0;
+  const downside = returns.length >= 2 ? downsideDeviation(returns, rfPeriodic) : 0;
+  const meanExcess = mean(excessReturns);
+  const sharpe = excessStd > 0 ? (meanExcess / excessStd) * annualisation : 0;
+  const sortino = downside > 0 ? (meanExcess / downside) * annualisation : 0;
 
   const mdd = computeMaxDrawdown(equityValues);
   const calmar = mdd > 0 ? annualisedReturn / mdd : 0;
@@ -261,7 +281,7 @@ export function computeMetrics(
   const grossLoss = hasPnl
     ? Math.abs(losses.reduce((s, t) => s + (t.netPnl ?? 0), 0))
     : Math.abs(losses.reduce((s, t) => s + t.return, 0));
-  const profitFactor = grossLoss === 0 ? (grossProfit > 0 ? Infinity : 0) : grossProfit / grossLoss;
+  const profitFactor = grossLoss === 0 ? (grossProfit > 0 ? null : 0) : grossProfit / grossLoss;
   const expectancy = trades.length === 0 ? 0
     : hasPnl
       ? trades.reduce((s, t) => s + (t.netPnl ?? 0), 0) / trades.length
@@ -279,7 +299,7 @@ export function computeMetrics(
           : losses.reduce((s, t) => s + t.return, 0) / losses.length
       )
     : 0;
-  const payoffRatio = avgLoss === 0 ? (avgWin > 0 ? Infinity : 0) : avgWin / avgLoss;
+  const payoffRatio = avgLoss === 0 ? (avgWin > 0 ? null : 0) : avgWin / avgLoss;
 
   let curWins = 0;
   let curLosses = 0;

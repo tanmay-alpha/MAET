@@ -8,15 +8,18 @@
  *    - BUY impact shifts execution price upward.
  *    - SELL impact shifts execution price downward.
  *    - Invariant: non-negative, finite, bounded at maxImpactBps, zero impact for zero quantity.
- * 4. Slippage and statutory fees (reusing computeFeeRate).
- * 5. Participation constraints: maxFillQuantity = floor(barVolume * maxParticipationRate).
- * 6. Multi-bar order execution state machine (NEW -> PARTIALLY_FILLED -> FILLED / EXPIRED / CANCELLED).
- * 7. Comprehensive execution cost reporting: brokerage, taxes, spread, slippage, impact, cost drag.
+ * 4. Slippage and per-leg brokerage/statutory charges (computeLegCharges).
+ * 5. Participation constraints: maxFillQuantity = floor(referenceVolume * maxParticipationRate).
+ * 6. Execution cost reporting: brokerage, taxes, spread, slippage, impact, cost drag.
+ *
+ * Look-ahead rule: an order filled on bar i is decided at bar i's open, so every liquidity or
+ * volatility input (referenceVolume, rollingAtr, averageDailyVolume) must come from bars <= i-1.
+ * Only the fill bar's open/close (as the reference price) and timestamp are read from `bar`.
  */
 
 import type { Candle } from "@shared/types";
 import type { StrategyExecutionConfig } from "../../../shared/strategy/ast";
-import { computeFeeRate } from "./fee-model";
+import { computeLegCharges } from "./fee-model";
 
 // ============================================================
 // Types & Contracts
@@ -24,10 +27,9 @@ import { computeFeeRate } from "./fee-model";
 
 export type OrderSide = "BUY" | "SELL";
 export type OrderExecutionType = "MARKET" | "LIMIT" | "STOP";
-export type TimeInForce = "DAY" | "GTC" | "IOC";
-export type OrderFillStatus = "NEW" | "PARTIALLY_FILLED" | "FILLED" | "CANCELLED" | "EXPIRED";
 
 export interface ExecutionContext {
+  /** The bar the order fills on; only its open/close (reference price) and timestamp are read. */
   bar: Candle;
   orderQuantity: number;
   side: OrderSide;
@@ -35,8 +37,11 @@ export interface ExecutionContext {
   referencePrice?: number;
   limitPrice?: number;
   stopPrice?: number;
+  /** ATR known before the fill (bar i-1); drives VOLATILITY_BASED spread and the impact vol factor. */
   rollingAtr?: number;
   averageDailyVolume?: number;
+  /** Volume of the last completed bar (i-1); drives the participation cap, impact and LIQUIDITY_BASED spread. */
+  referenceVolume: number;
   config: StrategyExecutionConfig;
   barIndex?: number;
 }
@@ -62,36 +67,6 @@ export interface SingleFillResult {
   costs: ExecutionCostBreakdown;
   timestamp: string | number;
   barIndex?: number;
-}
-
-export interface OrderFillEvent {
-  barIndex: number;
-  timestamp: string | number;
-  fillQuantity: number;
-  fillPrice: number;
-  notional: number;
-  costs: ExecutionCostBreakdown;
-  spreadBps: number;
-  impactBps: number;
-  slippageBps: number;
-}
-
-export interface SimulatedOrderState {
-  orderId: string;
-  symbol: string;
-  side: OrderSide;
-  requestedQuantity: number;
-  filledQuantity: number;
-  remainingQuantity: number;
-  averageFillPrice: number;
-  status: OrderFillStatus;
-  fillCount: number;
-  timeInForce: TimeInForce;
-  placedBarIndex: number;
-  placedTimestamp: string | number;
-  lastBarIndex: number;
-  cumulativeCosts: ExecutionCostBreakdown;
-  fills: OrderFillEvent[];
 }
 
 // ============================================================
@@ -135,18 +110,17 @@ export class ExecutionModel {
     }
 
     if (model === "VOLATILITY_BASED") {
-      // Volatility component: ATR or bar range as fraction of price
-      const atr = ctx.rollingAtr ?? Math.abs(ctx.bar.high - ctx.bar.low);
-      const volFraction = refPrice > 0 ? atr / refPrice : 0.01;
+      // Volatility component from the prior-bar ATR; during ATR warm-up assume a typical 1% range.
+      const volFraction = ctx.rollingAtr != null && refPrice > 0 ? ctx.rollingAtr / refPrice : 0.01;
       // 1% daily volatility adds ~5 bps spread
       const volComponentBps = Math.min(50, volFraction * 10000 * 0.5);
       return Math.max(0, baseSpreadBps + volComponentBps);
     }
 
     if (model === "LIQUIDITY_BASED") {
-      // Illiquidity component: if bar volume is lower than average, spread widens
-      const adv = ctx.averageDailyVolume ?? (ctx.bar.volume > 0 ? ctx.bar.volume : 100_000);
-      const barVol = Math.max(1, ctx.bar.volume);
+      // Illiquidity component: if the last completed bar traded less than average, spread widens
+      const adv = ctx.averageDailyVolume ?? (ctx.referenceVolume > 0 ? ctx.referenceVolume : 100_000);
+      const barVol = Math.max(1, ctx.referenceVolume);
       const illiquidityRatio = Math.max(0, adv / barVol - 1);
       const illiquidityBps = Math.min(100, illiquidityRatio * 2);
       return Math.max(0, baseSpreadBps + illiquidityBps);
@@ -158,7 +132,7 @@ export class ExecutionModel {
   /**
    * Evaluates square-root market impact in basis points.
    * Deterministic formula:
-   *   participation = orderQuantity / barVolume
+   *   participation = orderQuantity / referenceVolume
    *   impactBps = coeff * sqrt(participation) * volatilityFactor
    */
   public calculateMarketImpactBps(ctx: ExecutionContext, fillQty: number, refPrice: number): number {
@@ -167,7 +141,7 @@ export class ExecutionModel {
       return 0;
     }
 
-    const barVol = Math.max(1, ctx.bar.volume);
+    const barVol = Math.max(1, ctx.referenceVolume);
     const participation = Math.min(1.0, fillQty / barVol);
     const coeff = ctx.config.impactCoefficient ?? 10;
     const maxImpactBps = ctx.config.maxImpactBps ?? 500;
@@ -203,12 +177,18 @@ export class ExecutionModel {
   /**
    * Simulates a single bar execution step for an order.
    */
-  public executeBarFill(ctx: ExecutionContext, targetQty: number): SingleFillResult {
+  public executeBarFill(
+    ctx: ExecutionContext,
+    targetQty: number,
+    options: { enforceParticipationCap: boolean } = { enforceParticipationCap: true },
+  ): SingleFillResult {
     const refPrice = this.resolveReferencePrice(ctx);
     const safeRefPrice = Number.isFinite(refPrice) && refPrice > 0 ? refPrice : ctx.bar.close;
 
-    // Participation cap
-    const maxFillQty = this.getMaximumBarFillQuantity(ctx.bar.volume, ctx.config.maxParticipationRate);
+    // Participation cap (forced exits such as stops close the whole position regardless)
+    const maxFillQty = options.enforceParticipationCap
+      ? this.getMaximumBarFillQuantity(ctx.referenceVolume, ctx.config.maxParticipationRate)
+      : Infinity;
     const fillQty = Math.min(Math.max(0, targetQty), maxFillQty);
 
     if (fillQty === 0) {
@@ -256,16 +236,10 @@ export class ExecutionModel {
     const notional = fillQty * effectivePrice;
     const baseNotional = fillQty * safeRefPrice;
 
-    // Fee breakdown from fee-model (statutory charges and brokerage)
-    const feeInfo = computeFeeRate(ctx.config, notional);
-    const statutoryCharges = notional * (
-      (feeInfo.breakdown.stt +
-        feeInfo.breakdown.exchangeCharges +
-        feeInfo.breakdown.gst +
-        feeInfo.breakdown.sebiCharges +
-        feeInfo.breakdown.stampDuty) / 10000
-    );
-    const brokerageFees = notional * (feeInfo.breakdown.brokerage / 10000);
+    // Brokerage and statutory charges on the traded notional, side-aware (stamp duty is BUY-only).
+    const charges = computeLegCharges(ctx.config, ctx.side, notional);
+    const statutoryCharges = charges.taxesAndCharges;
+    const brokerageFees = charges.brokerage;
 
     const spreadCost = baseNotional * halfSpreadRate;
     const slippageCost = baseNotional * slippageRate;

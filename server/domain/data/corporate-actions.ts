@@ -34,8 +34,13 @@ export interface CorporateAction {
   exDate: string | Date;
   recordDate?: string | Date;
   announcementDate?: string | Date;
-  ratioNumerator?: number; // e.g. 2 for 2:1 split (old 1 share -> 2 new shares)
-  ratioDenominator?: number; // e.g. 1
+  /**
+   * SPLIT / REVERSE_SPLIT: new shares per `ratioDenominator` old shares (2:1 split -> 2 / 1).
+   * BONUS: bonus shares issued per `ratioDenominator` shares held, as NSE quotes it
+   * (1:1 bonus -> 1 / 1, i.e. holdings double).
+   */
+  ratioNumerator?: number;
+  ratioDenominator?: number;
   amount?: number; // cash dividend amount per share
   currency?: string;
   source?: string;
@@ -89,79 +94,58 @@ export function adjustCandles(
   const sorted = [...candles].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
   const adjusted = sorted.map((c) => ({ ...c }));
 
-  // Process actions backward (or accumulate factors for each candle)
-  // Each action affects all candles strictly before its exDate.
-  for (const action of relevantActions) {
+  // Apply actions oldest first so the result never depends on the order they were supplied in.
+  // Each action scales every candle strictly before its ex-date.
+  const ordered = [...relevantActions].sort((a, b) => getExDateMs(a.exDate) - getExDateMs(b.exDate));
+  for (const action of ordered) {
     const exDateMs = getExDateMs(action.exDate);
+    const factors = adjustmentFactors(action, sorted, exDateMs, series);
+    if (!factors) continue;
 
-    if (action.actionType === "SPLIT" || action.actionType === "BONUS") {
-      const num = action.ratioNumerator ?? 1;
-      const den = action.ratioDenominator ?? 1;
-      if (num <= 0 || den <= 0) continue;
-
-      // Price factor: den / num (e.g. 2:1 split -> factor = 1/2 = 0.5)
-      const priceFactor = den / num;
-      // Volume factor: num / den (e.g. 2:1 split -> volume doubles = 2.0)
-      const volumeFactor = num / den;
-
-      for (let i = 0; i < adjusted.length; i++) {
-        const candleTs = new Date(adjusted[i].ts).getTime();
-        if (candleTs < exDateMs) {
-          adjusted[i].open = Number((adjusted[i].open * priceFactor).toFixed(4));
-          adjusted[i].high = Number((adjusted[i].high * priceFactor).toFixed(4));
-          adjusted[i].low = Number((adjusted[i].low * priceFactor).toFixed(4));
-          adjusted[i].close = Number((adjusted[i].close * priceFactor).toFixed(4));
-          adjusted[i].volume = Math.round(adjusted[i].volume * volumeFactor);
-        }
-      }
-    } else if (action.actionType === "REVERSE_SPLIT") {
-      const num = action.ratioNumerator ?? 1;
-      const den = action.ratioDenominator ?? 1;
-      if (num <= 0 || den <= 0) continue;
-
-      // Reverse split: e.g. 1 for 10 reverse split -> num = 1, den = 10 -> priceFactor = 10 / 1 = 10
-      const priceFactor = den / num;
-      const volumeFactor = num / den;
-
-      for (let i = 0; i < adjusted.length; i++) {
-        const candleTs = new Date(adjusted[i].ts).getTime();
-        if (candleTs < exDateMs) {
-          adjusted[i].open = Number((adjusted[i].open * priceFactor).toFixed(4));
-          adjusted[i].high = Number((adjusted[i].high * priceFactor).toFixed(4));
-          adjusted[i].low = Number((adjusted[i].low * priceFactor).toFixed(4));
-          adjusted[i].close = Number((adjusted[i].close * priceFactor).toFixed(4));
-          adjusted[i].volume = Math.round(adjusted[i].volume * volumeFactor);
-        }
-      }
-    } else if (action.actionType === "DIVIDEND" && series === "TOTAL_RETURN_ADJUSTED") {
-      const divAmount = action.amount ?? 0;
-      if (divAmount <= 0) continue;
-
-      // Find the last candle strictly before ex-date
-      let priorClose = 0;
-      for (let i = adjusted.length - 1; i >= 0; i--) {
-        if (new Date(adjusted[i].ts).getTime() < exDateMs) {
-          priorClose = adjusted[i].close;
-          break;
-        }
-      }
-
-      if (priorClose > divAmount) {
-        // Standard dividend adjustment factor k = 1 - (divAmount / priorClose)
-        const divFactor = (priorClose - divAmount) / priorClose;
-
-        for (let i = 0; i < adjusted.length; i++) {
-          const candleTs = new Date(adjusted[i].ts).getTime();
-          if (candleTs < exDateMs) {
-            adjusted[i].open = Number((adjusted[i].open * divFactor).toFixed(4));
-            adjusted[i].high = Number((adjusted[i].high * divFactor).toFixed(4));
-            adjusted[i].low = Number((adjusted[i].low * divFactor).toFixed(4));
-            adjusted[i].close = Number((adjusted[i].close * divFactor).toFixed(4));
-          }
-        }
-      }
+    for (let i = 0; i < adjusted.length; i++) {
+      if (new Date(adjusted[i].ts).getTime() >= exDateMs) break;
+      adjusted[i].open = Number((adjusted[i].open * factors.price).toFixed(4));
+      adjusted[i].high = Number((adjusted[i].high * factors.price).toFixed(4));
+      adjusted[i].low = Number((adjusted[i].low * factors.price).toFixed(4));
+      adjusted[i].close = Number((adjusted[i].close * factors.price).toFixed(4));
+      adjusted[i].volume = Math.round(adjusted[i].volume * factors.volume);
     }
   }
 
   return adjusted;
+}
+
+/**
+ * Price and volume multipliers for candles before an action's ex-date, or null if the action
+ * does not adjust this series. `rawSorted` are the unadjusted candles in ascending order.
+ */
+function adjustmentFactors(
+  action: CorporateAction,
+  rawSorted: Candle[],
+  exDateMs: number,
+  series: PriceAdjustmentSeries,
+): { price: number; volume: number } | null {
+  if (action.actionType === "DIVIDEND") {
+    const divAmount = action.amount ?? 0;
+    if (series !== "TOTAL_RETURN_ADJUSTED" || divAmount <= 0) return null;
+    // k = 1 - dividend / close before the ex-date. Both are in the share units of that date, so
+    // the close is read from the raw series, not from one already rescaled by later splits.
+    const prior = rawSorted.filter((c) => new Date(c.ts).getTime() < exDateMs).at(-1);
+    if (!prior || prior.close <= divAmount) return null;
+    return { price: (prior.close - divAmount) / prior.close, volume: 1 };
+  }
+
+  const num = action.ratioNumerator ?? 1;
+  const den = action.ratioDenominator ?? 1;
+  if (num <= 0 || den <= 0) return null;
+
+  if (action.actionType === "BONUS") {
+    // num bonus shares per den held: den shares become num + den.
+    return { price: den / (num + den), volume: (num + den) / den };
+  }
+  if (action.actionType === "SPLIT" || action.actionType === "REVERSE_SPLIT") {
+    // den shares become num (2:1 split -> x0.5 price; 1:10 reverse split -> x10 price).
+    return { price: den / num, volume: num / den };
+  }
+  return null;
 }

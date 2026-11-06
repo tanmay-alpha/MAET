@@ -5,6 +5,7 @@
 
 import { registerCalculator } from "../../engine/calculator-registry";
 import type { CalculatorInput, CalculatorOutput } from "../../engine/calculator-registry";
+import { computeMACD, computeRSI } from "@shared/indicators";
 
 function scanOutput(
   symbol: string,
@@ -22,28 +23,6 @@ function scanOutput(
     signal: strength,
     components: metadata as Record<string, number | null> | undefined,
   }];
-}
-
-function safeEMA(data: number[], period: number): number[] {
-  if (data.length < period) return [];
-  const k = 2 / (period + 1);
-  const result: number[] = [data[0]];
-  for (let i = 1; i < data.length; i++) {
-    result.push(data[i] * k + result[i - 1] * (1 - k));
-  }
-  return result;
-}
-
-function safeSMA(data: number[], period: number): number[] {
-  const result: number[] = [];
-  let sum = 0;
-  for (let i = 0; i < data.length; i++) {
-    sum += data[i];
-    if (i >= period) sum -= data[i - period];
-    if (i >= period - 1) result.push(sum / period);
-    else result.push(NaN);
-  }
-  return result;
 }
 
 // ============================================================================
@@ -149,25 +128,10 @@ registerCalculator({
     const closes = input.closes;
     const n = closes.length;
 
-    // Calculate RSI for last 2 days
-    function rsi(data: number[], period = 14): number {
-      if (data.length < period + 1) return 50;
-      let avgG = 0, avgL = 0;
-      for (let i = 1; i <= period; i++) {
-        const ch = data[i] - data[i - 1];
-        if (ch > 0) avgG += ch; else avgL -= ch;
-      }
-      avgG /= period; avgL /= period;
-      for (let i = period + 1; i < data.length; i++) {
-        const ch = data[i] - data[i - 1];
-        avgG = (avgG * (period - 1) + Math.max(0, ch)) / period;
-        avgL = (avgL * (period - 1) + Math.max(0, -ch)) / period;
-      }
-      return avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
-    }
-
-    const rsiNow = rsi(closes.slice(n - 16));
-    const rsiPrev = rsi(closes.slice(n - 17, n - 1));
+    const rsi = computeRSI(closes, 14);
+    const rsiNow = rsi[n - 1];
+    const rsiPrev = rsi[n - 2];
+    if (rsiNow === null || rsiPrev === null) return [];
     const lastDate = input.dates?.[n - 1] ?? "";
 
     if (rsiPrev < 30 && rsiNow >= 30) {
@@ -191,20 +155,13 @@ registerCalculator({
     if (!input.closes || input.closes.length < 40) return [];
     const closes = input.closes;
     const n = closes.length;
-    const ema12 = safeEMA(closes, 12);
-    const ema26 = safeEMA(closes, 26);
-    const macdLine = ema12.map((v, i) => v - ema26[i]);
-    const signalLine = safeEMA(macdLine.slice(25), 9);
-
-    if (signalLine.length < 2) return [];
-    const sl = signalLine.length;
-    const macdSlice = macdLine.slice(macdLine.length - sl);
+    const { macd, signal } = computeMACD(closes, 12, 26, 9);
+    const macdNow = macd[n - 1];
+    const macdPrev = macd[n - 2];
+    const sigNow = signal[n - 1];
+    const sigPrev = signal[n - 2];
+    if (macdNow === null || macdPrev === null || sigNow === null || sigPrev === null) return [];
     const lastDate = input.dates?.[n - 1] ?? "";
-
-    const macdNow = macdSlice[sl - 1];
-    const macdPrev = macdSlice[sl - 2];
-    const sigNow = signalLine[sl - 1];
-    const sigPrev = signalLine[sl - 2];
 
     if (macdPrev < sigPrev && macdNow > sigNow) {
       return scanOutput(input.symbol, "SCAN_MACD_BULLISH_CROSSOVER", "BUY",
