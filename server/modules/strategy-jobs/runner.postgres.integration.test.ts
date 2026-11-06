@@ -11,6 +11,8 @@ import { getSqlClient } from "../../data/drizzle/client";
 import { strategyBacktestsRouter } from "../../api/trpc/routers/strategy-backtests";
 import { strategyOptimisationRouter } from "../../api/trpc/routers/strategy-optimisation";
 import { createStrategyJobRunner } from "./runner";
+import { loadJobCandles } from "./candles";
+import { runBacktestV3 } from "../../domain/strategy/runner-v3";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
 const enabled = Boolean(process.env.TEST_DATABASE_URL);
@@ -129,7 +131,11 @@ describe("Strategy job runner (PostgreSQL)", () => {
     const { trades } = await caller.getTrades({ jobId: job.id });
     expect(trades).toHaveLength(snapshot!.tradeCount);
 
-  });
+    // exposure_percent holds a percentage (0-100); the engine reports exposure as a fraction.
+    const engine = runBacktestV3({
+      strategyVersionId: versionId, definition, symbol, timeframe: "1d", overrideCapital: 250_000,
+      candles: await loadJobCandles(symbol, "1d", new Date(from), new Date(to)),
+    });
     expect(engine.metrics.exposure).toBeGreaterThan(0.01);
     expect(Number(snapshot!.exposurePercent)).toBeCloseTo(engine.metrics.exposure * 100, 4);
   });

@@ -137,7 +137,8 @@ export async function runBacktestJob(job: jobs.BacktestJobRow, workerId: string,
         slippageCost: result.slippageCost.toFixed(4),
         // Signed: a losing backtest must persist its loss. The curve starts at the run's capital.
         netProfit: (result.equityCurve[result.equityCurve.length - 1].equity - result.equityCurve[0].equity).toFixed(4),
-        exposurePercent: m.exposure.toFixed(6),
+        // The column is a percentage (0-100); the engine reports exposure as a fraction of the run.
+        exposurePercent: (m.exposure * 100).toFixed(6),
         benchmarkReturn: m.benchmarkReturn.toFixed(6),
         alpha: m.alpha.toFixed(6),
         dataHash: result.dataHash,
