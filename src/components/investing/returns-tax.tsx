@@ -4,9 +4,9 @@ import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { createQueryProcedure } from "@/lib/trpc";
 import type { PaperInvestingReport } from "../../../server/modules/paper-trading/investing-report";
+import { rupees, serverMarkLabel } from "./display";
 
 const reportProcedure = createQueryProcedure<{ financialYearStart?: number }, PaperInvestingReport>("paperTrading.investingReport");
-const rupees = (value: number) => `₹${value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const percent = (value: number | null) => value === null ? "—" : `${(value * 100).toFixed(2)}%`;
 
 function Figure({ label, value }: { label: string; value: string }) {
@@ -46,6 +46,8 @@ export function ReturnsTaxSection() {
             <div className="mt-1 text-[11px] text-muted-foreground">Since {report.account.startedAt} · generation {report.account.generation}. {report.xirrReason}
               {report.stalePrices && <span className="text-amber-400"> Equity uses stale or entry prices.</span>}
             </div>
+            <p className="mt-1 text-[11px] text-muted-foreground">{serverMarkLabel(report.valuationAsOf)}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">XIRR uses server marks; the live total below uses browser quotes and can differ.</p>
           </dl>
           <dl><Figure label="Realised STCG" value={rupees(tax.grossStcg)} />
             <Figure label="Realised LTCG" value={rupees(tax.grossLtcg)} />

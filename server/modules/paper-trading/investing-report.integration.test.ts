@@ -54,11 +54,13 @@ describe("Read-only paper investing reports", () => {
     const [before] = await getDb().select().from(paperAccounts).where(eq(paperAccounts.userId,id));
     const fills = await getDb().select().from(paperFills).where(eq(paperFills.userId,id));
     const ledgerBefore = await getDb().select().from(paperLedgerEntries).where(eq(paperLedgerEntries.userId,id));
-    const report = await reports(1050).getReport(id,{ financialYearStart });
+    const valuationTime = new Date();
+    const report = await reports(1050, valuationTime).getReport(id,{ financialYearStart });
     const buy = fills.find(f => f.side === "BUY")!;
     const sell = fills.find(f => f.side === "SELL")!;
     const equity = Number(before!.cashBalance) + 6*(1050-Number(buy.fillPrice));
     expect(report.account?.equity).toBeCloseTo(equity,4);
+    expect(report.valuationAsOf).toBe(valuationTime.toISOString());
     expect(report.portfolioXirr).toBeCloseTo(equity/Number(before!.initialCash)-1,8);
     expect(report.tax.intradayPnl).toBeCloseTo(4*(Number(sell.fillPrice)-Number(buy.fillPrice)),4);
     expect(report.tax.estimatedTax).toBe(0);

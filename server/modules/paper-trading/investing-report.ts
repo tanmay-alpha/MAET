@@ -22,6 +22,8 @@ export interface PaperInvestingReport {
   tax: CapitalGainsReport;
   closedLots: (MatchedLot & { xirr: number | null })[];
   stalePrices: boolean;
+  /** Oldest open-position mark; null if an entry-price fallback has no timestamp. */
+  valuationAsOf: string | null;
 }
 
 export function financialYearFor(date: string): number {
@@ -42,7 +44,8 @@ export class PaperInvestingReportService {
   }
 
   async getReport(userId: string, options: { financialYearStart?: number } = {}): Promise<PaperInvestingReport> {
-    const today = istDateKey(this.now());
+    const now = this.now();
+    const today = istDateKey(now);
     const selectedYear = options.financialYearStart ?? financialYearFor(today);
     const state = await this.database().transaction(async (tx) => {
       const [account] = await tx.select().from(paperAccounts).where(eq(paperAccounts.userId, userId));
@@ -74,12 +77,20 @@ export class PaperInvestingReportService {
     }));
     if (!state) return {
       account: null, portfolioXirr: null, xirrReason: "No paper account yet.",
-      today, financialYears, tax, closedLots, stalePrices: false,
+      today, financialYears, tax, closedLots, stalePrices: false, valuationAsOf: null,
     };
     const prices = await Promise.all(state.positions.filter((p) => p.totalShares !== 0).map(async (position) => {
       const quote = await this.loadPrice(position.exchange === "BSE" ? "BSE" : "NSE", position.symbol);
       return valuePosition(position, quote, { date: today, isFinal: false });
     }));
+    let valuationAsOf = prices.length === 0 ? now.toISOString() : prices[0]!.asOf;
+    for (const price of prices) {
+      if (price.asOf === null) {
+        valuationAsOf = null;
+        break;
+      }
+      if (valuationAsOf !== null && price.asOf < valuationAsOf) valuationAsOf = price.asOf;
+    }
     // The paper engine is cash-settled: principal is not debited when opening a position.
     // Fees and realised P&L are already in cash; adding either would double-count them.
     const equity = Math.round((Number(state.account.cashBalance) + prices.reduce((sum, p) => sum + p.unrealizedPnl, 0)) * 10_000) / 10_000;
@@ -91,7 +102,7 @@ export class PaperInvestingReportService {
       account: { generation, initialCash: Number(state.account.initialCash), equity, startedAt },
       portfolioXirr,
       xirrReason: portfolioXirr === null ? (startedAt === today ? "Available after the first calendar day." : "No finite annualised return for these cash flows.") : null,
-      today, financialYears, tax, closedLots, stalePrices: prices.some((p) => p.stale),
+      today, financialYears, tax, closedLots, stalePrices: prices.some((p) => p.stale), valuationAsOf,
     };
   }
 }
