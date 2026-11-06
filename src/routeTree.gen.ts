@@ -18,9 +18,11 @@ import { Route as AppCompareRouteImport } from './routes/_app.compare'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppFuturesRouteImport } from './routes/_app.futures'
 import { Route as AppHeatmapRouteImport } from './routes/_app.heatmap'
+import { Route as AppImportRouteImport } from './routes/_app.import'
 import { Route as AppJournalRouteImport } from './routes/_app.journal'
 import { Route as AppNewsRouteImport } from './routes/_app.news'
 import { Route as AppOrdersRouteImport } from './routes/_app.orders'
+import { Route as AppPayoffRouteImport } from './routes/_app.payoff'
 import { Route as AppPerformanceRouteImport } from './routes/_app.performance'
 import { Route as AppPortfolioRouteImport } from './routes/_app.portfolio'
 import { Route as AppReplayRouteImport } from './routes/_app.replay'
@@ -88,6 +90,11 @@ const AppHeatmapRoute = AppHeatmapRouteImport.update({
   path: '/heatmap',
   getParentRoute: () => AppRoute,
 } as any)
+const AppImportRoute = AppImportRouteImport.update({
+  id: '/import',
+  path: '/import',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppJournalRoute = AppJournalRouteImport.update({
   id: '/journal',
   path: '/journal',
@@ -101,6 +108,11 @@ const AppNewsRoute = AppNewsRouteImport.update({
 const AppOrdersRoute = AppOrdersRouteImport.update({
   id: '/orders',
   path: '/orders',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPayoffRoute = AppPayoffRouteImport.update({
+  id: '/payoff',
+  path: '/payoff',
   getParentRoute: () => AppRoute,
 } as any)
 const AppPerformanceRoute = AppPerformanceRouteImport.update({
@@ -226,9 +238,11 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AppDashboardRoute
   '/futures': typeof AppFuturesRoute
   '/heatmap': typeof AppHeatmapRoute
+  '/import': typeof AppImportRoute
   '/journal': typeof AppJournalRoute
   '/news': typeof AppNewsRoute
   '/orders': typeof AppOrdersRoute
+  '/payoff': typeof AppPayoffRoute
   '/performance': typeof AppPerformanceRoute
   '/portfolio': typeof AppPortfolioRoute
   '/replay': typeof AppReplayRoute
@@ -261,9 +275,11 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AppDashboardRoute
   '/futures': typeof AppFuturesRoute
   '/heatmap': typeof AppHeatmapRoute
+  '/import': typeof AppImportRoute
   '/journal': typeof AppJournalRoute
   '/news': typeof AppNewsRoute
   '/orders': typeof AppOrdersRoute
+  '/payoff': typeof AppPayoffRoute
   '/performance': typeof AppPerformanceRoute
   '/portfolio': typeof AppPortfolioRoute
   '/replay': typeof AppReplayRoute
@@ -298,9 +314,11 @@ export interface FileRoutesById {
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/futures': typeof AppFuturesRoute
   '/_app/heatmap': typeof AppHeatmapRoute
+  '/_app/import': typeof AppImportRoute
   '/_app/journal': typeof AppJournalRoute
   '/_app/news': typeof AppNewsRoute
   '/_app/orders': typeof AppOrdersRoute
+  '/_app/payoff': typeof AppPayoffRoute
   '/_app/performance': typeof AppPerformanceRoute
   '/_app/portfolio': typeof AppPortfolioRoute
   '/_app/replay': typeof AppReplayRoute
@@ -335,9 +353,11 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/futures'
     | '/heatmap'
+    | '/import'
     | '/journal'
     | '/news'
     | '/orders'
+    | '/payoff'
     | '/performance'
     | '/portfolio'
     | '/replay'
@@ -370,9 +390,11 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/futures'
     | '/heatmap'
+    | '/import'
     | '/journal'
     | '/news'
     | '/orders'
+    | '/payoff'
     | '/performance'
     | '/portfolio'
     | '/replay'
@@ -406,9 +428,11 @@ export interface FileRouteTypes {
     | '/_app/dashboard'
     | '/_app/futures'
     | '/_app/heatmap'
+    | '/_app/import'
     | '/_app/journal'
     | '/_app/news'
     | '/_app/orders'
+    | '/_app/payoff'
     | '/_app/performance'
     | '/_app/portfolio'
     | '/_app/replay'
@@ -507,6 +531,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppHeatmapRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/import': {
+      id: '/_app/import'
+      path: '/import'
+      fullPath: '/import'
+      preLoaderRoute: typeof AppImportRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/journal': {
       id: '/_app/journal'
       path: '/journal'
@@ -526,6 +557,13 @@ declare module '@tanstack/react-router' {
       path: '/orders'
       fullPath: '/orders'
       preLoaderRoute: typeof AppOrdersRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/payoff': {
+      id: '/_app/payoff'
+      path: '/payoff'
+      fullPath: '/payoff'
+      preLoaderRoute: typeof AppPayoffRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/performance': {
@@ -693,9 +731,11 @@ interface AppRouteChildren {
   AppDashboardRoute: typeof AppDashboardRoute
   AppFuturesRoute: typeof AppFuturesRoute
   AppHeatmapRoute: typeof AppHeatmapRoute
+  AppImportRoute: typeof AppImportRoute
   AppJournalRoute: typeof AppJournalRoute
   AppNewsRoute: typeof AppNewsRoute
   AppOrdersRoute: typeof AppOrdersRoute
+  AppPayoffRoute: typeof AppPayoffRoute
   AppPerformanceRoute: typeof AppPerformanceRoute
   AppPortfolioRoute: typeof AppPortfolioRoute
   AppReplayRoute: typeof AppReplayRoute
@@ -724,9 +764,11 @@ const AppRouteChildren: AppRouteChildren = {
   AppDashboardRoute: AppDashboardRoute,
   AppFuturesRoute: AppFuturesRoute,
   AppHeatmapRoute: AppHeatmapRoute,
+  AppImportRoute: AppImportRoute,
   AppJournalRoute: AppJournalRoute,
   AppNewsRoute: AppNewsRoute,
   AppOrdersRoute: AppOrdersRoute,
+  AppPayoffRoute: AppPayoffRoute,
   AppPerformanceRoute: AppPerformanceRoute,
   AppPortfolioRoute: AppPortfolioRoute,
   AppReplayRoute: AppReplayRoute,
