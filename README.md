@@ -150,6 +150,10 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 - Batch runner that processes symbols in parallel chunks of 50 (`server/domain/calculations/engine/batch-runner.ts`).
 - Canonical indicator implementations live in `shared/indicators/canonical.ts`; `tests/canonical-indicators.test.ts` checks them against the strategy engine's indicator cache. Bars inside an indicator's warm-up window have `null` values, not `0`.
 
+### Charts
+- Candlestick, line and area charts on TradingView Lightweight Charts with volume, moving averages, RSI, backtest trade markers and paper position lines.
+- Dividend and split markers on the stock page chart and the full chart (toolbar toggle "Dividends & splits"; hover a marker for the amount or ratio, ex-date and source), plus a table of the last 10 corporate actions on the stock page. Events come from Yahoo Finance via `GET /api/market/corporate-actions`, cached server-side for 24 h and served stale (and labelled so) when Yahoo fails. Yahoo reports NSE bonus issues as splits, so they are labelled "Split/bonus".
+
 ### Storage
 - **Supabase PostgreSQL**: Operational persistence for companies, historical OHLCV candles, technical snapshots, paper trading accounts, orders, fills, ledger, and alert rules.
 - **Google BigQuery (optional)**: Analytics sink of the ingestion engine; the dataset comes from `BIGQUERY_DATASET` (no default). When it is unset or fails, the Postgres write still happens.
@@ -362,7 +366,7 @@ End-to-end tests need no database, broker or secret: `bun run test:e2e` builds t
 production mode with `VITE_API_URL=https://api.test`, serves it with the node-server preview, and
 answers every backend request from `tests/e2e/support/mock-api.ts` (shaped like the real market,
 tRPC and SSE contracts). Install the browser once with `bunx playwright install chromium`. The specs
-cover the screener, chart, quote freshness labels, the paper terminal (signed in and out) and
+cover the screener, chart, dividend and split markers, quote freshness labels, the paper terminal (signed in and out) and
 strategy creation, on one desktop and one mobile viewport.
 
 ### Production Builds

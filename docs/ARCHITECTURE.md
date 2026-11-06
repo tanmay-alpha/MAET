@@ -51,7 +51,7 @@ flowchart LR
 | PostgreSQL | Drizzle over `postgres-js`; pool `max: 5`, `prepare: false` (transaction-pooler friendly), 10 s connect timeout. | `server/data/drizzle/client.ts` |
 | Redis | `ioredis` singleton on `UPSTASH_REDIS_URL` (Redis protocol, not the Upstash REST API). Used for the Yahoo candle cache, the optional shared rate-limit store, the daily-processor lock and paper-notification pub/sub. It is **not** in the quote path. | `server/data/redis/client.ts`, `server/data/sources/yahoo.ts`, `server/middleware/rate-limit.ts`, `server/orchestrator.ts`, `server/api/paper/stream.get.ts` |
 | Angel One | REST login + FULL quote snapshots, and the SmartAPI WebSocket feed (`wss://smartapisocket.angelone.in/smart-stream`) for one shared feed identity, `render-market-feed`. | `server/data/sources/angelone/client.ts`, `server/workers/angelone-ws.ts`, `server/orchestrator.ts` |
-| Yahoo | Delayed fallback for quotes (`quality: "delayed"`) and the source of historical candles. | `server/data/sources/yahoo.ts` |
+| Yahoo | Delayed fallback for quotes (`quality: "delayed"`), the source of historical candles, and of dividends and splits (`events=div,splits` on the v8 chart API). | `server/data/sources/yahoo.ts` |
 | BigQuery | Optional analytics sink of the ingestion engine; failures there do not block the Postgres write. | `server/data/bigquery/client.ts`, `server/workers/ingestion-engine/writers/write-coordinator.ts` |
 
 ### What runs inside the single web process
@@ -116,6 +116,15 @@ Details (all `server/domain/market/quote-service.ts` unless noted):
 - `sessionQuality` (`server/domain/market/quote-quality.ts`) is why a broker quote cached at 15:29 is served as `delayed` at 15:45.
 - The response envelope (`buildQuotesPayload`) carries `source`, `delayed`, `marketPhase` and `errors`, so the UI never presents Yahoo data as live.
 - Live streaming uses `GET /api/market/stream` (`server/api/market/stream.get.ts`): unauthenticated SSE, 100 connections per process and 5 per IP, initial snapshot from `loadQuotes`, then ticks coalesced per symbol and flushed every 200 ms. Each connection takes reference-counted symbol subscriptions on the Angel One feed (`subscribeMarketSymbols` in `server/orchestrator.ts`).
+
+#### Corporate actions (dividends and splits)
+
+`GET /api/market/corporate-actions?symbol=` (`server/api/market/corporate-actions.get.ts`, with the same-origin fallback `src/routes/api.market.corporate-actions.ts`) returns every dividend and split Yahoo reports for the symbol, newest first, in the `CorporateActionsResponse` contract (`shared/types/corporate-actions.ts`).
+
+- `getCorporateActions` reads the full history in one request (`range=max&interval=1mo&events=div,splits`); `normalizeYahooCorporateActions` dates each event by its IST ex-date, reads the split ratio from `numerator`/`denominator` or the `splitRatio` string, drops malformed, 1:1 and duplicate rows, and orders the result. A dividend keeps Yahoo's amount and the response currency; `splitAdjusted` marks amounts Yahoo restated for a later split or bonus (`server/data/sources/yahoo.ts`).
+- Yahoo reports an NSE bonus issue as a split (a 1:1 bonus is `2:1`), so the UI labels these "Split/bonus" and shows the bonus reading next to the ratio; a ratio below 1 is a reverse split.
+- `server/domain/market/corporate-action-service.ts` caches each symbol in process memory for 24 h (at most 500 symbols, oldest evicted), coalesces concurrent refreshes, and when a refresh fails serves the last good copy with `stale: true`; with no copy the route answers 503. Nothing is synthesised on failure.
+- The stock page and the full chart place the events on the bar containing each ex-date (`placeCorporateActions` in `src/components/trading/chart-corporate-actions.ts`) and draw them as lightweight-charts series markers (D below the bar, S above), with a hover tooltip naming the amount or ratio, the ex-date and the source. A "Dividends & splits" toggle sits in the chart toolbar (on by default on the stock page, off on the full chart); the stock page Overview also lists the last 10 events.
 
 ### 2.2 A paper MARKET order, end to end
 
@@ -233,10 +242,10 @@ Sources: `server/api/trpc/routers/backtest-v2.ts`, `server/domain/backtest/prese
 
 | Path | Responsibility |
 |---|---|
-| `server/api/` | Nitro file routes: `/api/market/*` (quotes, candles, companies, SSE stream), `/api/paper/*` (REST paper orders, positions, account, SSE), `/api/health`, and the tRPC entry `server/api/trpc/[trpc].ts` with routers in `server/api/trpc/routers/`. |
+| `server/api/` | Nitro file routes: `/api/market/*` (quotes, candles, corporate actions, companies, SSE stream), `/api/paper/*` (REST paper orders, positions, account, SSE), `/api/health`, and the tRPC entry `server/api/trpc/[trpc].ts` with routers in `server/api/trpc/routers/`. |
 | `server/api/trpc/auth.ts`, `core.ts` | JWT verification; `publicProcedure`, `protectedProcedure`, `adminProcedure`; production error masking. |
 | `server/middleware/` | `cors.ts` (allowlist), `rate-limit.ts` (token buckets), `z-body-limit.ts` (256 KiB declared body cap). |
-| `server/domain/market/` | Market clock and phases, quote service and quality, symbol catalogue, candle service, matcher entry. |
+| `server/domain/market/` | Market clock and phases, quote service and quality, symbol catalogue, candle service, corporate-action (dividend and split) cache, matcher entry. |
 | `server/domain/strategy/` | Backtest runner (`runner-v3.ts`), indicator cache, AST evaluator, fee model, walk-forward, parameter sweep, plus research-only modules (portfolio engine, execution model, robustness, look-ahead detector). |
 | `server/domain/backtest/` | Metric formulas (`risk-metrics.ts`) and the preset adapter. |
 | `server/domain/data/`, `server/domain/fundamentals/` | Corporate-action adjustment; ratios and point-in-time fundamentals. |
@@ -334,7 +343,7 @@ The backend connects with whatever credentials its connection string carries (`s
 | Redis | The shared client fails fast (no offline queue, 1 s command and 5 s socket timeouts) and helpers return their fallback immediately when it is not `ready`: candle cache reads miss and writes are skipped; the optional Redis rate-limit store falls back to memory; the daily-processor lock falls back to an in-process lock (no cross-instance guard); the paper SSE stream answers 503 and the UI keeps polling. | `server/data/redis/client.ts`, `server/middleware/rate-limit.ts`, `server/orchestrator.ts`, `server/api/paper/stream.get.ts`, `src/hooks/use-paper-account.ts` |
 | Angel One REST | Warning logged, Yahoo used per symbol; quotes become `delayed`, so paper MARKET orders are refused (execution policy). | `server/domain/market/quote-service.ts`, `shared/types/market.ts` |
 | Angel One session rejected / WebSocket lost | Session cleared and re-login with backoff from 1 s doubling to 60 s; WebSocket reconnect `min(30 s, 500 ms × 2^n)`, 10 attempts. | `server/data/sources/angelone/client.ts`, `server/workers/angelone-ws.ts`, `server/workers/relogin-backoff.ts` |
-| Yahoo | 3 attempts with jittered backoff; then the last cached quote (marked `stale` when old) or a per-symbol error. | `server/data/sources/yahoo.ts`, `server/domain/market/quote-service.ts` |
+| Yahoo | 3 attempts with jittered backoff; then the last cached quote (marked `stale` when old) or a per-symbol error. Corporate actions serve the last good copy marked `stale`, or 503 when none was cached. | `server/data/sources/yahoo.ts`, `server/domain/market/quote-service.ts`, `server/domain/market/corporate-action-service.ts` |
 
 ## 9. Known gaps and risks
 
