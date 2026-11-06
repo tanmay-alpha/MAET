@@ -1,5 +1,5 @@
 import { getSqlClient } from "../data/drizzle/client";
-import { databaseBreaker, type DatabaseBreakerState } from "../data/drizzle/availability";
+import { databaseBreaker, type DatabaseBreakerState, type DatabaseProbeTicket } from "../data/drizzle/availability";
 import { getRedis } from "../data/redis/client";
 import { logger } from "./logger";
 
@@ -17,8 +17,12 @@ export type HealthCheckStatus = {
 /** The part of the database availability breaker the health check drives and reports. */
 export type DatabaseCircuit = {
   state(): DatabaseBreakerState;
-  recordProbe(ok: boolean): void;
+  startProbe(): DatabaseProbeTicket;
+  recordProbe(ticket: DatabaseProbeTicket, ok: boolean, error?: unknown): void;
 };
+
+/** Called when a probe starts; the returned callback receives its outcome. */
+type ProbeObserver = () => (ok: boolean, error?: unknown) => void;
 
 type Probe = () => Promise<unknown>;
 
@@ -50,13 +54,15 @@ function createCachedProbe(
   timeoutMs: number,
   cacheTtlMs: number,
   now: () => number,
-  onResult?: (ok: boolean) => void,
+  observe?: ProbeObserver,
 ): () => Promise<boolean> {
   let last: { ok: boolean; at: number } | undefined;
   let inflight: Promise<boolean> | undefined;
 
   const run = async (): Promise<boolean> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const finished = observe?.();
+    let failure: unknown;
     // Executor form on purpose: Render runs Node 20, which lacks Promise.withResolvers.
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`${component} probe timed out after ${timeoutMs}ms`)), timeoutMs);
@@ -69,13 +75,14 @@ function createCachedProbe(
       ok = true;
     } catch (err) {
       ok = false;
+      failure = err;
       if (last?.ok !== false) logger.warn({ component, err }, "health probe failed");
     } finally {
       clearTimeout(timer);
     }
     if (ok && last?.ok === false) logger.info({ component }, "health probe recovered");
     last = { ok, at: now() };
-    onResult?.(ok);
+    finished?.(ok, failure);
     return ok;
   };
 
@@ -95,7 +102,10 @@ export function createHealthChecker(options: HealthCheckerOptions): HealthChecke
   const circuit = options.databaseCircuit;
   const probeDatabase = createCachedProbe(
     "database", options.probes.database, timeoutMs, cacheTtlMs, now,
-    circuit && ((ok) => circuit.recordProbe(ok)),
+    circuit && (() => {
+      const ticket = circuit.startProbe();
+      return (ok, error) => circuit.recordProbe(ticket, ok, error);
+    }),
   );
   const probeRedis = createCachedProbe("redis", options.probes.redis, timeoutMs, cacheTtlMs, now);
 

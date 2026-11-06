@@ -64,11 +64,27 @@ export type DatabaseCircuitBreakerOptions = {
   now?: () => number;
 };
 
+/**
+ * Permission for one guarded operation. `generation` identifies the open
+ * period it started in; only the half-open trial of the current generation
+ * may close the breaker.
+ */
+export type DatabaseAttempt = { generation: number; trial: boolean };
+
+/** Marker of when a health probe started (the breaker generation at that time). */
+export type DatabaseProbeTicket = { generation: number };
+
+/** Probe failures without a connection error (e.g. timeouts on a busy pool) needed to open. */
+const PROBE_FAILURES_TO_OPEN = 3;
+
 export class DatabaseCircuitBreaker {
   private readonly cooldownMs: number;
   private readonly now: () => number;
   private openedAt: number | undefined;
   private trialStartedAt: number | undefined;
+  /** Incremented every time the breaker opens. */
+  private generation = 0;
+  private consecutiveProbeFailures = 0;
 
   constructor(options: DatabaseCircuitBreakerOptions = {}) {
     this.cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
@@ -81,40 +97,67 @@ export class DatabaseCircuitBreaker {
   }
 
   /**
-   * Whether a guarded read may use the database now. In half-open state the
-   * first caller gets the single trial; a trial that never reports back is
-   * replaced after another cooldown.
+   * Permission to use the database now, or undefined while open. In half-open
+   * state the first caller gets the single trial; a trial that never reports
+   * back is replaced after another cooldown.
    */
-  isAvailable(): boolean {
+  tryAcquire(): DatabaseAttempt | undefined {
     const state = this.state();
-    if (state === "closed") return true;
-    if (state === "open") return false;
+    if (state === "closed") return { generation: this.generation, trial: false };
+    if (state === "open") return undefined;
     const now = this.now();
-    if (this.trialStartedAt !== undefined && now - this.trialStartedAt < this.cooldownMs) return false;
+    if (this.trialStartedAt !== undefined && now - this.trialStartedAt < this.cooldownMs) return undefined;
     this.trialStartedAt = now;
-    return true;
+    return { generation: this.generation, trial: true };
   }
 
-  recordSuccess(): void {
-    this.openedAt = undefined;
-    this.trialStartedAt = undefined;
+  /**
+   * Only the current half-open trial closes the breaker: a slow query that
+   * started before the breaker opened says nothing about the database now.
+   */
+  recordSuccess(attempt: DatabaseAttempt): void {
+    if (attempt.trial && attempt.generation === this.generation && this.openedAt !== undefined) this.close();
   }
 
-  /** Opens on connection-class errors; any other error proves the server answered. */
-  recordFailure(error: unknown): void {
+  /**
+   * Opens on connection-class errors from any operation. Any other error from
+   * the current trial proves the server answered, so it closes the breaker.
+   */
+  recordFailure(error: unknown, attempt?: DatabaseAttempt): void {
     if (isConnectionError(error)) this.open();
-    else if (this.openedAt !== undefined) this.recordSuccess();
+    else if (attempt) this.recordSuccess(attempt);
   }
 
-  /** The health probe (`select 1`) is authoritative in both directions. */
-  recordProbe(ok: boolean): void {
-    if (ok) this.recordSuccess();
-    else this.open();
+  startProbe(): DatabaseProbeTicket {
+    return { generation: this.generation };
+  }
+
+  /**
+   * Health probe (`select 1`) outcome. A connection error opens the breaker at
+   * once; other failures (a probe timeout on a busy pool) open it only after
+   * PROBE_FAILURES_TO_OPEN in a row. A success closes it if the probe started
+   * after the breaker last opened.
+   */
+  recordProbe(ticket: DatabaseProbeTicket, ok: boolean, error?: unknown): void {
+    if (ok) {
+      this.consecutiveProbeFailures = 0;
+      if (ticket.generation === this.generation && this.openedAt !== undefined) this.close();
+      return;
+    }
+    this.consecutiveProbeFailures++;
+    if (isConnectionError(error) || this.consecutiveProbeFailures >= PROBE_FAILURES_TO_OPEN) this.open();
   }
 
   private open(): void {
+    this.generation++;
     this.openedAt = this.now();
     this.trialStartedAt = undefined;
+  }
+
+  private close(): void {
+    this.openedAt = undefined;
+    this.trialStartedAt = undefined;
+    this.consecutiveProbeFailures = 0;
   }
 }
 
@@ -122,24 +165,23 @@ export class DatabaseCircuitBreaker {
 export const databaseBreaker = new DatabaseCircuitBreaker();
 const breaker = databaseBreaker;
 
+/** Whether guarded reads currently use the database (does not consume the half-open trial). */
 export function isDatabaseAvailable(): boolean {
-  return breaker.isAvailable();
+  return breaker.state() !== "open";
 }
 
+/** Reports a database error seen outside withOptionalDatabase; opens on connection errors. */
 export function recordDatabaseFailure(error: unknown): void {
   breaker.recordFailure(error);
 }
 
-export function recordDatabaseSuccess(): void {
-  breaker.recordSuccess();
-}
-
-export function recordDatabaseProbe(ok: boolean): void {
-  breaker.recordProbe(ok);
-}
-
 export function databaseBreakerState(): DatabaseBreakerState {
   return breaker.state();
+}
+
+/** Test-only: closes the process-wide breaker. */
+export function resetDatabaseBreakerForTests(): void {
+  breaker.recordProbe(breaker.startProbe(), true);
 }
 
 /**
@@ -148,13 +190,14 @@ export function databaseBreakerState(): DatabaseBreakerState {
  * outcome. Callers must have a non-database fallback.
  */
 export async function withOptionalDatabase<T>(operation: () => Promise<T>): Promise<T> {
-  if (!breaker.isAvailable()) throw new DatabaseUnavailableError();
+  const attempt = breaker.tryAcquire();
+  if (!attempt) throw new DatabaseUnavailableError();
   try {
     const result = await operation();
-    breaker.recordSuccess();
+    breaker.recordSuccess(attempt);
     return result;
   } catch (error) {
-    breaker.recordFailure(error);
+    breaker.recordFailure(error, attempt);
     throw error;
   }
 }

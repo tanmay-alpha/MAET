@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Candle } from "@shared/types";
-import { databaseBreakerState, recordDatabaseProbe } from "../../data/drizzle/availability";
+import { databaseBreakerState, recordDatabaseFailure, resetDatabaseBreakerForTests } from "../../data/drizzle/availability";
 import { loadMarketCandles, type CandleStore } from "./candle-service";
 
 afterEach(() => {
-  recordDatabaseProbe(true);
+  resetDatabaseBreakerForTests();
 });
 
 const FROM = new Date("2026-10-01T00:00:00.000Z");
@@ -33,7 +33,7 @@ function hangingStore() {
 
 describe("loadMarketCandles with the database circuit open", () => {
   it("skips the database entirely and serves Yahoo history", async () => {
-    recordDatabaseProbe(false);
+    recordDatabaseFailure(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }));
     const { store, calls } = hangingStore();
 
     const result = await loadMarketCandles("RELIANCE", "1d", FROM, TO, {

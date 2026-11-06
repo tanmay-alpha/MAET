@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { createApp, toWebHandler, type EventHandler } from "h3";
 import healthRoute, { createHealthRoute } from "../api/health.get";
 import { closeDb, resetDb } from "../data/drizzle/client";
-import { DatabaseCircuitBreaker, recordDatabaseProbe } from "../data/drizzle/availability";
+import { DatabaseCircuitBreaker, resetDatabaseBreakerForTests } from "../data/drizzle/availability";
 import { closeRedis } from "../data/redis/client";
 import { createHealthChecker } from "./health";
 
@@ -35,7 +35,7 @@ describe("GET /api/health", () => {
       else process.env.TEST_DATABASE_URL = previousUrl;
       await closeDb();
       // The shared availability breaker followed the failed probe; reset it for other tests.
-      recordDatabaseProbe(true);
+      resetDatabaseBreakerForTests();
     }
   });
 
@@ -135,5 +135,20 @@ describe("GET /api/health", () => {
     // Probe result is cached as healthy, but live traffic just saw the database vanish.
     const body = await checker.check();
     expect(body).toMatchObject({ status: "degraded", databaseCircuit: "open", checks: { database: false } });
+  });
+
+  it("does not open the database circuit on one probe timeout (busy pool)", async () => {
+    const breaker = new DatabaseCircuitBreaker();
+    const checker = createHealthChecker({
+      probes: { database: () => new Promise(() => {}), redis: healthy },
+      timeoutMs: 20,
+      cacheTtlMs: 0,
+      databaseCircuit: breaker,
+    });
+
+    const body = await checker.check();
+
+    expect(body.checks.database).toBe(false);
+    expect(breaker.state()).toBe("closed");
   });
 });
