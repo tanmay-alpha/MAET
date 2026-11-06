@@ -61,6 +61,7 @@
     "enrich:nifty500": "bun run server/scripts/enrich-nifty500.ts"
   },
   "dependencies": {
+    "maplibre-gl": "^6.16.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "use-sync-external-store": "^1.6.0",

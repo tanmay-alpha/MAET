@@ -11,6 +11,7 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
+import { API_BASE_URL } from "@/lib/api-url";
 
 function NotFoundComponent() {
   return (
@@ -60,7 +61,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       // TanStack Start emits inline hydration and route-manifest scripts. A nonce is not exposed by this version, so blocking inline scripts leaves client-only routes blank.
       // frame-ancestors, X-Frame-Options and X-Content-Type-Options are ignored in <meta>; they must be sent as HTTP response headers by the host.
-      { httpEquiv: "Content-Security-Policy", content: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https:; base-uri 'self'; form-action 'self'" },
+      { httpEquiv: "Content-Security-Policy", content: `default-src 'self'; script-src 'self' 'unsafe-inline' https://s3.tradingview.com; frame-src https://*.tradingview.com https://www.tradingview-widget.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https: ${API_BASE_URL ? new URL(API_BASE_URL).origin : ""}; base-uri 'self'; form-action 'self'` },
       { title: "MAET — Indian market research and paper trading" },
       { name: "description", content: "MAET provides delayed Indian equity quotes, historical backtests, screeners, and server-side paper trading for signed-in users." },
       { property: "og:title", content: "MAET — Indian market research terminal" },
