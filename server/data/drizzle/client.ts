@@ -10,24 +10,31 @@ import * as schema from "../../db/schema";
 let dbInstance: ReturnType<typeof drizzle> | null = null;
 let sqlClientInstance: postgres.Sql | null = null;
 
+function isTestRun(env: NodeJS.ProcessEnv): boolean {
+  return env.NODE_ENV === "test" || Boolean(env.BUN_TEST);
+}
+
+/**
+ * Test runs must name their database explicitly (TEST_DATABASE_URL) and never
+ * fall back to a shared local database or the application's URL. Outside tests
+ * TEST_DATABASE_URL is ignored: a leftover value in a server's environment must
+ * not redirect production traffic to a scratch database.
+ */
+export function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (isTestRun(env)) return env.TEST_DATABASE_URL || undefined;
+  return env.SUPABASE_DB_URL || env.DATABASE_URL || env.POSTGRES_URL || undefined;
+}
+
 /**
  * Initialize or get the Drizzle database client
  * Connects to Supabase Postgres via connection string
  */
 export function getDb(): ReturnType<typeof drizzle> {
   if (!dbInstance) {
-    // Test runs must name their database explicitly: never fall back to a
-    // shared local database or to the application's (production) URL.
-    const isTestRun = process.env.NODE_ENV === "test" || Boolean(process.env.BUN_TEST);
-    const connectionString = isTestRun
-      ? process.env.TEST_DATABASE_URL
-      : process.env.TEST_DATABASE_URL ||
-        process.env.SUPABASE_DB_URL ||
-        process.env.DATABASE_URL ||
-        process.env.POSTGRES_URL;
+    const connectionString = resolveDatabaseUrl();
 
     if (!connectionString) {
-      if (!isTestRun) {
+      if (!isTestRun(process.env)) {
         throw new Error("Database connection string not found. Set SUPABASE_DB_URL or DATABASE_URL env var.");
       }
       // Some modules wire a client at import time; let them load and fail on

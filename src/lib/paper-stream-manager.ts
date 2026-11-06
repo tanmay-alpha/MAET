@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { PAPER_STREAM_CONNECTED_EVENT, isPaperOutboxEventType } from "@shared/domain/paper-trading/stream-events";
 import { getCurrentAccessToken, watchStoredSession } from "./auth-token";
 import { connectPaperTradingStream, type ConnectPaperTradingStreamOptions } from "./paper-sse-client";
 import { reconnectDelayMs, scheduleTimeout, type ScheduleFn } from "./reconnect-backoff";
@@ -16,17 +17,6 @@ export interface PaperStreamDeps {
   schedule: ScheduleFn;
   random: () => number;
 }
-
-// Events after which the server-side account state must be refetched.
-const STATE_EVENTS: Record<string, true> = {
-  ORDER_PLACED: true,
-  ORDER_FILLED: true,
-  ORDER_CANCELLED: true,
-  ACCOUNT_RESET: true,
-  ACCOUNT_UPDATED: true,
-  FILL_CREATED: true,
-  STATE_CHANGED: true,
-};
 
 // Route changes unmount one page's consumers before the next page mounts its own;
 // keep the stream open briefly so navigation doesn't tear it down and reopen it.
@@ -102,10 +92,11 @@ export class PaperStreamManager {
       // crashing handler can answer 200 and close at once, which must still back off.
       onEvent: (event) => {
         if (controller.signal.aborted) return;
-        if (event.type === "CONNECTED") {
+        if (event.type === PAPER_STREAM_CONNECTED_EVENT) {
           this.failures = 0;
           this.setConnected(true);
-        } else if (STATE_EVENTS[event.type] === true) this.invalidateState();
+          // Every outbox event is a committed change to the account's state.
+        } else if (isPaperOutboxEventType(event.type)) this.invalidateState();
       },
       onError: () => {
         if (controller.signal.aborted) return;

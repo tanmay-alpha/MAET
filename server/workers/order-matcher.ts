@@ -24,6 +24,11 @@ export class OrderMatcherWorker {
 
       // 2. Coordinates order matching for this symbol
       onTick(tick)
+        .then((receipts) => {
+          // A fill can end a working order or close a position: the paper-interest
+          // subscriptions re-read which symbols still need ticks.
+          if (receipts.length > 0) bus.emit("paper:interest_changed", { reason: "order_filled" });
+        })
         .catch((err) => {
           console.error(`[OrderMatcherWorker] Error processing tick for ${tick.symbol}:`, err);
         });

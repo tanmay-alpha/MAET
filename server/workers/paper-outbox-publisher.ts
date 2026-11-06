@@ -1,101 +1,180 @@
+/**
+ * Relays committed paper-trading outbox events to Redis pub/sub, where
+ * GET /api/paper/stream forwards them to the user's browser.
+ *
+ * Delivery is at least once: a batch is claimed with FOR UPDATE SKIP LOCKED,
+ * published, and marked PUBLISHED inside one transaction, so the row lock
+ * holds until the mark commits and no other publisher can claim the same
+ * rows meanwhile. If the process dies after publishing but before the
+ * commit, the events stay PENDING and are published again; consumers treat
+ * the event id as the deduplication key.
+ *
+ * While Redis is not ready the database is not touched at all: events stay
+ * PENDING and go out once Redis reconnects.
+ */
+import type postgres from "postgres";
+import { paperUserChannel, type PaperStreamMessage } from "@shared/domain/paper-trading/stream-events";
 import { getSqlClient } from "../data/drizzle/client";
+import { DatabaseUnavailableError, withOptionalDatabase } from "../data/drizzle/availability";
 import { getRedis } from "../data/redis/client";
+import { getLogger } from "../infra/logger";
+
+export interface OutboxPublisher {
+  publish(channel: string, message: string): Promise<unknown>;
+}
+
+export interface OutboxPublisherDeps {
+  /** The Redis publisher, or undefined while Redis cannot serve commands. */
+  publisher?: () => OutboxPublisher | undefined;
+  sql?: () => postgres.Sql;
+  batchSize?: number;
+}
+
+const DEFAULT_BATCH_SIZE = 50;
+const MAX_RETRY_DELAY_SECONDS = 300;
+const BUSY_POLL_MS = 50;
+const IDLE_POLL_MS = 1_000;
+const ERROR_POLL_MS = 5_000;
+
+type OutboxRow = {
+  id: string;
+  user_id: string;
+  generation: number;
+  event_type: PaperStreamMessage["eventType"];
+  aggregate_type: string;
+  aggregate_id: string;
+  payload: unknown;
+  attempt_count: number;
+};
+
+function log() {
+  return getLogger().child({ worker: "paper-outbox-publisher" });
+}
+
+function readyRedisPublisher(): OutboxPublisher | undefined {
+  try {
+    const redis = getRedis();
+    return redis.status === "ready" ? redis : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Claims, publishes and marks one batch in a single transaction. `claimed` is
+ * the number of due events locked (0 when nothing was due or Redis is down);
+ * `published` is how many of them went out. Throws on database errors.
+ */
+export async function processOutboxBatch(deps: OutboxPublisherDeps = {}): Promise<{ claimed: number; published: number }> {
+  const publisher = (deps.publisher ?? readyRedisPublisher)();
+  if (!publisher) return { claimed: 0, published: 0 };
+  const sql = (deps.sql ?? getSqlClient)();
+  const batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
+
+  return withOptionalDatabase(() =>
+    sql.begin(async (tx) => {
+      const events = await tx<OutboxRow[]>`
+        SELECT id, user_id, generation, event_type, aggregate_type, aggregate_id, payload, attempt_count
+        FROM public.paper_outbox_events
+        WHERE status = 'PENDING'
+          AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+        ORDER BY created_at ASC
+        LIMIT ${batchSize}
+        FOR UPDATE SKIP LOCKED
+      `;
+
+      const published: string[] = [];
+      for (const event of events) {
+        const message: PaperStreamMessage = {
+          id: event.id,
+          userId: event.user_id,
+          generation: event.generation,
+          eventType: event.event_type,
+          aggregateType: event.aggregate_type,
+          aggregateId: event.aggregate_id,
+          payload: event.payload,
+          publishedAt: new Date().toISOString(),
+        };
+        try {
+          await publisher.publish(paperUserChannel(event.user_id), JSON.stringify(message));
+          published.push(event.id);
+        } catch (error) {
+          // Redis failed mid-batch: back this event off and leave the rest of the
+          // batch PENDING (unchanged) for the next attempt instead of failing each one.
+          const attempts = event.attempt_count + 1;
+          const delaySeconds = Math.min(2 ** attempts, MAX_RETRY_DELAY_SECONDS);
+          await tx`
+            UPDATE public.paper_outbox_events
+            SET attempt_count = ${attempts},
+                last_error = ${errorMessage(error)},
+                next_attempt_at = NOW() + make_interval(secs => ${delaySeconds})
+            WHERE id = ${event.id}
+          `;
+          break;
+        }
+      }
+
+      if (published.length > 0) {
+        await tx`
+          UPDATE public.paper_outbox_events
+          SET status = 'PUBLISHED', published_at = NOW(), last_error = NULL
+          WHERE id = ANY(${published}::uuid[])
+        `;
+      }
+      return { claimed: events.length, published: published.length };
+    })
+  );
+}
 
 let isRunning = false;
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
+let inFlight: Promise<void> | null = null;
 
-export async function processOutboxBatch(): Promise<number> {
-  const sql = getSqlClient();
-  const redis = getRedis();
-
+async function runOnce(): Promise<number> {
   try {
-    const events = await sql<Array<{
-      id: string;
-      user_id: string;
-      generation: number;
-      event_type: string;
-      aggregate_type: string;
-      aggregate_id: string;
-      payload: unknown;
-      attempt_count: number;
-    }>>`
-      SELECT id, user_id, generation, event_type, aggregate_type, aggregate_id, payload, attempt_count
-      FROM public.paper_outbox_events
-      WHERE status = 'PENDING'
-        AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
-      ORDER BY created_at ASC
-      LIMIT 50
-      FOR UPDATE SKIP LOCKED
-    `;
-
-    if (events.length === 0) {
-      return 0;
+    const { claimed, published } = await processOutboxBatch();
+    if (published > 0) return BUSY_POLL_MS;
+    // Events were due but none went out (Redis erroring while "ready"): don't spin at 50ms.
+    return claimed > 0 ? ERROR_POLL_MS : IDLE_POLL_MS;
+  } catch (error) {
+    if (!(error instanceof DatabaseUnavailableError)) {
+      log().warn({ err: errorMessage(error) }, "paper outbox batch failed; events stay pending");
     }
-
-    for (const event of events) {
-      const channel = `paper:user:${event.user_id}`;
-      const message = JSON.stringify({
-        id: event.id,
-        userId: event.user_id,
-        generation: event.generation,
-        eventType: event.event_type,
-        aggregateType: event.aggregate_type,
-        aggregateId: event.aggregate_id,
-        payload: event.payload,
-        publishedAt: new Date().toISOString(),
-      });
-
-      try {
-        await redis.publish(channel, message);
-
-        await sql`
-          UPDATE public.paper_outbox_events
-          SET status = 'PUBLISHED',
-              published_at = NOW(),
-              last_error = NULL
-          WHERE id = ${event.id}
-        `;
-      } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        const nextAttemptCount = event.attempt_count + 1;
-        const delaySeconds = Math.min(Math.pow(2, nextAttemptCount), 300);
-
-        await sql`
-          UPDATE public.paper_outbox_events
-          SET attempt_count = ${nextAttemptCount},
-              last_error = ${errorMsg},
-              next_attempt_at = NOW() + (${delaySeconds} || ' seconds')::interval
-          WHERE id = ${event.id}
-        `;
-      }
-    }
-
-    return events.length;
-  } catch (_err) {
-    return 0;
+    return ERROR_POLL_MS;
   }
+}
+
+function scheduleNext(delayMs: number): void {
+  if (!isRunning) return;
+  loopTimer = setTimeout(() => {
+    loopTimer = null;
+    inFlight = runOnce().then((nextDelayMs) => {
+      inFlight = null;
+      scheduleNext(nextDelayMs);
+    });
+  }, delayMs);
 }
 
 export function startOutboxPublisherWorker(): void {
   if (isRunning) return;
   isRunning = true;
-
-  const runLoop = async () => {
-    if (!isRunning) return;
-    const processed = await processOutboxBatch();
-    const delay = processed > 0 ? 50 : 1000;
-    if (isRunning) {
-      loopTimer = setTimeout(runLoop, delay);
-    }
-  };
-
-  void runLoop();
+  scheduleNext(0);
 }
 
-export function stopOutboxPublisherWorker(): void {
+/** Stops polling and waits for a batch in progress to commit or roll back. */
+export async function stopOutboxPublisherWorker(): Promise<void> {
   isRunning = false;
   if (loopTimer) {
     clearTimeout(loopTimer);
     loopTimer = null;
   }
+  await inFlight;
+}
+
+export function isOutboxPublisherRunning(): boolean {
+  return isRunning;
 }

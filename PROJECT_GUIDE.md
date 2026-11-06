@@ -132,7 +132,7 @@ This folder is the website users interact with. It is built mainly with React, T
 | `src/lib/trpc.ts` | Browser tRPC client. It attaches the Supabase access token when the browser has a session, so public procedures work signed out; a 401 from a protected procedure becomes `AuthenticationError`, which React Query does not retry (`src/router.tsx`). |
 | `src/lib/auth-token.ts` | Retrieves and refreshes the browser's Supabase access token; `hasStoredSession` reports whether a session exists. |
 | `src/hooks/use-signed-in.ts` | `useSignedIn()` gates signed-in-only queries (paper account, alerts, watchlists, workspace, market breadth) so logged-out visitors don't send requests that would fail with 401. |
-| `src/lib/paper-sse-client.ts` | Opens the authenticated paper-trading stream (`/api/paper/stream`). In progress: the server does not publish paper events yet, so `src/hooks/use-paper-account.ts` refreshes by polling. |
+| `src/lib/paper-sse-client.ts` | Receives paper-trading updates from `GET /api/paper/stream`: named SSE events (`CONNECTED`, `heartbeat`, and the outbox event types) defined in `shared/domain/paper-trading/stream-events.ts`, which the server uses too. Falls back to polling while the stream is unavailable (503). |
 | `src/lib/technical-indicators.ts`, `src/lib/financial-metrics.ts` | Frontend-side helper calculations and formatting for displayed analysis. |
 | `src/store/` | Small browser-only state. For example, a selected terminal symbol belongs here, not in the durable database. |
 | `src/styles.css` | Global Tailwind CSS setup, theme variables, typography, colours, and animations. |
@@ -146,8 +146,9 @@ This folder contains the web server, APIs, provider integrations, business rules
 
 | Location | What it does |
 |---|---|
-| `server/plugins/orchestrator.ts` | Starts the market-data and background-work coordinator when the Nitro server starts. |
-| `server/orchestrator.ts` | Starts and stops workers, manages market subscriptions, and attempts Angel One login when credentials are configured. |
+| `server/plugins/orchestrator.ts` | Starts the market-data and background-work coordinator when the Nitro server starts, and on shutdown (SIGTERM, via Nitro's close hook) stops scheduled jobs (the portfolio snapshot scheduler, waiting for a run in flight), then the workers, then closes Redis and the database pool within 20s (`server/infra/shutdown.ts`). |
+| `server/plugins/paper-portfolio-snapshots.ts` | Runs the end-of-day paper portfolio snapshot job every minute after an NSE close (skipped while the database circuit is open); registers its stop with the graceful shutdown. |
+| `server/orchestrator.ts` | Starts and stops workers (including the paper outbox publisher), manages ref-counted market subscriptions (open market streams, active alerts, and the NSE symbols of working paper orders and open paper positions), and attempts Angel One login when credentials are configured. |
 | `server/config.ts` | Reads and validates server settings and secret names. |
 | `server/api/` | File-based REST and streaming endpoints. For example, `market/quotes.get.ts`, `market/candles.get.ts`, and `market/stream.get.ts`. |
 | `server/api/trpc/[trpc].ts` | The tRPC entry point used by signed-in frontend features. |
@@ -246,8 +247,8 @@ These naming rules help you understand almost every file without opening it firs
 - **Angel One:** The server can use Angel One when credentials and symbol tokens are available. It is not proof that every deployed environment has a live session.
 - **Options:** The Angel One options client, the options database tables, an admin-triggered ingestion mutation (`ingestion.triggerOptionsChain`), the `options` tRPC router and the options screen are wired together. There is no scheduled options ingestion, so the screen shows only chains an admin has ingested.
 - **Strategy workers (in progress):** Scripts exist for backtests, sweeps, walk-forward analysis, and evaluation. The single Render web-service definition starts only the web server, so queued jobs run only where those worker processes are started. `backtestV2.run` runs inside the request instead.
-- **Paper updates (in progress):** Fill, order and account events are written to a database outbox, but the publisher that would push them to `/api/paper/stream` is not started yet, so the UI polls.
-- **Live feed (in progress):** The Angel One WebSocket streams only NSE symbols that have an open market stream or an active alert; resting paper orders and positions do not subscribe their own symbols yet.
+- **Paper updates:** Fill, order and account events go to a database outbox; the in-process publisher pushes them through Redis to `/api/paper/stream` (at-least-once). With Redis down the stream answers 503 and the UI polls. Failed events retry with backoff indefinitely; there is no dead-letter state yet.
+- **Live feed:** The Angel One WebSocket streams NSE symbols that have an open market stream, an active alert, a working paper order or an open paper position (paper interest is capped at 150 symbols). BSE has no live feed, so BSE resting orders do not fill and BSE positions are not margin-monitored live.
 - **BigQuery:** The ingestion engine has an optional BigQuery output path. Do not say it is actively populated unless that deployment is verified.
 - **Paper portfolio performance:** The equity curve and its metrics (total return, CAGR, volatility, Sharpe, max drawdown) come from daily server-side snapshots in `paper_portfolio_snapshots`, written after each NSE close (15:45 IST) by an in-process job and on demand when the analytics are read. The curve and total return start from the generation's initial cash on the day it began. Days the server was asleep have no snapshot: the curve has gaps, and returns across missed sessions are left out of volatility and Sharpe (counted as `gapCount`). A closing snapshot needs a price from the 15:00–15:30 IST closing window, otherwise it is flagged `stale_prices`; an intraday value whose session closed while the server slept stays flagged as provisional. Metrics are `null` with a reason until there is enough history.
 
