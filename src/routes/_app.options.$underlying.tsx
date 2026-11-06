@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, Database } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import type {
   OptionChainContractView,
   PersistedOptionExpiryView,
@@ -9,6 +9,7 @@ import { GreekDisplay } from "@/components/options/greek-display";
 import { trpc } from "@/lib/trpc";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { sourceName } from "@/lib/quote-source";
 
 const UNAVAILABLE = "—";
 
@@ -132,6 +133,14 @@ function OptionsChain() {
     [chainQuery.data?.contracts],
   );
   const chain = chainQuery.data;
+  const chainSources = useMemo(() => {
+    const sources = new Set<string>();
+    for (const contract of chain?.contracts ?? []) {
+      if (contract.quote) sources.add(contract.quote.source);
+      if (contract.greeks) sources.add(contract.greeks.source);
+    }
+    return [...sources].map(sourceName).join(" + ");
+  }, [chain?.contracts]);
   const isPartial =
     chain !== undefined &&
     (chain.coverage.quotes < chain.coverage.contracts ||
@@ -177,44 +186,34 @@ function OptionsChain() {
         </label>
       </div>
 
-      <div className="flex flex-1 flex-col gap-4 overflow-auto p-5">
+      <div className="flex flex-1 flex-col gap-3 overflow-auto p-3 sm:p-5">
         {!signedIn && <SignedOutNotice feature="Options chains" />}
         {signedIn && expiriesQuery.isLoading && (
-          <div className="rounded border border-border bg-panel p-4 text-sm text-muted-foreground">
-            Loading persisted option expiries…
-          </div>
+          <p className="text-sm text-muted-foreground">Loading stored expiries…</p>
         )}
         {expiriesQuery.isError && (
-          <div className="rounded border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-            Unable to load persisted expiries: {expiriesQuery.error.message}
-          </div>
+          <p role="status" className="text-sm text-bear">
+            Stored expiries are unavailable right now: {expiriesQuery.error.message}
+          </p>
         )}
         {signedIn && !expiriesQuery.isLoading && !expiriesQuery.isError && expiries.length === 0 && (
-          <section className="flex max-w-2xl items-start gap-3 rounded-lg border border-border bg-panel p-5">
-            <Database className="mt-0.5 h-5 w-5 text-primary" />
-            <div>
-              <h2 className="font-medium">No persisted option expiries</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                No Angel One / NFO contracts have been stored for {symbol} yet.
-              </p>
-            </div>
-          </section>
+          <p role="status" className="text-sm text-muted-foreground">
+            No option contracts are stored for {symbol} yet.
+          </p>
         )}
         {selectedExpiry !== null && chainQuery.isLoading && (
-          <div className="rounded border border-border bg-panel p-4 text-sm text-muted-foreground">
-            Loading persisted option chain…
-          </div>
+          <p className="text-sm text-muted-foreground">Loading the stored chain…</p>
         )}
         {chainQuery.isError && (
-          <div className="rounded border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-            Unable to load the persisted chain: {chainQuery.error.message}
-          </div>
+          <p role="status" className="text-sm text-bear">
+            The stored chain is unavailable right now: {chainQuery.error.message}
+          </p>
         )}
         {chain !== undefined && (
           <>
-            <section className="flex flex-wrap gap-x-5 gap-y-2 rounded border border-border bg-panel px-4 py-3 text-xs">
+            <section className="flex flex-wrap gap-x-5 gap-y-1 border-b border-border pb-2 text-xs">
               <span>
-                <span className="text-muted-foreground">Source:</span> Angel One / NFO
+                <span className="text-muted-foreground">Source:</span> {chainSources || UNAVAILABLE}
               </span>
               <span>
                 <span className="text-muted-foreground">Quotes:</span> {chain.coverage.quotes} /{" "}
@@ -237,20 +236,19 @@ function OptionsChain() {
               </span>
             </section>
             {chain.contracts.length > 0 && chain.coverage.quotes === 0 && (
-              <div className="rounded border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">
-                Contracts are persisted, but no quote observations are available yet.
-              </div>
+              <p className="text-xs text-amber-400">
+                Contracts are stored, but no quotes have been observed for them yet.
+              </p>
             )}
             {isPartial && chain.coverage.quotes > 0 && (
-              <div className="rounded border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">
-                Partial persisted coverage is shown; unavailable observations remain marked{" "}
-                {UNAVAILABLE}.
-              </div>
+              <p className="text-xs text-amber-400">
+                Partial coverage: missing observations show as {UNAVAILABLE}.
+              </p>
             )}
             {chain.contracts.length === 0 ? (
-              <div className="rounded border border-border bg-panel p-4 text-sm text-muted-foreground">
-                This persisted expiry has no canonical option contracts.
-              </div>
+              <p className="text-sm text-muted-foreground">
+                This expiry has no stored option contracts.
+              </p>
             ) : (
               <div className="overflow-x-auto rounded border border-border bg-panel">
                 <table className="w-full min-w-[1100px] border-collapse text-xs">

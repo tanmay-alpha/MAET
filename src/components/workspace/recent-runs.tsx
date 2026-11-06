@@ -1,30 +1,26 @@
-import React from "react";
 import { useResearchWorkspace } from "@/hooks/use-research-workspace";
 
 export function RecentRuns() {
   const { recentRuns } = useResearchWorkspace();
 
   return (
-    <div className="rounded-lg border bg-card p-6 shadow-sm">
-      <h2 className="text-xl font-semibold tracking-tight mb-4">Recent Screener Runs</h2>
-
-      <div className="space-y-3">
-        {recentRuns.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-4">No recent runs recorded.</p>
-        ) : (
-          recentRuns.map((run: any) => (
-            <div key={run.id} className="flex items-center justify-between text-sm rounded-md border p-3">
-              <div>
-                <p className="font-medium">Run ID: {run.id.slice(0, 8)}</p>
-                <p className="text-xs text-muted-foreground">{new Date(run.runStartedAt).toLocaleString()}</p>
-              </div>
-              <span className="rounded bg-secondary px-2 py-1 text-xs">
-                {run.matchCount ?? 0} matches
-              </span>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
+    <section className="border border-border bg-panel">
+      <h2 className="border-b border-border px-3 py-2 text-sm font-semibold">Recent screener runs</h2>
+      {recentRuns.length === 0 ? (
+        <p className="px-3 py-2.5 text-xs text-muted-foreground">No runs recorded.</p>
+      ) : (
+        <table className="w-full text-xs">
+          <tbody>
+            {recentRuns.map((run) => (
+              <tr key={run.id} className="border-b border-border/60 last:border-0">
+                <td className="px-3 py-1.5 font-mono text-muted-foreground">{run.id.slice(0, 8)}</td>
+                <td className="px-3 py-1.5 font-mono text-muted-foreground">{new Date(run.runStartedAt).toLocaleString("en-IN")}</td>
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums">{run.matchCount ?? 0} matches</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
