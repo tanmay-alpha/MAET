@@ -7,6 +7,7 @@ function createHarness(initialToken: string | null = "token-1") {
   const authListeners = new Set<() => void>();
   const connections: Array<{ options: ConnectPaperTradingStreamOptions }> = [];
   const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+  const clock = { now: 0 };
   const manager = new PaperStreamManager({
     getToken: async () => token,
     watchAuth: (onChange) => {
@@ -27,6 +28,7 @@ function createHarness(initialToken: string | null = "token-1") {
       };
     },
     random: () => 1,
+    now: () => clock.now,
   });
 
   const runPendingTimer = async (): Promise<number> => {
@@ -46,7 +48,7 @@ function createHarness(initialToken: string | null = "token-1") {
     await flush();
   };
 
-  return { manager, connections, timers, runPendingTimer, changeSession, authListeners };
+  return { manager, connections, timers, runPendingTimer, changeSession, authListeners, clock };
 }
 
 async function flush() {
@@ -81,7 +83,7 @@ describe("PaperStreamManager", () => {
   });
 
   test("refetches the account each time the server confirms a (re)connected subscription", async () => {
-    const { manager, connections, runPendingTimer } = createHarness();
+    const { manager, connections, runPendingTimer, clock } = createHarness();
     const invalidations: unknown[][] = [];
     manager.subscribe(subscriber(invalidations).sub);
     await flush();
@@ -91,11 +93,66 @@ describe("PaperStreamManager", () => {
     connections[0].options.onEvent?.({ type: "CONNECTED", data: {} });
     expect(invalidations).toEqual([[{ queryKey: ["paperTrading"] }]]);
 
+    clock.now = 6_000;
     connections[0].options.onError?.(new Error("dropped"));
     await runPendingTimer();
     expect(invalidations).toHaveLength(1);
     connections[1].options.onEvent?.({ type: "CONNECTED", data: {} });
     expect(invalidations).toEqual([[{ queryKey: ["paperTrading"] }], [{ queryKey: ["paperTrading"] }]]);
+  });
+
+  test("coalesces reloads from a flapping stream into one per 5 s, still reloading after the last reconnect", async () => {
+    const { manager, connections, timers, clock } = createHarness();
+    const invalidations: unknown[][] = [];
+    manager.subscribe(subscriber(invalidations).sub);
+    await flush();
+    const pending = () => timers.filter((timer) => !timer.cancelled);
+    const flap = async (at: number) => {
+      clock.now = at;
+      connections.at(-1)!.options.onError?.(new Error("closed at once"));
+      const retry = pending().find((timer) => timer.ms <= 1_000)!;
+      retry.cancelled = true;
+      retry.fn();
+      await flush();
+      connections.at(-1)!.options.onEvent?.({ type: "CONNECTED", data: {} });
+    };
+
+    connections[0].options.onEvent?.({ type: "CONNECTED", data: {} });
+    expect(invalidations).toHaveLength(1);
+
+    // Reconnects 1 s and 2 s later share one deferred reload, due 5 s after the first.
+    await flap(1_000);
+    await flap(2_000);
+    expect(invalidations).toHaveLength(1);
+    const deferred = pending();
+    expect(deferred.map((timer) => timer.ms)).toEqual([4_000]);
+
+    clock.now = 5_000;
+    deferred[0].cancelled = true;
+    deferred[0].fn();
+    expect(invalidations).toHaveLength(2);
+
+    // Once 5 s have passed since that reload, a reconnect reloads at once again.
+    await flap(10_000);
+    expect(invalidations).toHaveLength(3);
+    expect(pending()).toEqual([]);
+  });
+
+  test("an announced change makes a deferred reconnect reload redundant", async () => {
+    const { manager, connections, timers, runPendingTimer, clock } = createHarness();
+    const invalidations: unknown[][] = [];
+    manager.subscribe(subscriber(invalidations).sub);
+    await flush();
+    connections[0].options.onEvent?.({ type: "CONNECTED", data: {} });
+
+    clock.now = 1_000;
+    connections[0].options.onError?.(new Error("dropped"));
+    await runPendingTimer();
+    connections[1].options.onEvent?.({ type: "CONNECTED", data: {} });
+    connections[1].options.onEvent?.({ type: "PAPER_ORDER_FILLED", data: {} });
+
+    expect(invalidations).toHaveLength(2);
+    expect(timers.filter((timer) => !timer.cancelled)).toEqual([]);
   });
 
   test("closes the connection after the last consumer unsubscribes", async () => {

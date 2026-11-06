@@ -16,11 +16,15 @@ export interface PaperStreamDeps {
   connect: (options: ConnectPaperTradingStreamOptions) => Promise<void>;
   schedule: ScheduleFn;
   random: () => number;
+  now: () => number;
 }
 
 // Route changes unmount one page's consumers before the next page mounts its own;
 // keep the stream open briefly so navigation doesn't tear it down and reopen it.
 const IDLE_CLOSE_DELAY_MS = 1_000;
+// A proxy that accepts the stream and closes it at once makes it reconnect every second;
+// reload state on reconnect at most this often, deferring (not dropping) the reload.
+const RECONNECT_RELOAD_INTERVAL_MS = 5_000;
 
 /**
  * One authenticated paper-trading SSE connection shared by every usePaperAccount()
@@ -39,6 +43,8 @@ export class PaperStreamManager {
   // Token the current (or last attempted) connection authenticated with.
   private token: string | null = null;
   private stopWatchingAuth: (() => void) | null = null;
+  private lastReloadAt = Number.NEGATIVE_INFINITY;
+  private cancelDeferredReload: (() => void) | null = null;
 
   constructor(private readonly deps: PaperStreamDeps) {}
 
@@ -49,6 +55,7 @@ export class PaperStreamManager {
       connect: connectPaperTradingStream,
       schedule: scheduleTimeout,
       random: Math.random,
+      now: Date.now,
     });
     return PaperStreamManager.instance;
   }
@@ -96,8 +103,8 @@ export class PaperStreamManager {
           this.failures = 0;
           this.setConnected(true);
           // Polling stops once connected, and nothing committed before this subscription
-          // (first open, or while the stream was down) is replayed on it: reload state now.
-          this.invalidateState();
+          // (first open, or while the stream was down) is replayed on it: reload state.
+          this.reloadAfterConnect();
           // Every outbox event is a committed change to the account's state.
         } else if (isPaperOutboxEventType(event.type)) this.invalidateState();
       },
@@ -128,6 +135,10 @@ export class PaperStreamManager {
     this.controller = null;
     this.failures = 0;
     this.setConnected(false);
+    // A new session (or the next first subscriber) starts from a fresh reload.
+    this.cancelDeferredReload?.();
+    this.cancelDeferredReload = null;
+    this.lastReloadAt = Number.NEGATIVE_INFINITY;
   }
 
   private close() {
@@ -137,7 +148,25 @@ export class PaperStreamManager {
     this.token = null;
   }
 
+  /** Reloads now, or once RECONNECT_RELOAD_INTERVAL_MS has passed since the last reload. */
+  private reloadAfterConnect() {
+    if (this.cancelDeferredReload) return;
+    const wait = this.lastReloadAt + RECONNECT_RELOAD_INTERVAL_MS - this.deps.now();
+    if (wait <= 0) {
+      this.invalidateState();
+      return;
+    }
+    this.cancelDeferredReload = this.deps.schedule(() => {
+      this.cancelDeferredReload = null;
+      this.invalidateState();
+    }, wait);
+  }
+
   private invalidateState() {
+    // Any reload covers a deferred one.
+    this.cancelDeferredReload?.();
+    this.cancelDeferredReload = null;
+    this.lastReloadAt = this.deps.now();
     const clients = new Set([...this.subscribers].map((subscriber) => subscriber.queryClient));
     clients.forEach((client) => void client.invalidateQueries({ queryKey: ["paperTrading"] }));
   }
