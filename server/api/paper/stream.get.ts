@@ -17,7 +17,13 @@ export default defineEventHandler(async (event) => {
 
   let sub: ReturnType<typeof getRedis>;
   try {
-    sub = getRedis().duplicate();
+    const shared = getRedis();
+    // Without Redis there are no notifications to relay; answer 503 at once so
+    // the client switches to polling instead of hanging on SUBSCRIBE.
+    if (shared.status !== "ready") throw new Error("redis not ready");
+    // The shared client disables the offline queue; this dedicated subscriber
+    // must queue SUBSCRIBE until its own socket is connected.
+    sub = shared.duplicate({ enableOfflineQueue: true });
   } catch {
     release();
     throw createError({
