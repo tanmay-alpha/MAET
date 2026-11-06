@@ -1,0 +1,138 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "INR",
+          "symbol": "RELIANCE.NS",
+          "exchangeName": "NSI",
+          "fullExchangeName": "NSE",
+          "instrumentType": "EQUITY",
+          "regularMarketTime": 1793959153,
+          "gmtoffset": 19800,
+          "timezone": "IST",
+          "exchangeTimezoneName": "Asia/Kolkata",
+          "regularMarketPrice": 1320.0,
+          "dataGranularity": "1mo",
+          "range": "max"
+        },
+        "timestamp": [
+          1790793000,
+          1793471400,
+          1793959153
+        ],
+        "events": {
+          "dividends": {
+            "1498847400": {
+              "amount": 2.724178,
+              "date": 1499917500
+            },
+            "1527791400": {
+              "amount": 2.97183,
+              "date": 1530071100
+            },
+            "1564597800": {
+              "amount": 3.219483,
+              "date": 1564717500
+            },
+            "1593541800": {
+              "amount": 3.25,
+              "date": 1593661500
+            },
+            "1622485800": {
+              "amount": 3.5,
+              "date": 1623383100
+            },
+            "1659292200": {
+              "amount": 4.0,
+              "date": 1660794300
+            },
+            "1690828200": {
+              "amount": 4.5,
+              "date": 1692589500
+            },
+            "1722450600": {
+              "amount": 5.0,
+              "date": 1724039100
+            },
+            "1753986600": {
+              "amount": 5.5,
+              "date": 1755143100
+            },
+            "1780252200": {
+              "amount": 6.0,
+              "date": 1780631100
+            }
+          },
+          "splits": {
+            "875644200": {
+              "date": 877923900,
+              "numerator": 2.0,
+              "denominator": 1.0,
+              "splitRatio": "2:1"
+            },
+            "1257013800": {
+              "date": 1259207100,
+              "numerator": 2.0,
+              "denominator": 1.0,
+              "splitRatio": "2:1"
+            },
+            "1504204200": {
+              "date": 1504755900,
+              "numerator": 2.0,
+              "denominator": 1.0,
+              "splitRatio": "2:1"
+            },
+            "1727721000": {
+              "date": 1730087100,
+              "numerator": 2.0,
+              "denominator": 1.0,
+              "splitRatio": "2:1"
+            }
+          }
+        },
+        "indicators": {
+          "quote": [
+            {
+              "open": [
+                1180.0999755859375,
+                1228.0999755859375,
+                1295.0
+              ],
+              "high": [
+                1234.300048828125,
+                1325.0,
+                1320.0
+              ],
+              "low": [
+                1152.199951171875,
+                1214.199951171875,
+                1295.0
+              ],
+              "close": [
+                1164.9000244140625,
+                1313.4000244140625,
+                1320.0
+              ],
+              "volume": [
+                302069932,
+                169372037,
+                22766798
+              ]
+            }
+          ],
+          "adjclose": [
+            {
+              "adjclose": [
+                1164.9000244140625,
+                1313.4000244140625,
+                1320.0
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

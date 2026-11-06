@@ -123,6 +123,10 @@ This folder is the website users interact with. It is built mainly with React, T
 | `src/routes/_app.tsx` | The logged-in/shared application layout. |
 | `src/routes/index.tsx` | The public landing page. |
 | `src/routes/_app.*.tsx` | One file per screen, such as screener, terminal, portfolio, alerts, orders, workspace, strategies, and replay. |
+| `src/routes/_app.portfolio.tsx` | Paper positions plus the Returns and tax section (`src/components/investing/returns-tax.tsx`): XIRR and an estimated capital-gains tax per financial year, from the `paperTrading.investingReport` procedure. Signed-out visitors see a notice, not sample figures. |
+| `src/routes/_app.import.tsx` | Broker tradebook import (`/import`): a Zerodha, Groww or mapped CSV is parsed and analysed in the browser and never uploaded. Steps live in `src/components/import/`, file reading in `src/lib/import/read-csv-file.ts`. |
+| `src/routes/_app.payoff.tsx` | Options Payoff Lab (`/payoff`): multi-leg payoff, Black-Scholes value and Greeks. The whole lab is stored in the URL (`src/lib/payoff-lab-state.ts`), so it can be shared. |
+| `src/routes/_app.world.tsx` | World Monitor (`/world`), public: map, event and news tables, macro indicators and sector exposure links. Components are in `src/components/world/`. |
 | `src/routes/_app.stock.$symbol.tsx` | A dynamic stock page. `$symbol` means the URL supplies the selected stock symbol. |
 | `src/routes/_app.options.$underlying.tsx` | An options screen for an underlying symbol. It reads persisted option-chain snapshots through `trpc.options.listExpiries` and `options.getLatestChain`, and marks missing observations as unavailable instead of inventing them. |
 | `src/routes/api.market.*.ts` | Frontend/server helper routes for market requests, validation, and caching. |
@@ -164,11 +168,11 @@ This folder contains the web server, APIs, provider integrations, business rules
 | `server/domain/` | Reusable rules and calculations, including quote services, indicator logic, screening, portfolios, and strategy evaluation. |
 | `server/domain/market/quote-service.ts` | Chooses the market quote path, preferring eligible Angel One data and falling back to Yahoo when needed. |
 | `server/domain/market/quote-store.ts` | Keeps the latest ticks in process memory for fast live updates. |
-| `server/modules/` | Feature-level business workflows. The paper-trading module handles orders, fills, positions, ledger entries, and service rules. |
+| `server/modules/` | Feature-level business workflows. The paper-trading module handles orders, fills, positions, ledger entries, and service rules; `paper-trading/investing-report.ts` builds the read-only returns and tax report. `world/` holds the World Monitor adapters, caches and bounded HTTP client behind `server/api/world/*.get.ts`. |
 | `server/workers/` | Background tasks. Started inside the web server: Angel One WebSocket processing, candle aggregation, alert evaluation, paper-order matching and margin monitoring, and the daily processor. Run as separate processes (`bun run worker:*`): backtest, sweep, walk-forward and strategy-evaluator workers. There is no Yahoo polling worker; Yahoo is called on demand as a fallback. |
 | `server/workers/ingestion-engine/` | A more structured ingestion pipeline with normalisation, validation, retry/dead-letter handling, Supabase writes, and optional BigQuery output. |
 | `server/db/schema.ts` | TypeScript description of database tables for Drizzle ORM. |
-| `server/db/migrations/` | Numbered SQL migrations (0001–0026) for PostgreSQL, applied by `server/scripts/apply-migrations.ts` (each file and its tracking row in one transaction). Most add tables or columns, but some also drop indexes, replace policies and revoke privileges (for example `0010`, `0011`), so read them in order. `0017_options_market_data.sql` adds the options-data tables. |
+| `server/db/migrations/` | Numbered SQL migrations (0001–0027) for PostgreSQL, applied by `server/scripts/apply-migrations.ts` (each file and its tracking row in one transaction). Most add tables or columns, but some also drop indexes, replace policies and revoke privileges (for example `0010`, `0011`), so read them in order. `0017_options_market_data.sql` adds the options-data tables. |
 | `server/db/seeds/` | Reference-data loads, such as `market_baseline_metrics.sql` (run with `server/scripts/populate-baselines.ts`). |
 | `server/infra/` | Shared technical services: the internal event bus, encryption, health status, logging, client-IP detection and database diagnostics. There is no metrics module. |
 | `server/middleware/` | Request-wide behavior: CORS rules, token-bucket rate limiting and a request body size limit. |
@@ -186,6 +190,9 @@ The frontend and backend both need to agree on what a quote, candle, order, pape
 | `shared/types/order.ts` | Shared order-related types. |
 | `shared/types/errors.ts` | Shared error types used by data-source code. |
 | `shared/domain/paper-trading/` | Pure paper-trading domain rules, including execution, margin, and position reconciliation. |
+| `shared/domain/investing/` | XIRR (`xirr.ts`) and FIFO capital gains with Indian tax rules (`capital-gains.ts`), used by the portfolio report on the server and by the import page in the browser. `import/` holds the CSV parser, date rules, broker column mapping and the import analysis. |
+| `shared/domain/options/` | Option payoff and exact expiry profile (`payoff.ts`), Black-Scholes price and Greeks (`black-scholes.ts`), and NSE index lot sizes (`index-contracts.ts`). |
+| `shared/world/` | World Monitor contracts and the rule-based exposure engine (`exposure-rules.ts`). |
 | `shared/screener/` | Screener query language and validation schema. |
 | `shared/strategy/` | Strategy-language AST, operators, contracts, schemas, and versions. |
 | `shared/research/` | Research-workspace contracts and schemas. |
@@ -234,7 +241,7 @@ These naming rules help you understand almost every file without opening it firs
 
 ### Safe to say
 
-- MAET has a React-based market-research interface with routes for screeners, charts, portfolio views, paper trading, strategy work, alerts, and workspace features.
+- MAET has a React-based market-research interface with routes for screeners, charts, portfolio views, paper trading, strategy work, alerts, workspace features, a tradebook import, an options payoff lab and a world monitor.
 - It has backend REST, tRPC, and Server-Sent Events paths.
 - It has market-provider adapters for Angel One, Yahoo Finance, and NSE-related data.
 - It has Supabase/PostgreSQL schema and migration foundations plus Drizzle access code.
@@ -262,7 +269,7 @@ These naming rules help you understand almost every file without opening it firs
 
 ## Useful commands
 
-Run these from the repository root:
+Run these from the repository root. What each test group covers and what CI runs is in [README §6](README.md#6-verification--test-suite):
 
 ```bash
 # Install dependencies
@@ -283,11 +290,24 @@ bun run build
 # Type-check both frontend and backend
 bun run typecheck
 
-# Run the usual test set
-bun test
+# Unit tests: no database needed (domain logic, shared engines, frontend helpers)
+bun run test:unit
 
-# Run every registered test group
+# Paper-trading integration and concurrency suites (need TEST_DATABASE_URL, a disposable PostgreSQL)
+bun run test:integration
+bun run test:concurrency
+
+# Every registered test group, including the remaining database suites
 bun run test:all
+
+# Fail if a test file is not reachable from test:all
+bun run check:test-wiring
+
+# Browser tests with Playwright against mocked APIs (tests/e2e/)
+bun run test:e2e
+
+# Lint the frontend
+bun run lint
 
 # Check whether the server can connect to its configured database (uses .env)
 bun run check:db
@@ -321,7 +341,11 @@ It lets users practise the lifecycle of orders, fills, positions, and profit/los
 
 ### What would you build next?
 
-I would complete one end-to-end vertical slice at a time: start the paper outbox publisher so the stream carries real updates, subscribe the live feed to symbols with orders and positions, schedule options ingestion, and move the strategy job runner to its own deployed service once the web instance can no longer absorb the load. I would keep the same rule: unavailable provider data stays unavailable instead of being invented.
+I would complete one end-to-end vertical slice at a time: add a dead-letter state for paper outbox events, schedule options ingestion, and move the strategy job runner to its own deployed service once the web instance can no longer absorb the load. I would keep the same rule: unavailable provider data stays unavailable instead of being invented.
+
+### Where are the newer features explained?
+
+Returns and tax, tradebook import, the Payoff Lab, the World Monitor, the honest account states and the data-licensing reasoning each have a section in [docs/INTERVIEW_NOTES.md](docs/INTERVIEW_NOTES.md#recent-features): what the feature does, the files, the hard decisions, the tests that prove it and likely questions.
 
 ## Final one-line explanation
 

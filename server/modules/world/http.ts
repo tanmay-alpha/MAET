@@ -22,7 +22,8 @@ export async function requestJson(
   const request = async () => {
     const response = await fetcher(url, {
       signal: controller.signal,
-      headers: { accept: "application/json" },
+      // Public data APIs (GDELT, NASA) ask clients to identify themselves.
+      headers: { accept: "application/json", "user-agent": "MAET/1.0 (+https://github.com/tanmay-alpha/MAET)" },
     });
     if (controller.signal.aborted) {
       void response.body?.cancel().catch(() => {});

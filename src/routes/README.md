@@ -18,7 +18,7 @@ __root.tsx                                # App root shell: HTML, meta, theme sc
 │   ├── _app.chart-grid.tsx               # Multi-symbol monitoring grid (/chart-grid)
 │   ├── _app.stock.$symbol.tsx            # Company profile & metrics (/stock/:symbol)
 │   ├── _app.compare.tsx                  # Peer comparison analysis (/compare)
-│   ├── _app.heatmap.tsx                  # Market breadth & heatmap (/heatmap)
+│   ├── _app.heatmap.tsx                  # All-NSE heatmap & breadth; NIFTY 50 from public quotes when signed out (/heatmap)
 │   ├── _app.universe.tsx                 # NSE stock universe browser (/universe)
 │   ├── _app.screener.tsx                 # Stock screener with saved presets (/screener)
 │   ├── _app.watchlists.tsx               # User watchlists (/watchlists)
@@ -28,7 +28,7 @@ __root.tsx                                # App root shell: HTML, meta, theme sc
 │   ├── _app.performance.tsx              # Paper trading performance analytics (/performance)
 │   ├── _app.journal.tsx                  # Research journal & trade theses (/journal)
 │   ├── _app.options.$underlying.tsx      # NSE options chain (/options/:underlying)
-│   ├── _app.futures.tsx                  # Derivatives & futures overview (/futures)
+│   ├── _app.futures.tsx                  # Futures placeholder: no futures feed is connected (/futures)
 │   ├── _app.strategies.index.tsx         # Strategy catalog (/strategies)
 │   ├── _app.strategies.$strategyId.index.tsx  # Strategy editor (/strategies/:strategyId)
 │   ├── _app.strategies.$strategyId.backtests.tsx   # Backtest runs (/strategies/:strategyId/backtests)
@@ -36,9 +36,9 @@ __root.tsx                                # App root shell: HTML, meta, theme sc
 │   ├── _app.backtest.tsx                 # Standalone backtesting engine (/backtest)
 │   ├── _app.replay.tsx                   # Historical market replay simulator (/replay)
 │   ├── _app.news.tsx                     # Sample headlines (no market news feed connected) (/news)
-│   ├── _app.settings.tsx                 # Terminal preferences & theme (/settings)
+│   ├── _app.settings.tsx                 # Theme, shortcuts, browser data (/settings)
 │   ├── _app.workspace.tsx                # Workspace manager (/workspace)
-│   └── _app.admin.data-quality.tsx       # Telemetry & data quality dashboard (/admin/data-quality)
+│   └── _app.admin.data-quality.tsx       # Public data status (backend health, quote source) + admin ingestion audits (/admin/data-quality)
 ```
 
 ---
@@ -49,6 +49,7 @@ __root.tsx                                # App root shell: HTML, meta, theme sc
 |---|---|---|---|
 | `api.market.quotes.ts` | GET | `/api/market/quotes` | Batch equity & index quotes with freshness headers |
 | `api.market.candles.ts` | GET | `/api/market/candles` | Historical OHLCV candle series |
+| `api.market.corporate-actions.ts` | GET | `/api/market/corporate-actions` | Dividends and splits from Yahoo Finance, newest first (24 h server cache) |
 | `api.market.companies.ts` | GET | `/api/market/companies` | Listed equities master directory |
 | `api.market.company.ts` | GET | `/api/market/company` | Single company fundamentals & profiles |
 

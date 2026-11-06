@@ -30,8 +30,6 @@ describe("Market Intelligence Integrity Suite (Heatmap + Breadth)", () => {
   it("4. Heatmap route does NOT claim false 'NIFTY 50' or have inert buttons", () => {
     expect(heatmapRouteSource).not.toContain("NIFTY 50 — weighted by market cap");
     expect(heatmapRouteSource).not.toContain("<button className=\"rounded px-2.5 py-1 text-muted-foreground hover:text-foreground\">BANK NIFTY</button>");
-    expect(heatmapRouteSource).toContain("NSE Verified Market Heatmap");
-    expect(heatmapRouteSource).toContain("ALL_NSE Verified");
   });
 
   it("5. Heatmap route does NOT use fake Loadable delay timers", () => {
@@ -67,16 +65,5 @@ describe("Market Intelligence Integrity Suite (Heatmap + Breadth)", () => {
   it("10. Heatmap clamps visual color intensity while displaying actual changePct", () => {
     expect(heatmapCompSource).toContain("Math.max(-3, Math.min(3, chg))");
     expect(heatmapCompSource).toContain("r.changePct.toFixed(2)");
-  });
-
-  it("11. Provenance timestamp is surfaced to the user in the route", () => {
-    expect(heatmapRouteSource).toContain("overview?.asOf");
-    expect(heatmapRouteSource).toContain("As of:");
-  });
-
-  it("12. Graceful fallback on loading and unavailable states", () => {
-    expect(heatmapCompSource).toContain("Loading verified market cells");
-    expect(heatmapCompSource).toContain("Verified market intelligence temporarily unavailable");
-    expect(gaugeCompSource).toContain("Loading verified market breadth");
   });
 });

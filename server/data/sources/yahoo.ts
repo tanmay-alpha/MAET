@@ -1,4 +1,4 @@
-import type { Candle, Tick } from "../../../shared/types";
+import type { Candle, CorporateActionEvent, Tick } from "../../../shared/types";
 import { UpstreamDegradedError, UpstreamPermanentError } from "../../../shared/types";
 import { getCachedJson, setCachedJson } from "../../data/redis/client";
 import { RedisKeys } from "../../data/redis/keys";
@@ -80,8 +80,10 @@ type YahooChartResp = {
         marketState?: string;
         currency?: string;
         regularMarketTime?: number;
+        gmtoffset?: number;
       };
       timestamp?: number[];
+      events?: YahooChartEvents;
       indicators: {
         quote: Array<{
           open: Array<number | null>;
@@ -95,6 +97,95 @@ type YahooChartResp = {
     error?: unknown;
   };
 };
+
+/** `events=div,splits` payload of the v8 chart API, keyed by an opaque timestamp. */
+export type YahooChartEvents = {
+  dividends?: Record<string, { amount?: number; date?: number; currency?: string }>;
+  splits?: Record<string, { date?: number; numerator?: number; denominator?: number; splitRatio?: string }>;
+};
+
+const IST_OFFSET_SECONDS = 19_800;
+const SPLIT_RATIO = /^\s*(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)\s*$/;
+
+function positive(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/** Exchange-local calendar date of a provider timestamp (seconds). */
+function exchangeDate(seconds: number, gmtOffsetSeconds: number): string {
+  return new Date((seconds + gmtOffsetSeconds) * 1000).toISOString().slice(0, 10);
+}
+
+/** numerator:denominator from Yahoo's numeric fields, else from its "2:1" string. */
+function splitRatio(split: NonNullable<YahooChartEvents["splits"]>[string]): [number, number] | null {
+  if (positive(split.numerator) && positive(split.denominator)) return [split.numerator, split.denominator];
+  const match = split.splitRatio ? SPLIT_RATIO.exec(split.splitRatio) : null;
+  if (!match) return null;
+  const ratio: [number, number] = [Number(match[1]), Number(match[2])];
+  return positive(ratio[0]) && positive(ratio[1]) ? ratio : null;
+}
+
+/**
+ * Dividends and splits from a Yahoo chart response, newest first (same-day
+ * dividends before splits), without duplicates or malformed rows. Nothing is
+ * inferred: a dividend without a currency or a 1:1 "split" is dropped.
+ */
+export function normalizeYahooCorporateActions(
+  events: YahooChartEvents | undefined,
+  meta: { currency?: string; gmtoffset?: number } = {}
+): CorporateActionEvent[] {
+  const offset = Number.isFinite(meta.gmtoffset) ? meta.gmtoffset! : IST_OFFSET_SECONDS;
+  const seen = new Set<string>();
+  const splits: Array<Extract<CorporateActionEvent, { kind: "split" }>> = [];
+  for (const split of Object.values(events?.splits ?? {})) {
+    const ratio = splitRatio(split);
+    if (!positive(split.date) || !ratio || ratio[0] === ratio[1]) continue;
+    const exDate = exchangeDate(split.date, offset);
+    const key = `split:${exDate}:${ratio[0]}:${ratio[1]}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    splits.push({ kind: "split", exDate, numerator: ratio[0], denominator: ratio[1] });
+  }
+
+  const dividends: Array<Extract<CorporateActionEvent, { kind: "dividend" }>> = [];
+  for (const dividend of Object.values(events?.dividends ?? {})) {
+    const currency = dividend.currency ?? meta.currency;
+    if (!positive(dividend.date) || !positive(dividend.amount) || !currency) continue;
+    const exDate = exchangeDate(dividend.date, offset);
+    const key = `dividend:${exDate}:${dividend.amount}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    dividends.push({
+      kind: "dividend",
+      exDate,
+      amount: dividend.amount,
+      currency,
+      // Yahoo restates a dividend for every later split or bonus.
+      splitAdjusted: splits.some((split) => split.exDate > exDate),
+    });
+  }
+
+  return [...dividends, ...splits].sort((a, b) => {
+    if (a.exDate !== b.exDate) return a.exDate < b.exDate ? 1 : -1;
+    return a.kind === b.kind ? 0 : a.kind === "dividend" ? -1 : 1;
+  });
+}
+
+/** Every dividend and split Yahoo reports for a ticker, over its full history. */
+export async function getCorporateActions(ticker: string): Promise<CorporateActionEvent[]> {
+  const fullTicker = symbolToTicker(ticker);
+  return withRetry(async () => {
+    // Monthly bars keep the full-history response small; events carry their own dates.
+    const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(fullTicker)}?range=max&interval=1mo&events=div%2Csplits`;
+    const res = await withRequestSlot(() => fetch(url, { headers: { "User-Agent": BROWSER_USER_AGENT } }));
+    if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo events ${res.status} for ${fullTicker}`);
+    if (!res.ok) throw new UpstreamPermanentError(`yahoo events ${res.status} for ${fullTicker}`);
+    const data = (await res.json()) as YahooChartResp;
+    const r = data.chart.result?.[0];
+    if (!r) throw new UpstreamPermanentError("yahoo: empty result");
+    return normalizeYahooCorporateActions(r.events, r.meta);
+  });
+}
 
 function symbolToTicker(symbol: string): string {
   if (symbol.startsWith("^")) return symbol;

@@ -1,19 +1,20 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, BarChart3, Layers, LineChart, Download, Upload, Settings, TrendingDown, TrendingUp, ExternalLink, Zap, Building2, Sparkles, X } from "lucide-react";
+import { ArrowLeft, BarChart3, Layers, LineChart, Download, Upload, ExternalLink, Building2, X } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { useCorporateActions } from "@/hooks/use-corporate-actions";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
 import { mapBacktestTradesToMarkers } from "@/components/trading/chart-trade-markers";
 import { useChartLayout, useChartShortcuts, useFullscreen } from "@/hooks/use-chart-layout";
-import { TiltCard } from "@/components/trading/tilt-card";
-import { ContractPanel } from "@/components/common/contract-panel";
 import { CandlestickChart } from "@/components/trading/candlestick-chart";
-import { ChartToolbar, DRAWING_TOOLS } from "@/components/trading/chart-toolbar";
+import { ChartToolbar, CorporateActionsStatus } from "@/components/trading/chart-toolbar";
+import { placeCorporateActions } from "@/components/trading/chart-corporate-actions";
 import { getTradingViewUrl } from "@/lib/tradingview";
+import { quoteSourceLabel, sourceName } from "@/lib/quote-source";
 import type { MarketCandle } from "@/lib/market-api";
 import type { ChartState } from "@/components/trading/candlestick-chart";
 import type { ChartLayout } from "@/hooks/use-chart-layout";
@@ -59,23 +60,21 @@ function isTimeframeKey(value: string): value is TimeframeKey {
 
 const DEFAULT_CHART_STATE: ChartState = { zoom: 1, panOffset: 0, drawings: [] };
 
-function IndicatorCard({ name, enabled, onChange, disabled = false, reason }: { name: string; enabled: boolean; onChange: (enabled: boolean) => void; disabled?: boolean; reason?: string }) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      title={reason}
-      onClick={() => onChange(!enabled)}
-      className={`rounded-lg border p-3 text-left transition-colors ${
-        enabled
-          ? "border-primary bg-primary/10 text-foreground"
-          : "border-border bg-panel text-muted-foreground hover:bg-accent/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-panel"
-      }`}
-    >
-      <div className="font-medium">{name}</div>
-    </button>
-  );
-}
+const CHART_TYPES: { type: ChartLayout["chartType"]; title: string; icon: typeof BarChart3 }[] = [
+  { type: "candles", title: "Candlestick chart", icon: BarChart3 },
+  { type: "line", title: "Line chart", icon: LineChart },
+  { type: "area", title: "Area chart", icon: Layers },
+];
+
+const SHORTCUT_GROUPS: { title: string; items: [string, string][] }[] = [
+  { title: "Period", items: [["Alt ←", "Previous period"], ["Alt →", "Next period"]] },
+  { title: "Zoom and pan", items: [["+ / −", "Zoom in / out"], ["0", "Reset zoom"], ["← / →", "Pan"]] },
+  { title: "Drawing", items: [["T", "Trendline"], ["H", "Horizontal"], ["V", "Vertical"], ["F", "Fibonacci"], ["S", "Support/resistance"], ["Esc", "Leave tool"]] },
+  { title: "View", items: [["F11", "Fullscreen"]] },
+];
+
+const PRICE_FORMAT: Intl.NumberFormatOptions = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+const SIDE_BUTTON = "rounded border border-border px-2 py-1.5 text-xs hover:bg-accent/50";
 
 function ChartPage() {
   const { symbol } = Route.useParams();
@@ -134,7 +133,6 @@ function ChartPage() {
   const selectedTool = layout.drawingTool;
   const { volume: showVolume, ma: showMA, rsi: showRSI, macd: showMACD } = layout.indicators;
   const setSelectedTF = (timeframe: TimeframeKey) => updateLayout({ timeframe });
-  const setSelectedChartType = (chartType: ChartLayout["chartType"]) => updateLayout({ chartType });
   const setSelectedTool = (drawingTool: string | null) => updateLayout({ drawingTool });
   const { isFullscreen, toggleFullscreen } = useFullscreen();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -148,6 +146,7 @@ function ChartPage() {
     onPanLeft: () => setChartState((s) => ({ ...s, panOffset: s.panOffset - 10 })),
     onPanRight: () => setChartState((s) => ({ ...s, panOffset: s.panOffset + 10 })),
     onSelectTool: setSelectedTool,
+    onEscape: () => setSelectedTool(null),
   });
 
   // Period switching shortcuts
@@ -165,10 +164,8 @@ function ChartPage() {
     return () => window.removeEventListener("keydown", handlePeriodKey);
   }, [selectedTF, updateLayout]);
 
-  const { quoteMap } = useMarketQuotes([symbol]);
-  const liveQuote = quoteMap.get(symbol);
-  // Only a real-time quote taken during market hours is live; a connected stream alone is not.
-  const isLive = liveQuote !== undefined && !liveQuote.delayed;
+  const quotes = useMarketQuotes([symbol]);
+  const liveQuote = quotes.quoteMap.get(symbol);
   const tf = TIMEFRAMES[selectedTF];
   const candleQuery = useMarketCandles(symbol, tf.timeframe as MarketCandle["tf"], tf.range);
 
@@ -183,10 +180,26 @@ function ChartPage() {
     })),
     [candleQuery.data?.candles]
   );
+  const lastBar = candles.at(-1);
+
+  const [showCorporateActions, setShowCorporateActions] = useState(false);
+  const corporateActionsQuery = useCorporateActions(symbol, showCorporateActions);
+  const placedCorporateActions = useMemo(
+    () =>
+      showCorporateActions && corporateActionsQuery.data
+        ? placeCorporateActions(candles.map((candle) => candle.t), corporateActionsQuery.data.events)
+        : [],
+    [showCorporateActions, corporateActionsQuery.data, candles]
+  );
 
   const currentPrice = liveQuote?.price;
-  const volume = liveQuote?.volume;
-  const previousClose = liveQuote?.previousClose;
+  const changePct = liveQuote?.changePct;
+  const quoteLabel = liveQuote
+    ? quoteSourceLabel(liveQuote.source, liveQuote.delayed, quotes.marketPhase)
+    : quotes.isError ? "Quote unavailable" : "Loading quote…";
+  const candleSource = candleQuery.data
+    ? `${sourceName(candleQuery.data.source)}${candleQuery.data.delayed ? " · delayed" : ""}`
+    : undefined;
 
   const handleZoomIn = () => setChartState((s) => ({ ...s, zoom: Math.min(5, s.zoom * 1.2) }));
   const handleZoomOut = () => setChartState((s) => ({ ...s, zoom: Math.max(0.2, s.zoom / 1.2) }));
@@ -218,10 +231,6 @@ function ChartPage() {
     setLayoutPanel((current) => (current === panel ? null : panel));
   };
 
-  const handleExportLayout = () => {
-    exportLayout(chartState);
-  };
-
   const handleImportLayout = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
@@ -235,458 +244,365 @@ function ChartPage() {
     }
   };
 
-  const triggerFileInput = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
-    }
-  };
-
   return (
-    <div className={`h-screen bg-background flex flex-col ${isFullscreen ? "fixed inset-0 z-50" : ""}`}>
+    <div className={`flex h-full min-h-0 flex-col bg-background ${isFullscreen ? "fixed inset-0 z-50" : ""}`}>
       {/* Header */}
-      <div className="sticky top-0 z-50 border-b border-border bg-panel">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 lg:px-6">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate({ to: "/" })}
-              className="rounded-lg border border-border bg-panel p-2 hover:bg-accent"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-            <div>
-              <h1 className="text-lg font-semibold">{symbol}</h1>
-              <div className="text-sm text-muted-foreground">
-                {previousClose && currentPrice && (
-                  <span className={`${currentPrice > previousClose ? "text-bull" : "text-bear"}`}>
-                    {((currentPrice - previousClose) / previousClose * 100).toFixed(2)}%
-                  </span>
-                )}
-                <span className="mx-2">|</span>
-                <span className={`font-mono ${isLive ? "text-bull" : "text-muted-foreground"}`}>
-                  {isLive ? "Live" : "Delayed"}
-                </span>
-              </div>
-            </div>
+      <header className="border-b border-border bg-panel px-3 py-2 lg:px-5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <button
+            type="button"
+            onClick={() => navigate({ to: "/screener" })}
+            className="rounded border border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            aria-label="Back to screener"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <h1 className="text-lg font-semibold">{symbol}</h1>
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono text-lg font-semibold tabular-nums">
+              {currentPrice !== undefined ? `₹${currentPrice.toLocaleString("en-IN", PRICE_FORMAT)}` : "—"}
+            </span>
+            {changePct !== undefined && (
+              <span className={`font-mono text-sm tabular-nums ${changePct >= 0 ? "text-bull" : "text-bear"}`}>
+                {changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%
+              </span>
+            )}
+            <span className="text-[11px] text-muted-foreground">{quoteLabel}</span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="font-mono text-xl font-semibold mr-2">
-              {currentPrice ? `₹${currentPrice.toFixed(2)}` : "—"}
-            </div>
-
-            {/* Quick Navigation: Terminal / Paper */}
+          <div className="ml-auto flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => void navigate({ to: "/terminal" as any, search: { symbol, exchange: search.exchange || "NSE", sourceContext: "chart" } as any })}
-              className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition"
-              title="Trade this symbol in Paper Terminal"
+              className="rounded border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+              title="Trade this symbol in the paper terminal"
             >
-              <Zap className="h-3.5 w-3.5" />
               Terminal
             </button>
-
-            {/* Quick Navigation: Backtest */}
             <button
               type="button"
               onClick={() => void navigate({ to: "/backtest" as any, search: { symbol, sourceContext: "chart" } as any })}
-              className="flex items-center gap-1.5 rounded-lg border border-bull/30 bg-bull/10 px-3 py-1.5 text-xs font-semibold text-bull hover:bg-bull/20 transition"
+              className="rounded border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
               title="Backtest strategies for this symbol"
             >
-              <BarChart3 className="h-3.5 w-3.5" />
               Backtest
             </button>
-
-            {/* Quick Navigation: Stock Detail */}
             <button
               type="button"
               onClick={() => void navigate({ to: `/stock/${symbol}` as any })}
-              className="rounded-lg border border-border bg-panel p-2 hover:bg-accent text-muted-foreground hover:text-foreground transition"
-              title="Company Financials & Overview"
+              className="rounded border border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Company page"
+              aria-label="Company page"
             >
               <Building2 className="h-4 w-4" />
             </button>
-
             <a
               href={getTradingViewUrl(symbol)}
               target="_blank"
               rel="noreferrer"
-              className="rounded-lg border border-border bg-panel p-2 hover:bg-accent text-muted-foreground hover:text-foreground transition"
-              title="Open TradingView"
+              className="rounded border border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Open in TradingView"
+              aria-label="Open in TradingView"
             >
               <ExternalLink className="h-4 w-4" />
             </a>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* Backtest Run Trade Markers Banner */}
+      {/* Backtest run trade markers */}
       {activeBacktestRunId && (
-        <div className="flex items-center justify-between border-b border-primary/20 bg-primary/10 px-6 py-2 text-xs text-primary">
-          <div className="flex items-center gap-2 font-medium">
-            <Sparkles className="h-4 w-4 text-primary" />
-            <span>
-              Overlaying <strong>{tradeMarkers.length}</strong> strategy trade markers from Backtest Run{" "}
-              <code className="rounded bg-primary/20 px-1 py-0.5 font-mono text-[11px]">{activeBacktestRunId.slice(0, 8)}</code>
-            </span>
-          </div>
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-panel px-3 py-1.5 text-xs lg:px-5">
+          <span>
+            {tradeMarkers.length} trade markers from backtest run{" "}
+            <code className="font-mono text-[11px] text-muted-foreground">{activeBacktestRunId.slice(0, 8)}</code>
+          </span>
           <button
             type="button"
             onClick={() => setActiveBacktestRunId(undefined)}
-            className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] hover:bg-primary/20 font-medium"
-            title="Clear trade markers overlay"
+            className="flex items-center gap-1 rounded px-2 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <X className="h-3.5 w-3.5" />
-            Hide Markers
+            Hide markers
           </button>
         </div>
       )}
 
       {/* Below lg the chart and sidebar stack and this area scrolls. */}
-      <div className="flex-1 flex flex-col overflow-y-auto lg:overflow-hidden">
-        {/* Time Period Selector */}
-        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 lg:px-6">
-          <div className="flex min-w-0 gap-1 overflow-x-auto">
-            {Object.entries(TIMEFRAMES).map(([key, tf]) => (
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:overflow-hidden">
+        {/* Time period selector */}
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5 lg:px-5">
+          <div className="flex min-w-0 gap-0.5 overflow-x-auto">
+            {Object.entries(TIMEFRAMES).map(([key, option]) => (
               <button
                 key={key}
+                type="button"
                 onClick={() => isTimeframeKey(key) && setSelectedTF(key)}
-                className={`shrink-0 whitespace-nowrap px-3 py-1.5 text-sm rounded-md transition-colors ${
+                className={`shrink-0 whitespace-nowrap rounded px-2.5 py-1 text-xs ${
                   selectedTF === key
                     ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent/50"
+                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                 }`}
-                title={`Press Alt + Arrow keys to switch periods`}
+                title="Alt + arrow keys switch periods"
               >
-                {tf.label}
+                {option.label}
               </button>
             ))}
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-0.5">
+            {CHART_TYPES.map(({ type, title, icon: Icon }) => (
+              <button
+                key={type}
+                type="button"
+                onClick={() => updateLayout({ chartType: type })}
+                className={`rounded p-1.5 ${
+                  selectedChartType === type
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent/50"
+                }`}
+                title={title}
+                aria-label={title}
+              >
+                <Icon className="h-4 w-4" />
+              </button>
+            ))}
             <button
-              onClick={() => setSelectedChartType("candles")}
-              className={`p-2 rounded-md ${
-                selectedChartType === "candles"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent/50"
-              }`}
-              title="Candlestick Chart (C)"
-            >
-              <BarChart3 className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setSelectedChartType("line")}
-              className={`p-2 rounded-md ${
-                selectedChartType === "line"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent/50"
-              }`}
-              title="Line Chart (L)"
-            >
-              <LineChart className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setSelectedChartType("area")}
-              className={`p-2 rounded-md ${
-                selectedChartType === "area"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent/50"
-              }`}
-              title="Area Chart (A)"
-            >
-              <Layers className="h-4 w-4" />
-            </button>
-            <button
+              type="button"
               onClick={() => setShowShortcutsHelp(!showShortcutsHelp)}
-              className={`p-2 rounded-md ${
+              aria-expanded={showShortcutsHelp}
+              className={`rounded px-2 py-1 text-xs font-semibold ${
                 showShortcutsHelp
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:bg-accent/50"
               }`}
-              title="Keyboard Shortcuts (?)"
+              title="Keyboard shortcuts"
+              aria-label="Keyboard shortcuts"
             >
-              <span className="text-xs font-bold">?</span>
+              ?
             </button>
           </div>
         </div>
 
-        {/* Keyboard Shortcuts Help */}
         {showShortcutsHelp && (
-          <div className="border-b border-border bg-panel/95 backdrop-blur px-6 py-3">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-              <div>
-                <div className="font-semibold mb-2 text-primary">Period Switching</div>
-                <div className="space-y-1 text-muted-foreground">
-                  <div><kbd className="bg-panel px-1 rounded">Alt</kbd> + <kbd className="bg-panel px-1 rounded">←</kbd> Previous period</div>
-                  <div><kbd className="bg-panel px-1 rounded">Alt</kbd> + <kbd className="bg-panel px-1 rounded">→</kbd> Next period</div>
-                </div>
+          <div className="grid grid-cols-2 gap-4 border-b border-border bg-panel px-3 py-3 text-xs md:grid-cols-4 lg:px-5">
+            {SHORTCUT_GROUPS.map((group) => (
+              <div key={group.title}>
+                <div className="mb-1.5 font-semibold">{group.title}</div>
+                <dl className="space-y-0.5 text-muted-foreground">
+                  {group.items.map(([keys, action]) => (
+                    <div key={keys} className="flex gap-2">
+                      <dt className="w-12 shrink-0 font-mono text-foreground">{keys}</dt>
+                      <dd>{action}</dd>
+                    </div>
+                  ))}
+                </dl>
               </div>
-              <div>
-                <div className="font-semibold mb-2 text-primary">Zoom & Pan</div>
-                <div className="space-y-1 text-muted-foreground">
-                  <div><kbd className="bg-panel px-1 rounded">+</kbd> Zoom in</div>
-                  <div><kbd className="bg-panel px-1 rounded">-</kbd> Zoom out</div>
-                  <div><kbd className="bg-panel px-1 rounded">0</kbd> Reset zoom</div>
-                </div>
-              </div>
-              <div>
-                <div className="font-semibold mb-2 text-primary">Drawing Tools</div>
-                <div className="space-y-1 text-muted-foreground">
-                  <div><kbd className="bg-panel px-1 rounded">T</kbd> Trendline</div>
-                  <div><kbd className="bg-panel px-1 rounded">H</kbd> Horizontal</div>
-                  <div><kbd className="bg-panel px-1 rounded">F</kbd> Fibonacci</div>
-                  <div><kbd className="bg-panel px-1 rounded">Esc</kbd> Exit tool</div>
-                </div>
-              </div>
-              <div>
-                <div className="font-semibold mb-2 text-primary">View</div>
-                <div className="space-y-1 text-muted-foreground">
-                  <div><kbd className="bg-panel px-1 rounded">F11</kbd> Fullscreen</div>
-                  <div><kbd className="bg-panel px-1 rounded">S</kbd> Support/Resistance</div>
-                </div>
-              </div>
-            </div>
+            ))}
           </div>
         )}
 
-        {/* Main Chart Area */}
         {/* Side by side from lg up; stacked below so the chart keeps the full width. */}
-        <div className="flex flex-col lg:flex-1 lg:flex-row">
-          {/* Chart Canvas */}
-          <div className="min-w-0 p-3 lg:flex-1 lg:p-6">
-            <TiltCard max={5} className="h-full">
-              <div className="h-full rounded-2xl border border-border bg-panel/95 p-4 relative">
-                <ChartToolbar
-                  onToolSelect={setSelectedTool}
-                  onToggleFullscreen={() => toggleFullscreen()}
-                  onZoomIn={handleZoomIn}
-                  onZoomOut={handleZoomOut}
-                  onResetZoom={handleResetZoom}
-                  selectedTool={selectedTool}
-                  fullscreen={isFullscreen}
-                  onSaveLayout={() => toggleLayoutPanel("save")}
-                  onLoadLayout={() => toggleLayoutPanel("load")}
-                />
+        <div className="flex flex-col lg:min-h-0 lg:flex-1 lg:flex-row">
+          {/* Chart */}
+          <div className="flex min-w-0 flex-col lg:flex-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-1.5 lg:px-5">
+              <span className="text-[11px] text-muted-foreground">
+                {tf.label}
+                {candles.length > 0 && ` · ${candles.length.toLocaleString("en-IN")} bars`}
+                {candleSource && ` · ${candleSource}`}
+              </span>
+              <ChartToolbar
+                onToolSelect={setSelectedTool}
+                onToggleFullscreen={() => toggleFullscreen()}
+                onZoomIn={handleZoomIn}
+                onZoomOut={handleZoomOut}
+                onResetZoom={handleResetZoom}
+                selectedTool={selectedTool}
+                fullscreen={isFullscreen}
+                corporateActions={{ enabled: showCorporateActions, onToggle: () => setShowCorporateActions((on) => !on) }}
+              />
+            </div>
 
-                {candleQuery.isLoading ? (
-                  <div className="h-full flex items-center justify-center">
-                    <div className="text-center">
-                      <div className="text-lg font-semibold mb-2">Loading chart...</div>
-                      <div className="text-sm text-muted-foreground">
-                        Fetching {tf.label} data from Yahoo
-                      </div>
-                    </div>
-                  </div>
-                ) : candleQuery.isError ? (
-                  <div className="h-full flex items-center justify-center">
-                    <ContractPanel symbol={symbol} />
-                  </div>
-                ) : candles.length === 0 ? (
-                  <div className="h-full flex items-center justify-center">
-                    <div className="text-center">
-                      <div className="text-lg font-semibold mb-2">No data</div>
-                      <div className="text-sm text-muted-foreground">
-                        No historical data available for {symbol}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="h-full flex flex-col pt-14">
-                    <CandlestickChart
-                      data={candles}
-                      height={420}
-                      seriesType={selectedChartType === "candles" ? "candlestick" : selectedChartType}
-                      chartState={chartState}
-                      onChartStateChange={setChartState}
-                      drawingTool={selectedTool}
-                      indicators={{ sma: showMA, ema: showMA, rsi: showRSI, macd: showMACD, volume: showVolume }}
-                      trades={tradeMarkers}
-                      paperOverlay={paperOverlay}
-                    />
-                  </div>
+            {candleQuery.isLoading ? (
+              <p className="px-3 py-16 text-center text-xs text-muted-foreground lg:px-5">Loading {tf.label.toLowerCase()} candles…</p>
+            ) : candleQuery.isError ? (
+              <p role="status" className="px-3 py-16 text-center text-xs text-muted-foreground lg:px-5">
+                Candles for {symbol} are unavailable right now. Try another period or refresh.
+              </p>
+            ) : candles.length === 0 ? (
+              <p className="px-3 py-16 text-center text-xs text-muted-foreground lg:px-5">No {tf.label.toLowerCase()} history for {symbol}.</p>
+            ) : (
+              <div className="p-2 lg:p-3">
+                <CandlestickChart
+                  data={candles}
+                  height={420}
+                  seriesType={selectedChartType === "candles" ? "candlestick" : selectedChartType}
+                  chartState={chartState}
+                  onChartStateChange={setChartState}
+                  drawingTool={selectedTool}
+                  indicators={{ sma: showMA, ema: showMA, rsi: showRSI, macd: showMACD, volume: showVolume }}
+                  trades={tradeMarkers}
+                  paperOverlay={paperOverlay}
+                  corporateActions={placedCorporateActions}
+                />
+                {showCorporateActions && (
+                  <CorporateActionsStatus
+                    data={corporateActionsQuery.data}
+                    isError={corporateActionsQuery.isError}
+                    placed={placedCorporateActions}
+                  />
                 )}
               </div>
-            </TiltCard>
+            )}
           </div>
 
           {/* Sidebar */}
-          <div className="w-full space-y-4 border-t border-border p-3 lg:w-80 lg:shrink-0 lg:border-l lg:border-t-0 lg:p-6">
-            {/* Price Info */}
-            <TiltCard>
-              <div className="p-4">
-                <h3 className="font-semibold mb-3">Price</h3>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Open</span>
-                    <span className="font-mono">{candles[candles.length - 1]?.o.toFixed(2) || "—"}</span>
+          <aside className="w-full border-t border-border text-sm lg:w-72 lg:shrink-0 lg:overflow-y-auto lg:border-l lg:border-t-0">
+            {lastBar && (
+              <section className="border-b border-border p-3">
+                <h2 className="mb-2 text-xs font-semibold text-muted-foreground">Last bar</h2>
+                {([
+                  ["Open", lastBar.o.toLocaleString("en-IN", PRICE_FORMAT)],
+                  ["High", lastBar.h.toLocaleString("en-IN", PRICE_FORMAT)],
+                  ["Low", lastBar.l.toLocaleString("en-IN", PRICE_FORMAT)],
+                  ["Close", lastBar.c.toLocaleString("en-IN", PRICE_FORMAT)],
+                  ["Volume", lastBar.v.toLocaleString("en-IN")],
+                ] as const).map(([label, value]) => (
+                  <div key={label} className="flex justify-between py-0.5">
+                    <span className="text-muted-foreground">{label}</span>
+                    <span className="font-mono tabular-nums">{value}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">High</span>
-                    <span className="font-mono">{candles[candles.length - 1]?.h.toFixed(2) || "—"}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Low</span>
-                    <span className="font-mono">{candles[candles.length - 1]?.l.toFixed(2) || "—"}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Close</span>
-                    <span className="font-mono">{candles[candles.length - 1]?.c.toFixed(2) || "—"}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Volume</span>
-                    <span className="font-mono">{volume?.toLocaleString() || "—"}</span>
-                  </div>
-                </div>
-              </div>
-            </TiltCard>
+                ))}
+              </section>
+            )}
 
-            {/* Indicators */}
-            <TiltCard>
-              <div className="p-4">
-                <h3 className="font-semibold mb-3">Indicators</h3>
-                <div className="grid grid-cols-2 gap-2">
-                  <IndicatorCard
-                    name="Volume"
-                    enabled={showVolume}
-                    onChange={(enabled) => updateIndicator("volume", enabled)}
-                  />
-                  <IndicatorCard
-                    name="Moving Avg"
-                    enabled={showMA}
-                    onChange={(enabled) => updateIndicator("ma", enabled)}
-                  />
-                  <IndicatorCard
-                    name="RSI"
-                    enabled={showRSI}
-                    onChange={(enabled) => updateIndicator("rsi", enabled)}
-                  />
-                  <IndicatorCard
-                    name="MACD"
-                    enabled={showMACD}
-                    onChange={(enabled) => updateIndicator("macd", enabled)}
-                  />
-                </div>
+            <section className="border-b border-border p-3">
+              <h2 className="mb-2 text-xs font-semibold text-muted-foreground">Indicators</h2>
+              <div className="grid grid-cols-2 gap-1.5">
+                {([
+                  ["volume", "Volume", showVolume],
+                  ["ma", "Moving avg", showMA],
+                  ["rsi", "RSI", showRSI],
+                  ["macd", "MACD", showMACD],
+                ] as const).map(([key, name, enabled]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={enabled}
+                    onClick={() => updateIndicator(key, !enabled)}
+                    className={`rounded border px-2 py-1.5 text-left text-xs ${
+                      enabled ? "border-primary/60 bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:bg-accent/50"
+                    }`}
+                  >
+                    {name}
+                  </button>
+                ))}
               </div>
-            </TiltCard>
+            </section>
 
-            {/* Layout Actions */}
-            <TiltCard>
-              <div className="p-4">
-                <h3 className="font-semibold mb-3">Layout</h3>
-                <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={() => toggleLayoutPanel("save")}
-                    aria-expanded={layoutPanel === "save"}
-                    className="w-full px-3 py-2 text-sm rounded-md border border-border hover:bg-accent/50 transition-colors flex items-center gap-2"
-                  >
-                    Save Current Layout
-                  </button>
-                  {layoutPanel === "save" && (
-                    <form onSubmit={handleSaveLayout} className="flex gap-2">
-                      <input
-                        value={layoutName}
-                        onChange={(event) => setLayoutName(event.target.value)}
-                        placeholder="Layout name"
-                        aria-label="Layout name"
-                        maxLength={60}
-                        autoFocus
-                        className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!layoutName.trim()}
-                        className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
-                      >
-                        Save
-                      </button>
-                    </form>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => toggleLayoutPanel("load")}
-                    aria-expanded={layoutPanel === "load"}
-                    className="w-full px-3 py-2 text-sm rounded-md border border-border hover:bg-accent/50 transition-colors flex items-center gap-2"
-                  >
-                    Load Saved Layout
-                  </button>
-                  {layoutPanel === "load" && (
-                    namedLayoutNames.length === 0 ? (
-                      <div className="text-xs text-muted-foreground">No saved layouts for {symbol}.</div>
-                    ) : (
-                      <ul className="space-y-1">
-                        {namedLayoutNames.map((name) => (
-                          <li key={name} className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleLoadLayout(name)}
-                              className="min-w-0 flex-1 truncate rounded-md px-2 py-1 text-left text-sm hover:bg-accent/50"
-                            >
-                              {name}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteNamedLayout(name)}
-                              className="rounded-md p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                              aria-label={`Delete layout ${name}`}
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )
-                  )}
-                  {layoutMessage && (
-                    <div role="status" className="text-xs text-muted-foreground">
-                      {layoutMessage}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetLayout();
-                      setChartState(DEFAULT_CHART_STATE);
-                    }}
-                    className="w-full px-3 py-2 text-sm rounded-md border border-border hover:bg-accent/50 transition-colors flex items-center gap-2"
-                  >
-                    Reset to Defaults
-                  </button>
-                  <div className="border-t border-border pt-2 mt-2">
-                    <div className="text-xs text-muted-foreground mb-2">Export / Import</div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={handleExportLayout}
-                        className="flex-1 px-2 py-1.5 text-xs rounded-md border border-border hover:bg-accent/50 transition-colors flex items-center justify-center gap-1"
-                        title="Export layout to JSON"
-                      >
-                        <Download className="h-3 w-3" />
-                        Export
-                      </button>
-                      <button
-                        type="button"
-                        onClick={triggerFileInput}
-                        className="flex-1 px-2 py-1.5 text-xs rounded-md border border-border hover:bg-accent/50 transition-colors flex items-center justify-center gap-1"
-                        title="Import layout from JSON"
-                      >
-                        <Upload className="h-3 w-3" />
-                        Import
-                      </button>
-                    </div>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".json"
-                      onChange={handleImportLayout}
-                      className="hidden"
-                      aria-label="Import layout from JSON file"
-                    />
-                  </div>
-                </div>
+            <section className="p-3">
+              <h2 className="mb-2 text-xs font-semibold text-muted-foreground">Layout</h2>
+              <div className="grid grid-cols-3 gap-1.5">
+                <button type="button" onClick={() => toggleLayoutPanel("save")} aria-expanded={layoutPanel === "save"} className={SIDE_BUTTON}>
+                  Save
+                </button>
+                <button type="button" onClick={() => toggleLayoutPanel("load")} aria-expanded={layoutPanel === "load"} className={SIDE_BUTTON}>
+                  Load
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetLayout();
+                    setChartState(DEFAULT_CHART_STATE);
+                  }}
+                  className={SIDE_BUTTON}
+                >
+                  Reset
+                </button>
               </div>
-            </TiltCard>
-          </div>
+              {layoutPanel === "save" && (
+                <form onSubmit={handleSaveLayout} className="mt-2 flex gap-1.5">
+                  <input
+                    value={layoutName}
+                    onChange={(event) => setLayoutName(event.target.value)}
+                    placeholder="Layout name"
+                    aria-label="Layout name"
+                    maxLength={60}
+                    autoFocus
+                    className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-sm"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!layoutName.trim()}
+                    className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </form>
+              )}
+              {layoutPanel === "load" && (
+                namedLayoutNames.length === 0 ? (
+                  <p className="mt-2 text-xs text-muted-foreground">No saved layouts for {symbol}.</p>
+                ) : (
+                  <ul className="mt-2 space-y-0.5">
+                    {namedLayoutNames.map((name) => (
+                      <li key={name} className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleLoadLayout(name)}
+                          className="min-w-0 flex-1 truncate rounded px-2 py-1 text-left text-sm hover:bg-accent/50"
+                        >
+                          {name}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteNamedLayout(name)}
+                          className="rounded p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                          aria-label={`Delete layout ${name}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )
+              )}
+              {layoutMessage && (
+                <p role="status" className="mt-2 text-xs text-muted-foreground">
+                  {layoutMessage}
+                </p>
+              )}
+              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => exportLayout(chartState)}
+                  className={`${SIDE_BUTTON} flex items-center justify-center gap-1`}
+                  title="Export layout to JSON"
+                >
+                  <Download className="h-3 w-3" />
+                  Export
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`${SIDE_BUTTON} flex items-center justify-center gap-1`}
+                  title="Import layout from JSON"
+                >
+                  <Upload className="h-3 w-3" />
+                  Import
+                </button>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json"
+                onChange={handleImportLayout}
+                className="hidden"
+                aria-label="Import layout from JSON file"
+              />
+            </section>
+          </aside>
         </div>
       </div>
     </div>

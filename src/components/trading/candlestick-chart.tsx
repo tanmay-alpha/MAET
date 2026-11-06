@@ -17,6 +17,7 @@ import {
   type TradeMarkerData,
   type PaperOverlayState,
 } from "./lightweight-chart";
+import type { PlacedCorporateActions } from "./chart-corporate-actions";
 
 export type Candle = ChartCandle;
 export type {
@@ -37,6 +38,7 @@ export interface CandlestickChartProps {
   seriesType?: "candlestick" | "line" | "area";
   trades?: TradeMarkerData[];
   paperOverlay?: PaperOverlayState | null;
+  corporateActions?: PlacedCorporateActions[];
   className?: string;
 }
 
@@ -48,8 +50,9 @@ export function CandlestickChart({
   drawingTool = null,
   indicators = { sma: false, ema: false, rsi: false, macd: false, volume: true },
   seriesType = "candlestick",
-  trades = [],
+  trades,
   paperOverlay,
+  corporateActions,
   className = "",
 }: CandlestickChartProps) {
   return (
@@ -63,6 +66,7 @@ export function CandlestickChart({
       indicators={indicators}
       trades={trades}
       paperOverlay={paperOverlay ?? undefined}
+      corporateActions={corporateActions}
       className={className}
     />
   );

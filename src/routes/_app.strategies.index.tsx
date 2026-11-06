@@ -1,17 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import {
-  Layers, Plus, FlaskConical, Play, GitBranch,
-  BookOpen, Archive, TrendingUp, Activity, Zap,
-  ChevronRight, Code2, BarChart3,
-} from "lucide-react";
-import {
-  STRATEGY_TEMPLATES,
-  templateCreateInput,
-  TEMPLATE_CATEGORY_LABELS,
-  TEMPLATE_CATEGORY_COLORS,
-  type StrategyTemplate,
-} from "@/components/strategy/strategy-library";
+import { STRATEGY_TEMPLATES, templateCreateInput, TEMPLATE_CATEGORY_LABELS, type StrategyTemplate } from "@/components/strategy/strategy-library";
+import { EmptyLine, ErrorLine, PageHeader, primaryButton, secondaryButton, ViewSwitch } from "@/components/strategy/page-chrome";
+import { executionRows, groupText, riskRows } from "@/components/strategy/rule-text";
+import { shortDate } from "@/components/strategy/format";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import { trpc } from "@/lib/trpc";
 
 export const Route = createFileRoute("/_app/strategies/")({
@@ -19,351 +13,215 @@ export const Route = createFileRoute("/_app/strategies/")({
   component: StrategyLab,
 });
 
-type LabTab = "library" | "my-strategies" | "new";
+type LabView = "library" | "mine";
+
+const VIEWS = [
+  { id: "library", label: "Library" },
+  { id: "mine", label: "My strategies" },
+] as const;
 
 function StrategyLab() {
-  const [activeTab, setActiveTab] = useState<LabTab>("library");
+  const [view, setView] = useState<LabView>("library");
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-5 py-3">
-        <div className="flex items-center gap-3">
-          <FlaskConical className="h-5 w-5 text-primary" />
-          <h1 className="text-lg font-semibold">Strategy Lab</h1>
-          <span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary uppercase tracking-wide">
-            Paper Only
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          {(["library", "my-strategies", "new"] as LabTab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`rounded-md border px-3 py-1.5 text-xs transition-colors ${
-                activeTab === tab
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {tab === "library" ? "Strategy Library" : tab === "my-strategies" ? "My Strategies" : "New Strategy"}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-hidden">
-        {activeTab === "library" && <StrategyLibraryTab />}
-        {activeTab === "my-strategies" && <MyStrategiesTab />}
-        {activeTab === "new" && <NewStrategyTab />}
+      <PageHeader
+        title="Strategy Lab"
+        meta={`${STRATEGY_TEMPLATES.length} rule templates · backtests run on stored candles · paper only`}
+        actions={<ViewSwitch label="Strategy Lab view" options={VIEWS} value={view} onChange={setView} />}
+      />
+      <div className="min-h-0 flex-1">
+        {view === "library" ? <Library /> : <MyStrategies onBrowse={() => setView("library")} />}
       </div>
     </div>
   );
 }
 
 // ============================================================
-// Strategy Library Tab
+// Library
 // ============================================================
 
-function StrategyLibraryTab() {
-  const [selected, setSelected] = useState<StrategyTemplate | null>(null);
+function Library() {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = STRATEGY_TEMPLATES.find((t) => t.id === selectedId) ?? null;
 
   return (
-    <div className="flex h-full overflow-hidden">
-      {/* Template list */}
-      <div className="w-72 border-r border-border overflow-y-auto p-3 flex-shrink-0">
-        <div className="mb-3 text-xs text-muted-foreground">
-          Educational templates — no returns claimed. Backtest before use.
-        </div>
-        <div className="space-y-1.5">
-          {STRATEGY_TEMPLATES.map((t) => (
+    <div className="flex h-full flex-col md:flex-row">
+      <ul
+        aria-label="Strategy templates"
+        className={`${selected ? "hidden md:block" : ""} min-h-0 flex-1 overflow-y-auto border-border md:w-80 md:flex-none md:border-r`}
+      >
+        {STRATEGY_TEMPLATES.map((t) => (
+          <li key={t.id} className="border-b border-border">
             <button
-              key={t.id}
-              onClick={() => setSelected(t)}
-              className={`w-full text-left rounded-lg border p-3 transition-colors ${
-                selected?.id === t.id
-                  ? "border-primary bg-primary/10"
-                  : "border-border hover:border-border/80 hover:bg-panel/60"
-              }`}
+              type="button"
+              aria-current={selected?.id === t.id}
+              onClick={() => setSelectedId(t.id)}
+              className="w-full px-4 py-2.5 text-left hover:bg-accent/40 aria-[current=true]:bg-accent"
             >
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`text-[10px] rounded border px-1.5 py-0.5 uppercase tracking-wide ${TEMPLATE_CATEGORY_COLORS[t.category]}`}>
-                  {TEMPLATE_CATEGORY_LABELS[t.category]}
-                </span>
-              </div>
-              <div className="text-sm font-medium">{t.name}</div>
-              <div className="text-xs text-muted-foreground mt-1 line-clamp-2">{t.description}</div>
+              <span className="flex items-baseline justify-between gap-3">
+                <span className="text-sm font-medium">{t.name}</span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">{TEMPLATE_CATEGORY_LABELS[t.category]}</span>
+              </span>
+              <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">{groupText(t.definition.entry)}</span>
             </button>
-          ))}
-        </div>
-      </div>
+          </li>
+        ))}
+      </ul>
 
-      {/* Template detail */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className={`${selected ? "" : "hidden md:block"} min-h-0 flex-1 overflow-y-auto p-4`}>
         {selected ? (
-          <TemplateDetail template={selected} />
+          <TemplateDetail template={selected} onBack={() => setSelectedId(null)} />
         ) : (
-          <div className="flex h-full items-center justify-center">
-            <div className="text-center space-y-3">
-              <BookOpen className="h-12 w-12 text-muted-foreground/30 mx-auto" />
-              <p className="text-muted-foreground">Select a template to view details</p>
-            </div>
-          </div>
+          <p className="text-xs text-muted-foreground">Select a template to see its rules, the idea behind it and where it fails.</p>
         )}
       </div>
     </div>
   );
 }
 
-function TemplateDetail({ template }: { template: StrategyTemplate }) {
+function TemplateDetail({ template, onBack }: { template: StrategyTemplate; onBack: () => void }) {
+  const signedIn = useSignedIn();
   const createMutation = trpc.strategyDefinitions.create.useMutation();
   const navigate = useNavigate();
-  return (
-    <div className="max-w-2xl">
-      <div className="flex items-start gap-3 mb-6">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`text-[10px] rounded border px-1.5 py-0.5 uppercase tracking-wide ${TEMPLATE_CATEGORY_COLORS[template.category]}`}>
-              {TEMPLATE_CATEGORY_LABELS[template.category]}
-            </span>
-          </div>
-          <h2 className="text-xl font-semibold">{template.name}</h2>
-          <p className="text-sm text-muted-foreground mt-1">{template.description}</p>
-        </div>
-      </div>
-
-      <div className="space-y-4 mb-6">
-        <div className="rounded-lg border border-border bg-panel p-4">
-          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Hypothesis</div>
-          <p className="text-sm">{template.hypothesis}</p>
-        </div>
-        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
-          <div className="text-xs font-medium text-amber-400 uppercase tracking-wide mb-2">Known Limitations</div>
-          <p className="text-sm text-muted-foreground">{template.limitations}</p>
-        </div>
-        <div className="rounded-lg border border-border bg-panel p-4">
-          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Typical Timeframes</div>
-          <div className="flex gap-2">
-            {template.timeframes.map((tf) => (
-              <span key={tf} className="rounded bg-background px-2 py-1 text-xs font-mono">{tf}</span>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="flex gap-3">
-        <button
-          className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          disabled={createMutation.isPending}
-          onClick={() => {
-            createMutation.mutate(
-              templateCreateInput(template),
-              {
-                onSuccess: (data) => {
-                  void navigate({ to: "/strategies/$strategyId", params: { strategyId: data.strategy.id } });
-                },
-              },
-            );
-          }}
-        >
-          <Plus className="h-4 w-4" />
-          {createMutation.isPending ? "Creating..." : "Use This Template"}
-        </button>
-        <button
-          className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <FlaskConical className="h-4 w-4" />
-          Quick Backtest
-        </button>
-      </div>
-
-      <div className="mt-6 rounded-lg border border-primary/20 bg-primary/5 p-4 text-xs text-muted-foreground">
-        <strong className="text-foreground">Educational Disclaimer:</strong> These templates are provided for research purposes only.
-        Past strategy performance in backtests does not guarantee future results.
-        This is a paper trading simulation — no real money is at risk.
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// My Strategies Tab
-// ============================================================
-
-function MyStrategiesTab() {
-  const { data, isLoading } = trpc.strategyDefinitions.list.useQuery();
-  const strategies = data?.strategies ?? [];
+  const input = templateCreateInput(template);
+  const { definition } = input;
+  const startsWith = [
+    ["Symbol", definition.universe?.symbolOrId ?? "—"],
+    ["Timeframe", definition.timeframe ?? "—"],
+    ...riskRows(definition.risk).slice(0, 1),
+    ...executionRows(definition.execution),
+  ];
 
   return (
-    <div className="h-full overflow-y-auto p-4">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h2 className="font-medium">My Strategies</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {strategies.length} {strategies.length === 1 ? "strategy" : "strategies"}
-          </p>
-        </div>
-        <button
-          className="flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
-          onClick={() => {}}
-        >
-          <Plus className="h-4 w-4" />
-          New Strategy
-        </button>
-      </div>
+    <article className="max-w-3xl space-y-4">
+      <button type="button" onClick={onBack} className="text-xs text-muted-foreground hover:text-foreground md:hidden">
+        ← All templates
+      </button>
 
-      {isLoading ? (
-        <div className="space-y-2">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-20 rounded-lg border border-border bg-panel animate-pulse" />
-          ))}
-        </div>
-      ) : strategies.length === 0 ? (
-        <EmptyStrategies />
-      ) : (
-        <div className="space-y-2">
-          {strategies.map((s: any) => (
-            <StrategyCard key={s.id} strategy={s} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StrategyCard({ strategy }: { strategy: any }) {
-  const statusColors: Record<string, string> = {
-    DRAFT: "text-muted-foreground border-border",
-    VALIDATED: "text-emerald-400 border-emerald-400/30 bg-emerald-400/5",
-    ARCHIVED: "text-muted-foreground/50 border-border/50",
-  };
-
-  return (
-    <div className="flex items-center gap-4 rounded-lg border border-border bg-panel p-4 hover:border-border/80">
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="font-medium truncate">{strategy.name}</span>
-          <span className={`text-[10px] rounded border px-1.5 py-0.5 uppercase tracking-wide shrink-0 ${statusColors[strategy.status] ?? statusColors.DRAFT}`}>
-            {strategy.status}
-          </span>
-        </div>
-        {strategy.description && (
-          <p className="text-xs text-muted-foreground mt-0.5 truncate">{strategy.description}</p>
-        )}
-      </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <Link
-          to="/strategies/$strategyId"
-          params={{ strategyId: strategy.id }}
-          className="flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <Code2 className="h-3 w-3" />
-          Edit
-        </Link>
-        <Link
-          to="/strategies/$strategyId/backtests"
-          params={{ strategyId: strategy.id }}
-          className="flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <FlaskConical className="h-3 w-3" />
-          Backtests
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-function EmptyStrategies() {
-  return (
-    <div className="flex h-64 flex-col items-center justify-center rounded-lg border border-dashed border-border">
-      <Layers className="h-10 w-10 text-muted-foreground/30 mb-3" />
-      <p className="text-sm font-medium text-muted-foreground mb-1">No strategies yet</p>
-      <p className="text-xs text-muted-foreground mb-4">Start from the library or create a blank strategy</p>
-      <div className="flex gap-2">
-        <button className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
-          <BookOpen className="h-3.5 w-3.5" />
-          Browse Library
-        </button>
-        <button className="flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">
-          <Plus className="h-3.5 w-3.5" />
-          New Strategy
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// New Strategy Tab
-// ============================================================
-
-function NewStrategyTab() {
-  return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="max-w-xl mx-auto">
-        <h2 className="text-lg font-semibold mb-1">Create New Strategy</h2>
-        <p className="text-sm text-muted-foreground mb-6">
-          Choose a starting point. You can customise all parameters in the visual rule builder.
+      <header>
+        <p className="text-xs text-muted-foreground">
+          {TEMPLATE_CATEGORY_LABELS[template.category]} · suits {template.timeframes.join(", ")}
         </p>
+        <h2 className="text-lg font-semibold">{template.name}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{template.description}</p>
+      </header>
 
-        <div className="space-y-3">
-          {[
-            {
-              icon: BookOpen,
-              title: "From Library Template",
-              desc: "Start from one of the 7 educational templates",
-              color: "text-blue-400",
-              action: "Browse Library →",
-            },
-            {
-              icon: Code2,
-              title: "Blank Strategy",
-              desc: "Start with an empty rule tree and build from scratch",
-              color: "text-primary",
-              action: "Start Blank →",
-            },
-            {
-              icon: GitBranch,
-              title: "Duplicate Existing",
-              desc: "Copy one of your existing strategies and modify it",
-              color: "text-purple-400",
-              action: "My Strategies →",
-            },
-          ].map((opt) => (
-            <button
-              key={opt.title}
-              className="w-full text-left flex items-start gap-4 rounded-lg border border-border bg-panel p-4 hover:border-primary/50 transition-colors"
-            >
-              <div className={`mt-0.5 ${opt.color}`}>
-                <opt.icon className="h-5 w-5" />
-              </div>
-              <div className="flex-1">
-                <div className="font-medium">{opt.title}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">{opt.desc}</div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-            </button>
-          ))}
-        </div>
+      <dl className="grid grid-cols-[4.5rem_1fr] gap-x-3 gap-y-1.5 rounded border border-border bg-panel px-3 py-2.5 text-xs">
+        <dt className="text-muted-foreground">Entry</dt>
+        <dd className="font-mono">{groupText(definition.entry)}</dd>
+        <dt className="text-muted-foreground">Exit</dt>
+        <dd className="font-mono">{groupText(definition.exit)}</dd>
+        <dt className="text-muted-foreground">Direction</dt>
+        <dd>{definition.direction === "LONG_ONLY" ? "Long only" : definition.direction === "SHORT_ONLY" ? "Short only" : "Long and short"}</dd>
+      </dl>
 
-        <div className="mt-8 rounded-lg border border-border bg-panel p-4 text-xs text-muted-foreground space-y-1">
-          <div className="font-medium text-foreground mb-2">Strategy Lab features</div>
-          {[
-            "Visual rule builder — no code required",
-            "Backtest engine V3 with look-ahead protection",
-            "Parameter sweep to explore strategy variants",
-            "Walk-forward validation to test robustness",
-            "ALERT_ONLY, MANUAL_CONFIRM, or AUTO_PAPER deployment",
-            "Bar replay workspace for manual strategy testing",
-          ].map((f) => (
-            <div key={f} className="flex items-center gap-2">
-              <div className="h-1 w-1 rounded-full bg-primary shrink-0" />
-              {f}
+      <section>
+        <h3 className="text-xs font-medium text-muted-foreground">Idea</h3>
+        <p className="mt-1 text-sm">{template.hypothesis}</p>
+      </section>
+      <section>
+        <h3 className="text-xs font-medium text-muted-foreground">Where it fails</h3>
+        <p className="mt-1 text-sm">{template.limitations}</p>
+      </section>
+
+      <section>
+        <h3 className="text-xs font-medium text-muted-foreground">Saved with</h3>
+        <dl className="mt-1 grid grid-cols-1 gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
+          {startsWith.map(([label, value]) => (
+            <div key={label} className="flex justify-between gap-3 border-b border-border py-1">
+              <dt className="text-muted-foreground">{label}</dt>
+              <dd className="text-right font-mono">{value}</dd>
             </div>
           ))}
-        </div>
+        </dl>
+      </section>
+
+      <div className="space-y-2">
+        <button
+          type="button"
+          className={primaryButton}
+          disabled={!signedIn || createMutation.isPending}
+          onClick={() =>
+            createMutation.mutate(input, {
+              onSuccess: (data) => void navigate({ to: "/strategies/$strategyId", params: { strategyId: data.strategy.id } }),
+            })
+          }
+        >
+          {createMutation.isPending ? "Saving…" : "Use this template"}
+        </button>
+        {!signedIn && <SignedOutNotice feature="Saved strategies" />}
+        {createMutation.error && <ErrorLine title="Could not save the strategy" error={createMutation.error} />}
       </div>
+    </article>
+  );
+}
+
+// ============================================================
+// My strategies
+// ============================================================
+
+interface StrategyRow {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  updatedAt: string;
+}
+
+const STATUS_TONE: Record<string, string> = {
+  VALIDATED: "text-bull",
+  ARCHIVED: "text-muted-foreground/60",
+};
+
+function MyStrategies({ onBrowse }: { onBrowse: () => void }) {
+  const signedIn = useSignedIn();
+  const { data, isLoading, error } = trpc.strategyDefinitions.list.useQuery(undefined, { enabled: signedIn });
+  const strategies: StrategyRow[] = data?.strategies ?? [];
+
+  if (!signedIn) return <div className="p-4"><SignedOutNotice feature="Saved strategies" /></div>;
+  if (error) return <div className="p-4"><ErrorLine title="Could not load your strategies" error={error} /></div>;
+  if (isLoading) return <EmptyLine>Loading strategies…</EmptyLine>;
+  if (strategies.length === 0) {
+    return (
+      <div className="flex flex-wrap items-center gap-3 p-4 text-xs text-muted-foreground">
+        No saved strategies yet. Save one from a library template.
+        <button type="button" onClick={onBrowse} className={secondaryButton}>Open library</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-auto">
+      <table className="w-full text-xs">
+        <thead className="sticky top-0 border-b border-border bg-panel text-muted-foreground">
+          <tr>
+            <th className="px-4 py-2 text-left font-medium">Strategy</th>
+            <th className="px-3 py-2 text-left font-medium">Status</th>
+            <th className="hidden px-3 py-2 text-right font-medium sm:table-cell">Updated</th>
+            <th className="px-4 py-2 text-right font-medium"><span className="sr-only">Open</span></th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {strategies.map((s) => (
+            <tr key={s.id} className="hover:bg-accent/30">
+              <td className="max-w-0 px-4 py-2">
+                <Link to="/strategies/$strategyId" params={{ strategyId: s.id }} className="font-medium hover:text-primary">
+                  {s.name}
+                </Link>
+                {s.description && <div className="truncate text-muted-foreground">{s.description}</div>}
+              </td>
+              <td className={`px-3 py-2 ${STATUS_TONE[s.status] ?? "text-muted-foreground"}`}>{s.status.charAt(0) + s.status.slice(1).toLowerCase()}</td>
+              <td className="hidden whitespace-nowrap px-3 py-2 text-right font-mono text-muted-foreground sm:table-cell">{shortDate(s.updatedAt)}</td>
+              <td className="whitespace-nowrap px-4 py-2 text-right">
+                <Link to="/strategies/$strategyId/backtests" params={{ strategyId: s.id }} className="text-muted-foreground hover:text-foreground">
+                  Research
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

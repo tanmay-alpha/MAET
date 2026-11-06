@@ -3,11 +3,21 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, BarChart3, Building2, ExternalLink, RefreshCw, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import { CandlestickChart, type ChartState } from "@/components/trading/candlestick-chart";
+import {
+  CORPORATE_ACTION_SOURCE_LABEL,
+  NO_CORPORATE_ACTIONS_MESSAGE,
+  describeCorporateAction,
+  formatExDate,
+  placeCorporateActions,
+} from "@/components/trading/chart-corporate-actions";
+import { CorporateActionsStatus, CorporateActionsToggle } from "@/components/trading/chart-toolbar";
+import { useCorporateActions } from "@/hooks/use-corporate-actions";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { fetchCompanyDetail, type FinancialStatement } from "@/lib/market-api";
 import { quoteSourceLabel, sourceName } from "@/lib/quote-source";
 import { getTradingViewUrl } from "@/lib/tradingview";
+import type { CorporateActionsResponse } from "@shared/types";
 
 export const Route = createFileRoute("/_app/stock/$symbol")({
   head: () => ({ meta: [{ title: "Company Intelligence — MAET" }] }),
@@ -104,6 +114,44 @@ function StatementTable({ statements, tab, reason }: {
   );
 }
 
+/** The ten most recent provider-reported dividends and splits, newest first. */
+function CorporateActionsTable({ data, isError }: { data: CorporateActionsResponse | undefined; isError: boolean }) {
+  const recent = data?.events.slice(0, 10) ?? [];
+  const scope = data && data.events.length > recent.length ? "Last 10 · " : "";
+  return (
+    <section aria-labelledby="corporate-actions-heading" className="overflow-hidden rounded-xl border border-border bg-panel/30">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 border-b border-border px-4 py-3">
+        <h2 id="corporate-actions-heading" className="text-sm font-semibold">Corporate actions</h2>
+        <p className="text-[11px] text-muted-foreground">
+          {`${scope}Source: ${CORPORATE_ACTION_SOURCE_LABEL[data?.source ?? "yahoo"]}`}
+          {data?.stale && ` · cached ${formatExDate(data.asOf.slice(0, 10))}`}
+        </p>
+      </div>
+      {!data ? (
+        <p className="px-4 py-3 text-xs text-muted-foreground">{isError ? "Corporate actions unavailable: Yahoo Finance did not respond." : "Loading corporate actions…"}</p>
+      ) : recent.length === 0 ? (
+        <p className="px-4 py-3 text-xs text-muted-foreground">{NO_CORPORATE_ACTIONS_MESSAGE}</p>
+      ) : (
+        <table className="w-full text-xs">
+          <thead className="text-left text-[10px] uppercase tracking-wider text-muted-foreground">
+            <tr><th className="px-4 py-2 font-medium">Ex-date</th><th className="px-4 py-2 font-medium">Action</th><th className="px-4 py-2 font-medium">Details</th></tr>
+          </thead>
+          <tbody>{recent.map((event) => {
+            const { label, detail } = describeCorporateAction(event);
+            return (
+              <tr key={`${event.kind}:${event.exDate}:${detail}`} className="border-t border-border/70">
+                <td className="whitespace-nowrap px-4 py-2 font-mono tabular-nums">{formatExDate(event.exDate)}</td>
+                <td className="whitespace-nowrap px-4 py-2">{label}</td>
+                <td className="px-4 py-2 font-mono tabular-nums">{detail}</td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 function StockDetail() {
   const { symbol } = Route.useParams();
   const navigate = useNavigate();
@@ -127,6 +175,15 @@ function StockDetail() {
       t: new Date(candle.ts).getTime(), o: candle.open, h: candle.high, l: candle.low, c: candle.close, v: candle.volume,
     }));
   }, [detail?.candles, fallbackCandles.data?.candles]);
+  const [showCorporateActions, setShowCorporateActions] = useState(true);
+  const corporateActions = useCorporateActions(symbol);
+  const placedCorporateActions = useMemo(
+    () =>
+      showCorporateActions && corporateActions.data
+        ? placeCorporateActions(chartData.map((candle) => candle.t), corporateActions.data.events)
+        : [],
+    [showCorporateActions, corporateActions.data, chartData],
+  );
 
   if (detailQuery.isLoading) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading stored company intelligence…</div>;
   if (!detail) return (
@@ -171,9 +228,11 @@ function StockDetail() {
         {activeTab === "overview" && <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <section className="overflow-hidden rounded-xl border border-border bg-panel/30">
             <div className="flex items-center justify-between border-b border-border px-4 py-3"><div><h2 className="text-sm font-semibold">Price history · 1Y daily</h2><p className="text-[11px] text-muted-foreground">{historySource ? `Source: ${sourceName(historySource)}` : "Loading candles…"}</p></div>
-              <button type="button" onClick={() => navigate({ to: `/chart/${symbol}` })} className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-accent"><BarChart3 className="h-3.5 w-3.5" />Full chart</button></div>
-            {chartData.length > 1 ? <CandlestickChart data={chartData} height={380} chartState={chartState} onChartStateChange={setChartState} drawingTool={null} indicators={{ sma: false, ema: false, rsi: false, macd: false, volume: true }} /> :
+              <div className="flex items-center gap-2"><CorporateActionsToggle enabled={showCorporateActions} onToggle={() => setShowCorporateActions((on) => !on)} />
+              <button type="button" onClick={() => navigate({ to: `/chart/${symbol}` })} className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-accent"><BarChart3 className="h-3.5 w-3.5" />Full chart</button></div></div>
+            {chartData.length > 1 ? <CandlestickChart data={chartData} height={380} chartState={chartState} onChartStateChange={setChartState} drawingTool={null} indicators={{ sma: false, ema: false, rsi: false, macd: false, volume: true }} corporateActions={placedCorporateActions} /> :
               <div className="flex h-[380px] items-center justify-center text-xs text-muted-foreground">{detail.availability.history.reason}</div>}
+            {showCorporateActions && chartData.length > 1 && <CorporateActionsStatus data={corporateActions.data} isError={corporateActions.isError} placed={placedCorporateActions} />}
           </section>
           <aside className="space-y-4">
             <div className="rounded-xl border border-border bg-panel/40 p-4"><div className="flex items-center gap-2 text-xs font-semibold"><Building2 className="h-4 w-4 text-primary" />Company identity</div>
@@ -184,6 +243,7 @@ function StockDetail() {
             </div>
             <a href={getTradingViewUrl(symbol)} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-xs hover:bg-accent">Open TradingView <ExternalLink className="h-3.5 w-3.5" /></a>
           </aside>
+          <CorporateActionsTable data={corporateActions.data} isError={corporateActions.isError} />
         </div>}
 
         {(activeTab === "balance_sheet" || activeTab === "income_statement" || activeTab === "cash_flow") && <section>

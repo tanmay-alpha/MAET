@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Check, Plus, X, Layers } from "lucide-react";
+import { Check, Plus, X } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { fetchMarketCandles } from "@/lib/market-api";
+import { quoteSourceLabel, sourceName } from "@/lib/quote-source";
 import { trpc } from "@/lib/trpc";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
@@ -40,10 +41,10 @@ const RANGE_LABELS: { id: RangeType; label: string }[] = [
 ];
 
 const PRESETS = [
-  { name: "IT Giants", symbols: ["TCS", "INFY", "WIPRO", "HCLTECH"] },
-  { name: "Private Banking", symbols: ["HDFCBANK", "ICICIBANK", "KOTAKBANK", "AXISBANK"] },
-  { name: "Auto Leaders", symbols: ["MARUTI", "TATAMOTORS", "M&M", "BAJAJ-AUTO"] },
-  { name: "Energy & Conglomerate", symbols: ["RELIANCE", "ONGC", "NTPC", "POWERGRID"] },
+  { name: "IT services", symbols: ["TCS", "INFY", "WIPRO", "HCLTECH"] },
+  { name: "Private banks", symbols: ["HDFCBANK", "ICICIBANK", "KOTAKBANK", "AXISBANK"] },
+  { name: "Autos", symbols: ["MARUTI", "TATAMOTORS", "M&M", "BAJAJ-AUTO"] },
+  { name: "Energy", symbols: ["RELIANCE", "ONGC", "NTPC", "POWERGRID"] },
 ];
 
 function Compare() {
@@ -54,7 +55,14 @@ function Compare() {
   const [chartMode, setChartMode] = useState<ChartMode>("pct");
   const primarySymbol = symbols[0] || "RELIANCE";
 
-  const { quoteMap, isFetching, isError } = useMarketQuotes(symbols);
+  const quotes = useMarketQuotes(symbols);
+  const { quoteMap, isFetching, isError } = quotes;
+  const quoteLabel = isError
+    ? "Quotes unavailable"
+    : quotes.data
+      ? `Quotes: ${quoteSourceLabel(quotes.data.source, quotes.delayed, quotes.marketPhase)}`
+      : "Loading quotes…";
+  const rangeLabel = RANGE_LABELS.find((range) => range.id === selectedRange)?.label ?? selectedRange;
 
   const signedIn = useSignedIn();
   const peerQuery = useQuery({
@@ -72,6 +80,9 @@ function Compare() {
       retry: 2,
     })),
   });
+  const candlesFailed = candleQueries.length > 0 && candleQueries.every((query) => query.isError);
+  const candleSources = [...new Set(candleQueries.flatMap((query) => (query.data ? [sourceName(query.data.source)] : [])))];
+  const candleSource = candleSources.join(" + ");
 
   // Calculate synchronized chronological chart data
   const chartData = useMemo(() => {
@@ -200,13 +211,15 @@ function Compare() {
   };
 
   const peerData = peerQuery.data;
+  // Without daily candles the period columns would be dashes on every row; drop them instead.
+  const hasPeriodStats = performanceStats.some((stat) => stat.returnPct !== null);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       {/* Top Header Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-panel px-4 py-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="mr-1 font-semibold text-sm">Compare</span>
+          <h1 className="mr-1 text-sm font-semibold">Compare</h1>
           {peerData?.selectionBasis === "industry" && (
             <span className="rounded bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-primary">
               Industry Peers ({peerData.selectionLabel})
@@ -267,16 +280,15 @@ function Compare() {
           )}
         </div>
 
-        {/* Quick Presets */}
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Layers className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Presets:</span>
+        {/* Quick presets */}
+        <div className="flex max-w-full items-center gap-1.5 overflow-x-auto text-xs text-muted-foreground">
+          <span className="shrink-0">Presets</span>
           {PRESETS.map((p) => (
             <button
               key={p.name}
               type="button"
               onClick={() => setSymbols(p.symbols.slice(0, 5))}
-              className="rounded bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted border border-border"
+              className="shrink-0 whitespace-nowrap rounded border border-border bg-background px-2 py-0.5 text-[11px] text-foreground hover:bg-muted"
             >
               {p.name}
             </button>
@@ -286,13 +298,14 @@ function Compare() {
 
       {/* Tabs & Controls Ribbon */}
       <div className="flex flex-wrap items-center justify-between border-b border-border bg-panel px-4 text-xs font-medium">
-        <div className="flex">
+        <div className="flex max-w-full overflow-x-auto">
           {(["Performance", "Valuation", "Growth", "Profitability", "Leverage", "Momentum"] as TabType[]).map(
             (tab) => (
               <button
                 key={tab}
+                type="button"
                 onClick={() => setActiveTab(tab)}
-                className={`px-4 py-2.5 border-b-2 transition-colors ${
+                className={`shrink-0 whitespace-nowrap px-3 py-2.5 border-b-2 transition-colors ${
                   activeTab === tab
                     ? "border-primary text-primary font-semibold"
                     : "border-transparent text-muted-foreground hover:text-foreground"
@@ -367,47 +380,8 @@ function Compare() {
       {/* Main View Area */}
       {activeTab === "Performance" ? (
         <div className="flex flex-1 min-h-0 flex-col">
-          {/* Key Period Metrics Ribbon */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 border-b border-border bg-background/50 p-2.5 text-xs">
-            {performanceStats.map((stat, index) => {
-              const quote = quoteMap.get(stat.symbol);
-              return (
-                <div
-                  key={stat.symbol}
-                  className="rounded border border-border bg-panel p-2 flex flex-col justify-between"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 font-semibold font-mono">
-                      <span className="h-2 w-2 rounded-full" style={{ background: COLORS[index] }} />
-                      <span>{stat.symbol}</span>
-                    </div>
-                    <span className="font-mono text-[11px] text-muted-foreground">
-                      ₹{quote?.price?.toLocaleString("en-IN", { maximumFractionDigits: 1 }) ?? "—"}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex items-baseline justify-between">
-                    <span className="text-[10px] text-muted-foreground uppercase">{selectedRange} Return</span>
-                    <span
-                      className={`font-mono text-xs font-semibold ${
-                        (stat.returnPct ?? 0) >= 0 ? "text-bull" : "text-bear"
-                      }`}
-                    >
-                      {stat.returnPct !== null
-                        ? `${stat.returnPct >= 0 ? "+" : ""}${stat.returnPct.toFixed(2)}%`
-                        : "—"}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
-                    <span>Max DD: {stat.maxDrawdown !== null ? `${stat.maxDrawdown.toFixed(1)}%` : "—"}</span>
-                    <span>Vol: {stat.volatility !== null ? `${stat.volatility.toFixed(1)}%` : "—"}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
           {/* Interactive Line Chart */}
-          <div className="min-h-[320px] flex-1 border-b border-border p-3">
+          <div className="min-h-[320px] flex-1 p-3">
             {chartData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 14, right: 28, bottom: 6, left: 4 }}>
@@ -459,22 +433,25 @@ function Compare() {
                 </LineChart>
               </ResponsiveContainer>
             ) : (
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                {isError ? "Market history is temporarily unavailable" : "Loading comparison data…"}
-              </div>
+              <p role="status" className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                {candlesFailed ? "Price history is unavailable right now." : "Loading price history…"}
+              </p>
             )}
           </div>
         </div>
       ) : (
         <div className="p-4 flex-1 overflow-auto">
-          {!signedIn && (
-            <div className="mb-3">
-              <SignedOutNotice feature="Peer fundamentals" />
-            </div>
-          )}
+          {!signedIn ? (
+            <SignedOutNotice feature="Peer fundamentals" />
+          ) : peerQuery.isError ? (
+            <p role="status" className="text-xs text-muted-foreground">Peer fundamentals for {primarySymbol} are unavailable right now.</p>
+          ) : !peerData ? (
+            <p className="text-xs text-muted-foreground">Loading peers for {primarySymbol}…</p>
+          ) : (
+          <>
           <div className="mb-3 text-xs text-muted-foreground flex flex-wrap items-center justify-between gap-2">
             <span>
-              Comparing peers for <strong>{primarySymbol}</strong>
+              Peers of <strong>{primarySymbol}</strong>
             </span>
             <div className="flex items-center gap-3 font-mono text-[11px]">
               <span>As of: {peerData?.asOf ? new Date(peerData.asOf).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</span>
@@ -484,17 +461,18 @@ function Compare() {
             </div>
           </div>
 
-          <table className="w-full text-xs">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-xs">
             <thead className="bg-panel text-muted-foreground">
               <tr>
                 <th className="px-4 py-2 text-left font-medium">Company</th>
-                <th className="px-4 py-2 text-right font-medium">Metric</th>
-                <th className="px-4 py-2 text-right font-medium">Peer Median</th>
-                <th className="px-4 py-2 text-right font-medium">Comparison Median</th>
+                <th className="px-4 py-2 text-right font-medium">{activeTab}</th>
+                <th className="px-4 py-2 text-right font-medium">Peer median</th>
+                <th className="px-4 py-2 text-right font-medium">Comparison median</th>
                 <th className="px-4 py-2 text-right font-medium">Percentile</th>
                 <th className="px-4 py-2 text-right font-medium">Rank</th>
                 <th className="px-4 py-2 text-right font-medium">Coverage</th>
-                <th className="px-4 py-2 text-center font-medium">Action</th>
+                <th className="px-4 py-2 text-center font-medium"><span className="sr-only">Action</span></th>
               </tr>
             </thead>
             <tbody>
@@ -551,53 +529,58 @@ function Compare() {
               })}
             </tbody>
           </table>
+          </div>
+          </>
+          )}
         </div>
       )}
 
-      {/* Quote Feed Table */}
-      <div className="max-h-48 overflow-auto border-t border-border">
-        <table className="w-full text-xs">
+      {/* Quotes and period statistics per symbol */}
+      <div className="max-h-56 overflow-auto border-t border-border">
+        <table className={`w-full text-xs ${hasPeriodStats ? "min-w-[680px]" : "min-w-[480px]"}`}>
           <thead className="sticky top-0 bg-panel text-muted-foreground">
             <tr>
               <th className="px-4 py-2 text-left font-medium">Symbol</th>
               <th className="px-4 py-2 text-right font-medium">Price</th>
-              <th className="px-4 py-2 text-right font-medium">Change</th>
-              <th className="px-4 py-2 text-right font-medium">Previous close</th>
-              <th className="px-4 py-2 text-right font-medium">Cash volume</th>
+              <th className="px-4 py-2 text-right font-medium">Chg %</th>
+              {hasPeriodStats && (
+                <>
+                  <th className="px-4 py-2 text-right font-medium">{rangeLabel} return</th>
+                  <th className="px-4 py-2 text-right font-medium">Max drawdown</th>
+                  <th className="px-4 py-2 text-right font-medium">Ann. volatility</th>
+                </>
+              )}
+              <th className="px-4 py-2 text-right font-medium">Volume</th>
               <th className="px-4 py-2 text-right font-medium">Updated</th>
             </tr>
           </thead>
           <tbody>
-            {symbols.map((symbol) => {
-              const quote = quoteMap.get(symbol);
+            {performanceStats.map((stat, index) => {
+              const quote = quoteMap.get(stat.symbol);
               return (
-                <tr key={symbol} className="border-t border-border/70 hover:bg-muted/30">
-                  <td className="px-4 py-2 font-mono font-semibold text-primary">{symbol}</td>
-                  <td className="px-4 py-2 text-right font-mono">
-                    {quote?.price.toLocaleString("en-IN", { maximumFractionDigits: 2 }) ?? "—"}
+                <tr key={stat.symbol} className="border-t border-border/70 font-mono tabular-nums hover:bg-muted/30">
+                  <td className="px-4 py-1.5 font-semibold">
+                    <span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: COLORS[index] }} />
+                    {stat.symbol}
                   </td>
-                  <td
-                    className={`px-4 py-2 text-right font-mono ${
-                      (quote?.changePct ?? 0) >= 0 ? "text-bull" : "text-bear"
-                    }`}
-                  >
-                    {quote?.changePct === undefined
-                      ? "—"
-                      : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}%`}
+                  <td className="px-4 py-1.5 text-right">
+                    {quote ? `₹${quote.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
                   </td>
-                  <td className="px-4 py-2 text-right font-mono">
-                    {quote?.previousClose?.toLocaleString("en-IN", { maximumFractionDigits: 2 }) ?? "—"}
+                  <td className={`px-4 py-1.5 text-right ${quote?.changePct === undefined ? "text-muted-foreground" : quote.changePct >= 0 ? "text-bull" : "text-bear"}`}>
+                    {quote?.changePct === undefined ? "—" : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}%`}
                   </td>
-                  <td className="px-4 py-2 text-right font-mono">
-                    {quote?.volume?.toLocaleString("en-IN") ?? "—"}
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-muted-foreground">
-                    {quote?.ts
-                      ? new Date(quote.ts).toLocaleTimeString("en-IN", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "—"}
+                  {hasPeriodStats && (
+                    <>
+                      <td className={`px-4 py-1.5 text-right ${stat.returnPct === null ? "text-muted-foreground" : stat.returnPct >= 0 ? "text-bull" : "text-bear"}`}>
+                        {stat.returnPct === null ? "—" : `${stat.returnPct >= 0 ? "+" : ""}${stat.returnPct.toFixed(2)}%`}
+                      </td>
+                      <td className="px-4 py-1.5 text-right">{stat.maxDrawdown === null ? "—" : `${stat.maxDrawdown.toFixed(1)}%`}</td>
+                      <td className="px-4 py-1.5 text-right">{stat.volatility === null ? "—" : `${stat.volatility.toFixed(1)}%`}</td>
+                    </>
+                  )}
+                  <td className="px-4 py-1.5 text-right">{quote?.volume?.toLocaleString("en-IN") ?? "—"}</td>
+                  <td className="px-4 py-1.5 text-right text-muted-foreground">
+                    {quote?.ts ? new Date(quote.ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false }) : "—"}
                   </td>
                 </tr>
               );
@@ -606,13 +589,10 @@ function Compare() {
         </table>
       </div>
 
-      {/* Footer Status Bar */}
-      <div className="flex items-center justify-between border-t border-border bg-panel px-4 py-1.5 text-[11px] text-muted-foreground">
-        <span>{isFetching ? "Refreshing market data…" : "Multi-Asset Peer Comparison v2.0"}</span>
-        <span className={isError ? "text-bear" : "text-bull"}>
-          {isError ? "Data unavailable" : "Market feed active"}
-        </span>
-      </div>
+      <footer className="flex flex-wrap items-center justify-between gap-x-4 border-t border-border bg-panel px-4 py-1.5 text-[11px] text-muted-foreground">
+        <span>{quoteLabel}{candleSource ? ` · daily candles: ${candleSource}` : ""}</span>
+        {isFetching && <span>Refreshing…</span>}
+      </footer>
     </div>
   );
 }

@@ -13,6 +13,7 @@ import type { Page, Request, Route } from "@playwright/test";
 import type { MarketCandle, MarketCompany } from "../../../src/lib/market-api";
 import { PaperOrderCommandSchema } from "../../../server/modules/paper-trading/contracts";
 import { CreateStrategyInputSchema } from "../../../shared/strategy/contracts";
+import type { CorporateActionEvent } from "../../../shared/types/corporate-actions";
 import { WORLD_EVENTS, WORLD_MACRO, WORLD_NEWS } from "./world-data";
 import {
   ACCESS_TOKEN,
@@ -106,6 +107,17 @@ export class MockApi {
   readonly orders: PaperOrderWire[] = [];
   /** The tick each market SSE connection sends after its snapshot. */
   tick = { symbol: "NIFTY50", price: BASE_PRICES.NIFTY50 + 12.35 };
+  /**
+   * Dividends and splits /api/market/corporate-actions reports for every symbol, newest
+   * first. The first two fall inside the 60 daily fixture candles (7 Sep – 5 Nov 2026).
+   */
+  corporateActions: CorporateActionEvent[] = [
+    { kind: "dividend", exDate: "2026-10-14", amount: 24, currency: "INR", splitAdjusted: false },
+    { kind: "split", exDate: "2026-09-21", numerator: 2, denominator: 1 },
+    { kind: "dividend", exDate: "2025-08-14", amount: 5.5, currency: "INR", splitAdjusted: true },
+    { kind: "dividend", exDate: "2024-08-19", amount: 5, currency: "INR", splitAdjusted: true },
+    { kind: "split", exDate: "2017-09-07", numerator: 1, denominator: 10 },
+  ];
   worldEvents = structuredClone(WORLD_EVENTS);
   worldNews = structuredClone(WORLD_NEWS);
   worldMacro = structuredClone(WORLD_MACRO);
@@ -194,6 +206,14 @@ export class MockApi {
       if (path === "/api/market/companies") return await json(route, 200, this.companies(url));
       if (path === "/api/market/company") return await this.companyDetail(route, url);
       if (path === "/api/market/candles") return await this.candles(route, url);
+      if (path === "/api/market/corporate-actions")
+        return await json(route, 200, {
+          symbol: (url.searchParams.get("symbol") ?? "").toUpperCase(),
+          source: "yahoo",
+          asOf: FIXED_NOW,
+          stale: false,
+          events: this.corporateActions,
+        });
       if (path === "/api/paper/stream") return await this.paperStream(route, request);
       if (path.startsWith("/api/trpc/"))
         return await this.trpc(route, request, path.slice("/api/trpc/".length));
