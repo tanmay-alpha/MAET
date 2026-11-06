@@ -3,9 +3,9 @@ import { getClientIp } from "../../infra/client-ip";
 import { bus } from "../../infra/bus";
 import { buildQuotesPayload, loadQuotes } from "../../domain/market/quote-service";
 import { toMarketQuote } from "../../domain/market/quote-quality";
-import { MARKET_SYMBOL_PATTERN, MAX_SYMBOLS_PER_REQUEST } from "../../domain/market/symbol";
+import { MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol";
 import { subscribeMarketSymbols } from "../../orchestrator";
-import type { Tick } from "@shared/types";
+import { MAX_STREAM_SYMBOLS, type Tick } from "@shared/types";
 
 let activeConnections = 0;
 const MAX_CONNECTIONS = 100;
@@ -23,8 +23,10 @@ export default defineEventHandler(async (event) => {
       .map((symbol) => symbol.trim().toUpperCase())
       .filter(Boolean)
   )];
-  if (symbols.length === 0 || symbols.length > MAX_SYMBOLS_PER_REQUEST) {
-    throw createError({ statusCode: 400, statusMessage: `Request between 1 and ${MAX_SYMBOLS_PER_REQUEST} symbols` });
+  // The browser shares one stream across all mounted components, so this cap
+  // is the union-sized MAX_STREAM_SYMBOLS, not the 50-symbol REST quotes cap.
+  if (symbols.length === 0 || symbols.length > MAX_STREAM_SYMBOLS) {
+    throw createError({ statusCode: 400, statusMessage: `Request between 1 and ${MAX_STREAM_SYMBOLS} symbols` });
   }
   if (symbols.some((symbol) => !MARKET_SYMBOL_PATTERN.test(symbol))) {
     throw createError({ statusCode: 400, statusMessage: "Invalid symbol" });

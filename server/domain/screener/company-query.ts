@@ -1,5 +1,6 @@
 import { desc, eq, ne } from "drizzle-orm";
 import { db } from "../../data/drizzle/client";
+import { withOptionalDatabase } from "../../data/drizzle/availability";
 import { companies, fundamentals, quoteSnapshots, technicalSnapshots } from "../../db/schema";
 import { getNseCompanyMaster, searchNseCompanyMaster } from "../../data/sources/nse-company-master";
 
@@ -499,7 +500,7 @@ async function queryNseFallback(input: CompanyScreenerParams): Promise<CompanySc
 
 export async function queryCompanyScreener(input: CompanyScreenerParams): Promise<CompanyScreenerResponse> {
   try {
-    return await queryDatabase(input);
+    return await withOptionalDatabase(() => queryDatabase(input));
   } catch {
     return queryNseFallback(input);
   }
