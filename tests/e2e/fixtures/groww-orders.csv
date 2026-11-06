@@ -1,0 +1,5 @@
+﻿Stock name,Symbol,ISIN,Type,Quantity,Value,Exchange,Exchange Order Id,Execution date and time,Order status
+Infosys Ltd,INFY,INE009A01021,BUY,10,"14,805.00",NSE,7001,15-01-2024 10:30 AM,Executed
+"ITC, Ltd",ITC,INE154A01025,BUY,20,"9,000.00",NSE,7002,16-01-2024 11:00 AM,Executed
+Infosys Ltd,INFY,INE009A01021,SELL,4,"6,400.00",NSE,7003,20-03-2024 02:15 PM,Executed
+Infosys Ltd,INFY,INE009A01021,SELL,6,"9,000.00",NSE,7004,21-03-2024 09:20 AM,Cancelled
