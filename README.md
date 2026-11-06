@@ -162,6 +162,12 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 - Server-Sent Events for paper updates: fill, order and account events go to a transactional outbox; `server/workers/paper-outbox-publisher.ts` claims, publishes to Redis and marks each batch in one transaction (at-least-once), and one shared Redis subscriber per process (`server/modules/paper-trading/stream-hub.ts`) fans events out to `/api/paper/stream`. Event names are a shared contract (`shared/domain/paper-trading/stream-events.ts`). When Redis is unavailable the stream answers 503, events stay `PENDING`, and the UI polls (every 3 s while orders are working, else 10 s).
 - The live feed subscribes NSE symbols with an open market stream, an active alert, a working paper order or an open paper position (`server/modules/paper-trading/interest-subscriptions.ts`; refreshed on boot, every 60 s and after order/fill events, capped at 150 symbols with working orders first). BSE symbols get no live ticks, so BSE resting orders do not fill.
 
+### Options Payoff Lab (`/payoff`)
+- Multi-leg builder for index and stock options: buy/sell CE, PE or futures legs with strike, lots and premium; templates (straddle, strangle, spreads, iron condor, iron butterfly, covered call, protective put) place strikes around the ATM strike and leave premiums blank. Prices are the user's inputs, not live quotes.
+- Expiry payoff and today's Black-Scholes value on one chart, with breakevens, spot and hover read-out; a summary of max profit/loss (including "Unlimited"), exact breakevens, net credit/debit, risk : reward and position Greeks; a spot-move × day scenario grid with an IV shift.
+- Max profit/loss and breakevens are solved analytically from the strikes (`shared/domain/options/payoff.ts`), not read off a sampled curve. Index lot defaults follow NSE circular NSE/FAOP/70616 (NIFTY 65, BANKNIFTY 30, FINNIFTY 60) and stay editable.
+- State lives in the URL (shareable) and the last session in localStorage; nothing is stored server-side. On an options chain, "Open in Payoff Lab" and each LTP open the lab pre-filled. See [docs/RESEARCH_ENGINE.md §10](docs/RESEARCH_ENGINE.md#10-options-payoff-lab).
+
 ---
 
 ## 4. Repository Structure
@@ -194,7 +200,7 @@ MAET/
 │   ├── orchestrator.ts           # Worker/market-data orchestration
 │   └── nitro.config.ts           # Nitro build configuration
 ├── shared/                       # Contracts shared by frontend and backend
-│   ├── domain/                   # Domain contracts (paper trading, Indian equity charges)
+│   ├── domain/                   # Domain logic shared by both sides (paper trading, Indian equity charges, options pricing and payoff)
 │   ├── indicators/               # Canonical indicator implementations
 │   ├── research/                 # Research schemas and contracts
 │   ├── screener/                 # Screener AST and filter registry
