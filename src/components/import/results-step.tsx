@@ -13,7 +13,8 @@ import { fetchMarketQuotes } from "@/lib/market-api";
 const QUOTE_BATCH = 50;
 
 const signed = (value: number) => <span className={value > 0 ? "text-bull" : value < 0 ? "text-bear" : ""}>{rupees(value)}</span>;
-const fixed = (value: number) => value.toFixed(2);
+/** Export figures stay `number`s, so toCsv writes them as numbers and only text cells get formula-neutralised. */
+const fixed = (value: number) => Number(value.toFixed(2));
 
 function ExportButton({ fileName, rows }: { fileName: string; rows: Array<Array<string | number>> }) {
   return <button type="button" onClick={() => downloadCsv(fileName, toCsv(rows))}

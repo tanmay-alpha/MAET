@@ -91,9 +91,20 @@ export function parseCsv(text: string): CsvRow[] {
   return parser.end();
 }
 
+/** A text cell starting with one of these is evaluated as a formula by Excel, Sheets or LibreOffice. */
+const FORMULA_TRIGGER = /^[=+\-@\t\r]/;
+
+/**
+ * Writes RFC 4180 CSV that is safe to open in a spreadsheet (OWASP CSV
+ * injection): a text cell starting with = + - @ TAB or CR gets a leading
+ * single quote, so "=HYPERLINK(...)" from an imported file opens as text.
+ * The cell's type decides: a `number` is written as is, so -21293.75 stays a
+ * number, while a string is always text, even "-12.5", because toCsv cannot
+ * tell a figure from untrusted file content. Callers pass figures as numbers.
+ */
 export function toCsv(rows: ReadonlyArray<ReadonlyArray<string | number>>): string {
   const escape = (value: string | number) => {
-    const text = String(value);
+    const text = typeof value === "number" ? String(value) : FORMULA_TRIGGER.test(value) ? `'${value}` : value;
     return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
   };
   return rows.map((row) => row.map(escape).join(",")).join("\r\n");

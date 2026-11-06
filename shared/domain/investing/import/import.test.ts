@@ -64,6 +64,21 @@ describe("CSV parsing", () => {
     const csv = toCsv([["symbol", "note"], ["INFY", 'a, "b"'], ["TCS", 12.5]]);
     expect(parseCsv(csv).map((row) => row.cells)).toEqual([["symbol", "note"], ["INFY", 'a, "b"'], ["TCS", "12.5"]]);
   });
+
+  it("exports cells that a spreadsheet would run as formulas as plain text", () => {
+    const csv = toCsv([
+      ["=HYPERLINK(\"https://evil.test\",\"x\")", "+cmd|' /C calc'!A0", "-2+3", "@SUM(A1:A2)", "\t=1+1", "\r=1+1"],
+    ]);
+    expect(parseCsv(csv)[0]!.cells).toEqual([
+      "'=HYPERLINK(\"https://evil.test\",\"x\")", "'+cmd|' /C calc'!A0", "'-2+3", "'@SUM(A1:A2)", "'\t=1+1", "'\r=1+1",
+    ]);
+  });
+
+  it("keeps typed numbers numeric, negative ones included, and neutralises numeric-looking text", () => {
+    expect(toCsv([[-21293.75, 0, 12.5, -0.05]])).toBe("-21293.75,0,12.5,-0.05");
+    // A string reached toCsv as text (a symbol or note from the file), so it stays text.
+    expect(toCsv([["-12.5", "INFY"]])).toBe("'-12.5,INFY");
+  });
 });
 
 describe("dates", () => {
