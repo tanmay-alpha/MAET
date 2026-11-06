@@ -3,6 +3,7 @@ import { MemoryStorage } from "@/test-utils/memory-storage";
 import {
   PAYOFF_LAB_STORAGE_KEY,
   draftFromSearch,
+  istIsoDate,
   loadStoredSearch,
   parsePayoffSearch,
   payoffSearchForChainContract,
@@ -169,6 +170,22 @@ describe("payoff lab validation", () => {
     const { contractErrors } = validateLab({ ...condorDraft, contract }, "2026-11-07");
     expect(contractErrors.spot).toBe("Enter spot > 0");
     expect(visibleContractErrors(contract, contractErrors)).toEqual({ lotSize: "Whole number > 0" });
+  });
+
+  it("rejects an impossible calendar expiry from a link instead of rolling it into March", () => {
+    expect(parsePayoffSearch({ exp: "2026-02-30" }).exp).toBeUndefined();
+    const result = validateLab({ ...condorDraft, contract: { ...condorDraft.contract, expiry: "2026-02-30" } }, "2026-02-01");
+    expect(result.contractErrors.expiry).toBe("Pick an expiry");
+    expect(result.daysToExpiry).toBeNull();
+    expect(result.lab).toBeNull();
+  });
+});
+
+describe("payoff lab clock", () => {
+  it("dates today in IST, where NSE contracts expire, whatever the viewer's zone", () => {
+    expect(istIsoDate(new Date("2026-11-07T18:29:59Z"))).toBe("2026-11-07");
+    // 18:30 UTC is midnight in India: still 7 Nov in New York, already 8 Nov on the exchange.
+    expect(istIsoDate(new Date("2026-11-07T18:30:00Z"))).toBe("2026-11-08");
   });
 });
 
