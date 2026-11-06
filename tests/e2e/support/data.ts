@@ -8,6 +8,7 @@
 import type { MarketCandle, MarketCompany } from "../../../src/lib/market-api";
 import type {
   PaperAccountRow,
+  PaperFillRow,
   PaperOrderRow,
 } from "../../../server/modules/paper-trading/contracts";
 
@@ -21,6 +22,7 @@ type Wire<Row> = {
 };
 export type PaperAccountWire = Wire<PaperAccountRow>;
 export type PaperOrderWire = Wire<PaperOrderRow>;
+export type PaperFillWire = Wire<PaperFillRow>;
 
 export const FIXED_NOW = "2026-11-06T10:15:00.000Z";
 export const USER_ID = "7d7f0f7e-1c1f-4a52-9a4c-0f3b7c1e2a01";
@@ -314,6 +316,33 @@ export function paperOrderRow(input: {
     referencePrice: "2450.0000",
     lastQuoteFingerprint: null,
     version: 1,
+  };
+}
+
+/** One execution of `order`, as server/modules/paper-trading/fill-writer.ts records it. */
+export function paperFillRow(order: PaperOrderWire, input: { id: string; quantity: number; fillPrice: number; fees: number }): PaperFillWire {
+  return {
+    id: input.id,
+    orderId: order.id,
+    userId: USER_ID,
+    generation: order.generation,
+    symbol: order.symbol,
+    exchange: order.exchange,
+    side: order.side,
+    quantity: input.quantity,
+    referencePrice: input.fillPrice.toFixed(4),
+    fillPrice: input.fillPrice.toFixed(4),
+    slippage: "0.0000",
+    fees: input.fees.toFixed(4),
+    realizedPnl: "0.0000",
+    quoteSource: "angelone",
+    quoteQuality: "live",
+    quoteTimestamp: FIXED_NOW,
+    quoteFingerprint: `e2e-${input.id}`,
+    executionReason: "USER_ORDER",
+    executionSequence: 1,
+    executedAt: FIXED_NOW,
+    createdAt: FIXED_NOW,
   };
 }
 

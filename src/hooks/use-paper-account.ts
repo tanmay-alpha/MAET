@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { PaperStreamManager } from "@/lib/paper-stream-manager";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { paperAccountStatus, type PaperAccountStatus } from "@/lib/paper-account-status";
+import { isWorkingOrderStatus } from "@shared/domain/paper-trading/order-status";
 import type {
   PaperAccountRow,
   PaperOrderRow,
@@ -61,10 +62,8 @@ export function usePaperAccount(): UsePaperAccountResult {
     refetchOnWindowFocus: true,
     refetchInterval: (query) => {
       if (sseConnected) return false;
-      const openOrders = query.state.data?.orders?.some(
-        (o: PaperOrderRow) => o.status === "PENDING" || o.status === "TRIGGER_PENDING"
-      );
-      return openOrders ? 3000 : 10000;
+      const workingOrders = query.state.data?.orders?.some((o: PaperOrderRow) => isWorkingOrderStatus(o.status));
+      return workingOrders ? 3000 : 10000;
     },
   });
 
@@ -105,7 +104,9 @@ export function usePaperAccount(): UsePaperAccountResult {
     mutationFn: async (orderId: string) => {
       return await trpc.paperTrading.cancelOrder.mutate({ orderId });
     },
-    onSuccess: () => {
+    // A refused cancel (the order filled or was cancelled meanwhile) also means the
+    // cached list is stale, so reload it either way.
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["paperTrading"] });
     },
   });

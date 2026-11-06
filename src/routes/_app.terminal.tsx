@@ -14,6 +14,8 @@ import type { PaperOrderRow, PaperPositionRow, PaperFillRow } from "../../server
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
 import { buildClosePositionOrder } from "@/lib/paper-orders";
 import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
+import { PaperOrderStatus } from "@/components/trading/paper-order-status";
+import { isWorkingOrderStatus } from "@shared/domain/paper-trading/order-status";
 import { mapFillsToTradeMarkers } from "@/components/trading/chart-trade-markers";
 
 import { useActiveSymbol } from "@/hooks/use-active-symbol";
@@ -122,6 +124,7 @@ function Terminal() {
     () => extractPaperOverlay(active, positions, orders),
     [active, positions, orders]
   );
+  const workingOrders = useMemo(() => orders.filter((o: PaperOrderRow) => isWorkingOrderStatus(o.status)), [orders]);
 
   const tradeMarkers = useMemo(
     () => mapFillsToTradeMarkers(fills, active),
@@ -375,7 +378,7 @@ function Terminal() {
                 }`}
               >
                 <ClipboardList className="h-3.5 w-3.5" />
-                Pending Orders ({orders.filter((o: PaperOrderRow) => o.status === "PENDING" || o.status === "TRIGGER_PENDING").length})
+                Pending Orders ({workingOrders.length})
               </button>
               <button
                 onClick={() => setActiveTab("history")}
@@ -460,15 +463,15 @@ function Terminal() {
                       <th className="px-3 py-1.5 text-right">Side</th>
                       <th className="px-3 py-1.5 text-right">Type</th>
                       <th className="px-3 py-1.5 text-right">Price</th>
-                      <th className="px-3 py-1.5 text-right">Quantity</th>
+                      <th className="px-3 py-1.5 text-right">Filled / Qty</th>
+                      <th className="px-3 py-1.5 text-right">Remaining</th>
+                      <th className="px-3 py-1.5 text-right">Avg Fill</th>
                       <th className="px-3 py-1.5 text-right">Status</th>
                       <th className="px-3 py-1.5 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {orders
-                      .filter((o: PaperOrderRow) => o.status === "PENDING" || o.status === "TRIGGER_PENDING")
-                      .map((o: PaperOrderRow) => (
+                    {workingOrders.map((o: PaperOrderRow) => (
                         <tr key={o.id} className="border-b border-border hover:bg-accent/40 transition-colors">
                           <td className="px-3 py-2 text-muted-foreground">
                             {new Date(o.placedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
@@ -480,9 +483,13 @@ function Terminal() {
                             </span>
                           </td>
                           <td className="px-3 py-2 text-right">{o.type}</td>
-                          <td className="px-3 py-2 text-right">₹{o.limitPrice ? Number(o.limitPrice).toFixed(2) : o.stopPrice ? Number(o.stopPrice).toFixed(2) : "MKT"}</td>
-                          <td className="px-3 py-2 text-right">{o.qty}</td>
-                          <td className="px-3 py-2 text-right font-semibold text-amber-500">{o.status}</td>
+                          <td className="px-3 py-2 text-right">{o.limitPrice ? `₹${Number(o.limitPrice).toFixed(2)}` : o.stopPrice ? `₹${Number(o.stopPrice).toFixed(2)}` : "MKT"}</td>
+                          <td className="px-3 py-2 text-right">{o.filledQty}/{o.qty}</td>
+                          <td className="px-3 py-2 text-right">{o.qty - o.filledQty}</td>
+                          <td className="px-3 py-2 text-right">{o.filledQty > 0 && o.averageFillPrice ? `₹${Number(o.averageFillPrice).toFixed(2)}` : "—"}</td>
+                          <td className="px-3 py-2 text-right">
+                            <PaperOrderStatus status={o.status} />
+                          </td>
                           <td className="px-3 py-2 text-right">
                             <button
                               onClick={() => cancelOrder(o.id)}
@@ -493,9 +500,9 @@ function Terminal() {
                           </td>
                         </tr>
                       ))}
-                    {orders.filter((o: PaperOrderRow) => o.status === "PENDING" || o.status === "TRIGGER_PENDING").length === 0 && (
+                    {workingOrders.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground font-sans">
+                        <td colSpan={10} className="px-3 py-10 text-center text-muted-foreground font-sans">
                           No pending orders.
                         </td>
                       </tr>

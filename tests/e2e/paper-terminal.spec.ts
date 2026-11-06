@@ -1,8 +1,8 @@
 import type { Page, Request } from "@playwright/test";
 import { PaperOrderCommandSchema } from "../../server/modules/paper-trading/contracts";
-import { ACCESS_TOKEN } from "./support/data";
+import { ACCESS_TOKEN, paperFillRow, paperOrderRow, type PaperOrderWire } from "./support/data";
 import { test, expect, signIn } from "./support/fixtures";
-import { API_ORIGIN } from "./support/mock-api";
+import { API_ORIGIN, type MockApi } from "./support/mock-api";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -67,8 +67,10 @@ test("paper terminal: a LIMIT order sends the contract payload, lists the fixtur
     "BUY",
     "LIMIT",
     "₹2400.00",
+    "0/15",
     "15",
-    "PENDING",
+    "—",
+    "Open",
     "Cancel",
   ]);
 
@@ -147,4 +149,170 @@ test("paper dashboard: a signed-in session keeps its account summary and trading
   await expect(page.getByText("Paper account requires sign-in.")).toHaveCount(0);
   await expect(page.locator("header").getByText("Sign-in coming soon", { exact: true })).toHaveCount(0);
   await expect(page.locator("main").getByText("NIFTY 50", { exact: true })).toHaveCount(0);
+});
+
+/**
+ * A LIMIT buy that has traded 4 of 10 shares and a triggered stop-limit that has not
+ * traded yet: both still working, as the matcher leaves them (tick-processor.ts).
+ */
+function seedTradedWorkingOrders(api: MockApi): { partFilled: PaperOrderWire; triggered: PaperOrderWire } {
+  const partFilled: PaperOrderWire = {
+    ...paperOrderRow({
+      id: "00000000-0000-4000-8000-000000000201",
+      type: "LIMIT",
+      symbol: "RELIANCE",
+      exchange: "NSE",
+      side: "BUY",
+      quantity: 10,
+      limitPrice: 2440,
+      clientOrderId: "00000000-0000-4000-8000-000000000202",
+      idempotencyKey: "00000000-0000-4000-8000-000000000203",
+    }),
+    status: "PARTIALLY_FILLED",
+    filledQty: 4,
+    averageFillPrice: "2439.5000",
+    lastFillAt: "2026-11-06T10:10:00.000Z",
+  };
+  const triggered: PaperOrderWire = {
+    ...paperOrderRow({
+      id: "00000000-0000-4000-8000-000000000211",
+      type: "STOP_LOSS_LIMIT",
+      symbol: "TCS",
+      exchange: "NSE",
+      side: "SELL",
+      quantity: 5,
+      stopPrice: 3880,
+      limitPrice: 3875,
+      clientOrderId: "00000000-0000-4000-8000-000000000212",
+      idempotencyKey: "00000000-0000-4000-8000-000000000213",
+    }),
+    status: "TRIGGERED",
+    triggeredAt: "2026-11-06T10:12:00.000Z",
+  };
+  api.orders.push(partFilled, triggered);
+  api.fills.push(
+    paperFillRow(partFilled, { id: "00000000-0000-4000-8000-000000000204", quantity: 4, fillPrice: 2439.5, fees: 11.72 }),
+  );
+  return { partFilled, triggered };
+}
+
+test("paper terminal: part-filled and triggered orders stay working with their fills, and a cancel keeps the filled part", async ({
+  page,
+  api,
+}) => {
+  const { partFilled } = seedTradedWorkingOrders(api);
+  await openSignedInTerminal(page);
+
+  const tableWith = (column: string) =>
+    page.getByRole("table").filter({ has: page.getByRole("columnheader", { name: column, exact: true }) });
+  const workingTable = tableWith("Remaining");
+  await expect(async () => {
+    await page.getByRole("button", { name: "Pending Orders (2)" }).click();
+    await expect(workingTable).toBeVisible({ timeout: 1_000 });
+  }).toPass();
+  const partRow = workingTable.getByRole("row").filter({ hasText: "RELIANCE" });
+  await expect(partRow.getByRole("cell")).toHaveText([
+    /\d{2}:\d{2}/,
+    "RELIANCE",
+    "BUY",
+    "LIMIT",
+    "₹2440.00",
+    "4/10",
+    "6",
+    "₹2439.50",
+    "Part filled",
+    "Cancel",
+  ]);
+  await expect(workingTable.getByRole("row").filter({ hasText: "TCS" }).getByRole("cell")).toHaveText([
+    /\d{2}:\d{2}/,
+    "TCS",
+    "SELL",
+    "STOP_LOSS_LIMIT",
+    "₹3875.00",
+    "0/5",
+    "5",
+    "—",
+    "Triggered",
+    "Cancel",
+  ]);
+
+  const cancelRequest = page.waitForRequest(isMutation("paperTrading.cancelOrder"));
+  await partRow.getByRole("button", { name: "Cancel", exact: true }).click();
+  const cancel = await cancelRequest;
+  expect(cancel.postDataJSON()).toEqual({ orderId: partFilled.id });
+  expect(cancel.headers().authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+
+  // The working tab drops it; the fill it already made stays in the history tab.
+  await expect(page.getByRole("button", { name: "Pending Orders (1)" })).toBeVisible();
+  await expect(partRow).toHaveCount(0);
+  await page.getByRole("button", { name: "Fills History (1)" }).click();
+  await expect(tableWith("Fill Price").getByRole("row").filter({ hasText: "RELIANCE" }).getByRole("cell")).toHaveText([
+    /\d{2}:\d{2}/,
+    "RELIANCE",
+    "BUY",
+    "4",
+    "₹2439.50",
+    "₹0.00",
+    "₹11.72",
+    "USER_ORDER",
+  ]);
+  expect(api.orders[0]).toMatchObject({ status: "CANCELLED", filledQty: 4 });
+});
+
+test("/orders: part-filled and triggered orders show quantities, average fill and Cancel; a cancel keeps the filled part", async ({
+  page,
+  api,
+}) => {
+  const { partFilled, triggered } = seedTradedWorkingOrders(api);
+  await signIn(page);
+  await page.goto("/orders");
+
+  const partRow = page.getByRole("row").filter({ hasText: "RELIANCE" });
+  const triggeredRow = page.getByRole("row").filter({ hasText: "TCS" });
+  await expect(partRow.getByRole("cell")).toHaveText([
+    /\d{2}/,
+    /^RELIANCE/,
+    "BUY",
+    "Limit",
+    "4/10",
+    "6",
+    "₹2,440.00",
+    "₹2,439.50",
+    "Part filled",
+    "Cancel",
+  ]);
+  await expect(triggeredRow.getByRole("cell")).toHaveText([
+    /\d{2}/,
+    /^TCS/,
+    "SELL",
+    "SL limit",
+    "0/5",
+    "5",
+    "₹3,875.00 · trig ₹3,880.00",
+    "—",
+    "Triggered",
+    "Cancel",
+  ]);
+
+  const partCancel = page.waitForRequest(isMutation("paperTrading.cancelOrder"));
+  await expect(async () => {
+    await partRow.getByRole("button", { name: "Cancel", exact: true }).click({ timeout: 1_000 });
+    await expect.poll(() => api.trpcCalls("paperTrading.cancelOrder").length, { timeout: 1_000 }).toBeGreaterThan(0);
+  }).toPass();
+  expect((await partCancel).postDataJSON()).toEqual({ orderId: partFilled.id });
+  // Cancelled, with the 4 shares it bought and their average price still shown.
+  await expect(partRow.getByRole("cell")).toHaveText([/\d{2}/, /^RELIANCE/, "BUY", "Limit", "4/10", "—", "₹2,440.00", "₹2,439.50", "Cancelled", ""]);
+
+  const triggeredCancel = page.waitForRequest(isMutation("paperTrading.cancelOrder"));
+  await triggeredRow.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect((await triggeredCancel).postDataJSON()).toEqual({ orderId: triggered.id });
+  await expect(triggeredRow).toContainText("Cancelled");
+  await expect(triggeredRow.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+});
+
+test("paper dashboard: part-filled and triggered orders count as pending", async ({ page, api }) => {
+  seedTradedWorkingOrders(api);
+  await signIn(page);
+  await page.goto("/dashboard");
+  await expect(page.getByText("0 filled · 2 pending", { exact: true })).toBeVisible();
 });

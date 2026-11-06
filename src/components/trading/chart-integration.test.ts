@@ -109,6 +109,37 @@ describe("Chart Paper Overlay", () => {
     const overlay = extractPaperOverlay("INFY", [], []);
     expect(overlay).toBeNull();
   });
+
+  it("draws exits and entries that are triggered or part filled, and ignores finished ones", () => {
+    const position = {
+      id: "pos-3",
+      symbol: "INFY",
+      averageEntryPrice: "1500.0000",
+      totalShares: 20,
+      unrealizedPnl: "0.0000",
+      side: "LONG",
+    } as PaperPositionRow;
+    const order = (id: string, fields: Partial<PaperOrderRow>) => ({ id, symbol: "INFY", side: "SELL", ...fields }) as PaperOrderRow;
+
+    const working = extractPaperOverlay("INFY", [position], [
+      order("sl-done", { type: "STOP_LOSS_MARKET", status: "CANCELLED", stopPrice: "1400.0000" }),
+      order("tp-done", { type: "LIMIT", status: "FILLED", limitPrice: "1700.0000" }),
+      order("sl", { type: "STOP_LOSS_MARKET", status: "TRIGGERED", stopPrice: "1450.0000" }),
+      order("tp", { type: "LIMIT", status: "PARTIALLY_FILLED", limitPrice: "1600.0000" }),
+    ]);
+    expect(working?.stopLoss).toBe(1450);
+    expect(working?.takeProfit).toBe(1600);
+
+    const finishedOnly = extractPaperOverlay("INFY", [position], [
+      order("tp-done", { type: "LIMIT", status: "FILLED", limitPrice: "1700.0000" }),
+    ]);
+    expect(finishedOnly?.takeProfit).toBeUndefined();
+
+    const entry = extractPaperOverlay("INFY", [], [
+      order("entry", { side: "BUY", type: "LIMIT", status: "PARTIALLY_FILLED", limitPrice: "1490.0000" }),
+    ]);
+    expect(entry).toMatchObject({ averageEntryPrice: 1490, side: "LONG" });
+  });
 });
 
 describe("Chart Trade Markers", () => {

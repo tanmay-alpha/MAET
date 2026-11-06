@@ -12,6 +12,7 @@ import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
 import { ResetAccountButton } from "@/components/trading/reset-account-button";
 import type { PaperAccountRow, PaperPositionRow, PaperOrderRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
+import { isWorkingOrderStatus } from "@shared/domain/paper-trading/order-status";
 
 export const Route = createFileRoute("/_app/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — MAET" }] }),
@@ -111,7 +112,7 @@ function Dashboard() {
 
   const figures = account && accountFigures(account, unrealizedPnl);
   const filledOrders = orders.filter((o: PaperOrderRow) => o.status === "FILLED").length;
-  const pendingOrders = orders.filter((o: PaperOrderRow) => o.status === "PENDING" || o.status === "TRIGGER_PENDING").length;
+  const pendingOrders = orders.filter((o: PaperOrderRow) => isWorkingOrderStatus(o.status)).length;
 
   return (
     <div className="h-full overflow-y-auto p-4">

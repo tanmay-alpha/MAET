@@ -6,6 +6,7 @@
  * TradingView Lightweight Charts price scale.
  */
 
+import { isWorkingOrderStatus } from "@shared/domain/paper-trading/order-status";
 import type { PaperPositionRow, PaperOrderRow } from "../../../server/modules/paper-trading/contracts";
 import type { PaperOverlayState } from "./lightweight-chart";
 
@@ -25,11 +26,9 @@ export function extractPaperOverlay(
     (p) => p.symbol.trim().toUpperCase() === normSymbol && Number(p.totalShares) > 0
   );
 
-  // Find pending protective orders for this symbol
+  // Working orders for this symbol (untriggered, triggered or part filled)
   const pendingOrders = orders.filter(
-    (o) =>
-      o.symbol.trim().toUpperCase() === normSymbol &&
-      (o.status === "PENDING" || o.status === "TRIGGER_PENDING")
+    (o) => o.symbol.trim().toUpperCase() === normSymbol && isWorkingOrderStatus(o.status)
   );
 
   if (position) {

@@ -13,6 +13,7 @@ import type { Page, Request, Route } from "@playwright/test";
 import type { MarketCandle, MarketCompany } from "../../../src/lib/market-api";
 import { PaperOrderCommandSchema } from "../../../server/modules/paper-trading/contracts";
 import { CreateStrategyInputSchema } from "../../../shared/strategy/contracts";
+import { isWorkingOrderStatus } from "../../../shared/domain/paper-trading/order-status";
 import type { CorporateActionEvent } from "../../../shared/types/corporate-actions";
 import { WORLD_EVENTS, WORLD_MACRO, WORLD_NEWS } from "./world-data";
 import {
@@ -28,6 +29,7 @@ import {
   paperOrderRow,
   quoteFor,
   type MarketSession,
+  type PaperFillWire,
   type PaperOrderWire,
 } from "./data";
 
@@ -110,6 +112,8 @@ export class MockApi {
   session: MarketSession = "open";
   /** Paper orders the fake account holds; placeOrder/cancelOrder mutate it. */
   readonly orders: PaperOrderWire[] = [];
+  /** Executions of those orders; the fake never fills anything itself. */
+  readonly fills: PaperFillWire[] = [];
   /** The tick each market SSE connection sends after its snapshot. */
   tick = { symbol: "NIFTY50", price: BASE_PRICES.NIFTY50 + 12.35 };
   /**
@@ -460,7 +464,7 @@ export class MockApi {
       account,
       positions: [],
       orders: this.orders,
-      fills: [],
+      fills: this.fills,
       asOf: FIXED_NOW,
     }));
     this.onMutation("paperTrading.placeOrder", (input) => {
@@ -498,8 +502,9 @@ export class MockApi {
       const orderId = requireString(input, "orderId");
       const order = this.orders.find((row) => row.id === orderId);
       if (!order) throw new TrpcError("NOT_FOUND", "Order not found");
-      if (order.status !== "PENDING" && order.status !== "TRIGGER_PENDING") {
-        throw new TrpcError("CONFLICT", `Order ${orderId} is ${order.status}`);
+      // Like PaperTradingService.cancelOrder: any working order, filled quantity kept.
+      if (!isWorkingOrderStatus(order.status)) {
+        throw new TrpcError("CONFLICT", `Cannot cancel order in ${order.status} state`);
       }
       order.status = "CANCELLED";
       order.cancelledAt = FIXED_NOW;

@@ -4,6 +4,8 @@ import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { PaperOrderStatus } from "@/components/trading/paper-order-status";
+import { isWorkingOrderStatus } from "@shared/domain/paper-trading/order-status";
 import type { PaperOrderRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
 
 export const Route = createFileRoute("/_app/orders")({
@@ -13,24 +15,12 @@ export const Route = createFileRoute("/_app/orders")({
   component: OrdersPage,
 });
 
-const STATUS: Record<string, { label: string; className: string }> = {
-  PENDING: { label: "Open", className: "text-amber-300" },
-  TRIGGER_PENDING: { label: "Awaiting trigger", className: "text-amber-300" },
-  TRIGGERED: { label: "Triggered", className: "text-primary" },
-  PARTIALLY_FILLED: { label: "Part filled", className: "text-primary" },
-  FILLED: { label: "Filled", className: "text-bull" },
-  REJECTED: { label: "Rejected", className: "text-bear" },
-  CANCELLED: { label: "Cancelled", className: "text-muted-foreground" },
-};
-
 const ORDER_TYPE: Record<string, string> = {
   MARKET: "Market",
   LIMIT: "Limit",
   STOP_LOSS_LIMIT: "SL limit",
   STOP_LOSS_MARKET: "SL market",
 };
-
-const OPEN_STATUSES: Record<string, true> = { PENDING: true, TRIGGER_PENDING: true, TRIGGERED: true, PARTIALLY_FILLED: true };
 
 const FILTERS = [
   { id: "all", label: "All" },
@@ -60,16 +50,6 @@ function orderPrice(order: PaperOrderRow): string {
   return [limit, trigger].filter(Boolean).join(" · ") || "Market";
 }
 
-function OrderStatus({ status, rejectReason }: { status: string; rejectReason?: string | null }) {
-  const config = STATUS[status] ?? { label: status, className: "text-muted-foreground" };
-  return (
-    <span className={`font-sans text-[11px] font-medium ${config.className}`} title={rejectReason ?? undefined}>
-      {config.label}
-      {rejectReason && <span className="ml-1 font-normal text-muted-foreground">({rejectReason})</span>}
-    </span>
-  );
-}
-
 const TH = "px-3 py-2 font-medium";
 
 function OrdersPage() {
@@ -85,7 +65,7 @@ function OrdersPage() {
   const filteredOrders = useMemo(() => {
     let result = orders;
     if (activeFilter === "open") {
-      result = result.filter((order) => OPEN_STATUSES[order.status]);
+      result = result.filter((order) => isWorkingOrderStatus(order.status));
     } else if (activeFilter !== "all") {
       result = result.filter((order) => order.status === activeFilter);
     }
@@ -165,7 +145,7 @@ function OrdersPage() {
             </div>
 
             <div className="overflow-x-auto rounded border border-border bg-panel">
-              <table className="w-full min-w-[46rem] text-left font-mono text-xs tabular-nums">
+              <table className="w-full min-w-[52rem] text-left font-mono text-xs tabular-nums">
                 <thead>
                   <tr className="border-b border-border text-[10px] uppercase tracking-wide text-muted-foreground">
                     <th className={TH}>Placed</th>
@@ -173,6 +153,7 @@ function OrdersPage() {
                     <th className={TH}>Side</th>
                     <th className={TH}>Type</th>
                     <th className={`${TH} text-right`}>Filled / qty</th>
+                    <th className={`${TH} text-right`}>Remaining</th>
                     <th className={`${TH} text-right`}>Price</th>
                     <th className={`${TH} text-right`}>Avg fill</th>
                     <th className={TH}>Status</th>
@@ -182,7 +163,7 @@ function OrdersPage() {
                 <tbody>
                   {filteredOrders.map((o: PaperOrderRow) => {
                     const quote = quoteMap.get(o.symbol);
-                    const canCancel = o.status === "PENDING" || o.status === "TRIGGER_PENDING";
+                    const working = isWorkingOrderStatus(o.status);
 
                     return (
                       <tr key={o.id} className="border-b border-border/60 last:border-0 hover:bg-accent/30">
@@ -200,13 +181,14 @@ function OrdersPage() {
                         <td className="px-3 py-2 text-right">
                           {o.filledQty}/{o.qty}
                         </td>
+                        <td className="px-3 py-2 text-right">{working ? o.qty - o.filledQty : "—"}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-right">{orderPrice(o)}</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-right">{rupees(o.averageFillPrice)}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right">{o.filledQty > 0 ? rupees(o.averageFillPrice) : "—"}</td>
                         <td className="px-3 py-2">
-                          <OrderStatus status={o.status} rejectReason={o.rejectReason} />
+                          <PaperOrderStatus status={o.status} rejectReason={o.rejectReason} />
                         </td>
                         <td className="px-3 py-1.5 text-right">
-                          {canCancel && (
+                          {working && (
                             <button
                               type="button"
                               onClick={() => cancelOrder(o.id)}
@@ -222,7 +204,7 @@ function OrdersPage() {
                   })}
                   {filteredOrders.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="px-3 py-6 text-center font-sans text-muted-foreground">
+                      <td colSpan={10} className="px-3 py-6 text-center font-sans text-muted-foreground">
                         {orders.length === 0 ? "No paper orders yet. Place one from the terminal." : "No orders match this filter."}
                       </td>
                     </tr>
