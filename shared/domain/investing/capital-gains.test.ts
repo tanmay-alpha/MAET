@@ -83,13 +83,14 @@ describe("buildCapitalGainsReport", () => {
     const report = buildCapitalGainsReport([...trade("stOld", "2024-07-01", "2024-07-22", 10000), ...trade("stNew", "2024-07-01", "2024-07-23", 10000), ...trade("ltOld", "2022-01-01", "2024-07-22", 150000), ...trade("ltNew", "2022-01-01", "2024-07-23", 150000)], 2024, 1);
     expect(bucket(report, "STCG", "old").tax).toBe(1500);
     expect(bucket(report, "STCG", "new").tax).toBe(2000);
-    expect(bucket(report, "LTCG", "old").taxableGain).toBe(25000);
-    expect(bucket(report, "LTCG", "new").taxableGain).toBe(150000);
+    // The exemption goes to the 12.5% gain first: 25000 × 12.5% + 150000 × 10% + 1500 + 2000.
+    expect(bucket(report, "LTCG", "new").taxableGain).toBe(25000);
+    expect(bucket(report, "LTCG", "old").taxableGain).toBe(150000);
     expect(report.exemptionLimit).toBe(125000);
     expect(report.exemptionUsed).toBe(125000);
-    expect(report.baseTax).toBe(24750);
-    expect(report.cess).toBe(990);
-    expect(report.estimatedTax).toBe(25740);
+    expect(report.baseTax).toBe(21625);
+    expect(report.cess).toBe(865);
+    expect(report.estimatedTax).toBe(22490);
   });
 
   it("uses the whole transition FY exemption even when all transfers precede July 23", () => {
@@ -108,14 +109,16 @@ describe("buildCapitalGainsReport", () => {
     expect(current.baseTax).toBeCloseTo(0.125, 10);
   });
 
-  it("sets LTCL only against LTCG and STCL against STCG then LTCG, old buckets first", () => {
+  it("sets LTCL only against LTCG and STCL against STCG then LTCG, highest rate first", () => {
     const report = buildCapitalGainsReport([...trade("stGainOld", "2024-01-01", "2024-07-22", 100), ...trade("stGainNew", "2024-01-01", "2024-07-23", 300), ...trade("stLoss", "2024-01-01", "2024-08-01", -500), ...trade("ltGainOld", "2020-01-01", "2024-07-22", 200000), ...trade("ltGainNew", "2020-01-01", "2024-07-23", 200000), ...trade("ltLoss", "2020-01-01", "2024-09-01", -50000)], 2024, 1);
-    // ST new internally nets 300 - 500 = -200; ST old consumes 100, then LT old 100.
-    // LT new internally nets 200000 - 50000 = 150000; then old exemption consumes 125000.
+    // STCL 500 absorbs ST 20% (300), ST 15% (100), then LT 12.5% (100).
+    // LTCL 50000 absorbs LT 12.5% first; the exemption then takes the rest of LT 12.5% first.
+    expect(bucket(report, "STCG", "new").lossOffset).toBe(300);
     expect(bucket(report, "STCG", "old").lossOffset).toBe(100);
-    expect(bucket(report, "LTCG", "old").lossOffset).toBe(100);
-    expect(bucket(report, "LTCG", "old").taxableGain).toBe(74900);
-    expect(bucket(report, "LTCG", "new").taxableGain).toBe(150000);
+    expect(bucket(report, "LTCG", "new").lossOffset).toBe(50100);
+    expect(bucket(report, "LTCG", "new").exemptionUsed).toBe(125000);
+    expect(bucket(report, "LTCG", "new").taxableGain).toBe(24900);
+    expect(bucket(report, "LTCG", "old").taxableGain).toBe(200000);
     expect(report.unabsorbedStcl).toBe(0);
     expect(report.unabsorbedLtcl).toBe(0);
   });
@@ -151,7 +154,6 @@ describe("buildCapitalGainsReport", () => {
     expect(report.grossStcg).toBe(1000);
     expect(report.assumptions.join(" ")).toContain("not tax advice");
     expect(report.assumptions.join(" ")).toContain("STT");
-    expect(report.assumptions.join(" ")).toContain("not an optimal");
     expect(JSON.parse(JSON.stringify(report))).toEqual(report);
   });
 

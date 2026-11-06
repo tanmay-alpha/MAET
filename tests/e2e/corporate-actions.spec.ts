@@ -39,8 +39,8 @@ test("stock page: dividend and split markers with hover details, a toggle and th
     "Ex-dateActionDetails",
     "14 Oct 2026Dividend₹24.00 per share",
     "21 Sep 2026Split/bonus2 for 1 · 1:1 as bonus",
-    "14 Aug 2025Dividend₹5.50 per share (split-adjusted)",
-    "19 Aug 2024Dividend₹5.00 per share (split-adjusted)",
+    "14 Aug 2025Dividend₹5.50 per share (adjusted by provider)",
+    "19 Aug 2024Dividend₹5.00 per share (adjusted by provider)",
     "7 Sep 2017Reverse split1 for 10",
   ]);
   await expect(table.getByText("Source: Yahoo Finance", { exact: true })).toBeVisible();
