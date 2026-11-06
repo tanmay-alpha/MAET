@@ -39,10 +39,20 @@ describe("landing heatmap", () => {
   });
 
   test("source and freshness follow per-quote data and market session", () => {
-    expect(marketSummary(response())).toBe("Angel One · Live quotes");
-    expect(marketSummary(response({ source: "yahoo", delayed: true, marketPhase: "CLOSED", quotes: [quote({ source: "yahoo", quality: "delayed", delayed: true })] }))).toBe("Yahoo Finance · Market closed · last available quotes");
-    expect(marketSummary(response({ quotes: [quote(), quote({ source: "yahoo", delayed: true, quality: "delayed" })] }))).toBe("Angel One + Yahoo Finance · Delayed quotes");
-    expect(marketSummary(response({ quotes: [quote({ quality: "stale" })] }))).toBe("Angel One · Stale quotes");
+    const now = new Date("2026-11-06T10:00:05.000Z");
+    expect(marketSummary(response(), now)).toBe("Angel One · Live quotes");
+    expect(marketSummary(response({ source: "yahoo", delayed: true, marketPhase: "CLOSED", quotes: [quote({ source: "yahoo", quality: "delayed", delayed: true })] }), now)).toBe("Yahoo Finance · Market closed · last available quotes");
+    expect(marketSummary(response({ quotes: [quote(), quote({ symbol: "TCS", source: "yahoo", delayed: true, quality: "delayed" })] }), now)).toBe("Angel One + Yahoo Finance · Delayed quotes");
+    expect(marketSummary(response({ quotes: [quote({ quality: "stale" })] }), now)).toBe("Angel One · Stale quotes");
+  });
+
+  test("an empty or partial response is never summarised as live", () => {
+    const now = new Date("2026-11-06T10:00:05.000Z");
+    const empty = marketSummary(response({ quotes: [], errors: [{ symbol: "RELIANCE", message: "timeout" }] }), now);
+    expect(empty).not.toMatch(/live/i);
+    expect(empty).not.toContain("Angel One");
+    const partial = marketSummary(response({ errors: [{ symbol: "TCS", message: "timeout" }] }), now);
+    expect(partial).toContain("1 of 2");
   });
 
   test("freshness uses exchange quote timestamps, not response receipt time", () => {

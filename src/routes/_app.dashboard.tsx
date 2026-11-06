@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Activity, ArrowDownRight, ArrowUpRight, ReceiptText, TrendingUp, Wallet, PlusCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
-import { quoteFeedLabel } from "@/lib/quote-status";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { paperAccountBlockedReason } from "@/lib/paper-account-status";
@@ -85,7 +84,7 @@ function Dashboard() {
     () => [...new Set([...positions.map((position) => position.symbol), ...INDEX_KEYS])],
     [positions]
   );
-  const { quoteMap, isError, delayed, marketPhase } = useMarketQuotes(symbols);
+  const { quoteMap, feed } = useMarketQuotes(symbols);
 
   if (!signedIn) return <GuestMarketDashboard />;
   // No account to show or act on: keep the public market workspace useful under the notice.
@@ -119,7 +118,7 @@ function Dashboard() {
         <div>
           <h1 className="text-xl font-semibold">Paper trading dashboard</h1>
           <p className="text-xs text-muted-foreground">
-            {quoteFeedLabel({ isError, delayed, marketPhase })}
+            {feed.label}
           </p>
         </div>
         <div className="flex gap-2">

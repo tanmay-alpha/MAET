@@ -1,5 +1,5 @@
 import type { MarketQuote, MarketQuotesResponse } from "@/lib/market-api";
-import { quoteFeedLabel } from "@/lib/quote-status";
+import { quoteFeed } from "@/lib/quote-status";
 
 /** Fixed buckets keep the same percentage the same colour across refreshes. */
 export function heatmapTone(changePct: number | undefined): string {
@@ -30,16 +30,13 @@ export function quoteTime(timestamp: string): string {
   });
 }
 
-export function marketSummary(data: MarketQuotesResponse): string {
-  const sources = [...new Set(data.quotes.map((quote) => quote.source))];
-  const source = (sources.length ? sources : [data.source]).map(sourceName).join(" + ");
-  const stale = data.quotes.some((quote) => quote.quality === "stale");
-  const status = stale ? "Stale quotes" : quoteFeedLabel({
-    isError: false,
-    delayed: data.delayed || data.quotes.some((quote) => quote.delayed),
-    marketPhase: data.marketPhase,
-  });
-  return `${source} · ${status}`;
+/** Source and freshness of a response; the symbols it covers are its quotes plus its per-symbol errors. */
+export function marketSummary(data: MarketQuotesResponse, now: Date = new Date()): string {
+  const requested = [...data.quotes, ...data.errors].map((entry) => entry.symbol);
+  const status = quoteFeed({ requested, response: data, isError: false, now }).label;
+  // With no quotes there is no source to credit.
+  if (!data.quotes.length) return status;
+  return `${[...new Set(data.quotes.map((quote) => quote.source))].map(sourceName).join(" + ")} · ${status}`;
 }
 
 export function quoteRange(quotes: MarketQuote[]): string | undefined {

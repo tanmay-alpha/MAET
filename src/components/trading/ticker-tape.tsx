@@ -11,7 +11,7 @@ const INDEX_KEYS: Record<string, string> = {
 };
 
 export function TickerTape() {
-  const { quoteMap, delayed } = useMarketQuotes(Object.values(INDEX_KEYS));
+  const { quoteMap, feed } = useMarketQuotes(Object.values(INDEX_KEYS));
   const indices = INDICES.map((item) => {
     const quote = quoteMap.get(INDEX_KEYS[item.symbol]);
     return {
@@ -37,7 +37,7 @@ export function TickerTape() {
             </span>
             {index === 0 && (
               <span className="text-[9px] uppercase tracking-wider text-muted-foreground">
-                {delayed ? "Delayed" : "Live"}
+                {feed.badge}
               </span>
             )}
           </div>

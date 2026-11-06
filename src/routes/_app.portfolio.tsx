@@ -3,7 +3,6 @@ import { ArrowLeft, DollarSign, TrendingUp, TrendingDown, type LucideIcon } from
 import { useMemo, useState } from "react";
 import { usePortfolioAnalytics } from "@/hooks/use-portfolio-analytics";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
-import { quoteFeedLabel } from "@/lib/quote-status";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { paperAccountBlockedReason } from "@/lib/paper-account-status";
 import { PaperAccountNotice } from "@/components/common/signed-out-notice";
@@ -71,7 +70,7 @@ function PortfolioPage() {
     [positions]
   );
 
-  const { quoteMap, isError, delayed, marketPhase } = useMarketQuotes(positionSymbols);
+  const { quoteMap, feed } = useMarketQuotes(positionSymbols);
 
   const visibleHistory = useMemo(() => {
     if (selectedPeriod === "ALL" || history.length === 0) return history;
@@ -128,7 +127,7 @@ function PortfolioPage() {
                 <p className="text-xs text-muted-foreground">Paper trading performance · <Link to="/import" className="text-primary hover:underline">Analyse a broker tradebook</Link></p>
               </div>
               <span className="text-sm text-muted-foreground">
-                {quoteFeedLabel({ isError, delayed, marketPhase })}
+                {feed.label}
               </span>
             </div>
             <div className="flex gap-2">

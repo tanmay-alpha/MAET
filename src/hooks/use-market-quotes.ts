@@ -7,6 +7,7 @@ import {
   type MarketQuotesResponse,
 } from "@/lib/market-api";
 import { API_BASE_URL } from "@/lib/api-url";
+import { quoteFeed } from "@/lib/quote-status";
 import { reconnectDelayMs, scheduleTimeout, type ScheduleFn } from "@/lib/reconnect-backoff";
 import { MAX_STREAM_SYMBOLS } from "@shared/types";
 
@@ -304,10 +305,16 @@ export function useMarketQuotes(symbols: string[]) {
     () => new Map((query.data?.quotes ?? []).map((quote) => [quote.symbol, quote])),
     [query.data?.quotes]
   );
+  // Recomputed with each response (every 15s, or per tick), so the date check stays current.
+  const feed = useMemo(
+    () => quoteFeed({ requested: normalized, response: query.data, isError: query.isError, now: new Date() }),
+    [normalized, query.data, query.isError]
+  );
 
   return {
     ...query,
     quoteMap,
+    feed,
     streamConnected,
     delayed: query.data?.delayed ?? true,
     marketPhase: query.data?.marketPhase,

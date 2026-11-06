@@ -38,7 +38,7 @@ export function GuestMarketDashboard({
 }: {
   accountNotice?: ReactNode;
 }) {
-  const { quoteMap, marketPhase, delayed, isError, isLoading } = useMarketQuotes(NIFTY50_SYMBOLS);
+  const { quoteMap, marketPhase, feed, isError, isLoading } = useMarketQuotes(NIFTY50_SYMBOLS);
   const { items } = useWatchlist();
   const { gainers, losers } = useMemo(() => rankNiftyMovers(quoteMap), [quoteMap]);
   // Each quote request stays within the public endpoint's 50-symbol limit, including saved lists.
@@ -54,9 +54,9 @@ export function GuestMarketDashboard({
       <header className="border-b border-border pb-3">
         <h1 className="text-xl font-semibold">Paper trading dashboard</h1>
         <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-          <span>{marketPhaseLabel(marketPhase)}</span>
-          <span aria-hidden="true">·</span>
-          <span>{isError ? "Quote service unavailable" : delayed ? "Delayed quotes" : "Live quotes"}</span>
+          {/* The closed and pre-open labels already name the session. */}
+          {feed.state !== "closed" && feed.state !== "pre-open" && <><span>{marketPhaseLabel(marketPhase)}</span><span aria-hidden="true">·</span></>}
+          <span>{feed.label}</span>
           {sources && <span>· {sources}</span>}
         </p>
         {accountNotice}
