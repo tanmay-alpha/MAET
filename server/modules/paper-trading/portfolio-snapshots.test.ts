@@ -66,11 +66,14 @@ describe("snapshot sessions", () => {
 });
 
 describe("position valuation", () => {
+  const FINAL = { date: "2026-10-05", isFinal: true };
+  const INTRADAY = { date: "2026-10-05", isFinal: false };
+
   it("marks a position at a quote from the session and labels its source", () => {
     const valued = valuePosition(
       position(),
       { price: 1050, ts: ist("2026-10-05", "15:29").toISOString(), source: "yahoo", quality: "delayed" },
-      "2026-10-05"
+      FINAL
     );
     expect(valued).toMatchObject({ price: 1050, source: "yahoo", quality: "delayed", stale: false });
     expect(valued.marketValue).toBe(10_500);
@@ -81,23 +84,36 @@ describe("position valuation", () => {
     const valued = valuePosition(
       position(),
       { price: 990, ts: ist("2026-10-02", "15:29").toISOString(), source: "yahoo", quality: "delayed" },
-      "2026-10-05"
+      INTRADAY
     );
     expect(valued).toMatchObject({ price: 1010, source: "last_fill:angelone", stale: false });
   });
 
   it("flags a price from another day as stale instead of presenting it as the close", () => {
-    const valued = valuePosition(position(), null, "2026-10-06");
+    const valued = valuePosition(position(), null, { date: "2026-10-06", isFinal: false });
     expect(valued).toMatchObject({ price: 1010, source: "last_fill:angelone", stale: true });
+  });
+
+  it("needs a price from the 15:00-15:30 closing window for a final snapshot", () => {
+    // The morning fill price is that session's price, but not its close.
+    expect(valuePosition(position(), null, FINAL)).toMatchObject({ price: 1010, stale: true });
+    const at = (time: string) => ({ price: 1050, ts: ist("2026-10-05", time).toISOString(), source: "angelone", quality: "delayed" });
+    expect(valuePosition(position(), at("14:59"), FINAL).stale).toBe(true);
+    expect(valuePosition(position(), at("15:00"), FINAL).stale).toBe(false);
+    expect(valuePosition(position(), at("15:29"), FINAL).stale).toBe(false);
+    // A pre-open quote is never a close: not the same day's, nor the previous session's.
+    expect(valuePosition(position(), at("09:05"), FINAL).stale).toBe(true);
+    const nextPreOpen = { price: 1050, ts: ist("2026-10-06", "09:05").toISOString(), source: "angelone", quality: "delayed" };
+    expect(valuePosition(position(), nextPreOpen, FINAL).stale).toBe(true);
   });
 
   it("flags stale and synthetic quotes even when dated on the session", () => {
     const quote = { price: 1050, ts: ist("2026-10-05", "15:29").toISOString(), source: "simulated", quality: "synthetic" };
-    expect(valuePosition(position({ lastQuotePrice: null }), quote, "2026-10-05").stale).toBe(true);
+    expect(valuePosition(position({ lastQuotePrice: null }), quote, FINAL).stale).toBe(true);
   });
 
   it("falls back to the entry price only as a stale, labelled valuation", () => {
-    const valued = valuePosition(position({ lastQuotePrice: null, lastQuoteTimestamp: null }), null, "2026-10-05");
+    const valued = valuePosition(position({ lastQuotePrice: null, lastQuoteTimestamp: null }), null, INTRADAY);
     expect(valued).toMatchObject({ price: 1000, source: "entry_price", stale: true, asOf: null, unrealizedPnl: 0 });
   });
 
@@ -105,7 +121,7 @@ describe("position valuation", () => {
     const valued = valuePosition(
       position({ side: "SHORT" }),
       { price: 1100, ts: ist("2026-10-05", "15:29").toISOString(), source: "angelone", quality: "delayed" },
-      "2026-10-05"
+      FINAL
     );
     expect(valued.side).toBe("SHORT");
     expect(valued.marketValue).toBe(11_000);
@@ -115,12 +131,13 @@ describe("position valuation", () => {
 
 describe("account valuation", () => {
   it("adds unrealised P&L to cash and summarises price sources and staleness", () => {
+    const session = { date: "2026-10-05", isFinal: false };
     const fresh = valuePosition(
       position(),
       { price: 1050, ts: ist("2026-10-05", "15:29").toISOString(), source: "angelone", quality: "delayed" },
-      "2026-10-05"
+      session
     );
-    const lastFill = valuePosition(position({ id: "pos-2", symbol: "TCS" }), null, "2026-10-05");
+    const lastFill = valuePosition(position({ id: "pos-2", symbol: "TCS" }), null, session);
     const valuation = valueAccount(
       { cashBalance: "999000.0000", initialCash: "1000000.0000" },
       { realizedPnl: 200, fees: 1200 },

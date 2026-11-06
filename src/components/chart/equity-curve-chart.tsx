@@ -1,10 +1,14 @@
 /**
  * Simple equity curve chart component using canvas
  * No external chart library dependency
+ *
+ * Points are spaced by calendar date, so days without a snapshot show as gaps.
+ * Stale-price points are amber; provisional (intraday, never closed) points
+ * are hollow; the generation-start anchor is a hollow square.
  */
 
 import { useRef, useEffect } from "react";
-import type { PerformanceDataPoint } from "@/hooks/use-portfolio-analytics";
+import { dateSpacedX, type PerformanceDataPoint } from "@/lib/portfolio-curve";
 
 interface EquityCurveChartProps {
   data: PerformanceDataPoint[];
@@ -48,9 +52,8 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
     const padding = { top: 20, bottom: 30, left: 80, right: 20 };
     const chartWidth = width - padding.left - padding.right;
     const chartAreaHeight = chartHeight - padding.top - padding.bottom;
-    // A single snapshot sits at the left edge instead of dividing by zero.
-    const step = data.length > 1 ? chartWidth / (data.length - 1) : 0;
-    const xAt = (i: number) => padding.left + step * i;
+    const xs = dateSpacedX(data.map((point) => point.date), padding.left, chartWidth);
+    const xAt = (i: number) => xs[i]!;
     const yAt = (value: number) => padding.top + chartAreaHeight * (1 - (value - minVal) / range);
     const trendColor = data[data.length - 1].value >= data[0].value ? "#22c55e" : "#ef4444";
 
@@ -128,13 +131,28 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
     });
     ctx.stroke();
 
-    // Draw points; snapshots valued with stale prices are amber.
+    // Draw points: stale prices amber, provisional hollow, the start anchor a hollow square.
+    ctx.lineWidth = 1.5;
     data.forEach((point, i) => {
-      if (data.length > 20 && !point.stale) return;
+      if (data.length > 20 && !point.stale && !point.provisional && !point.anchor) return;
+      const color = point.stale ? STALE_COLOR : trendColor;
+      const x = xAt(i);
+      const y = yAt(point.value);
       ctx.beginPath();
-      ctx.arc(xAt(i), yAt(point.value), 3, 0, Math.PI * 2);
-      ctx.fillStyle = point.stale ? STALE_COLOR : trendColor;
-      ctx.fill();
+      if (point.anchor) {
+        ctx.rect(x - 3, y - 3, 6, 6);
+      } else {
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+      }
+      if (point.anchor || point.provisional) {
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = color;
+        ctx.fill();
+      }
     });
 
     // Current value label

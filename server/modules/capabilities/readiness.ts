@@ -55,6 +55,12 @@ export async function checkDatabaseTablesExist(): Promise<Record<string, boolean
     "source_audit",
     "anomaly_flags",
   ];
+  // Columns that tell a migrated table from an older one with the same name, keyed "table.column".
+  // paper_portfolio_snapshots existed since 0008; only 0027 gives it snapshot_date.
+  const requiredColumns = ["paper_portfolio_snapshots.snapshot_date"];
+  const markAllMissing = () => {
+    for (const key of [...requiredTables, ...requiredColumns]) tableMap[key] = false;
+  };
 
   try {
     const client = getSqlClient();
@@ -66,15 +72,19 @@ export async function checkDatabaseTablesExist(): Promise<Record<string, boolean
       for (const table of requiredTables) {
         tableMap[table] = existingTables.has(table);
       }
-    } else {
-      for (const table of requiredTables) {
-        tableMap[table] = false;
+      const columns = await client<{ key: string }[]>`
+        SELECT table_name || '.' || column_name AS key FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name || '.' || column_name IN ${client(requiredColumns)}
+      `;
+      const existingColumns = new Set(columns.map((r) => r.key));
+      for (const column of requiredColumns) {
+        tableMap[column] = existingColumns.has(column);
       }
+    } else {
+      markAllMissing();
     }
   } catch {
-    for (const table of requiredTables) {
-      tableMap[table] = false;
-    }
+    markAllMissing();
   }
 
   cachedTableMap = { map: tableMap, timestamp: now };
@@ -196,12 +206,12 @@ export async function evaluateReadiness(ctx: ReadinessContext): Promise<Capabili
   });
 
   // 9. portfolioAnalytics: daily paper snapshots (migration 0027) back the curve and its metrics.
-  const paSchema = Boolean(tables["paper_portfolio_snapshots"]);
+  const paSchema = Boolean(tables["paper_portfolio_snapshots"] && tables["paper_portfolio_snapshots.snapshot_date"]);
   results.push({
     key: "portfolioAnalytics",
     available: paSchema && hasAuth,
     reason: !paSchema
-      ? "Portfolio analytics requires paper_portfolio_snapshots (migration 0027)"
+      ? "Portfolio analytics requires paper_portfolio_snapshots from migration 0027"
       : !hasAuth
       ? "Portfolio analytics requires sign in"
       : undefined,

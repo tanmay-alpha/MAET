@@ -2,9 +2,9 @@
  * Response shape of paperTrading.portfolioAnalytics. Kept free of runtime
  * server imports so the frontend can import the types.
  */
-import type { PortfolioMetrics } from "./portfolio-metrics";
+import type { CurveAnchor, PortfolioMetrics } from "./portfolio-metrics";
 
-export type { DrawdownResult, MetricResult, PortfolioMetrics } from "./portfolio-metrics";
+export type { CurveAnchor, DrawdownResult, MetricResult, PortfolioMetrics } from "./portfolio-metrics";
 
 /** One end-of-day (or provisional intraday) snapshot of the current account generation. */
 export interface PortfolioCurvePoint {
@@ -38,6 +38,8 @@ export interface PortfolioAnalyticsResult {
   account: { generation: number; initialCash: number; status: string } | null;
   /** Why there is nothing to show (no account), otherwise null. */
   reason: string | null;
+  /** Initial cash on the date the generation began: where the curve and total return start. */
+  anchor: CurveAnchor | null;
   curve: PortfolioCurvePoint[];
   metrics: PortfolioMetrics;
   onDemandSnapshot: OnDemandSnapshotStatus;

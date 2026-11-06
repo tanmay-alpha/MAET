@@ -264,8 +264,9 @@ Tables live in `server/db/schema.ts`; constraints that only exist in SQL are cit
 | `paper_fills` | Append-only execution record with reference price, fill price, slippage, fees, realised P&L, quote source/quality/timestamp/fingerprint, `execution_sequence`. | Unique `(order_id, execution_sequence)` and `(order_id, quote_fingerprint)`; `quantity > 0` (`0011_backend_paper_trading_consolidation.sql`); UPDATE/DELETE blocked by trigger (`0012_enforce_paper_history_immutability.sql`). |
 | `paper_ledger_entries` | Append-only cash ledger: `INITIAL_CASH`, `TRADE_REALIZED_PNL`, `EXECUTION_FEE`. | Unique `(user_id, generation, source_type, source_id, entry_type)`; immutable by trigger (`0012`). |
 | `paper_outbox_events` | Transactional outbox of account/order/position events. | Written in the same transaction as the state change. |
+| `paper_portfolio_snapshots` | Daily equity snapshot per account generation (migration `0027`): cash, positions value, realised/unrealised P&L, fees, price sources, `stale_prices`, `is_final`. Written after each NSE close by `server/plugins/paper-portfolio-snapshots.ts` and on demand by `paperTrading.portfolioAnalytics`. | Unique `(user_id, generation, snapshot_date)`; a final row is only rewritten to replace stale prices. |
 
-The account `generation` implements reset: every query filters by it, and a reset increments it (`server/modules/paper-trading/service.ts` `resetAccount`). Older tables `paper_ledgers`, `paper_margin_logs`, `paper_portfolio_snapshots`, `orders`, `fills` and `idempotency` remain in the schema but are not used by the paper engine.
+The account `generation` implements reset: every query filters by it, and a reset increments it (`server/modules/paper-trading/service.ts` `resetAccount`). Older tables `paper_ledgers`, `paper_margin_logs`, `portfolio_snapshots`, `orders`, `fills` and `idempotency` remain in the schema but are not used by the paper engine.
 
 ### Market and research data
 

@@ -5,13 +5,15 @@
  * after the NSE close by the in-process scheduler, or on demand when the
  * account's analytics are read and the current session has no row yet. An
  * intraday (on-read) row is provisional: the first write after the close
- * replaces it, and a final row is never rewritten.
+ * replaces it. A final row is rewritten only to replace stale prices with a
+ * valuation that has none; otherwise it is never rewritten.
  *
  * Values: cash from the account row; realised P&L and fees summed from the
  * generation's ledger; open positions marked at the last known price, whose
- * source is recorded. A price from another day (or a stale/synthetic quote,
- * or no price at all, which falls back to the entry price) marks the
- * snapshot stale_prices instead of being presented as a close.
+ * source is recorded. A price that is not from the session (for a final
+ * snapshot: not from its closing window), a stale/synthetic quote, or no
+ * price at all (the entry price is used) marks the snapshot stale_prices
+ * instead of being presented as a close.
  */
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
@@ -25,7 +27,7 @@ import { getLogger } from "../../infra/logger";
 import type { PaperAccountRow, PaperPositionRow } from "./contracts";
 import type { PaperDatabase } from "./repository";
 import { signedPositionQuantity } from "./mapper";
-import { computePortfolioMetrics } from "./portfolio-metrics";
+import { computePortfolioMetrics, type CurveAnchor } from "./portfolio-metrics";
 import type {
   OnDemandSnapshotStatus,
   PortfolioAnalyticsResult,
@@ -34,6 +36,14 @@ import type {
 
 const SESSION_OPEN_IST_MINUTES = 9 * 60 + 15;
 const SESSION_CLOSE_IST_MINUTES = 15 * 60 + 30;
+/**
+ * Start of the NSE cash-market closing window. NSE's official closing price is
+ * the volume-weighted average of trades in the last 30 minutes (15:00-15:30
+ * IST), so a final snapshot needs a price from this window or later in the
+ * same session. Last-trade timestamps fall just before 15:30 (e.g. 15:29:59),
+ * which is why the threshold is not the 15:30 close itself.
+ */
+export const CLOSING_WINDOW_START_IST_MINUTES = 15 * 60;
 /** Closing prices settle (and the closing auction prints) shortly after 15:30 IST. */
 export const SNAPSHOT_CLOSE_BUFFER_MINUTES = 15;
 export const END_OF_DAY_SNAPSHOT_IST_MINUTES = SESSION_CLOSE_IST_MINUTES + SNAPSHOT_CLOSE_BUFFER_MINUTES;
@@ -58,6 +68,20 @@ export function isTradingDate(date: string, holidays: Date[]): boolean {
 
 function previousDate(date: string): string {
   return new Date(Date.parse(`${date}T00:00:00.000Z`) - DAY_MS).toISOString().slice(0, 10);
+}
+
+/** The instant of an IST wall-clock time (minutes after midnight) on `date`. */
+function istInstant(date: string, minutes: number): number {
+  return Date.parse(`${date}T00:00:00.000+05:30`) + minutes * 60_000;
+}
+
+/** Trading sessions in (fromExclusive, toInclusive] on the NSE calendar. */
+export function tradingSessionsBetween(fromExclusive: string, toInclusive: string, holidays: Date[]): number {
+  let count = 0;
+  for (let time = Date.parse(`${fromExclusive}T00:00:00.000Z`) + DAY_MS; time <= Date.parse(`${toInclusive}T00:00:00.000Z`); time += DAY_MS) {
+    if (isTradingDate(new Date(time).toISOString().slice(0, 10), holidays)) count++;
+  }
+  return count;
 }
 
 export interface SnapshotSession {
@@ -132,11 +156,15 @@ function priceCandidate(price: number | null, ts: string | null, source: string,
   return Number.isFinite(time) ? { price, ts: new Date(time).toISOString(), time, source, quality } : null;
 }
 
-/** Marks one position at the most recent known price and says whether that price belongs to the session. */
+/**
+ * Marks one position at the most recent known price and says whether that
+ * price can stand for the session: from the session's date, and for a final
+ * snapshot from its closing window or later.
+ */
 export function valuePosition(
   position: PaperPositionRow,
   quote: SnapshotPrice | null,
-  sessionDate: string
+  session: SnapshotSession
 ): PositionValuation {
   const quantity = signedPositionQuantity(position);
   const averageEntryPrice = Number(position.averageEntryPrice);
@@ -158,7 +186,8 @@ export function valuePosition(
   const price = chosen?.price ?? averageEntryPrice;
   const stale =
     chosen === null ||
-    istDateKey(new Date(chosen.time)) !== sessionDate ||
+    istDateKey(new Date(chosen.time)) !== session.date ||
+    (session.isFinal && chosen.time < istInstant(session.date, CLOSING_WINDOW_START_IST_MINUTES)) ||
     (chosen.quality !== null && UNTRUSTED_QUALITIES[chosen.quality] === true);
   return {
     symbol: position.symbol,
@@ -344,8 +373,8 @@ export class PaperPortfolioSnapshotService {
     if (!state) return { status: "no_account", session, snapshot: null };
 
     const { account, positions, ledger } = state;
-    // A generation has no history before it began (account creation or reset).
-    if (session.date < istDateKey(account.resetAt ?? account.createdAt)) {
+    // A generation has no history for sessions that closed before it began (account creation or reset).
+    if ((account.resetAt ?? account.createdAt).getTime() > istInstant(session.date, SESSION_CLOSE_IST_MINUTES)) {
       return { status: "generation_not_started", session, snapshot: null };
     }
 
@@ -357,7 +386,7 @@ export class PaperPortfolioSnapshotService {
     const valuation = valueAccount(
       account,
       ledger,
-      positions.map((position, index) => valuePosition(position, quotes[index] ?? null, session.date))
+      positions.map((position, index) => valuePosition(position, quotes[index] ?? null, session))
     );
 
     const ledgerCash = valuation.initialCash + valuation.realizedPnl - valuation.fees;
@@ -392,7 +421,8 @@ export class PaperPortfolioSnapshotService {
       .onConflictDoUpdate({
         target: [paperPortfolioSnapshots.userId, paperPortfolioSnapshots.generation, paperPortfolioSnapshots.snapshotDate],
         set: values,
-        setWhere: sql`${paperPortfolioSnapshots.isFinal} = false`,
+        // Replace a provisional row, or a final row with stale prices by a final valuation without them.
+        setWhere: sql`${paperPortfolioSnapshots.isFinal} = false OR (${paperPortfolioSnapshots.stalePrices} AND excluded.is_final AND NOT excluded.stale_prices)`,
       })
       .returning();
     if (written) return { status: "written", session, snapshot: written };
@@ -412,8 +442,9 @@ export class PaperPortfolioSnapshotService {
 
   /**
    * Final snapshots of the latest closed session for every open account that
-   * lacks one. Holds a transaction-scoped Postgres advisory lock so concurrent
-   * runs (another instance, an overlapping tick) skip instead of duplicating work.
+   * lacks one (or whose final one has stale prices). Holds a transaction-scoped
+   * Postgres advisory lock so concurrent runs (another instance, an overlapping
+   * tick) skip instead of duplicating work.
    */
   async runEndOfDay(now: Date = this.now()): Promise<EndOfDayRunResult> {
     const session = this.sessionFor(now);
@@ -438,6 +469,7 @@ export class PaperPortfolioSnapshotService {
                 AND ${paperPortfolioSnapshots.generation} = ${paperAccounts.generation}
                 AND ${paperPortfolioSnapshots.snapshotDate} = ${session.date}
                 AND ${paperPortfolioSnapshots.isFinal}
+                AND NOT ${paperPortfolioSnapshots.stalePrices}
             )`
           )
         );
@@ -459,8 +491,9 @@ export class PaperPortfolioSnapshotService {
   }
 
   /**
-   * Writes the current session's snapshot when it is missing, or when only a
-   * provisional one exists and the session has since closed.
+   * Writes the current session's snapshot when it is missing, when only a
+   * provisional one exists and the session has since closed, or when the
+   * final one was valued with stale prices (a fresh close may now exist).
    */
   async ensureCurrentSnapshot(userId: string, now: Date = this.now()): Promise<OnDemandSnapshotStatus> {
     const session = this.sessionFor(now);
@@ -471,7 +504,7 @@ export class PaperPortfolioSnapshotService {
     if (!account) return "no_account";
 
     const [existing] = await this.database()
-      .select({ isFinal: paperPortfolioSnapshots.isFinal })
+      .select({ isFinal: paperPortfolioSnapshots.isFinal, stalePrices: paperPortfolioSnapshots.stalePrices })
       .from(paperPortfolioSnapshots)
       .where(
         and(
@@ -480,7 +513,7 @@ export class PaperPortfolioSnapshotService {
           eq(paperPortfolioSnapshots.snapshotDate, session.date)
         )
       );
-    if (existing && (existing.isFinal || !session.isFinal)) return "existing";
+    if (existing && (!session.isFinal || (existing.isFinal && !existing.stalePrices))) return "existing";
 
     const captured = await this.captureAccount(userId, { now, capturedBy: "ON_READ" });
     switch (captured.status) {
@@ -512,6 +545,7 @@ export class PaperPortfolioSnapshotService {
       return {
         account: null,
         reason: "No paper trading account yet",
+        anchor: null,
         curve: [],
         metrics: computePortfolioMetrics([], { riskFreeRate: options.riskFreeRate }),
         onDemandSnapshot,
@@ -525,13 +559,24 @@ export class PaperPortfolioSnapshotService {
       .where(and(eq(paperPortfolioSnapshots.userId, userId), eq(paperPortfolioSnapshots.generation, account.generation)))
       .orderBy(asc(paperPortfolioSnapshots.snapshotDate));
     const curve = rows.map(toCurvePoint);
+    // The curve starts from the generation's initial cash on the day it began.
+    const startedAt = account.resetAt ?? account.createdAt;
+    const anchor: CurveAnchor = { date: istDateKey(startedAt), equity: Number(account.initialCash) };
+    const holidays = this.holidays();
     return {
       account: { generation: account.generation, initialCash: Number(account.initialCash), status: account.status },
       reason: null,
+      anchor,
       curve,
       metrics: computePortfolioMetrics(
-        curve.map((point) => ({ date: point.date, equity: point.equity, stalePrices: point.stalePrices })),
-        { riskFreeRate: options.riskFreeRate }
+        curve.map((point) => ({ date: point.date, equity: point.equity, stalePrices: point.stalePrices, isFinal: point.isFinal })),
+        {
+          riskFreeRate: options.riskFreeRate,
+          anchor,
+          anchorStartsAfterClose: startedAt.getTime() > istInstant(anchor.date, SESSION_CLOSE_IST_MINUTES),
+          sessionsBetween: (from, to) => tradingSessionsBetween(from, to, holidays),
+          currentSessionDate: this.sessionFor(now).date,
+        }
       ),
       onDemandSnapshot,
       asOf: now.toISOString(),

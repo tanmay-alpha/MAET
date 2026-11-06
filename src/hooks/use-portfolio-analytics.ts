@@ -2,7 +2,9 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import { createQueryProcedure } from "@/lib/trpc";
+import { curveToHistory, type PerformanceDataPoint } from "@/lib/portfolio-curve";
 import type { PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
 import type { PortfolioAnalyticsResult } from "../../server/modules/paper-trading/portfolio-analytics-contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
@@ -41,27 +43,17 @@ export interface TradeStats {
   avgHoldingDays: number;
 }
 
-/** One point of the server-side equity curve, shaped for the chart. */
-export interface PerformanceDataPoint {
-  date: string;
-  value: number;
-  pnl: number;
-  /** Valued with a price not from that session. */
-  stale?: boolean;
-  /** Intraday snapshot the session close will still replace. */
-  provisional?: boolean;
-}
-
 export interface PortfolioAnalytics {
   /** Live valuation of the open account from current quotes. */
   metrics: PerformanceMetrics;
   trades: TradeStats;
   /** Daily equity curve of the current account generation, from server snapshots. */
   history: PerformanceDataPoint[];
-  /** Server-computed curve metrics; undefined until loaded. */
+  /** Server-computed curve metrics; undefined until loaded (or while signed out). */
   performance: PortfolioAnalyticsResult | undefined;
   isPerformanceLoading: boolean;
   performanceError: string | null;
+  signedIn: boolean;
   hasData: boolean;
 }
 
@@ -69,32 +61,26 @@ const portfolioAnalyticsProcedure = createQueryProcedure<{ riskFreeRate?: number
   "paperTrading.portfolioAnalytics"
 );
 
-/** Server equity curve and metrics; shares the ["paperTrading"] key so trades and resets refresh it. */
+/**
+ * Server equity curve and metrics for the signed-in user; shares the
+ * ["paperTrading"] key so trades and resets refresh it. Not requested while
+ * signed out: the procedure can only answer 401.
+ */
 export function usePortfolioPerformance(riskFreeRate = 0) {
-  return useQuery({
+  const signedIn = useSignedIn();
+  const query = useQuery({
     queryKey: ["paperTrading", "portfolioAnalytics", riskFreeRate],
     queryFn: () => portfolioAnalyticsProcedure.query({ riskFreeRate }),
+    enabled: signedIn,
     staleTime: 60_000,
     retry: 1,
   });
-}
-
-/** Chart points for the server equity curve (P&L relative to the generation's initial cash). */
-export function curveToHistory(performance: PortfolioAnalyticsResult | undefined): PerformanceDataPoint[] {
-  if (!performance?.account) return [];
-  const initialCash = performance.account.initialCash;
-  return performance.curve.map((point) => ({
-    date: point.date,
-    value: point.equity,
-    pnl: point.equity - initialCash,
-    stale: point.stalePrices,
-    provisional: !point.isFinal,
-  }));
+  return { query, signedIn };
 }
 
 export function usePortfolioAnalytics(): PortfolioAnalytics {
   const { account, positions, orders, fills } = usePaperAccount();
-  const performanceQuery = usePortfolioPerformance();
+  const { query: performanceQuery, signedIn } = usePortfolioPerformance();
 
   const positionSymbols = useMemo(
     () => [...new Set(positions.map((p: PaperPositionRow) => p.symbol))],
@@ -199,5 +185,6 @@ export function usePortfolioAnalytics(): PortfolioAnalytics {
     performance,
     isPerformanceLoading: performanceQuery.isLoading,
     performanceError: performanceQuery.error?.message ?? null,
+    signedIn,
   };
 }

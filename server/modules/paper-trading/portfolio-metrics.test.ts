@@ -1,8 +1,19 @@
 import { describe, expect, it } from "bun:test";
+import { computeMetrics } from "../../domain/backtest/risk-metrics";
 import { computePortfolioMetrics, type EquitySnapshotPoint } from "./portfolio-metrics";
 
-function series(values: Array<[string, number]>, stale: string[] = []): EquitySnapshotPoint[] {
-  return values.map(([date, equity]) => ({ date, equity, stalePrices: stale.includes(date) }));
+function series(values: Array<[string, number]>, stale: string[] = [], provisional: string[] = []): EquitySnapshotPoint[] {
+  return values.map(([date, equity]) => ({
+    date,
+    equity,
+    stalePrices: stale.includes(date),
+    isFinal: !provisional.includes(date),
+  }));
+}
+
+function sampleStd(values: number[]): number {
+  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+  return Math.sqrt(values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / (values.length - 1));
 }
 
 // Equity 100 -> 110 -> 99 -> 105 over four trading days.
@@ -95,7 +106,7 @@ describe("computePortfolioMetrics", () => {
     expect(metrics.totalReturn.value).toBeCloseTo(0.02, 12);
     expect(metrics.dailyReturnsCount).toBe(1);
     expect(metrics.volatility.value).toBeNull();
-    expect(metrics.volatility.reason).toContain("at least 3 daily snapshots");
+    expect(metrics.volatility.reason).toContain("at least 2 consecutive-session daily returns");
     expect(metrics.sharpe.value).toBeNull();
   });
 
@@ -123,5 +134,116 @@ describe("computePortfolioMetrics", () => {
     const metrics = computePortfolioMetrics([...KNOWN].reverse());
     expect(metrics.firstDate).toBe("2026-10-05");
     expect(metrics.totalReturn.value).toBeCloseTo(0.05, 12);
+  });
+
+  it("matches the backtest risk-metrics definitions on a gapless curve", () => {
+    const backtest = computeMetrics(
+      KNOWN.map((point, i) => ({ timestamp: i * 86_400_000, equity: point.equity })),
+      [],
+      undefined,
+      "1d",
+      { riskFreeRate: 0.065 }
+    );
+    const metrics = computePortfolioMetrics(KNOWN, { riskFreeRate: 0.065 });
+    expect(metrics.volatility.value).toBeCloseTo(backtest.volatility, 12);
+    expect(metrics.sharpe.value).toBeCloseTo(backtest.sharpe, 12);
+    expect(metrics.sharpe.value).toBeCloseTo(2.98956, 4);
+  });
+
+  describe("gaps (missed trading sessions)", () => {
+    // Wed 10-07 -> Mon 10-12 skips Thu 10-08 and Fri 10-09: one return spanning 3 sessions.
+    const GAPPED = series([
+      ["2026-10-05", 100],
+      ["2026-10-06", 110],
+      ["2026-10-07", 99],
+      ["2026-10-12", 105],
+      ["2026-10-13", 102.9],
+    ]);
+
+    it("counts missed sessions and uses only consecutive-session returns for volatility and Sharpe", () => {
+      const metrics = computePortfolioMetrics(GAPPED);
+      expect(metrics.gapCount).toBe(2);
+      // 10-07 -> 10-12 is excluded; the rest are +10%, -10%, 102.9/105 - 1 = -2%.
+      const consecutive = [0.1, -0.1, -0.02];
+      expect(metrics.dailyReturnsCount).toBe(3);
+      expect(metrics.volatility.value).toBeCloseTo(sampleStd(consecutive) * Math.sqrt(252), 10);
+      const mean = (0.1 - 0.1 - 0.02) / 3;
+      expect(metrics.sharpe.value).toBeCloseTo((mean / sampleStd(consecutive)) * Math.sqrt(252), 10);
+      // Total return and drawdown still use the whole curve.
+      expect(metrics.totalReturn.value).toBeCloseTo(0.029, 12);
+      expect(metrics.maxDrawdown.value).toBeCloseTo(0.1, 12);
+    });
+
+    it("counts sessions with the supplied trading calendar", () => {
+      // With Thu 10-08 a holiday, 10-07 -> 10-12 misses only Fri 10-09.
+      const holidays = new Set(["2026-10-08"]);
+      const sessionsBetween = (from: string, to: string) => {
+        let count = 0;
+        for (let t = Date.parse(`${from}T00:00:00Z`) + 86_400_000; t <= Date.parse(`${to}T00:00:00Z`); t += 86_400_000) {
+          const date = new Date(t);
+          if (date.getUTCDay() % 6 !== 0 && !holidays.has(date.toISOString().slice(0, 10))) count++;
+        }
+        return count;
+      };
+      expect(computePortfolioMetrics(GAPPED, { sessionsBetween }).gapCount).toBe(1);
+    });
+
+    it("returns null volatility with a reason when gaps leave fewer than 2 consecutive returns", () => {
+      const metrics = computePortfolioMetrics(series([["2026-10-05", 100], ["2026-10-08", 104], ["2026-10-13", 101]]));
+      expect(metrics.gapCount).toBe(4);
+      expect(metrics.dailyReturnsCount).toBe(0);
+      expect(metrics.volatility.value).toBeNull();
+      expect(metrics.volatility.reason).toContain("consecutive-session");
+      expect(metrics.volatility.reason).toContain("4 missed sessions");
+      expect(metrics.sharpe.value).toBeNull();
+      expect(metrics.totalReturn.value).toBeCloseTo(0.01, 12);
+    });
+  });
+
+  describe("generation-start anchor", () => {
+    it("measures total return from the generation's initial cash", () => {
+      // Day-one trading: the first close is already above the starting cash.
+      const metrics = computePortfolioMetrics(
+        series([["2026-10-05", 1_009_831], ["2026-10-06", 1_009_831]]),
+        { anchor: { date: "2026-10-05", equity: 1_000_000 } }
+      );
+      expect(metrics.firstDate).toBe("2026-10-05");
+      expect(metrics.totalReturn.value).toBeCloseTo(0.009831, 12);
+      // Start -> 10-05 close is the first session's return; 10-05 -> 10-06 the second.
+      expect(metrics.dailyReturnsCount).toBe(2);
+      expect(metrics.gapCount).toBe(0);
+      expect(metrics.volatility.value).toBeCloseTo(sampleStd([0.009831, 0]) * Math.sqrt(252), 10);
+    });
+
+    it("reports total return from one snapshot after the start", () => {
+      const metrics = computePortfolioMetrics(series([["2026-10-05", 105]]), { anchor: { date: "2026-10-03", equity: 100 } });
+      // Started on Saturday 10-03; Monday 10-05 is the first session, so no gap.
+      expect(metrics.totalReturn.value).toBeCloseTo(0.05, 12);
+      expect(metrics.gapCount).toBe(0);
+      expect(metrics.snapshotCount).toBe(1);
+      expect(metrics.volatility.value).toBeNull();
+    });
+
+    it("still needs a snapshot after the start", () => {
+      const metrics = computePortfolioMetrics([], { anchor: { date: "2026-10-05", equity: 100 } });
+      expect(metrics.totalReturn.value).toBeNull();
+      expect(metrics.totalReturn.reason).toContain("Insufficient history");
+    });
+
+    it("dates a drawdown from the starting cash", () => {
+      const metrics = computePortfolioMetrics(series([["2026-10-05", 90], ["2026-10-06", 95]]), {
+        anchor: { date: "2026-10-05", equity: 100 },
+      });
+      expect(metrics.maxDrawdown.value).toBeCloseTo(0.1, 12);
+      expect(metrics.maxDrawdown.peakDate).toBe("2026-10-05");
+      expect(metrics.maxDrawdown.troughDate).toBe("2026-10-05");
+    });
+  });
+
+  it("counts past provisional snapshots that never got a closing value", () => {
+    const points = series([["2026-10-05", 100], ["2026-10-06", 101], ["2026-10-07", 102]], [], ["2026-10-05", "2026-10-07"]);
+    // Today's (10-07) intraday point is expected to be provisional; 10-05 never got its close.
+    expect(computePortfolioMetrics(points, { currentSessionDate: "2026-10-07" }).provisionalSnapshotCount).toBe(1);
+    expect(computePortfolioMetrics(points, { currentSessionDate: "2026-10-08" }).provisionalSnapshotCount).toBe(2);
   });
 });

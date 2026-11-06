@@ -191,6 +191,58 @@ describe("Paper portfolio snapshots", () => {
     expect(after[0]).toEqual(row!);
   });
 
+  it("replaces a final snapshot valued with stale prices by a later closing valuation, never the reverse", async () => {
+    const { userId } = await seedTradedAccount();
+
+    // The feed is down at the close: only the morning fill price exists, which is not a close.
+    expect(await snapshotService(() => null).ensureCurrentSnapshot(userId, ist(D1, "16:00"))).toBe("written");
+    let [row] = await snapshotsOf(userId);
+    expect(row).toMatchObject({ isFinal: true, stalePrices: true, priceSource: "last_fill:angelone" });
+
+    // A later read with a closing quote repairs it.
+    expect(await snapshotService(() => closeQuote(1050, D1)).ensureCurrentSnapshot(userId, ist(D1, "17:00"))).toBe("written");
+    [row] = await snapshotsOf(userId);
+    expect(row).toMatchObject({ isFinal: true, stalePrices: false, priceSource: "angelone" });
+    expect(row!.positionPrices).toEqual([expect.objectContaining({ price: 1050 })]);
+
+    // A stale valuation never overwrites a good close.
+    const stale = await snapshotService(() => null).captureAccount(userId, { now: ist(D1, "18:00"), capturedBy: "ON_READ" });
+    expect(stale.status).toBe("unchanged");
+    expect(await snapshotsOf(userId)).toEqual([row!]);
+  });
+
+  it("finalises a provisional snapshot before the next open, and flags one the instance slept through", async () => {
+    const intraday = (date: string) => snapshotService(() => ({ ...closeQuote(1000, date), ts: ist(date, "10:59").toISOString() }));
+
+    // Read at 11:00, asleep through the close, awake before the next open: the close is still recorded.
+    const caughtUp = await seedTradedAccount();
+    expect(await intraday(D1).ensureCurrentSnapshot(caughtUp.userId, ist(D1, "11:00"))).toBe("written");
+    expect(await snapshotService(() => closeQuote(1040, D1)).ensureCurrentSnapshot(caughtUp.userId, ist(D2, "08:00"))).toBe("written");
+    const [finalised] = await snapshotsOf(caughtUp.userId);
+    expect(finalised).toMatchObject({ snapshotDate: D1, isFinal: true, stalePrices: false });
+
+    // Asleep until the next session had opened: D1 keeps its intraday value, flagged as provisional.
+    const slept = await seedTradedAccount();
+    expect(await intraday(D1).ensureCurrentSnapshot(slept.userId, ist(D1, "11:00"))).toBe("written");
+    const analytics = await intraday(D2).getAnalytics(slept.userId, { now: ist(D2, "11:00") });
+    expect(analytics.curve.map((point) => [point.date, point.isFinal])).toEqual([[D1, false], [D2, false]]);
+    // D2 is today's intraday point; only D1 is a past provisional snapshot.
+    expect(analytics.metrics.provisionalSnapshotCount).toBe(1);
+  });
+
+  it("measures total return from the generation's initial cash", async () => {
+    const { userId, symbol } = await seedTradedAccount();
+    const snapshots = snapshotService((s) => (s === symbol ? closeQuote(1050, D1) : null));
+    await snapshots.captureAccount(userId, { now: ist(D1, "16:00"), capturedBy: "SCHEDULER" });
+
+    const analytics = await snapshots.getAnalytics(userId, { now: ist(D1, "17:00") });
+    expect(analytics.anchor).toEqual({ date: "2026-09-01", equity: 1_000_000 });
+    const equity = analytics.curve[0]!.equity;
+    expect(equity).not.toBe(1_000_000);
+    expect(analytics.metrics.firstDate).toBe("2026-09-01");
+    expect(analytics.metrics.totalReturn.value).toBeCloseTo(equity / 1_000_000 - 1, 12);
+  });
+
   it("flags stale prices instead of silently valuing at entry prices", async () => {
     const { userId, symbol } = await seedTradedAccount();
 
@@ -234,8 +286,12 @@ describe("Paper portfolio snapshots", () => {
     expect(afterReset.account).toEqual({ generation: 2, initialCash: 1_000_000, status: "ACTIVE" });
     expect(afterReset.curve).toHaveLength(1);
     expect(afterReset.curve[0]).toMatchObject({ date: D3, equity: 1_000_000, positionsCount: 0, priceSource: "none" });
-    expect(afterReset.metrics.totalReturn.value).toBeNull();
-    expect(afterReset.metrics.totalReturn.reason).toContain("at least 2 daily snapshots");
+    // Measured from the reset's initial cash; one return is too few for volatility.
+    expect(afterReset.anchor).toEqual({ date: D2, equity: 1_000_000 });
+    expect(afterReset.metrics.totalReturn.value).toBe(0);
+    expect(afterReset.metrics.gapCount).toBe(0);
+    expect(afterReset.metrics.volatility.value).toBeNull();
+    expect(afterReset.metrics.volatility.reason).toContain("Insufficient history");
 
     const next = await at(D4).getAnalytics(userId, { now: ist(D4, "16:00") });
     expect(next.curve.map((point) => point.date)).toEqual([D3, D4]);

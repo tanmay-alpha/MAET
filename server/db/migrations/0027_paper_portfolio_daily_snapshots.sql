@@ -15,6 +15,8 @@ BEGIN
          AND table_name = 'paper_portfolio_snapshots'
          AND column_name = 'snapshot_date'
      ) THEN
+    -- Block concurrent writes so a row committed after the check cannot be dropped with the table.
+    LOCK TABLE public.paper_portfolio_snapshots IN ACCESS EXCLUSIVE MODE;
     IF EXISTS (SELECT 1 FROM public.paper_portfolio_snapshots) THEN
       ALTER TABLE public.paper_portfolio_snapshots RENAME TO paper_portfolio_snapshots_legacy_0008;
     ELSE
@@ -55,7 +57,8 @@ CREATE TABLE IF NOT EXISTS public.paper_portfolio_snapshots (
   CONSTRAINT paper_portfolio_snapshots_user_generation_date_unique UNIQUE (user_id, generation, snapshot_date)
 );
 
--- Owner read-only through Supabase; only the backend (service role) writes.
+-- Owners may read their rows through Supabase. No client role may write: the
+-- backend writes as the table owner, which bypasses RLS.
 ALTER TABLE public.paper_portfolio_snapshots ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS paper_portfolio_snapshots_owner_select ON public.paper_portfolio_snapshots;
 CREATE POLICY paper_portfolio_snapshots_owner_select ON public.paper_portfolio_snapshots

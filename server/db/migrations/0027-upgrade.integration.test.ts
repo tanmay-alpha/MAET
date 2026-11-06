@@ -59,6 +59,14 @@ async function createUser(sql: postgres.Sql): Promise<string> {
 const migration0027 = () => readFileSync(join(migrationsDir, MIGRATION_0027), "utf8");
 
 describe("Migration 0027 paper portfolio daily snapshots", () => {
+  it("locks the legacy table before checking whether it is empty", () => {
+    const code = migration0027().replace(/--[^\n]*/gu, "");
+    const lock = code.search(/LOCK\s+TABLE\s+public\.paper_portfolio_snapshots\s+IN\s+ACCESS\s+EXCLUSIVE\s+MODE/iu);
+    const emptinessCheck = code.search(/IF\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+public\.paper_portfolio_snapshots\s*\)/iu);
+    expect(lock).toBeGreaterThan(-1);
+    expect(emptinessCheck).toBeGreaterThan(lock);
+  });
+
   it("replaces the never-written 0008 table with a per-generation, per-date one", async () => {
     if (!process.env.TEST_DATABASE_URL) {
       console.log("  Skipping migration 0027 PostgreSQL integration test: TEST_DATABASE_URL not set");
