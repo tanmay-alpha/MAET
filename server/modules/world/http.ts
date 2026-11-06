@@ -82,8 +82,12 @@ export function createSpacedQueue(
     const result = previous.then(async () => {
       const delay = nextStart - now();
       if (delay > 0) await pause(delay);
-      nextStart = now() + spacingMs;
-      return request();
+      try {
+        return await request();
+      } finally {
+        // A slow or timed-out request still occupies the upstream, so the gap starts when it settles.
+        nextStart = now() + spacingMs;
+      }
     });
     previous = result.catch(() => {});
     return result;

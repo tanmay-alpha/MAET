@@ -111,4 +111,28 @@ describe("world bounded upstream transport", () => {
     expect(await third).toBe(3);
     expect(starts).toEqual([0, 5_000, 10_000]);
   });
+
+  it("waits the full spacing after a slow request settles, not after it started", async () => {
+    let now = 0;
+    const starts: number[] = [];
+    const queue = createSpacedQueue(
+      () => now,
+      async (ms) => {
+        now += ms;
+      },
+      5_000,
+    );
+    const slow = queue(async () => {
+      starts.push(now);
+      now += 8_000;
+      throw new Error("Upstream request timed out");
+    });
+    const next = queue(async () => {
+      starts.push(now);
+      return 2;
+    });
+    expect(await slow.catch((error: unknown) => error)).toEqual(new Error("Upstream request timed out"));
+    expect(await next).toBe(2);
+    expect(starts).toEqual([0, 13_000]);
+  });
 });
