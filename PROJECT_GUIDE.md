@@ -34,7 +34,7 @@ flowchart LR
   Frontend --> API[REST or tRPC API]
   API --> Server[MAET backend]
   Server --> Providers[Angel One, Yahoo Finance, NSE]
-  Server --> Cache[Redis cache]
+  Server --> Cache[Redis: candle cache, locks, rate limits, paper pub/sub]
   Server --> Database[Supabase PostgreSQL]
   Database --> Server
   Server --> API
@@ -67,7 +67,7 @@ For live-style updates, `server/api/market/stream.get.ts` keeps a Server-Sent Ev
 ### Example: paper trading
 
 1. The user enters a paper order in the React interface.
-2. The frontend sends a signed-in tRPC request with the user's Supabase access token.
+2. The frontend sends a tRPC request with the user's Supabase access token. Signed-in-only hooks such as `usePaperAccount` are gated by `useSignedIn`, so logged-out visitors send no paper requests.
 3. The backend checks the user, validates the input, and checks whether a quote is safe enough for paper execution.
 4. For an immediately executable paper order, it writes the order, fill, position, ledger entries, and related events in a database transaction.
 5. A limit or stop paper order can remain pending; background matching watches later ticks and performs the fill when its rule is met.
@@ -124,14 +124,15 @@ This folder is the website users interact with. It is built mainly with React, T
 | `src/routes/index.tsx` | The public landing page. |
 | `src/routes/_app.*.tsx` | One file per screen, such as screener, terminal, portfolio, alerts, orders, workspace, strategies, and replay. |
 | `src/routes/_app.stock.$symbol.tsx` | A dynamic stock page. `$symbol` means the URL supplies the selected stock symbol. |
-| `src/routes/_app.options.$underlying.tsx` | An options screen for an underlying symbol. It honestly shows unavailable data when no verified options feed is wired to that screen. |
+| `src/routes/_app.options.$underlying.tsx` | An options screen for an underlying symbol. It reads persisted option-chain snapshots through `trpc.options.listExpiries` and `options.getLatestChain`, and marks missing observations as unavailable instead of inventing them. |
 | `src/routes/api.market.*.ts` | Frontend/server helper routes for market requests, validation, and caching. |
 | `src/components/` | Reusable visual building blocks. `trading/` holds market widgets, `chart/` and `charting/` hold charts, `workspace/` holds saved-workspace widgets, and `ui/` holds generic buttons, dialogs, tables, tabs, and forms. |
 | `src/hooks/` | Reusable data and interaction logic. Examples include quote, candle, stream, paper-account, portfolio, and workspace hooks. |
 | `src/lib/market-api.ts` | Defines and validates market API responses before the UI trusts them. |
-| `src/lib/trpc.ts` | Browser client for signed-in tRPC features such as paper trading, workspace, alerts, backtests, and strategies. |
-| `src/lib/auth-token.ts` | Retrieves and refreshes the browser's Supabase access token. |
-| `src/lib/paper-sse-client.ts` | Receives paper-trading updates through a stream. |
+| `src/lib/trpc.ts` | Browser tRPC client. It attaches the Supabase access token when the browser has a session, so public procedures work signed out; a 401 from a protected procedure becomes `AuthenticationError`, which React Query does not retry (`src/router.tsx`). |
+| `src/lib/auth-token.ts` | Retrieves and refreshes the browser's Supabase access token; `hasStoredSession` reports whether a session exists. |
+| `src/hooks/use-signed-in.ts` | `useSignedIn()` gates signed-in-only queries (paper account, alerts, watchlists, workspace, market breadth) so logged-out visitors don't send requests that would fail with 401. |
+| `src/lib/paper-sse-client.ts` | Opens the authenticated paper-trading stream (`/api/paper/stream`). In progress: the server does not publish paper events yet, so `src/hooks/use-paper-account.ts` refreshes by polling. |
 | `src/lib/technical-indicators.ts`, `src/lib/financial-metrics.ts` | Frontend-side helper calculations and formatting for displayed analysis. |
 | `src/store/` | Small browser-only state. For example, a selected terminal symbol belongs here, not in the durable database. |
 | `src/styles.css` | Global Tailwind CSS setup, theme variables, typography, colours, and animations. |
@@ -155,7 +156,7 @@ This folder contains the web server, APIs, provider integrations, business rules
 | `server/api/trpc/index.ts` | Collects the feature routers into one tRPC API. |
 | `server/api/trpc/routers/` | Feature-specific API logic: companies, market data, paper trading, portfolio, alerts, screeners, data quality, strategy jobs, and backtests. |
 | `server/data/sources/` | Adapters for external providers: Angel One, Yahoo Finance, NSE company master, NSE index constituents, and fundamentals sources. |
-| `server/data/sources/angelone/client.ts` | Angel One login, authenticated quote requests, option-Greek capability, and NFO option-contract resolver. The option capability is foundation work and is not yet a fully wired user feature. |
+| `server/data/sources/angelone/client.ts` | Angel One login, authenticated quote requests, option-Greek requests, and the NFO option-contract resolver used by the options-chain ingestion pipeline. |
 | `server/data/sources/yahoo.ts` | Yahoo quote and candle retrieval, retry handling, source timestamps, and cache use. Yahoo data is marked delayed. |
 | `server/data/drizzle/client.ts` | Connection layer between TypeScript code and Supabase PostgreSQL. |
 | `server/data/redis/` | Redis/Upstash cache client, keys, and test helpers. |
@@ -163,13 +164,13 @@ This folder contains the web server, APIs, provider integrations, business rules
 | `server/domain/market/quote-service.ts` | Chooses the market quote path, preferring eligible Angel One data and falling back to Yahoo when needed. |
 | `server/domain/market/quote-store.ts` | Keeps the latest ticks in process memory for fast live updates. |
 | `server/modules/` | Feature-level business workflows. The paper-trading module handles orders, fills, positions, ledger entries, and service rules. |
-| `server/workers/` | Background tasks such as Yahoo polling, Angel One WebSocket processing, candle writing, alert evaluation, paper-order matching, daily processing, and strategy workers. |
+| `server/workers/` | Background tasks. Started inside the web server: Angel One WebSocket processing, candle aggregation, alert evaluation, paper-order matching and margin monitoring, and the daily processor. Run as separate processes (`bun run worker:*`): backtest, sweep, walk-forward and strategy-evaluator workers. There is no Yahoo polling worker; Yahoo is called on demand as a fallback. |
 | `server/workers/ingestion-engine/` | A more structured ingestion pipeline with normalisation, validation, retry/dead-letter handling, Supabase writes, and optional BigQuery output. |
 | `server/db/schema.ts` | TypeScript description of database tables for Drizzle ORM. |
-| `server/db/migrations/` | Numbered SQL upgrades for PostgreSQL, applied by `server/scripts/apply-migrations.ts` (each file and its tracking row in one transaction). New migrations only add forward-safe changes; for example, `0017_options_market_data.sql` adds the options-data foundation. |
+| `server/db/migrations/` | Numbered SQL migrations (0001–0026) for PostgreSQL, applied by `server/scripts/apply-migrations.ts` (each file and its tracking row in one transaction). Most add tables or columns, but some also drop indexes, replace policies and revoke privileges (for example `0010`, `0011`), so read them in order. `0017_options_market_data.sql` adds the options-data tables. |
 | `server/db/seeds/` | Reference-data loads, such as `market_baseline_metrics.sql` (run with `server/scripts/populate-baselines.ts`). |
-| `server/infra/` | Shared technical services such as the internal event bus, encryption, health status, logging, and metrics. |
-| `server/middleware/` | Request-wide behavior such as CORS rules. |
+| `server/infra/` | Shared technical services: the internal event bus, encryption, health status, logging, client-IP detection and database diagnostics. There is no metrics module. |
+| `server/middleware/` | Request-wide behavior: CORS rules, token-bucket rate limiting and a request body size limit. |
 | `server/routes/` | Non-`/api` route handlers, such as the admin-only `/health/detailed` report. Public health is `server/api/health.get.ts` (`/api/health`). |
 | `server/scripts/` | Server-side operational scripts, such as a database connection check. |
 | `server/nitro.config.ts` | Nitro build, aliases, ignored files, and route-cache configuration. |
@@ -222,7 +223,7 @@ These naming rules help you understand almost every file without opening it firs
 | PostgreSQL | Supabase database | Stores durable company data, paper trades, user workspaces, strategy jobs, and more. |
 | Drizzle ORM | `server/data/drizzle/` and `server/db/schema.ts` | Lets TypeScript code work with PostgreSQL tables safely. |
 | SQL | `server/db/migrations/` | Defines and upgrades the actual database structure. |
-| Redis / Upstash | `server/data/redis/` | Keeps short-lived cached data and supports coordination. |
+| Redis / Upstash | `server/data/redis/` | Caches Yahoo candles, holds the daily-processor lock, optionally stores rate-limit buckets, and carries paper-notification pub/sub. Quotes are cached in process memory, not in Redis. |
 | Bun | Root commands and tests | Installs packages, runs TypeScript scripts, and runs tests. |
 | Node.js | Render production runtime | Runs the deployed backend service. |
 | Tailwind CSS and CSS | `src/styles.css` and components | Controls layout, colours, themes, and responsive design. |
@@ -243,8 +244,10 @@ These naming rules help you understand almost every file without opening it firs
 
 - **Market data:** Some data can be delayed, stale, provider-dependent, or unavailable. The API carries source and delay information for this reason.
 - **Angel One:** The server can use Angel One when credentials and symbol tokens are available. It is not proof that every deployed environment has a live session.
-- **Options:** The Angel One options client and normalized options database tables now exist, but no options ingestion worker, tRPC route, or frontend delivery path is wired to them yet.
-- **Strategy workers:** Scripts exist for backtests, sweeps, walk-forward analysis, and evaluation. The single Render web-service definition starts the web server; production needs separate worker processes or scheduling for queued jobs.
+- **Options:** The Angel One options client, the options database tables, an admin-triggered ingestion mutation (`ingestion.triggerOptionsChain`), the `options` tRPC router and the options screen are wired together. There is no scheduled options ingestion, so the screen shows only chains an admin has ingested.
+- **Strategy workers (in progress):** Scripts exist for backtests, sweeps, walk-forward analysis, and evaluation. The single Render web-service definition starts only the web server, so queued jobs run only where those worker processes are started. `backtestV2.run` runs inside the request instead.
+- **Paper updates (in progress):** Fill, order and account events are written to a database outbox, but the publisher that would push them to `/api/paper/stream` is not started yet, so the UI polls.
+- **Live feed (in progress):** The Angel One WebSocket streams only NSE symbols that have an open market stream or an active alert; resting paper orders and positions do not subscribe their own symbols yet.
 - **BigQuery:** The ingestion engine has an optional BigQuery output path. Do not say it is actively populated unless that deployment is verified.
 - **Paper portfolio performance:** The equity curve and its metrics (total return, CAGR, volatility, Sharpe, max drawdown) come from daily server-side snapshots in `paper_portfolio_snapshots`, written after each NSE close (15:45 IST) by an in-process job and on demand when the analytics are read. Days the server was asleep have no snapshot, so the curve can have gaps; snapshots valued with prices from an earlier session are flagged `stale_prices`; metrics are `null` with a reason until there is enough history.
 
@@ -252,7 +255,7 @@ These naming rules help you understand almost every file without opening it firs
 
 - That MAET sends real orders to a broker.
 - That all quotes are live or exchange-grade.
-- That the options screen has verified live chain data today.
+- That the options screen has live or continuously refreshed chain data; it shows persisted snapshots from manual ingestion runs.
 - That every screen is production-ready just because its route exists.
 - That local mock, synthetic, or illustrative calculations are provider-supplied market data.
 
@@ -285,8 +288,12 @@ bun test
 # Run every registered test group
 bun run test:all
 
-# Check whether the server can connect to its configured database
+# Check whether the server can connect to its configured database (uses .env)
 bun run check:db
+
+# After a database restore: read-only verification of migrations, schema, row counts,
+# paper-trading invariants and RLS (reads SUPABASE_DB_URL or DATABASE_URL, not .env)
+bun run verify:db
 ```
 
 ## A short interview question-and-answer guide
@@ -301,7 +308,7 @@ The providers are kept behind server-side adapters. The backend validates values
 
 ### Why use background workers?
 
-Tasks such as polling prices, matching queued paper orders, evaluating alerts, writing candles, and running long strategy jobs should not block a normal browser request. Workers let the application do that work separately.
+Tasks such as streaming prices, matching resting paper orders, evaluating alerts, aggregating candles, and running long strategy jobs should not block a normal browser request. Workers let the application do that work separately. The market workers run inside the web server process; the strategy job workers are separate processes.
 
 ### Why use both REST and tRPC?
 
@@ -313,7 +320,7 @@ It lets users practise the lifecycle of orders, fills, positions, and profit/los
 
 ### What would you build next?
 
-I would complete one end-to-end vertical slice at a time: connect verified options ingestion to the new tables, expose it through a backend route, show clear availability states in the UI, and add deployment-level worker scheduling. I would keep the same rule: unavailable provider data stays unavailable instead of being invented.
+I would complete one end-to-end vertical slice at a time: start the paper outbox publisher so the stream carries real updates, subscribe the live feed to symbols with orders and positions, schedule options ingestion, and run the strategy job workers as their own deployed service. I would keep the same rule: unavailable provider data stays unavailable instead of being invented.
 
 ## Final one-line explanation
 

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
-import { trpc, AuthenticationError } from "./trpc";
+import { trpc, AuthenticationError, retryUnlessUnauthenticated } from "./trpc";
 
 describe("Authenticated tRPC Client", () => {
   const originalFetch = globalThis.fetch;
@@ -32,10 +32,36 @@ describe("Authenticated tRPC Client", () => {
     globalThis.fetch = originalFetch;
   });
 
-  test("rejects locally with AuthenticationError when signed out", async () => {
+  test("sends public procedures without an Authorization header when signed out", async () => {
     window.localStorage.removeItem("supabase.auth.token");
 
+    let requested = false;
+    let capturedHeader: string | null | undefined;
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      requested = true;
+      capturedHeader = (init?.headers as Record<string, string> | undefined)?.Authorization ?? null;
+      return new Response(JSON.stringify({ result: { data: { ok: true } } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await trpc.screenerDsl.parseAndCompile.mutate({ natural: "pe below 20" });
+
+    expect(requested).toBe(true);
+    expect(capturedHeader).toBeNull();
+  });
+
+  test("maps a server 401 to AuthenticationError", async () => {
+    window.localStorage.removeItem("supabase.auth.token");
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ error: { message: "UNAUTHORIZED" } }), { status: 401 })
+    ) as unknown as typeof fetch;
+
     await expect(trpc.paperTrading.getState.query()).rejects.toThrow(AuthenticationError);
+  });
+
+  test("queries are not retried after the server rejects the session", () => {
+    expect(retryUnlessUnauthenticated(0, new AuthenticationError())).toBe(false);
+    expect(retryUnlessUnauthenticated(0, new Error("tRPC query failed: Bad Gateway"))).toBe(true);
+    expect(retryUnlessUnauthenticated(3, new Error("tRPC query failed: Bad Gateway"))).toBe(false);
   });
 
   test("sends Bearer token header on queries", async () => {
