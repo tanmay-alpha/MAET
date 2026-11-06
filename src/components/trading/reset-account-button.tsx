@@ -1,32 +1,34 @@
 import { useId, type ReactNode } from "react";
-import { useSignedIn } from "@/hooks/use-signed-in";
-import { SIGN_IN_REQUIRED_MESSAGE } from "@/components/common/sign-in-required";
+import { paperAccountBlockedReason, type PaperAccountStatus } from "@/lib/paper-account-status";
 
 /**
- * Resets the paper account after a confirmation. Signed-out visitors have no account to
- * reset (the server answers 401), so the button is disabled and says why.
+ * Resets the paper account after a confirmation. Until the account has loaded (signed out,
+ * loading, session rejected, server down) there is nothing to reset, so the button is
+ * disabled and says why.
  */
 export function ResetAccountButton({
+  accountStatus,
   onReset,
   confirmMessage,
   className = "",
   children,
 }: {
+  accountStatus: PaperAccountStatus;
   onReset: () => unknown;
   confirmMessage: string;
   className?: string;
   children: ReactNode;
 }) {
-  const signedIn = useSignedIn();
+  const blockedReason = paperAccountBlockedReason(accountStatus);
   const reasonId = useId();
 
   return (
     <>
       <button
         type="button"
-        disabled={!signedIn}
-        title={signedIn ? "Reset the paper account to its initial cash" : SIGN_IN_REQUIRED_MESSAGE}
-        aria-describedby={signedIn ? undefined : reasonId}
+        disabled={blockedReason !== null}
+        title={blockedReason ?? "Reset the paper account to its initial cash"}
+        aria-describedby={blockedReason ? reasonId : undefined}
         onClick={() => {
           if (window.confirm(confirmMessage)) void onReset();
         }}
@@ -34,9 +36,9 @@ export function ResetAccountButton({
       >
         {children}
       </button>
-      {!signedIn && (
+      {blockedReason && (
         <span id={reasonId} className="sr-only">
-          {SIGN_IN_REQUIRED_MESSAGE}
+          {blockedReason}
         </span>
       )}
     </>

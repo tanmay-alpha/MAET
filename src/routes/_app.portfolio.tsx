@@ -5,6 +5,8 @@ import { usePortfolioAnalytics } from "@/hooks/use-portfolio-analytics";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { quoteFeedLabel } from "@/lib/quote-status";
 import { usePaperAccount } from "@/hooks/use-paper-account";
+import { paperAccountBlockedReason } from "@/lib/paper-account-status";
+import { PaperAccountNotice } from "@/components/common/signed-out-notice";
 import { TiltCard } from "@/components/trading/tilt-card";
 import { EquityCurveChart } from "@/components/chart/equity-curve-chart";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
@@ -30,12 +32,13 @@ const PERIOD_DAYS: Record<Exclude<ChartPeriod, "ALL">, number> = { "1W": 7, "1M"
 function StatCard({ icon: Icon, label, value, sub, trend }: {
   icon: LucideIcon;
   label: string;
-  value: string;
+  /** null while the account is loading: a skeleton, never a placeholder figure. */
+  value: string | null;
   sub?: string;
   trend?: "up" | "down" | "flat";
 }) {
   return (
-    <div className="rounded-lg border border-border bg-panel p-4">
+    <div className="rounded-lg border border-border bg-panel p-4" aria-busy={value === null}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Icon className="h-4 w-4 text-muted-foreground" />
@@ -44,14 +47,16 @@ function StatCard({ icon: Icon, label, value, sub, trend }: {
         {trend === "up" && <TrendingUp className="h-4 w-4 text-bull" />}
         {trend === "down" && <TrendingDown className="h-4 w-4 text-bear" />}
       </div>
-      <div className="mt-2 font-mono text-2xl font-semibold">{value}</div>
+      <div className="mt-2 font-mono text-xl font-semibold break-words 2xl:text-2xl">
+        {value ?? <span aria-hidden className="inline-block h-7 w-28 animate-pulse rounded bg-accent" />}
+      </div>
       {sub && <div className="mt-1 text-xs text-muted-foreground">{sub}</div>}
     </div>
   );
 }
 
 function PortfolioPage() {
-  const { account, positions, resetAccount, placeOrder, isTradingAvailable } = usePaperAccount();
+  const { status, positions, resetAccount, placeOrder, isTradingAvailable, retry } = usePaperAccount();
   const { metrics, trades, history, performance, isPerformanceLoading, performanceError, signedIn } = usePortfolioAnalytics();
   const navigate = useNavigate();
   const [selectedPeriod, setSelectedPeriod] = useState<ChartPeriod>("ALL");
@@ -75,7 +80,7 @@ function PortfolioPage() {
   }, [history, selectedPeriod]);
 
   const totalAllocation = useMemo(() => {
-    if (metrics.positionsValue === 0) return [];
+    if (!metrics || metrics.positionsValue === 0) return [];
     return positions
       .map((p) => {
         const quote = quoteMap.get(p.symbol);
@@ -89,7 +94,7 @@ function PortfolioPage() {
         };
       })
       .sort((a, b) => b.value - a.value);
-  }, [positions, metrics.positionsValue, metrics.totalValue, quoteMap]);
+  }, [positions, metrics, quoteMap]);
 
   const allocationColors = ["#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#6366f1", "#ef4444"];
   if (!signedIn) {
@@ -101,14 +106,15 @@ function PortfolioPage() {
     </div>;
   }
 
-
+  const blockedReason = paperAccountBlockedReason(status);
+  const failed = status === "unauthorized" || status === "unavailable";
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
       <div className="sticky top-0 z-50 border-b border-border/60 bg-background/70 backdrop-blur-xl">
         <div className="mx-auto max-w-7xl px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 onClick={() => navigate({ to: "/" })}
@@ -128,15 +134,18 @@ function PortfolioPage() {
             <div className="flex gap-2">
               <button
                 type="button"
+                disabled={blockedReason !== null}
+                title={blockedReason ?? undefined}
                 onClick={() => setTradeModal({ isOpen: true, symbol: "", side: "BUY" })}
-                className="flex items-center gap-1.5 rounded-lg bg-primary hover:bg-primary/95 text-primary-foreground px-3.5 py-2 text-sm font-bold shadow transition-all"
+                className="flex items-center gap-1.5 rounded-lg bg-primary hover:bg-primary/95 text-primary-foreground px-3.5 py-2 text-sm font-bold shadow transition-all disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <PlusCircle className="h-4 w-4" />
                 Quick Trade
               </button>
               <ResetAccountButton
+                accountStatus={status}
                 onReset={resetAccount}
-                confirmMessage={`Reset all positions and cash to ${rupees(1000000)}?`}
+                confirmMessage="Reset all positions and cash to the starting balance?"
                 className="rounded-lg border border-border bg-panel px-3 py-2 text-sm hover:bg-accent transition-all"
               >
                 Reset
@@ -147,44 +156,46 @@ function PortfolioPage() {
       </div>
 
       <div className="mx-auto max-w-7xl px-6 py-6">
-        <ReturnsTaxSection />
+        <PaperAccountNotice status={status} onRetry={retry} />
+        {/* Returns & tax reads the same account: nothing to compute when it failed to load. */}
+        {!failed && <ReturnsTaxSection />}
         {/* Portfolio Summary */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        {!failed && <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-6">
           <StatCard
             icon={DollarSign}
             label="Total Value"
-            value={rupees(metrics.totalValue)}
-            sub={`${rupees(metrics.cash)} cash`}
-            trend={metrics.totalPnl >= 0 ? "up" : "down"}
+            value={metrics && rupees(metrics.totalValue)}
+            sub={metrics ? `${rupees(metrics.cash)} cash` : undefined}
+            trend={metrics ? (metrics.totalPnl >= 0 ? "up" : "down") : undefined}
           />
           <StatCard
             icon={TrendingUp}
             label="Unrealized P&L"
-            value={`${metrics.unrealizedPnl >= 0 ? "+" : ""}${rupees(metrics.unrealizedPnl)}`}
-            trend={metrics.unrealizedPnl >= 0 ? "up" : "down"}
+            value={metrics && `${metrics.unrealizedPnl >= 0 ? "+" : ""}${rupees(metrics.unrealizedPnl)}`}
+            trend={metrics ? (metrics.unrealizedPnl >= 0 ? "up" : "down") : undefined}
           />
           <StatCard
             icon={TrendingUp}
             label="Realized P&L"
-            value={`${metrics.realizedPnl >= 0 ? "+" : ""}${rupees(metrics.realizedPnl)}`}
-            trend={metrics.realizedPnl >= 0 ? "up" : "down"}
+            value={metrics && `${metrics.realizedPnl >= 0 ? "+" : ""}${rupees(metrics.realizedPnl)}`}
+            trend={metrics ? (metrics.realizedPnl >= 0 ? "up" : "down") : undefined}
           />
           <StatCard
             icon={TrendingUp}
             label="Total P&L"
-            value={`${metrics.totalPnl >= 0 ? "+" : ""}${rupees(metrics.totalPnl)}`}
-            sub={`${metrics.totalReturnPct >= 0 ? "+" : ""}${metrics.totalReturnPct.toFixed(2)}%`}
-            trend={metrics.totalPnl >= 0 ? "up" : "down"}
+            value={metrics && `${metrics.totalPnl >= 0 ? "+" : ""}${rupees(metrics.totalPnl)}`}
+            sub={metrics ? `${metrics.totalReturnPct >= 0 ? "+" : ""}${metrics.totalReturnPct.toFixed(2)}%` : undefined}
+            trend={metrics ? (metrics.totalPnl >= 0 ? "up" : "down") : undefined}
           />
           <StatCard
             icon={DollarSign}
             label="Positions Value"
-            value={rupees(metrics.positionsValue)}
-            sub={`${positions.length} active`}
+            value={metrics && rupees(metrics.positionsValue)}
+            sub={metrics ? `${positions.length} active` : undefined}
           />
-        </div>
+        </div>}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+        {status === "ready" && <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
           {/* Equity Curve */}
           <div className="lg:col-span-2 space-y-6">
             <TiltCard>
@@ -387,7 +398,7 @@ function PortfolioPage() {
               </div>
             </TiltCard>
           </div>
-        </div>
+        </div>}
       </div>
 
       <QuickTradeModal

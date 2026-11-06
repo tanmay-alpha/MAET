@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { PaperStreamManager } from "@/lib/paper-stream-manager";
 import { useSignedIn } from "@/hooks/use-signed-in";
+import { paperAccountStatus, type PaperAccountStatus } from "@/lib/paper-account-status";
 import type {
   PaperAccountRow,
   PaperOrderRow,
@@ -20,7 +21,14 @@ export type PaperOrderDraft = DistributiveOmit<
   "clientOrderId" | "idempotencyKey"
 >;
 
+// Stable empties, so memoised consumers don't recompute on every render without data.
+const NO_POSITIONS: PaperPositionRow[] = [];
+const NO_ORDERS: PaperOrderRow[] = [];
+const NO_FILLS: PaperFillRow[] = [];
+
 export interface UsePaperAccountResult {
+  /** Only "ready" carries server data; otherwise account is null and the lists are empty. */
+  status: PaperAccountStatus;
   account: PaperAccountRow | null;
   positions: PaperPositionRow[];
   orders: PaperOrderRow[];
@@ -31,6 +39,8 @@ export interface UsePaperAccountResult {
   connectionState: "connected" | "polling" | "disconnected";
   lastSyncedAt: string | null;
   placeOrder: (command: PaperOrderDraft) => Promise<unknown>;
+  /** Refetches the account after a failure. */
+  retry: () => void;
   cancelOrder: (orderId: string) => Promise<unknown>;
   resetAccount: () => Promise<unknown>;
 }
@@ -109,29 +119,33 @@ export function usePaperAccount(): UsePaperAccountResult {
     },
   });
 
-  const hasError = Boolean(stateQuery.error);
-  const isTradingAvailable =
-    !hasError &&
-    Boolean(stateQuery.data?.account) &&
-    stateQuery.data?.account?.status === "ACTIVE";
+  const status = paperAccountStatus({
+    signedIn,
+    hasAccount: Boolean(stateQuery.data?.account),
+    error: stateQuery.error,
+  });
+  const state = status === "ready" ? stateQuery.data : undefined;
+  const isTradingAvailable = state?.account?.status === "ACTIVE";
 
-  const connectionState = hasError
+  const connectionState = stateQuery.error
     ? "disconnected"
     : sseConnected
       ? "connected"
       : "polling";
 
   return {
-    account: stateQuery.data?.account ?? null,
-    positions: stateQuery.data?.positions ?? [],
-    orders: stateQuery.data?.orders ?? [],
-    fills: stateQuery.data?.fills ?? [],
+    status,
+    account: state?.account ?? null,
+    positions: state?.positions ?? NO_POSITIONS,
+    orders: state?.orders ?? NO_ORDERS,
+    fills: state?.fills ?? NO_FILLS,
     isLoading: stateQuery.isLoading,
     isFetching: stateQuery.isFetching,
     isTradingAvailable,
     connectionState,
-    lastSyncedAt: stateQuery.data?.asOf ? new Date(stateQuery.data.asOf).toISOString() : null,
+    lastSyncedAt: state?.asOf ? new Date(state.asOf).toISOString() : null,
     placeOrder: placeOrderMutation.mutateAsync,
+    retry: () => void stateQuery.refetch(),
     cancelOrder: cancelOrderMutation.mutateAsync,
     resetAccount: resetAccountMutation.mutateAsync,
   };
