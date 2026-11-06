@@ -86,12 +86,20 @@ test("backend down: Retry loads the account once the server answers again", asyn
   await expect(page.getByRole("button", { name: "Quick Trade", exact: true })).toBeEnabled();
 });
 
-test("valid session: the /portfolio header keeps Quick Trade and Reset on screen at 390px", async ({ page }) => {
+test("valid session: /portfolio header buttons and summary figures fit at 390px", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
   await page.goto("/portfolio");
   await expect(page.getByRole("button", { name: "Quick Trade", exact: true })).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole("button", { name: "Reset", exact: true })).toBeInViewport({ ratio: 1 });
+
+  const totalValue = page.getByText(`${FIXTURE_CASH}.00`, { exact: true });
+  await expect(totalValue).toBeVisible();
+  // The figure is drawn inside its card rather than spilling past the edge.
+  expect(await totalValue.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  const card = await totalValue.locator("..").boundingBox();
+  const value = await totalValue.boundingBox();
+  expect(card && value && value.x + value.width <= card.x + card.width).toBe(true);
 });
 
 test("valid session: /portfolio shows the server's account figures and enabled actions", async ({ page }) => {

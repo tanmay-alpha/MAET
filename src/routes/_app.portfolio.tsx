@@ -47,7 +47,7 @@ function StatCard({ icon: Icon, label, value, sub, trend }: {
         {trend === "up" && <TrendingUp className="h-4 w-4 text-bull" />}
         {trend === "down" && <TrendingDown className="h-4 w-4 text-bear" />}
       </div>
-      <div className="mt-2 font-mono text-2xl font-semibold">
+      <div className="mt-2 font-mono text-xl font-semibold break-words 2xl:text-2xl">
         {value ?? <span aria-hidden className="inline-block h-7 w-28 animate-pulse rounded bg-accent" />}
       </div>
       {sub && <div className="mt-1 text-xs text-muted-foreground">{sub}</div>}
@@ -158,7 +158,7 @@ function PortfolioPage() {
         {/* Returns & tax reads the same account: nothing to compute when it failed to load. */}
         {!failed && <ReturnsTaxSection />}
         {/* Portfolio Summary */}
-        {!failed && <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        {!failed && <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-6">
           <StatCard
             icon={DollarSign}
             label="Total Value"
