@@ -164,8 +164,7 @@ MAET/
 │   ├── domain/                   # Business logic: analysis, backtest, calculations, company, data
 │   │                             # (corporate actions), fundamentals, market, portfolio, screener,
 │   │                             # strategy (runner-v3, execution model, portfolio engine, walk-forward), technical
-│   ├── http/sse/                 # Server-Sent Events hub
-│   ├── infra/                    # Auth (JWT), event bus, encryption, health, idempotency, logger, rate limit
+│   ├── infra/                    # Auth (JWT), event bus, client IP, DB diagnostics, encryption, health, logger, shutdown
 │   ├── middleware/cors.ts        # Global CORS (FRONTEND_ORIGIN)
 │   ├── modules/                  # Feature services (alerts, paper-trading, screener-dsl, strategy jobs, ...)
 │   ├── plugins/orchestrator.ts   # Starts/stops the orchestrator with the Nitro server

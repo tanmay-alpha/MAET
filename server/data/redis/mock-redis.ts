@@ -1,8 +1,8 @@
 /**
  * MockRedis — in-memory Redis substitute for offline unit and integration tests.
  *
- * Implements the ioredis surface used by rate-limit, idempotency, SSE hub, and
- * the Redis client tests.  Not intended for production use.
+ * Implements the ioredis surface used by the Redis client tests. Not intended
+ * for production use.
  */
 
 type StoreEntry = { value: string; expiresAt: number | null };

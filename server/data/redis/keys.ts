@@ -3,7 +3,6 @@ export const RedisKeys = {
   candlesKey: (exchange: string, symbol: string, tf: string, from: string, to: string) =>
     `cache:candles:${exchange}:${symbol}:${tf}:${from}:${to}`,
   fundamentals: (symbol: string) => `cache:fundamentals:${symbol}`,
-  idempotencyKey: (userId: string, key: string) => `idempotency:${userId}:${key}`,
   screenerCriteriaKey: (exchange: string) => `screener:criteria:${exchange}`,
   angeloneSessionKey: (userId: string) => `angelone:session:${userId}`,
   angeloneSubsKey: (userId: string) => `angelone:subs:${userId}`,
