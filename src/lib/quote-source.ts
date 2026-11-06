@@ -3,6 +3,9 @@ const SOURCE_NAMES: Record<string, string> = {
   yahoo: "Yahoo",
   nse: "NSE",
   database: "Stored snapshot",
+  // Fundamentals / statements providers (server/data/sources/yahoo-fundamentals.ts)
+  yahoo_timeseries: "Yahoo Finance · time series",
+  yahoo_quote_summary: "Yahoo Finance · quote summary",
 };
 
 const CLOSED_PHASES: Record<string, true> = { CLOSED: true, HOLIDAY: true, AFTER_HOURS: true };

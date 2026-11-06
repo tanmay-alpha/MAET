@@ -98,7 +98,7 @@ function StatementTable({ statements, tab, reason }: {
         ))}</tbody>
       </table>
       <div className="border-t border-border bg-panel/50 px-4 py-2 text-[10px] text-muted-foreground">
-        Source: {relevant[0].source} · stored {new Date(relevant[0].asOf).toLocaleString("en-IN")}
+        Source: {sourceName(relevant[0].source)} · stored {new Date(relevant[0].asOf).toLocaleString("en-IN")}
       </div>
     </div>
   );
@@ -177,10 +177,10 @@ function StockDetail() {
           </section>
           <aside className="space-y-4">
             <div className="rounded-xl border border-border bg-panel/40 p-4"><div className="flex items-center gap-2 text-xs font-semibold"><Building2 className="h-4 w-4 text-primary" />Company identity</div>
-              <dl className="mt-3 space-y-2 text-xs">{[["Sector", detail.master.sector], ["Industry", detail.master.industry], ["Cap bucket", detail.master.marketCapBucket], ["Yahoo symbol", detail.master.yahooSymbol], ["BSE code", detail.master.bseCode]].map(([label, value]) => <div key={label} className="flex justify-between gap-3"><dt className="text-muted-foreground">{label}</dt><dd className="text-right font-mono">{value || <Missing reason={label === "BSE code" ? "BSE code not yet verified" : `${label} unavailable from stored sources`} />}</dd></div>)}</dl>
+              <dl className="mt-3 space-y-2 text-xs">{[["Sector", detail.master.sector], ["Industry", detail.master.industry], ["Cap bucket", detail.master.marketCapBucket === "unknown" ? undefined : detail.master.marketCapBucket], ["Yahoo symbol", detail.master.yahooSymbol], ["BSE code", detail.master.bseCode]].map(([label, value]) => <div key={label} className="flex justify-between gap-3"><dt className="text-muted-foreground">{label}</dt><dd className="text-right font-mono">{value || <Missing reason={label === "BSE code" ? "BSE code not yet verified" : `${label} unavailable from stored sources`} />}</dd></div>)}</dl>
             </div>
             <div className="rounded-xl border border-border bg-panel/40 p-4"><div className="flex items-center gap-2 text-xs font-semibold"><ShieldCheck className="h-4 w-4 text-bull" />Data provenance</div>
-              <div className="mt-3 space-y-2 text-[11px] text-muted-foreground"><p>Master: NSE official company list</p><p>Quote: {quote ? sourceName(quote.source) : "unavailable"}{quoteAsOf ? ` · ${new Date(quoteAsOf).toLocaleString("en-IN")}` : ""}</p><p>Fundamentals: {detail.fundamentals?.source ?? "no verified snapshot"}</p><p>Statements: {detail.availability.balanceSheet.source ?? "no verified snapshot"}</p></div>
+              <div className="mt-3 space-y-2 text-[11px] text-muted-foreground"><p>Master: NSE official company list</p><p>Quote: {quote ? sourceName(quote.source) : "unavailable"}{quoteAsOf ? ` · ${new Date(quoteAsOf).toLocaleString("en-IN")}` : ""}</p><p>Fundamentals: {detail.fundamentals?.source ? sourceName(detail.fundamentals.source) : "no verified snapshot"}</p><p>Statements: {detail.availability.balanceSheet.source ? sourceName(detail.availability.balanceSheet.source) : "no verified snapshot"}</p></div>
             </div>
             <a href={getTradingViewUrl(symbol)} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-xs hover:bg-accent">Open TradingView <ExternalLink className="h-3.5 w-3.5" /></a>
           </aside>
