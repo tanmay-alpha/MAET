@@ -15,6 +15,7 @@
 - **Operational Database**: Supabase PostgreSQL (via Drizzle ORM)
 - **Analytics Data Warehouse**: Google BigQuery (`maet_warehouse`)
 - **Cache & Real-time Layer**: Upstash Redis & Server-Sent Events (SSE)
+- **Code-grounded engineering docs**: [Architecture](docs/ARCHITECTURE.md), [Paper trading engine](docs/PAPER_TRADING_ENGINE.md), [Research engine](docs/RESEARCH_ENGINE.md), [Interview notes](docs/INTERVIEW_NOTES.md) (these follow the code; where this README differs, they win)
 
 ---
 
