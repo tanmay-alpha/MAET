@@ -61,7 +61,7 @@ test("signed out: /watchlists edits the guest watchlist kept in this browser", a
 
 test("/news labels its placeholders once and has no live-looking actions", async ({ page, api }) => {
   await page.goto("/news");
-  await expect(page.getByRole("status").filter({ hasText: "Sample headlines: no live news feed connected." })).toHaveCount(1);
+  await expect(page.getByRole("status").filter({ hasText: "Sample headlines: no market news feed connected." })).toHaveCount(1);
   const headlines = page.getByRole("list", { name: "Sample headlines" }).getByRole("listitem");
   await expect(headlines).toHaveCount(5);
   await expect(headlines.getByRole("button")).toHaveCount(0);

@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 export const Route = createFileRoute("/_app/news")({
@@ -92,7 +92,12 @@ function News() {
 
       <div className="mx-auto w-full max-w-4xl space-y-3 p-4 sm:p-5">
         <p role="status" className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
-          Sample headlines: no live news feed connected. The items below are placeholders that show the layout; they are not news.
+          Sample headlines: no market news feed connected. The items below are placeholders that show the layout; they are not news.
+          Geopolitical and macro headlines from GDELT are on{" "}
+          <Link to="/world" className="underline underline-offset-2 hover:text-amber-300">
+            World Monitor
+          </Link>
+          .
         </p>
 
         <ul className="space-y-2" aria-label="Sample headlines">
