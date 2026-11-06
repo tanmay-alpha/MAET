@@ -39,19 +39,6 @@ function releasePipelineSlot(source: string): void {
   runningPipelines.delete(source);
 }
 
-// FIX 3: Admin role check
-const ADMIN_USER_IDS = new Set(
-  (process.env.ADMIN_USER_IDS || "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean)
-);
-
-function isAdmin(userId: string | undefined): boolean {
-  if (!userId) return false;
-  return ADMIN_USER_IDS.has(userId);
-}
-
 function normalizeOptionChainTrigger(input: { underlying: string; expiry: string }) {
   const underlying = input.underlying.trim().toUpperCase();
   if (!underlying) {
@@ -139,7 +126,7 @@ export const ingestionRouter = createRouter({
    * Get dead letter queue entries
    */
   getDLQ: adminProcedure
-    .input(z.object({ source: z.string().optional() }).optional())
+    .input(z.object({ source: z.string().max(50).optional() }).optional())
     .query(async ({ input }) => {
       const pending = await getPendingRetries(input?.source);
       return { pending, count: pending.length };
@@ -148,7 +135,7 @@ export const ingestionRouter = createRouter({
   /**
    * Get table row counts for quick inventory check
    */
-  getInventory: protectedProcedure.query(async () => {
+  getInventory: adminProcedure.query(async () => {
     const counts = await db.execute(sql`
       SELECT
         (SELECT COUNT(*) FROM companies WHERE exchange = 'NSE') as nse_companies,

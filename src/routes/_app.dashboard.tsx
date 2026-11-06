@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Activity, ArrowDownRight, ArrowUpRight, ReceiptText, TrendingUp, Wallet, PlusCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { quoteFeedLabel } from "@/lib/quote-status";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { INDICES } from "@/lib/market-catalog";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
@@ -67,7 +68,7 @@ function Dashboard() {
     () => [...new Set([...positions.map((position) => position.symbol), ...Object.values(INDEX_KEYS)])],
     [positions]
   );
-  const { quoteMap, streamConnected, isError } = useMarketQuotes(symbols);
+  const { quoteMap, isError, delayed, marketPhase } = useMarketQuotes(symbols);
 
   const cash = account ? Number(account.cashBalance) : 1000000;
   const initialCash = account ? Number(account.initialCash) : 1000000;
@@ -97,7 +98,7 @@ function Dashboard() {
         <div>
           <h1 className="text-xl font-semibold">Paper trading dashboard</h1>
           <p className="text-xs text-muted-foreground">
-            {isError ? "Market quote service unavailable" : streamConnected ? "● Angel One Live Feed (NSE Stream Connected)" : "Connecting to market quotes"}
+            {quoteFeedLabel({ isError, delayed, marketPhase })}
             {" · "}Backend authoritative state
           </p>
         </div>

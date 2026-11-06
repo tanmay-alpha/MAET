@@ -50,6 +50,27 @@ export const TickSchema = z.object({
 });
 export type Tick = z.infer<typeof TickSchema>;
 
+export const MarketPhaseSchema = z.enum(["PRE_OPEN", "OPEN", "CLOSED", "HOLIDAY", "AFTER_HOURS"]);
+export type MarketPhase = z.infer<typeof MarketPhaseSchema>;
+
+/**
+ * A tick as served to clients. `delayed` is per quote: one response can mix
+ * live broker quotes with delayed Yahoo fallbacks, and outside the cash
+ * session every quote is delayed regardless of source.
+ */
+export type MarketQuote = Tick & { delayed: boolean };
+
+/** Body of GET /api/market/quotes and of the SSE `snapshot` event. */
+export type QuotesPayload = {
+  asOf: string;
+  source: "angelone" | "yahoo";
+  /** True when any quote in `quotes` is delayed. */
+  delayed: boolean;
+  marketPhase: MarketPhase;
+  quotes: MarketQuote[];
+  errors: Array<{ symbol: string; message: string }>;
+};
+
 export const ExecutionQuoteSchema = z.object({
   exchange: ExchangeSchema,
   symbol: z.string().min(1),

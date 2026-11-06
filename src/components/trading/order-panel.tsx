@@ -1,19 +1,23 @@
 import { useEffect, useState, useMemo } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
+import { buildTicketOrder, type TicketOrderType } from "@/lib/order-ticket";
 import { AlertCircle, CheckCircle2, ShieldAlert } from "lucide-react";
 
 export function OrderPanel({
   symbol,
+  exchange,
   price,
 }: {
   symbol: string;
+  exchange: "NSE" | "BSE";
   price?: number;
 }) {
   const { placeOrder, isTradingAvailable } = usePaperAccount();
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [qtyRaw, setQtyRaw] = useState<string>("10");
   const [limit, setLimit] = useState(price?.toFixed(2) ?? "");
-  const [type, setType] = useState<"MKT" | "LMT" | "SL">("MKT");
+  const [trigger, setTrigger] = useState("");
+  const [type, setType] = useState<TicketOrderType>("MKT");
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -31,12 +35,27 @@ export function OrderPanel({
   useEffect(() => {
     setStopLoss("");
     setTakeProfit("");
+    setTrigger("");
   }, [symbol]);
 
   const parsedQty = useMemo(() => {
     const val = parseInt(qtyRaw, 10);
     return Number.isFinite(val) && val > 0 ? val : null;
   }, [qtyRaw]);
+
+  const ticket = buildTicketOrder({
+    symbol,
+    exchange,
+    side,
+    type,
+    quantity: parsedQty,
+    limitPrice: limit,
+    triggerPrice: trigger,
+    marketPrice: price,
+    stopLoss,
+    takeProfit,
+  });
+  const validationError = ticket.ok ? null : ticket.error;
 
   const effectivePrice = useMemo(() => {
     if (type === "LMT" || type === "SL") {
@@ -54,26 +73,6 @@ export function OrderPanel({
     return estimatedValue / 5; // 5x leverage
   }, [estimatedValue]);
 
-  const validationError = useMemo(() => {
-    if (!parsedQty) return "Quantity must be a positive integer.";
-    if (type === "LMT" && (!limit || parseFloat(limit) <= 0)) {
-      return "Limit price must be greater than 0.";
-    }
-    if (type === "SL" && (!limit || parseFloat(limit) <= 0)) {
-      return "Stop-loss price must be greater than 0.";
-    }
-    if (type === "MKT" && (!price || price <= 0)) {
-      return "Market quote unavailable for MARKET order.";
-    }
-    if (stopLoss && parseFloat(stopLoss) <= 0) {
-      return "Stop loss price must be positive.";
-    }
-    if (takeProfit && parseFloat(takeProfit) <= 0) {
-      return "Take profit price must be positive.";
-    }
-    return null;
-  }, [parsedQty, type, limit, price, stopLoss, takeProfit]);
-
   const handlePreSubmit = () => {
     if (validationError) {
       setMessage(validationError);
@@ -87,48 +86,23 @@ export function OrderPanel({
   };
 
   const executeSubmit = async () => {
-    if (!isTradingAvailable || !parsedQty) return;
+    if (!isTradingAvailable || !ticket.ok) return;
 
     setIsSubmitting(true);
     setMessage("");
     setShowConfirmation(false);
 
     try {
-      if (type === "MKT") {
-        await placeOrder({
-          symbol,
-          exchange: "NSE",
-          side,
-          type: "MARKET",
-          quantity: parsedQty,
-          stopLossPrice: stopLoss ? Number(stopLoss) : undefined,
-          takeProfitPrice: takeProfit ? Number(takeProfit) : undefined,
-        });
-        setMessage(`Market ${side} order placed for ${parsedQty} ${symbol}`);
-      } else if (type === "LMT") {
-        await placeOrder({
-          symbol,
-          exchange: "NSE",
-          side,
-          type: "LIMIT",
-          quantity: parsedQty,
-          limitPrice: Number(limit),
-          stopLossPrice: stopLoss ? Number(stopLoss) : undefined,
-          takeProfitPrice: takeProfit ? Number(takeProfit) : undefined,
-        });
-        setMessage(`Limit ${side} order placed at ₹${limit}`);
-      } else {
-        await placeOrder({
-          symbol,
-          exchange: "NSE",
-          side,
-          type: "STOP_LOSS_LIMIT",
-          quantity: parsedQty,
-          stopPrice: Number(limit),
-          limitPrice: Number(limit),
-        });
-        setMessage(`Stop-loss limit ${side} order placed at ₹${limit}`);
-      }
+      if (!ticket.ok) return;
+      const { order } = ticket;
+      await placeOrder(order);
+      setMessage(
+        order.type === "MARKET"
+          ? `Market ${side} order placed for ${parsedQty} ${symbol}`
+          : order.type === "LIMIT"
+            ? `Limit ${side} order placed at ₹${order.limitPrice}`
+            : `Stop-loss limit ${side} order placed: trigger ₹${order.stopPrice}, limit ₹${order.limitPrice}`
+      );
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : "Failed to place order";
       setMessage(errorMsg);
@@ -202,12 +176,25 @@ export function OrderPanel({
           />
         </div>
 
-        {/* Limit/Stop Price */}
+        {/* Trigger Price (stop-loss limit) */}
+        {type === "SL" && (
+          <div>
+            <label className="text-[10px] text-muted-foreground uppercase font-semibold">Trigger Price (₹)</label>
+            <input
+              type="number"
+              step="0.05"
+              value={trigger}
+              onChange={(e) => setTrigger(e.target.value)}
+              placeholder={side === "BUY" ? "At or below limit" : "At or above limit"}
+              className="mt-1 w-full rounded bg-panel-elevated px-2.5 py-1.5 font-mono text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+        )}
+
+        {/* Limit Price */}
         {type !== "MKT" && (
           <div>
-            <label className="text-[10px] text-muted-foreground uppercase font-semibold">
-              {type === "LMT" ? "Limit Price (₹)" : "Stop Price (₹)"}
-            </label>
+            <label className="text-[10px] text-muted-foreground uppercase font-semibold">Limit Price (₹)</label>
             <input
               type="number"
               step="0.05"
@@ -218,16 +205,18 @@ export function OrderPanel({
           </div>
         )}
 
-        {/* Advanced Controls */}
-        <button
-          type="button"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="text-[10px] text-muted-foreground underline hover:text-foreground"
-        >
-          {showAdvanced ? "Hide Stop Loss / Take Profit" : "Add Stop Loss / Take Profit"}
-        </button>
+        {/* Advanced Controls (stop-loss limit orders take no bracket) */}
+        {type !== "SL" && (
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="text-[10px] text-muted-foreground underline hover:text-foreground"
+          >
+            {showAdvanced ? "Hide Stop Loss / Take Profit" : "Add Stop Loss / Take Profit"}
+          </button>
+        )}
 
-        {showAdvanced && (
+        {showAdvanced && type !== "SL" && (
           <div className="space-y-2 pt-1 border-t border-border/50">
             <div>
               <label className="text-[10px] text-muted-foreground">Stop Loss Price (₹)</label>
@@ -270,12 +259,20 @@ export function OrderPanel({
         <button
           onClick={handlePreSubmit}
           disabled={isSubmitting || !isTradingAvailable || Boolean(validationError)}
+          aria-describedby={validationError ? "order-ticket-validation" : undefined}
           className={`w-full rounded py-2.5 text-xs font-bold text-white transition ${
             side === "BUY" ? "bg-bull hover:bg-bull/90" : "bg-bear hover:bg-bear/90"
           } disabled:opacity-50`}
         >
           {isSubmitting ? "Submitting..." : `${side} ${parsedQty ?? 0} ${symbol}`}
         </button>
+
+        {/* Why the order button is disabled */}
+        {validationError && (
+          <div id="order-ticket-validation" role="status" className="text-[11px] text-muted-foreground">
+            {validationError}
+          </div>
+        )}
 
         {/* Status Messages */}
         {message && (

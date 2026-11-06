@@ -1,10 +1,13 @@
 /**
- * Detailed Health Endpoint — /health/detailed
+ * Detailed Health Endpoint — /health/detailed (admin only)
  * Returns comprehensive system status including ingestion lag, row counts,
- * calculation queue depth, and DLQ statistics.
+ * calculation queue depth, and DLQ statistics. Row counts and DLQ details are
+ * operational data, so callers must present an admin Supabase JWT. Public
+ * liveness lives at /api/health.
  */
 
 import { defineEventHandler } from "h3";
+import { requireAdmin } from "../../api/trpc/auth";
 import { db } from "../../data/drizzle/client";
 import { desc, sql } from "drizzle-orm";
 import { ingestionRuns } from "../../db/schema";
@@ -27,7 +30,8 @@ function assessSource(lastSync: Date | null, staleThresholdMinutes = 60): Source
   return { status, lastSyncAt: lastSync.toISOString(), lagMinutes };
 }
 
-export default defineEventHandler(async () => {
+export default defineEventHandler(async (event) => {
+  await requireAdmin(event);
   const start = Date.now();
 
   try {

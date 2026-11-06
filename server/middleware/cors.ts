@@ -30,6 +30,8 @@ export const corsMiddleware = defineEventHandler((event) => {
   setResponseHeader(event, "vary", "Origin");
   if (origin && allowedOrigins.has(origin)) {
     setResponseHeader(event, "access-control-allow-origin", origin);
+    // Lets the browser client read the rate limiter's backoff hint on 429s.
+    setResponseHeader(event, "access-control-expose-headers", "Retry-After");
   }
 
   if (getMethod(event) === "OPTIONS") {

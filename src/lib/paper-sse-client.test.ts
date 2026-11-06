@@ -95,4 +95,43 @@ describe("Authenticated SSE Client", () => {
 
     expect(errorCalled).toBe(false);
   });
+
+  test("reports a server-closed stream so the caller can reconnect", async () => {
+    globalThis.fetch = mock(async () => {
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("event: CONNECTED\ndata: {}\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+
+    const errors: Error[] = [];
+    await connectPaperTradingStream({
+      accessToken: "sse-token-test",
+      onError: (error) => errors.push(error),
+    });
+
+    expect(errors).toHaveLength(1);
+  });
+
+  test("rejects a successful response that is not an event stream", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response("<!doctype html><title>MAET</title>", { status: 200, headers: { "Content-Type": "text/html" } })
+    ) as unknown as typeof fetch;
+
+    let opened = false;
+    const errors: Error[] = [];
+    await connectPaperTradingStream({
+      accessToken: "sse-token-test",
+      onOpen: () => {
+        opened = true;
+      },
+      onError: (error) => errors.push(error),
+    });
+
+    expect(opened).toBe(false);
+    expect(errors).toHaveLength(1);
+  });
 });

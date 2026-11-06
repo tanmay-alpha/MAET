@@ -179,8 +179,8 @@ export const workspaceRouter = createRouter({
     .input(z.object({
       items: z.array(z.object({
         itemId: z.string().uuid(),
-        position: z.number().int().min(0),
-      })).min(1),
+        position: z.number().int().min(0).max(10_000),
+      })).min(1).max(500),
     }).strict())
     .mutation(async ({ ctx, input }) => {
       const itemIds = input.items.map((item) => item.itemId);
@@ -213,8 +213,10 @@ export const workspaceRouter = createRouter({
   saveScreener: protectedProcedure
     .input(z.object({
       name: savedScreenerNameSchema,
-      criteria: z.record(z.unknown()),
-      description: z.string().optional(),
+      criteria: z
+        .record(z.unknown())
+        .refine((criteria) => JSON.stringify(criteria).length <= 32_768, "Screener criteria too large"),
+      description: z.string().max(2_000).optional(),
     }).strict())
     .mutation(async ({ ctx, input }) => {
       const [savedScreener] = await db.insert(savedScreenerDefinitions)

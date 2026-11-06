@@ -1,8 +1,7 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
-import { getCurrentAccessToken } from "@/lib/auth-token";
-import { connectPaperTradingStream } from "@/lib/paper-sse-client";
+import { PaperStreamManager } from "@/lib/paper-stream-manager";
 import type {
   PaperAccountRow,
   PaperOrderRow,
@@ -38,9 +37,6 @@ export interface UsePaperAccountResult {
 export function usePaperAccount(): UsePaperAccountResult {
   const queryClient = useQueryClient();
   const [sseConnected, setSseConnected] = useState(false);
-  const reconnectAttemptRef = useRef(0);
-  const abortControllerRef = useRef<AbortController | null>(null);
-
 
   const stateQuery = useQuery({
     queryKey: ["paperTrading", "state"],
@@ -59,90 +55,11 @@ export function usePaperAccount(): UsePaperAccountResult {
     retry: 2,
   });
 
-  const setupSseStream = useCallback(() => {
-    let isActive = true;
-    let timerId: ReturnType<typeof setTimeout> | null = null;
-
-    const startStream = async () => {
-      const token = await getCurrentAccessToken();
-      if (!token || !isActive) {
-        setSseConnected(false);
-        return;
-      }
-
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
-      await connectPaperTradingStream({
-        accessToken: token,
-        signal: controller.signal,
-        onOpen: () => {
-          if (isActive) {
-            reconnectAttemptRef.current = 0;
-          }
-        },
-        onEvent: (evt) => {
-          if (!isActive) return;
-
-          if (evt.type === "CONNECTED") {
-            setSseConnected(true);
-            reconnectAttemptRef.current = 0;
-            return;
-          }
-
-          // Financial mutation events
-          if (
-            evt.type === "ORDER_PLACED" ||
-            evt.type === "ORDER_FILLED" ||
-            evt.type === "ORDER_CANCELLED" ||
-            evt.type === "ACCOUNT_RESET" ||
-            evt.type === "ACCOUNT_UPDATED" ||
-            evt.type === "FILL_CREATED" ||
-            evt.type === "STATE_CHANGED"
-          ) {
-            queryClient.invalidateQueries({ queryKey: ["paperTrading"] });
-          }
-        },
-        onHeartbeat: () => {
-          // Heartbeat received without unnecessary invalidation
-        },
-        onError: () => {
-          if (!isActive) return;
-          setSseConnected(false);
-
-          // Bounded exponential backoff: 1s, 2s, 5s, 10s max
-          const attempt = reconnectAttemptRef.current;
-          const backoffs = [1000, 2000, 5000, 10000];
-          const delay = backoffs[Math.min(attempt, backoffs.length - 1)];
-          reconnectAttemptRef.current = attempt + 1;
-
-          timerId = setTimeout(() => {
-            if (isActive) {
-              startStream();
-            }
-          }, delay);
-        },
-      });
-    };
-
-    startStream();
-
-    return () => {
-      isActive = false;
-      if (timerId) clearTimeout(timerId);
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        abortControllerRef.current = null;
-      }
-      setSseConnected(false);
-    };
-  }, [queryClient]);
-
+  // All consumers share one ref-counted stream; it only triggers state refetches.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const cleanup = setupSseStream();
-    return cleanup;
-  }, [setupSseStream]);
+    return PaperStreamManager.getInstance().subscribe({ queryClient, onStatusChange: setSseConnected });
+  }, [queryClient]);
 
   const placeOrderMutation = useMutation({
     mutationFn: async (command: PaperOrderDraft) => {

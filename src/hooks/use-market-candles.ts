@@ -9,7 +9,10 @@ export function useMarketCandles(
   return useQuery({
     queryKey: ["market-candles", symbol, timeframe, range],
     queryFn: ({ signal }) => fetchMarketCandles(symbol, timeframe, range, signal),
-    enabled: typeof window !== "undefined" && Boolean(symbol),
+    // No `typeof window` gate: queries never run during SSR anyway, and a server-only
+    // `enabled: false` makes the server render "not loading" while the client renders
+    // "loading", which breaks hydration.
+    enabled: Boolean(symbol),
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,

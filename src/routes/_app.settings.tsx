@@ -4,6 +4,7 @@ import { Settings, Bell, Database, Palette, Keyboard, BookOpen, User, Shield, Mo
 import { PaperModeBanner } from "@/components/common/paper-mode-banner";
 import { ContractPanel } from "@/components/common/contract-panel";
 import { applyTheme, SETTINGS_STORAGE_KEY, type AppTheme } from "@/lib/theme";
+import { clearMaetLocalData } from "@/lib/local-data";
 
 type Theme = AppTheme;
 
@@ -118,41 +119,54 @@ function Toggle({ enabled, onToggle, label }: { enabled: boolean; onToggle: () =
   );
 }
 
+function loadStoredSettings(): SettingsState {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) ?? "null") as Partial<SettingsState> | null;
+    return saved ? {
+      general: { ...DEFAULT_SETTINGS.general, ...saved.general },
+      notifications: { ...DEFAULT_SETTINGS.notifications, ...saved.notifications },
+      data: { ...DEFAULT_SETTINGS.data, ...saved.data },
+      appearance: { ...DEFAULT_SETTINGS.appearance, ...saved.appearance },
+    } : DEFAULT_SETTINGS;
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
 function SettingsPage() {
   const [activeSection, setActiveSection] = useState("general");
-  const [settings, setSettings] = useState<SettingsState>(() => {
-    // Load from localStorage
-    try {
-      const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) ?? "null") as Partial<SettingsState> | null;
-      return saved ? {
-        general: { ...DEFAULT_SETTINGS.general, ...saved.general },
-        notifications: { ...DEFAULT_SETTINGS.notifications, ...saved.notifications },
-        data: { ...DEFAULT_SETTINGS.data, ...saved.data },
-        appearance: { ...DEFAULT_SETTINGS.appearance, ...saved.appearance },
-      } : DEFAULT_SETTINGS;
-    } catch {
-      return DEFAULT_SETTINGS;
-    }
-  });
+  // Server render and first client render both use defaults; stored settings load after
+  // mount so hydration markup matches.
+  const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    setSettings(loadStoredSettings());
+    setHydrated(true);
+  }, []);
 
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
 
   // Save settings to localStorage when they change
   useEffect(() => {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    if (!hydrated) return;
+    const serialized = JSON.stringify(settings);
+    if (localStorage.getItem(SETTINGS_STORAGE_KEY) === serialized) return;
+    localStorage.setItem(SETTINGS_STORAGE_KEY, serialized);
     setSaveStatus("saved");
     const timer = setTimeout(() => setSaveStatus("idle"), 1500);
     return () => clearTimeout(timer);
-  }, [settings]);
+  }, [hydrated, settings]);
 
   useEffect(() => {
+    if (!hydrated) return;
     applyTheme(settings.appearance.theme);
     if (settings.appearance.theme !== "system") return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const syncSystemTheme = () => applyTheme("system");
     media.addEventListener("change", syncSystemTheme);
     return () => media.removeEventListener("change", syncSystemTheme);
-  }, [settings.appearance.theme]);
+  }, [hydrated, settings.appearance.theme]);
 
   const updateSetting = <K extends keyof SettingsState>(
     section: K,
@@ -327,29 +341,31 @@ function SettingsPage() {
           <div className="space-y-6">
             <div className="space-y-4">
               <div className="rounded-lg border border-border bg-panel p-4">
-                <h4 className="font-medium mb-2">Local Storage Only</h4>
+                <h4 className="font-medium mb-2">Where your data lives</h4>
                 <p className="text-sm text-muted-foreground">
-                  All your data — portfolio, orders, alerts, and settings — is stored locally in your browser.
-                  We do not collect or transmit any personal information.
+                  Your paper-trading account, orders, alerts, watchlists and journal are stored on the MAET server
+                  under your signed-in account. This browser keeps only display preferences, chart layouts and the
+                  guest watchlist.
                 </p>
               </div>
 
               <div className="rounded-lg border border-border bg-panel p-4">
-                <h4 className="font-medium mb-2">Clear Data</h4>
+                <h4 className="font-medium mb-2">Clear Browser Data</h4>
                 <p className="text-sm text-muted-foreground mb-3">
-                  Remove all locally stored data including portfolio, orders, alerts, and settings.
+                  Remove MAET preferences, chart layouts and the guest watchlist from this browser. Your sign-in
+                  session and server-side paper account are not affected.
                 </p>
                 <button
                   type="button"
                   onClick={() => {
-                    if (window.confirm("This will clear all data. Are you sure?")) {
-                      localStorage.clear();
+                    if (window.confirm("Clear MAET preferences and layouts stored in this browser?")) {
+                      clearMaetLocalData(window.localStorage);
                       window.location.reload();
                     }
                   }}
                   className="px-4 py-2 bg-bear/10 text-bear rounded-md text-sm hover:bg-bear/20"
                 >
-                  Clear All Data
+                  Clear Browser Data
                 </button>
               </div>
             </div>

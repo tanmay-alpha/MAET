@@ -1,6 +1,7 @@
 import { db } from "../../data/drizzle/client";
 import { alerts, alertEvents, userNotifications } from "../../db/schema";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import {
   type CreateAlertInput,
   type AlertConfig,
@@ -10,6 +11,14 @@ import {
   isSupportedAlertType,
   CreatableAlertTypeSchema,
 } from "./contracts";
+
+/** A request that is invalid for the alert's current state (a client error, not a fault). */
+export class AlertStateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AlertStateError";
+  }
+}
 
 export function mapRowToAlertView(r: typeof alerts.$inferSelect): AlertView {
   const supported = isSupportedAlertType(r.type);
@@ -40,23 +49,41 @@ export function mapRowToAlertView(r: typeof alerts.$inferSelect): AlertView {
   };
 }
 
+/** Alerts a single user may hold; each one is evaluated on every tick of its symbol. */
+export const MAX_ALERTS_PER_USER = 100;
+
 export async function createAlert(userId: string, input: CreateAlertInput): Promise<AlertView> {
-  const [result] = await db
-    .insert(alerts)
-    .values({
-      userId,
-      symbol: input.symbol,
-      exchange: "NSE",
-      type: input.config.type,
-      condition: input.config.type,
-      target: String(input.config.threshold),
-      label: input.label,
-      enabled: input.enabled,
-      mode: input.config.mode === "repeating" ? "REPEATING" : "ONE_TIME",
-      cooldownMinutes: input.config.cooldownMinutes ?? 60,
-      config: input.config,
-    })
-    .returning();
+  const result = await db.transaction(async (tx) => {
+    // Serialise this user's creates so concurrent requests cannot overshoot the cap.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`alerts:${userId}`}))`);
+    const [{ count }] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(alerts)
+      .where(eq(alerts.userId, userId));
+    if (count >= MAX_ALERTS_PER_USER) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: `At most ${MAX_ALERTS_PER_USER} alerts allowed; delete an alert to create another.`,
+      });
+    }
+    const [row] = await tx
+      .insert(alerts)
+      .values({
+        userId,
+        symbol: input.symbol,
+        exchange: "NSE",
+        type: input.config.type,
+        condition: input.config.type,
+        target: String(input.config.threshold),
+        label: input.label,
+        enabled: input.enabled,
+        mode: input.config.mode === "repeating" ? "REPEATING" : "ONE_TIME",
+        cooldownMinutes: input.config.cooldownMinutes ?? 60,
+        config: input.config,
+      })
+      .returning();
+    return row;
+  });
   return mapRowToAlertView(result);
 }
 
@@ -114,7 +141,7 @@ export async function toggleAlert(
   if (!existing) return null;
 
   if (enabled && !isSupportedAlertType(existing.type)) {
-    throw new Error(`Cannot enable unsupported legacy alert type: ${existing.type}`);
+    throw new AlertStateError(`Cannot enable unsupported legacy alert type: ${existing.type}`);
   }
 
   const [result] = await db
@@ -133,7 +160,7 @@ export async function rearmAlert(alertId: string, userId: string): Promise<Alert
   if (!existing) return null;
 
   if (!isSupportedAlertType(existing.type)) {
-    throw new Error(`Cannot rearm unsupported legacy alert type: ${existing.type}`);
+    throw new AlertStateError(`Cannot rearm unsupported legacy alert type: ${existing.type}`);
   }
 
   const [result] = await db
