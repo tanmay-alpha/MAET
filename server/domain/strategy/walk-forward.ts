@@ -79,6 +79,15 @@ export interface WalkForwardAnalysisInput {
   warmupBars?: number;
 }
 
+export interface WalkForwardRunOptions {
+  /**
+   * Awaited after every backtest (outside the per-run error handling) so a caller sharing the
+   * process with an API server can hand control back to the event loop, and can abort the
+   * analysis by throwing.
+   */
+  yieldControl?: () => Promise<void>;
+}
+
 export interface WalkForwardAnalysisResult {
   strategyVersionId: string;
   symbol: string;
@@ -207,7 +216,11 @@ function summarise(result: V3BacktestRunResult): WindowMetricsSummary {
 const average = (values: number[]) => (values.length > 0 ? values.reduce((s, v) => s + v, 0) / values.length : 0);
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkForwardAnalysisResult {
+export async function runWalkForwardAnalysis(
+  input: WalkForwardAnalysisInput,
+  options: WalkForwardRunOptions = {},
+): Promise<WalkForwardAnalysisResult> {
+  const yieldControl = options.yieldControl ?? (async () => {});
   const { definition, candles, symbol, parameters } = input;
   const sorted = [...candles].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
   const sortedMs = sorted.map((c) => new Date(c.ts).getTime());
@@ -281,6 +294,7 @@ export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkFor
       } catch (err) {
         trainErrors.push(errorMessage(err));
       }
+      await yieldControl();
     }
     if (!best) {
       warnings.push(`Window ${w.windowNumber} skipped: every training run failed (${trainErrors[0] ?? "no parameter combinations"})`);
@@ -301,6 +315,7 @@ export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkFor
     } catch (err) {
       rejectionReason = `validation run failed: ${errorMessage(err)}`;
     }
+    await yieldControl();
     if (rejectionReason) warnings.push(`Window ${w.windowNumber} rejected: ${rejectionReason}`);
 
     // 3. Test: only accepted parameters trade out of sample; a rejected window stays in cash
@@ -317,6 +332,7 @@ export function runWalkForwardAnalysis(input: WalkForwardAnalysisInput): WalkFor
       } catch (err) {
         warnings.push(`Window ${w.windowNumber}: out-of-sample run failed (${errorMessage(err)})`);
       }
+      await yieldControl();
     }
 
     windowResults.push({

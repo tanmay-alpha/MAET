@@ -129,7 +129,7 @@ describe("P2 Leakage-Free 3-Phase Walk-Forward Analysis (Commit 7)", () => {
     );
   });
 
-  it("3. End-to-end 3-phase walk-forward analysis: separates IS, Validation, and OOS reporting", () => {
+  it("3. End-to-end 3-phase walk-forward analysis: separates IS, Validation, and OOS reporting", async () => {
     const candles = makeCandles(800, 100, 0.1);
 
     const input: WalkForwardAnalysisInput = {
@@ -146,7 +146,7 @@ describe("P2 Leakage-Free 3-Phase Walk-Forward Analysis (Commit 7)", () => {
       ],
     };
 
-    const result = runWalkForwardAnalysis(input);
+    const result = await runWalkForwardAnalysis(input);
 
     expect(result.windows.length).toBeGreaterThanOrEqual(1);
 
@@ -206,10 +206,10 @@ describe("walk-forward — validation, warm-up and efficiency", () => {
     valRatio: 0.2,
   });
 
-  it("does not test or count a window that validation rejected", () => {
+  it("does not test or count a window that validation rejected", async () => {
     // 300 bars: rising training (180), collapsing validation (60), rising test (60).
     const candles = makePhasedCandles([{ bars: 180, drift: 0.003 }, { bars: 60, drift: -0.01 }, { bars: 60, drift: 0.003 }]);
-    const result = runWalkForwardAnalysis(singleWindow(candles));
+    const result = await runWalkForwardAnalysis(singleWindow(candles));
 
     expect(result.windows).toHaveLength(1);
     const [w] = result.windows;
@@ -223,10 +223,10 @@ describe("walk-forward — validation, warm-up and efficiency", () => {
     expect(result.summary.walkForwardEfficiencyReason).toMatch(/No window/);
   });
 
-  it("reports WFE as undefined (null, with a reason) when the in-sample return is not positive", () => {
+  it("reports WFE as undefined (null, with a reason) when the in-sample return is not positive", async () => {
     // Falling training, quiet validation (accepted), rising test.
     const candles = makePhasedCandles([{ bars: 180, drift: -0.002 }, { bars: 60, drift: 0 }, { bars: 60, drift: 0.003 }]);
-    const result = runWalkForwardAnalysis(singleWindow(candles));
+    const result = await runWalkForwardAnalysis(singleWindow(candles));
 
     expect(result.summary.testedWindowsCount).toBe(1);
     expect(result.windows[0].isMetrics.annualisedReturn).toBeLessThan(0);
@@ -235,11 +235,11 @@ describe("walk-forward — validation, warm-up and efficiency", () => {
     expect(result.summary.performanceRetention).toBeNull();
   });
 
-  it("tests short out-of-sample windows using earlier bars to warm up indicators", () => {
+  it("tests short out-of-sample windows using earlier bars to warm up indicators", async () => {
     // 4 windows of 100 bars: each test phase has ~20 bars, fewer than the runner's 50-bar minimum
     // and than SMA(20) needs, so without warm-up history every test run would fail.
     const candles = makePhasedCandles([{ bars: 400, drift: 0.002 }]);
-    const result = runWalkForwardAnalysis({
+    const result = await runWalkForwardAnalysis({
       ...singleWindow(candles),
       definition: makeSmaCrossDef(),
       numWindows: 4,
@@ -248,5 +248,25 @@ describe("walk-forward — validation, warm-up and efficiency", () => {
     expect(result.summary.acceptedWindowsCount).toBeGreaterThan(0);
     expect(result.summary.testedWindowsCount).toBe(result.summary.acceptedWindowsCount);
     expect(result.warnings.filter((m) => /failed/.test(m))).toEqual([]);
+  });
+
+  it("hands control back between backtests so a long analysis cannot monopolise the event loop", async () => {
+    const candles = makePhasedCandles([{ bars: 300, drift: 0.002 }]);
+    let yields = 0;
+    const result = await runWalkForwardAnalysis(
+      { ...singleWindow(candles), definition: makeSmaCrossDef(), parameters: [{ name: "fast", path: "entry.children.0.left.params.period", values: [5, 10] }] },
+      { yieldControl: async () => { yields += 1; } },
+    );
+
+    // Two training runs, one validation run and one test run.
+    expect(result.summary.testedWindowsCount).toBe(1);
+    expect(yields).toBe(4);
+  });
+
+  it("aborts when yieldControl throws instead of recording the error as a failed training run", async () => {
+    const candles = makePhasedCandles([{ bars: 300, drift: 0.002 }]);
+    const stop = new Error("runner stopping");
+
+    await expect(runWalkForwardAnalysis(singleWindow(candles), { yieldControl: async () => { throw stop; } })).rejects.toBe(stop);
   });
 });
