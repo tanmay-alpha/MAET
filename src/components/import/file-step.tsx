@@ -81,6 +81,8 @@ export function FileStep({ initial, onContinue }: { initial?: FileChoice; onCont
       </button>
       <input ref={inputRef} type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" aria-label="Tradebook CSV file" className="sr-only"
         onChange={(event) => { const selected = event.target.files?.[0]; event.target.value = ""; if (selected) void readFile(selected); }} />
+      <button type="button" onClick={loadSample} className="rounded border border-border px-3 py-1.5 hover:bg-accent">Load sample tradebook</button>
+      <span className="text-muted-foreground">The sample is invented data in Zerodha format.</span>
     </div>
 
     {progress !== undefined && <div className="mt-3" role="status">

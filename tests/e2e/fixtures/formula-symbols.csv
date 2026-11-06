@@ -1,0 +1,4 @@
+symbol,isin,trade_date,exchange,segment,series,trade_type,auction,quantity,price,trade_id,order_id,order_execution_time
+"=HYPERLINK(""https://evil.test"",""x"")",INE000000001,2024-01-10,NSE,EQ,EQ,buy,false,10,100.00,501,601,2024-01-10T10:00:00
+"=HYPERLINK(""https://evil.test"",""x"")",INE000000001,2024-02-12,NSE,EQ,EQ,sell,false,10,90.50,502,602,2024-02-12T10:00:00
+-2+3,INE000000002,2024-01-11,NSE,EQ,EQ,buy,false,5,200.00,503,603,2024-01-11T10:00:00
