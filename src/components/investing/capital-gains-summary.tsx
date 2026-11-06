@@ -28,10 +28,10 @@ export function CapitalGainsBuckets({ tax }: { tax: CapitalGainsReport }) {
   return <>
     <div className="mt-3 overflow-x-auto">
       <table className="w-full whitespace-nowrap text-left">
-        <caption className="mb-1 text-left">Tax calculation · losses applied before the annual LTCG exemption</caption>
-        <thead><tr className="border-b border-border"><th className="py-1 pr-3">Bucket / rate</th><th className="pr-3">Net gain</th><th className="pr-3">Loss set-off</th><th className="pr-3">Exemption</th><th className="pr-3">Taxable</th><th>Tax</th></tr></thead>
+        <caption className="mb-1 text-left">Tax calculation · gains − loss set-off − exemption = taxable; losses and the LTCG exemption go to the highest rate first</caption>
+        <thead><tr className="border-b border-border"><th className="py-1 pr-3">Bucket / rate</th><th className="pr-3">Gains</th><th className="pr-3">Losses</th><th className="pr-3">Loss set-off</th><th className="pr-3">Exemption</th><th className="pr-3">Taxable</th><th>Tax</th></tr></thead>
         <tbody>{tax.buckets.map((bucket) => <tr key={`${bucket.term}-${bucket.regime}`} className="border-b border-border/40 font-mono tabular-nums">
-          <td className="py-1 pr-3">{bucket.term} · {percent(bucket.rate)}</td><td className="pr-3">{rupees(bucket.netGain)}</td><td className="pr-3">{rupees(bucket.lossOffset)}</td>
+          <td className="py-1 pr-3">{bucket.term} · {percent(bucket.rate)}</td><td className="pr-3">{rupees(bucket.grossGains)}</td><td className="pr-3">{rupees(bucket.grossLosses)}</td><td className="pr-3">{rupees(bucket.lossOffset)}</td>
           <td className="pr-3">{rupees(bucket.exemptionUsed)}</td><td className="pr-3">{rupees(bucket.taxableGain)}</td><td>{rupees(bucket.tax)}</td>
         </tr>)}</tbody>
       </table>

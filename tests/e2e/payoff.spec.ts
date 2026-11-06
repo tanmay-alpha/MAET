@@ -79,3 +79,37 @@ test("payoff lab: an iron condor from a template shows exact risk figures, a cha
   await expect(page.getByRole("textbox", { name: "Leg 4 premium" })).toHaveValue("12");
   await expectCondorSummary(page);
 });
+
+test.describe("viewed from outside India", () => {
+  test.use({ timezoneId: "America/New_York" });
+
+  test("payoff lab: days to expiry count from today's IST date, not the viewer's", async ({ page }) => {
+    // 20:00 UTC on 7 Nov 2026 is still 7 Nov in New York but 01:30 on 8 Nov in India.
+    await page.clock.setFixedTime(new Date("2026-11-07T20:00:00Z"));
+    await page.goto("/payoff?sym=NIFTY&spot=24000&exp=2026-11-10");
+    const daysToExpiry = page.locator("label", { hasText: "Days to expiry" }).locator("output");
+    await expect(async () => {
+      await expect(daysToExpiry).toHaveText("2", { timeout: 1_000 });
+    }).toPass();
+  });
+});
+
+test("payoff lab: a shared iron condor fits a 390px phone with its figures, chart and scenarios", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.clock.setFixedTime(new Date("2026-11-07T06:00:00Z"));
+  await page.goto("/payoff?sym=NIFTY&spot=24010&exp=2026-11-10&legs=B_PE_23800_1_10~S_PE_23900_1_30~S_CE_24100_1_32~B_CE_24200_1_12");
+  await expect(async () => {
+    await expect(summaryValue(page, /^max profit$/i)).toHaveText("₹2,600", { timeout: 1_000 });
+  }).toPass();
+  await expectCondorSummary(page);
+  await expect(page.getByRole("img", { name: /^payoff chart/i })).toBeVisible();
+  // Wide tables may scroll inside their own panels, never the page or the lab's scroller.
+  const overflow = await page.getByRole("heading", { level: 1, name: "Payoff Lab" }).evaluate((heading) => {
+    const scroller = heading.closest(".overflow-auto") ?? document.documentElement;
+    return [document.documentElement.scrollWidth - window.innerWidth, scroller.scrollWidth - scroller.clientWidth];
+  });
+  expect(overflow).toEqual([0, 0]);
+  const screenshot = testInfo.outputPath("condor-390px.png");
+  await page.screenshot({ path: screenshot, fullPage: true });
+  await testInfo.attach("condor-390px", { path: screenshot, contentType: "image/png" });
+});
