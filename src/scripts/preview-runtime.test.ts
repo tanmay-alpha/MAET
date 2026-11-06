@@ -32,8 +32,7 @@ describe("preview script", () => {
       const terminal = await fetch(`${origin}/terminal`);
       const html = await terminal.text();
       expect(terminal.status).toBe(200);
-      expect(html).toContain("Paper account balances and positions");
-      expect(html).toContain("require a signed-in account.");
+      expect(html).toContain("Paper trading requires a signed-in account.");
       expect(html).not.toContain("Net Asset Value");
     } finally {
       child.kill();

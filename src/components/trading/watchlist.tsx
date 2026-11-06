@@ -48,11 +48,12 @@ export function Watchlist({
           const quote = quotes.get(item.symbol);
           const price = quote?.price;
           const changePct = quote?.changePct;
-          const source = quote?.source ?? "db";
+          const source = quote?.source === "angelone" ? "Angel One" : quote?.source === "yahoo" ? "Yahoo" : quote?.source;
 
           return (
             <div
               key={item.symbol}
+              title={source ? `Quote source: ${source}` : "Quote unavailable"}
               className={`group flex w-full items-center gap-3 px-3 py-2 text-xs transition-colors hover:bg-accent ${
                 active === item.symbol ? "bg-accent font-semibold" : ""
               }`}
@@ -68,7 +69,6 @@ export function Watchlist({
                 <div className="min-w-0">
                   <div className="font-medium truncate flex items-center gap-1">
                     <span>{item.symbol}</span>
-                    <span className="text-[8px] uppercase text-muted-foreground opacity-75">{source.slice(0, 3)}</span>
                   </div>
                   <div className="truncate text-[10px] text-muted-foreground">{item.name}</div>
                 </div>

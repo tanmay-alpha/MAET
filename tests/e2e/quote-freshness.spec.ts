@@ -14,11 +14,8 @@ test("after hours: closed-market delayed quotes are labelled delayed, never live
   await expect(page.getByText(price(api.tick.price), { exact: true }).first()).toBeVisible();
   expect(api.requests.some((entry) => entry.url.pathname === "/api/market/stream")).toBe(true);
 
-  await expect(
-    page.getByText("Market closed · last available quotes", {
-      exact: true,
-    }),
-  ).toBeVisible();
+  await expect(page.getByText("Market closed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Delayed quotes", { exact: true })).toBeVisible();
   await expect(page.getByText(/Live quotes/)).toHaveCount(0);
   // App-shell ticker badge.
   await expect(page.getByText("Delayed", { exact: true })).toBeVisible();
@@ -34,6 +31,7 @@ test("market hours: real-time broker quotes are labelled live", async ({ page, a
   await expect(
     page.getByText("Live quotes", { exact: true }),
   ).toBeVisible();
+  await expect(page.getByText("Market open", { exact: true })).toBeVisible();
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
   await expect(page.getByText("Delayed", { exact: true })).toHaveCount(0);
 });

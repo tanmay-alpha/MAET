@@ -11,7 +11,6 @@ import type { MarketCandle } from "@/lib/market-api";
 import { WATCHLIST } from "@/lib/market-catalog";
 import { ShieldAlert, RefreshCw, Layers, ClipboardList, History, TrendingUp, BarChart3 } from "lucide-react";
 import { useSignedIn } from "@/hooks/use-signed-in";
-import { PaperAccountGate } from "@/components/trading/paper-account-gate";
 import type { PaperOrderRow, PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
 import { buildClosePositionOrder } from "@/lib/paper-orders";
@@ -146,8 +145,7 @@ function Terminal() {
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col bg-background">
       {/* Top Account Summary Dashboard Bar */}
-      <PaperAccountGate signedIn={signedIn}>
-      <div className="flex flex-wrap items-center justify-between border-b border-border bg-panel/40 px-4 py-2 text-xs">
+      {signedIn && <div className="flex flex-wrap items-center justify-between border-b border-border bg-panel/40 px-4 py-2 text-xs">
         <div className="flex flex-wrap items-center gap-6">
           <div className="flex flex-col">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Net Asset Value (NAV)</span>
@@ -200,8 +198,7 @@ function Terminal() {
             Reset Account
           </ResetAccountButton>
         </div>
-      </div>
-      </PaperAccountGate>
+      </div>}
 
       {context.sourceContext === "screener" && (
         <div className="flex items-center justify-between border-b border-primary/20 bg-primary/10 px-4 py-1.5 text-xs text-primary">

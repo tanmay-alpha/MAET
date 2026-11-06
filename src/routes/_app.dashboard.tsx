@@ -5,7 +5,7 @@ import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { quoteFeedLabel } from "@/lib/quote-status";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useSignedIn } from "@/hooks/use-signed-in";
-import { PaperAccountGate } from "@/components/trading/paper-account-gate";
+import { GuestMarketDashboard } from "@/components/trading/guest-market-dashboard";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
 import { ResetAccountButton } from "@/components/trading/reset-account-button";
 import type { PaperPositionRow, PaperOrderRow } from "../../server/modules/paper-trading/contracts";
@@ -66,6 +66,8 @@ function Dashboard() {
   );
   const { quoteMap, isError, delayed, marketPhase } = useMarketQuotes(symbols);
 
+  if (!signedIn) return <GuestMarketDashboard />;
+
   const cash = account ? Number(account.cashBalance) : 1000000;
   const initialCash = account ? Number(account.initialCash) : 1000000;
 
@@ -118,7 +120,6 @@ function Dashboard() {
       </div>
 
 
-      <PaperAccountGate signedIn={signedIn}>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <StatCard
           icon={Wallet}
@@ -212,7 +213,6 @@ function Dashboard() {
         initialSymbol={tradeModal.symbol}
         initialSide={tradeModal.side}
       />
-      </PaperAccountGate>
     </div>
   );
 }

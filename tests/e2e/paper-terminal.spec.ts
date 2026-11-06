@@ -144,7 +144,7 @@ test("paper dashboard: a signed-in session keeps its account summary and trading
   await expect(page.getByText("Positions overview", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Quick Trade", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Reset", exact: true })).toBeEnabled();
-  await expect(page.getByText("Paper account balances and positions require a signed-in account.")).toHaveCount(0);
+  await expect(page.getByText("Paper account requires sign-in.")).toHaveCount(0);
   await expect(page.locator("header").getByText("Sign-in coming soon", { exact: true })).toHaveCount(0);
   await expect(page.locator("main").getByText("NIFTY 50", { exact: true })).toHaveCount(0);
 });
