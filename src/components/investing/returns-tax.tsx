@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { SESSION_EXPIRED_MESSAGE } from "@/components/common/sign-in-required";
 import { useSignedIn } from "@/hooks/use-signed-in";
-import { createQueryProcedure } from "@/lib/trpc";
+import { AuthenticationError, createQueryProcedure } from "@/lib/trpc";
 import type { PaperInvestingReport } from "../../../server/modules/paper-trading/investing-report";
 import { rupees, serverMarkLabel } from "./display";
 
@@ -37,6 +38,7 @@ export function ReturnsTaxSection() {
     </div>
     {!signedIn ? <div className="mt-2"><SignedOutNotice feature="Portfolio returns and tax estimates" /></div>
       : query.isPending ? <p className="mt-2 text-muted-foreground" role="status">Loading returns and tax estimate…</p>
+      : query.error instanceof AuthenticationError ? <p className="mt-2 text-amber-400" role="status">{SESSION_EXPIRED_MESSAGE}</p>
       : query.error ? <p className="mt-2 text-bear" role="status">Returns and tax unavailable: {query.error.message}</p>
       : !report?.account ? <p className="mt-2 text-muted-foreground">No paper account yet. Place your first paper trade to start recording returns.</p>
       : tax && <>
