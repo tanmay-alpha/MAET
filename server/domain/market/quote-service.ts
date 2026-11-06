@@ -125,32 +125,48 @@ function fetchQuote(symbol: string, force: boolean): Promise<Tick> {
 
 /** SmartAPI's market quote endpoint accepts at most 50 tokens per request. */
 const ANGEL_QUOTE_BATCH_SIZE = 50;
+// SmartAPI's quote rate limit is documented as 10/s but reported as 1/s on
+// the forum: send batches one at a time, a second apart.
+const ANGEL_QUOTE_BATCH_GAP_MS = 1_000;
+let angelBatchGapMs = ANGEL_QUOTE_BATCH_GAP_MS;
 
-/** Refreshes catalogued NSE symbols from Angel One REST; returns the symbols it refreshed. */
+/** Test-only: shorten the pause between Angel One batches (undefined restores it). */
+export function setAngelBatchGapForTests(ms: number | undefined): void {
+  angelBatchGapMs = ms ?? ANGEL_QUOTE_BATCH_GAP_MS;
+}
+
+function logAngelFailure(error: unknown, symbols: number): void {
+  // Yahoo remains the delayed fallback for these symbols, but the switch must be visible.
+  try {
+    getLogger().warn(
+      { err: error instanceof Error ? error.message : String(error), symbols },
+      "angel one REST quotes failed; falling back to Yahoo"
+    );
+  } catch {
+    // Logger unavailable (invalid env); the fallback itself must still work.
+  }
+}
+
+/**
+ * Refreshes catalogued NSE symbols from Angel One REST; returns the symbols it
+ * refreshed. Batches run sequentially; a failed batch only sends its own
+ * symbols to the Yahoo fallback.
+ */
 async function refreshFromAngelOne(symbols: string[]): Promise<Set<string>> {
   const refreshed = new Set<string>();
   const requests = symbols.flatMap((symbol) => {
     const record = lookupSymbol("NSE", symbol);
     return record ? [{ symbol, token: record.token }] : [];
   });
-  const batches: Array<typeof requests> = [];
+  const snapshots: AngelOneMarketQuote[] = [];
   for (let start = 0; start < requests.length; start += ANGEL_QUOTE_BATCH_SIZE) {
-    batches.push(requests.slice(start, start + ANGEL_QUOTE_BATCH_SIZE));
-  }
-  let snapshots: AngelOneMarketQuote[];
-  try {
-    snapshots = (await Promise.all(batches.map((batch) => getAngelOneMarketQuotes(batch)))).flat();
-  } catch (error) {
-    // Yahoo below remains the delayed fallback, but the switch must be visible.
+    if (start > 0 && angelBatchGapMs > 0) await new Promise((resolve) => setTimeout(resolve, angelBatchGapMs));
+    const batch = requests.slice(start, start + ANGEL_QUOTE_BATCH_SIZE);
     try {
-      getLogger().warn(
-        { err: error instanceof Error ? error.message : String(error), symbols: requests.length },
-        "angel one REST quotes failed; falling back to Yahoo"
-      );
-    } catch {
-      // Logger unavailable (invalid env); the fallback itself must still work.
+      snapshots.push(...(await getAngelOneMarketQuotes(batch)));
+    } catch (error) {
+      logAngelFailure(error, batch.length);
     }
-    return refreshed;
   }
 
   const now = new Date();
