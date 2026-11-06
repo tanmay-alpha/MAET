@@ -66,7 +66,7 @@ async function outboxRowsFor(userId: string) {
 
 /** Publishes every due PENDING event (other test files leave theirs behind too). */
 async function drainOutbox(publisher: OutboxPublisher): Promise<void> {
-  while ((await processOutboxBatch({ publisher: () => publisher })) > 0) {
+  while ((await processOutboxBatch({ publisher: () => publisher })).claimed > 0) {
     // keep claiming batches until nothing is due
   }
 }
@@ -128,7 +128,7 @@ describe("paper live feed", () => {
     expect(getSubscriptionRefCount(symbol)).toBe(1);
 
     // Redis not ready: nothing is claimed, every event stays PENDING for a later retry.
-    expect(await processOutboxBatch({ publisher: () => undefined })).toBe(0);
+    expect(await processOutboxBatch({ publisher: () => undefined })).toEqual({ claimed: 0, published: 0 });
     const pending = await outboxRowsFor(userId);
     expect(pending.map((row) => row.event_type)).toEqual(
       expect.arrayContaining(["PAPER_ORDER_ACCEPTED", "PAPER_ORDER_FILLED"])

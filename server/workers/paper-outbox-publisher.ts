@@ -65,13 +65,13 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Claims, publishes and marks one batch in a single transaction. Returns the
- * number of events claimed (0 when there was nothing due or Redis is down).
- * Throws on database errors.
+ * Claims, publishes and marks one batch in a single transaction. `claimed` is
+ * the number of due events locked (0 when nothing was due or Redis is down);
+ * `published` is how many of them went out. Throws on database errors.
  */
-export async function processOutboxBatch(deps: OutboxPublisherDeps = {}): Promise<number> {
+export async function processOutboxBatch(deps: OutboxPublisherDeps = {}): Promise<{ claimed: number; published: number }> {
   const publisher = (deps.publisher ?? readyRedisPublisher)();
-  if (!publisher) return 0;
+  if (!publisher) return { claimed: 0, published: 0 };
   const sql = (deps.sql ?? getSqlClient)();
   const batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
 
@@ -125,7 +125,7 @@ export async function processOutboxBatch(deps: OutboxPublisherDeps = {}): Promis
           WHERE id = ANY(${published}::uuid[])
         `;
       }
-      return events.length;
+      return { claimed: events.length, published: published.length };
     })
   );
 }
@@ -136,8 +136,10 @@ let inFlight: Promise<void> | null = null;
 
 async function runOnce(): Promise<number> {
   try {
-    const processed = await processOutboxBatch();
-    return processed > 0 ? BUSY_POLL_MS : IDLE_POLL_MS;
+    const { claimed, published } = await processOutboxBatch();
+    if (published > 0) return BUSY_POLL_MS;
+    // Events were due but none went out (Redis erroring while "ready"): don't spin at 50ms.
+    return claimed > 0 ? ERROR_POLL_MS : IDLE_POLL_MS;
   } catch (error) {
     if (!(error instanceof DatabaseUnavailableError)) {
       log().warn({ err: errorMessage(error) }, "paper outbox batch failed; events stay pending");
