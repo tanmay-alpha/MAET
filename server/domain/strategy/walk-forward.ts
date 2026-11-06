@@ -19,7 +19,7 @@
  */
 
 import type { Candle } from "@shared/types";
-import type { StrategyDefinition } from "../../../shared/strategy/ast";
+import { DEFAULT_INITIAL_CAPITAL_INR, type StrategyDefinition } from "../../../shared/strategy/ast";
 import { runBacktestV3, type V3BacktestRunResult } from "./runner-v3";
 import { applyParameters, generateCombinations, type SweepParameter } from "./parameter-sweep";
 import type { EquityPoint } from "../backtest/risk-metrics";
@@ -235,7 +235,7 @@ export async function runWalkForwardAnalysis(
   const trainRatio = input.trainRatio ?? 0.6;
   const valRatio = input.valRatio ?? 0.2;
   const warmupBars = input.warmupBars ?? DEFAULT_WARMUP_BARS;
-  const initialCap = input.initialCapital ?? definition.execution?.initialCapital ?? 100000;
+  const initialCap = input.initialCapital ?? definition.execution?.initialCapital ?? DEFAULT_INITIAL_CAPITAL_INR;
 
   const startDate = new Date(sortedMs[0]);
   const endDate = new Date(sortedMs[sortedMs.length - 1]);

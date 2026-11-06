@@ -15,7 +15,7 @@
  */
 
 import type { Candle } from "@shared/types";
-import type { StrategyDefinition } from "../../../shared/strategy/ast";
+import { DEFAULT_INITIAL_CAPITAL_INR, type StrategyDefinition } from "../../../shared/strategy/ast";
 import { ExecutionModel, type ExecutionContext } from "./execution-model";
 import { adjustCandles, type CorporateAction, type PriceAdjustmentSeries } from "../data/corporate-actions";
 import { IndicatorStateCache } from "./indicator-state";
@@ -164,8 +164,8 @@ export function rankCandidates<T extends { symbol: string; score?: number; volum
 
 export function runPortfolioBacktestEngine(input: PortfolioEngineInput): PortfolioBacktestResult {
   const definition = input.definition;
-  const execConfig = definition.execution ?? ({ initialCapital: 100000 } as any);
-  const capital = input.initialCapital ?? execConfig.initialCapital ?? 100000;
+  const execConfig = definition.execution ?? ({ initialCapital: DEFAULT_INITIAL_CAPITAL_INR } as any);
+  const capital = input.initialCapital ?? execConfig.initialCapital ?? DEFAULT_INITIAL_CAPITAL_INR;
   const risk = definition.risk ?? { sizingMethod: "PERCENT_OF_EQUITY", sizeValue: 20, maximumOpenPositions: 5, allowPyramiding: false };
 
   const constraints: PortfolioConstraints = {

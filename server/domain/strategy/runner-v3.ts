@@ -15,7 +15,12 @@
 
 import { createHash } from "crypto";
 import type { Candle } from "@shared/types";
-import type { StrategyDefinition, StrategyRiskConfig, StrategyExecutionConfig } from "../../../shared/strategy/ast";
+import {
+  DEFAULT_INITIAL_CAPITAL_INR,
+  type StrategyDefinition,
+  type StrategyRiskConfig,
+  type StrategyExecutionConfig,
+} from "../../../shared/strategy/ast";
 import { IndicatorStateCache } from "./indicator-state";
 import { evaluateRuleGroup } from "./ast-evaluator";
 import { calculatePositionSize } from "./position-sizer";
@@ -166,7 +171,7 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     allowPyramiding: false,
     ...(definition.risk ?? {}),
   };
-  const exec: StrategyExecutionConfig = definition.execution ?? ({ initialCapital: 100000 } as any);
+  const exec: StrategyExecutionConfig = definition.execution ?? ({ initialCapital: DEFAULT_INITIAL_CAPITAL_INR } as any);
   const initialCapital = request.overrideCapital ?? exec.initialCapital;
 
   // Build indicator state cache

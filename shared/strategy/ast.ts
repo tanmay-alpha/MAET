@@ -187,6 +187,9 @@ export type FillPolicy = "NEXT_BAR_OPEN" | "ON_CLOSE";
 export type IntrabarPolicy = "CONSERVATIVE" | "STOP_FIRST" | "TARGET_FIRST";
 export type FeeModelType = "NONE" | "FIXED_BPS" | "VOLUME_AWARE";
 
+/** Starting capital (INR) the backtest engines use when a strategy sets none. */
+export const DEFAULT_INITIAL_CAPITAL_INR = 100_000;
+
 export interface StrategyExecutionConfig {
   fillPolicy: FillPolicy;         // default NEXT_BAR_OPEN
   intrabarPolicy: IntrabarPolicy; // default CONSERVATIVE

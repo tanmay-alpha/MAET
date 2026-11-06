@@ -8,6 +8,7 @@ import { EmptyLine, ErrorLine, MetricGrid, PageHeader, primaryButton, secondaryB
 import { count, dateTime, decimal, percent, rupees, shortDate, signTone } from "@/components/strategy/format";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import { useSignedIn } from "@/hooks/use-signed-in";
+import { DEFAULT_INITIAL_CAPITAL_INR } from "@shared/strategy/ast";
 
 export interface BacktestSearch {
   symbol?: string;
@@ -34,7 +35,7 @@ const STRATEGIES: Record<string, string> = {
 
 /** Risk settings every run uses; shown next to the results so the numbers can be read correctly. */
 const RISK = {
-  initialCapital: 100000,
+  initialCapital: DEFAULT_INITIAL_CAPITAL_INR,
   feeBps: 10,
   slippageBps: 5,
   positionSizePercent: 100,
