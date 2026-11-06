@@ -5,8 +5,10 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ClientOnly } from "@/components/common/client-only";
 import { TickerTape } from "@/components/trading/ticker-tape";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { useSignedIn } from "@/hooks/use-signed-in";
 
 export function AppShell() {
+  const signedIn = useSignedIn();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
 
@@ -43,11 +45,11 @@ export function AppShell() {
               ))}
             </nav>
             <div className="ml-auto flex shrink-0 items-center gap-1.5 text-xs">
-              <div className="hidden items-center gap-1.5 rounded-md bg-panel-elevated px-2.5 py-1 md:flex">
+              {signedIn ? <div className="hidden items-center gap-1.5 rounded-md bg-panel-elevated px-2.5 py-1 md:flex">
                 <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                 <span className="text-muted-foreground">NSE</span>
                 <span className="font-medium">Paper Workstation</span>
-              </div>
+              </div> : <span className="px-1 text-[11px] text-muted-foreground">Sign-in coming soon</span>}
               <div className="relative">
                 <button
                   type="button"
