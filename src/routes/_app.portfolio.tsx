@@ -14,6 +14,7 @@ import { PlusCircle } from "lucide-react";
 import type { PaperPositionRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
 import { buildClosePositionOrder } from "@/lib/paper-orders";
+import { ReturnsTaxSection } from "@/components/investing/returns-tax";
 
 export const Route = createFileRoute("/_app/portfolio")({
   head: () => ({
@@ -90,6 +91,13 @@ function PortfolioPage() {
   }, [positions, metrics.positionsValue, metrics.totalValue, quoteMap]);
 
   const allocationColors = ["#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#6366f1", "#ef4444"];
+  if (!signedIn) {
+    return <div className="mx-auto max-w-7xl px-4 py-6">
+      <h1 className="mb-4 text-xl font-semibold">Portfolio</h1>
+      <ReturnsTaxSection />
+    </div>;
+  }
+
 
   return (
     <div className="min-h-screen bg-background">
@@ -136,6 +144,7 @@ function PortfolioPage() {
       </div>
 
       <div className="mx-auto max-w-7xl px-6 py-6">
+        <ReturnsTaxSection />
         {/* Portfolio Summary */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <StatCard

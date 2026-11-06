@@ -34,6 +34,7 @@ test("signed out: /terminal makes no protected calls and asks the visitor to sig
 });
 
 const SIGNED_OUT_PAGES = [
+  { path: "/portfolio", notice: "Portfolio returns and tax estimates require a signed-in account." },
   { path: "/journal", notice: "Trade theses and reviews require a signed-in account." },
   { path: "/replay", notice: "Replay sessions require a signed-in account." },
   { path: "/performance", notice: "Backtest results require a signed-in account." },
