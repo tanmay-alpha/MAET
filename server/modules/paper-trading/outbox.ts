@@ -1,3 +1,4 @@
+import type { PaperOutboxEventType } from "@shared/domain/paper-trading/stream-events";
 import type { NewPaperOutboxEventRow } from "./contracts";
 
 export interface EventBuilderInput {
@@ -9,7 +10,7 @@ export interface EventBuilderInput {
 }
 
 function buildEvent(
-  eventType: string,
+  eventType: PaperOutboxEventType,
   input: EventBuilderInput
 ): NewPaperOutboxEventRow {
   return {

@@ -8,7 +8,7 @@ import { ReloginBackoff } from "./workers/relogin-backoff";
 import { quoteStore } from "./domain/market/quote-store";
 import { hasHolidaysForIstYear, nextIstTime } from "./domain/market/clock";
 import { configuredHolidays } from "./domain/market/quote-quality";
-import { closeRedis, keyExists, setnxWithTtl } from "./data/redis/client";
+import { keyExists, setnxWithTtl } from "./data/redis/client";
 import { RedisKeys } from "./data/redis/keys";
 import { login, onAngelOneSessionRejected, setAngelOneMarketSession } from "./data/sources/angelone/client";
 import { getConfig } from "./config";
@@ -21,6 +21,8 @@ import { marketDataMultiplexer } from "./domain/market/data-multiplexer";
 
 import { alertEvaluatorWorker } from "./workers/alert-evaluator";
 import { listActiveAlertSymbols } from "./modules/alerts/repository";
+import { startOutboxPublisherWorker, stopOutboxPublisherWorker } from "./workers/paper-outbox-publisher";
+import { PaperInterestSubscriptions } from "./modules/paper-trading/interest-subscriptions";
 
 const angelOne = new AngelOneWorker();
 const candleWriter = new CandleWriter();
@@ -38,6 +40,7 @@ let angelFailedOff: (() => void) | undefined;
 let angelRejectedOff: (() => void) | undefined;
 let quoteBusOff: (() => void) | undefined;
 let alertReconcileTimer: ReturnType<typeof setInterval> | undefined;
+let paperInterestOff: (() => void) | undefined;
 const ANGEL_FEED_USER = "render-market-feed";
 // Angel One sessions do not survive the night; log in fresh before pre-open (09:00 IST).
 const ANGEL_DAILY_LOGIN_IST = { hour: 8, minute: 30 };
@@ -51,6 +54,18 @@ function log() {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+// Keeps symbols with working paper orders or open positions on the live feed,
+// so resting orders can fill and positions are marked without any viewer.
+const paperInterest = new PaperInterestSubscriptions({
+  subscribe: subscribeSymbol,
+  unsubscribe: unsubscribeSymbol,
+  log: {
+    info: (fields, message) => log().info(fields, message),
+    warn: (fields, message) => log().warn(fields, message),
+    debug: (fields, message) => log().debug(fields, message),
+  },
+});
 
 function activeAngelTokens(): string[] {
   const tokens = new Set<string>();
@@ -181,6 +196,9 @@ export function startOrchestrator(): void {
   marketClock.start();
   screenerRunner.start();
   orderMatcher.start();
+  startOutboxPublisherWorker();
+  paperInterest.start();
+  paperInterestOff = bus.on("paper:interest_changed", () => paperInterest.requestRefresh());
   void alertEvaluatorWorker.start();
   marketDataMultiplexer.start();
   angelReadyOff = bus.on("user:angelone:ready", ({ userId }) => {
@@ -256,22 +274,27 @@ export async function stopOrchestrator(): Promise<void> {
   angelFailedOff?.();
   angelRejectedOff?.();
   quoteBusOff?.();
+  paperInterestOff?.();
+  paperInterestOff = undefined;
+
+  // No new fills, then let a claimed outbox batch commit before connections close.
+  orderMatcher.stop();
+  await stopOutboxPublisherWorker();
   await alertEvaluatorWorker.stop();
 
-  // Release alert-owned subscription references
+  // Release the feed subscriptions owned by alerts and paper trading.
   for (const s of alertSubscriptionSymbols) {
     unsubscribeSymbol(s);
   }
   alertSubscriptionSymbols.clear();
+  paperInterest.stop();
 
-  angelOne.stop();
-  orderMatcher.stop();
+  await angelOne.stop();
   screenerRunner.stop();
   marketClock.stop();
   candleWriter.stop();
   quoteStore.stop();
   marketDataMultiplexer.stop();
-  await closeRedis();
 }
 
 export function subscribeSymbol(symbol: string): void {
@@ -314,7 +337,17 @@ export function getAlertSubscriptionSymbols(): string[] {
   return Array.from(alertSubscriptionSymbols);
 }
 
+/** Re-reads working paper orders and open positions and updates their feed subscriptions. */
+export function reconcilePaperInterestSubscriptions(): Promise<void> {
+  return paperInterest.reconcile();
+}
+
+export function getPaperInterestSymbols(): string[] {
+  return paperInterest.symbols();
+}
+
 export function resetSubscriptionRefsForTesting(): void {
+  paperInterest.stop();
   subscriptionRefs.clear();
   alertSubscriptionSymbols.clear();
 }

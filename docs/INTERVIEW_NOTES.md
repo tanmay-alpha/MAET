@@ -108,16 +108,16 @@ Correctness would hold, because all money-moving state is in PostgreSQL behind r
 | Pessimistic locking + SERIALIZABLE + unique constraints | Strong correctness, easy to reason about | Lower throughput per account; retries add latency under contention |
 | Reject delayed quotes for execution | Fills are always against a tradable live price | Orders are refused whenever the live feed is down or for BSE |
 | Every paper fill charged at DELIVERY rates | Conservative: never understates costs | Overstates intraday costs about 6× (₹222 vs ₹35 per ₹1 lakh round trip) |
-| Transactional outbox for events | Events can never disagree with committed state | The publisher isn't started yet, so the UI polls |
+| Transactional outbox for events | Events can never disagree with committed state | Delivery is at-least-once and needs Redis; the UI keeps polling as a fallback |
 | Pure domain logic in `shared/` | Testable and reused by paper trading, backtests and UI | Two layers to keep in sync (domain types vs DB rows), e.g. `TRIGGER_PENDING` maps to domain `PENDING` |
 | Backtest metrics from bar counts | Deterministic and simple | CAGR ignores gaps in the calendar (holidays, missing data) |
 
 ## What I'd do next
 
-1. Start the paper outbox publisher (inside a transaction, so `SKIP LOCKED` works) and push fills to the UI over SSE instead of polling.
-2. Subscribe the live feed to symbols with resting orders and open positions, add the BSE exchange type, and auto-release or force-close stuck `LIQUIDATION_PENDING` accounts on a timer.
+1. Add a dead-letter state for outbox events that keep failing, and replace the 1 s publisher poll with `LISTEN/NOTIFY`.
+2. Auto-release or force-close stuck `LIQUIDATION_PENDING` accounts on a timer, and re-evaluate them from the last known close outside market hours.
 3. Add a product field (CNC/MIS) to paper orders, charge intraday rates for MIS, and square off MIS positions at 15:20.
 4. Run the research workers as a separate Render worker (or a queue), and move `backtestV2.run` onto the job queue.
 5. Wire corporate actions and point-in-time fundamentals into backtests, and replace the flat bps slippage with the existing `ExecutionModel`.
 6. Add a property-based test that $\sum \text{ledger} = \text{cash}$ after random sequences of fills, cancels and resets.
-7. Make `getDb()` prefer the production URL outside tests, register the SIGTERM shutdown handler, and close the DB pool on shutdown.
+7. Add a global Angel One token budget across market streams, alerts and paper interest, and a BSE live source.
