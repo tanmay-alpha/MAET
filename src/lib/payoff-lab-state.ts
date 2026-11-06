@@ -48,6 +48,18 @@ export interface LabDraft {
 export type ContractErrors = Partial<Record<keyof ContractDraft, string>>;
 export type LegErrors = Partial<Record<"strike" | "lots" | "premium", string>>;
 
+/**
+ * Errors to display: a field the user hasn't filled yet still blocks the analysis
+ * (see validateLab) but isn't shown in red, so a fresh page doesn't open with errors.
+ */
+export function visibleContractErrors(draft: ContractDraft, errors: ContractErrors): ContractErrors {
+  const visible: ContractErrors = {};
+  for (const [key, message] of Object.entries(errors) as Array<[keyof ContractDraft, string]>) {
+    if (draft[key].trim() !== "") visible[key] = message;
+  }
+  return visible;
+}
+
 export interface ValidLab {
   symbol: string;
   spot: number;

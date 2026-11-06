@@ -10,6 +10,7 @@ import {
   storeSearch,
   validateLab,
   withSymbol,
+  visibleContractErrors,
   type LabDraft,
 } from "./payoff-lab-state";
 
@@ -161,6 +162,13 @@ describe("payoff lab validation", () => {
       expiry: "Expiry is in the past",
     });
     expect(result.legErrors).toEqual({ d: { premium: "Enter premium" }, e: { lots: "Whole number > 0" } });
+  });
+
+  it("shows no error on a field the user has not filled yet, but keeps invalid entries flagged", () => {
+    const contract = { ...condorDraft.contract, spot: "", lotSize: "2.5" };
+    const { contractErrors } = validateLab({ ...condorDraft, contract }, "2026-11-07");
+    expect(contractErrors.spot).toBe("Enter spot > 0");
+    expect(visibleContractErrors(contract, contractErrors)).toEqual({ lotSize: "Whole number > 0" });
   });
 });
 

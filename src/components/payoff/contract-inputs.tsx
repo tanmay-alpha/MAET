@@ -1,5 +1,5 @@
 import { INDEX_CONTRACT_DEFAULTS } from "@shared/domain/options/index-contracts";
-import type { ContractDraft, ContractErrors } from "@/lib/payoff-lab-state";
+import { visibleContractErrors, type ContractDraft, type ContractErrors } from "@/lib/payoff-lab-state";
 import { Field, INPUT_CLASS, decimalDraft } from "./field";
 
 interface ContractInputsProps {
@@ -15,7 +15,8 @@ const INDEX_LOTS = Object.entries(INDEX_CONTRACT_DEFAULTS)
   .map(([symbol, defaults]) => `${symbol} ${defaults.lotSize}`)
   .join(", ");
 
-export function ContractInputs({ value, errors, daysToExpiry, onChange, onSymbolChange }: ContractInputsProps) {
+export function ContractInputs({ value, errors: allErrors, daysToExpiry, onChange, onSymbolChange }: ContractInputsProps) {
+  const errors = visibleContractErrors(value, allErrors);
   const decimal = (key: "spot" | "lotSize" | "strikeStep" | "rate" | "iv") => ({
     value: value[key],
     "aria-invalid": errors[key] !== undefined,
