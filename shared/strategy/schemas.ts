@@ -161,11 +161,8 @@ export const StrategyExecutionConfigSchema = z.object({
   feeModel: FeeModelTypeSchema,
   feeBps: z.number().min(0).max(500).optional(),
   brokerage: z.number().min(0).optional(),
-  stt: z.number().min(0).optional(),
-  exchangeCharges: z.number().min(0).optional(),
-  gst: z.number().min(0).optional(),
-  sebiCharges: z.number().min(0).optional(),
-  stampDuty: z.number().min(0).optional(),
+  exchange: z.enum(["NSE", "BSE"]).optional(),
+  product: z.enum(["DELIVERY", "INTRADAY"]).optional(),
   slippageBps: z.number().min(0).max(500).optional(),
   initialCapital: z.number().positive().finite().max(1_000_000_000),
   benchmarkSymbol: z.string().optional(),
@@ -175,7 +172,6 @@ export const StrategyExecutionConfigSchema = z.object({
   impactCoefficient: z.number().min(0).max(100).optional(),
   maxImpactBps: z.number().min(0).max(2000).optional(),
   maxParticipationRate: z.number().min(0.001).max(1).optional(),
-  timeInForce: z.enum(["DAY", "GTC", "IOC"]).optional(),
 });
 
 // ============================================================
@@ -224,9 +220,17 @@ export const BacktestJobStatusSchema = z.enum([
   "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED",
 ]);
 
+/** Path segments that reach object machinery (prototype pollution) or an array's length. */
+export const FORBIDDEN_SWEEP_PATH_SEGMENTS: readonly string[] = ["__proto__", "constructor", "prototype", "length"];
+
 export const SweepParameterSchema = z.object({
   name: z.string().min(1).max(50),
-  path: z.string().min(1),  // dot-path into strategy definition
+  // Dot-path to a numeric field of the strategy definition. The sweep and walk-forward workers
+  // re-check that every segment is an own property (server/domain/strategy/parameter-sweep.ts).
+  path: z.string().min(1).max(200).refine(
+    (path) => path.split(".").every((segment) => segment.length > 0 && !FORBIDDEN_SWEEP_PATH_SEGMENTS.includes(segment)),
+    { message: "path must be a dot-path of data fields (no __proto__, constructor, prototype or length)" },
+  ),
   values: z.array(z.number().finite()).min(1).max(10),
 });
 

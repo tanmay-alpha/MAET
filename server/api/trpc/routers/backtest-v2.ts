@@ -4,8 +4,6 @@ import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { backtestRuns, backtestPresets, candles } from "../../../db/schema";
 import { eq, and, desc, asc, gte, lte, sql } from "drizzle-orm";
-// P0-A fix: Route the Backtest Lab to the canonical V3 engine.
-// The legacy runBacktest (runner.ts / strategies-v2.ts) is deprecated.
 import { runBacktestV3, InsufficientHistoryV3Error } from "../../../domain/strategy/runner-v3";
 import { presetToV3Definition } from "../../../domain/backtest/preset-to-v3-adapter";
 import { StrategyTypeSchema } from "../../../modules/backtest/contracts";

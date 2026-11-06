@@ -18,7 +18,6 @@ import { adjustCandles, type CorporateAction } from "../data/corporate-actions";
 import { getPointInTimeFundamentals, getActiveUniverseConstituents, type PointInTimeFundamental, type UniverseConstituent } from "../fundamentals/point-in-time";
 import { runPortfolioBacktestEngine, type PortfolioEngineInput } from "./portfolio-engine";
 import { runWalkForwardAnalysis, type WalkForwardAnalysisInput } from "./walk-forward";
-import type { SweepParameterRange } from "../../workers/sweep-worker";
 import { analyzeParameterStability, type SweepPointResult } from "./robustness";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 import type { Candle } from "@shared/types";
@@ -115,6 +114,7 @@ describe("MAET P2 Research & Simulation Invariants", () => {
       const candle = createSyntheticCandles("INFY", 1)[0];
       const ctx: ExecutionContext = {
         bar: candle,
+        referenceVolume: candle.volume,
         orderQuantity: 1000,
         side: "BUY",
         orderType: "MARKET",
@@ -148,6 +148,7 @@ describe("MAET P2 Research & Simulation Invariants", () => {
 
       const makeCtx = (qty: number): ExecutionContext => ({
         bar: candle,
+        referenceVolume: candle.volume,
         orderQuantity: qty,
         side: "BUY",
         config: {
@@ -337,17 +338,12 @@ describe("MAET P2 Research & Simulation Invariants", () => {
     it("evaluates walk-forward windows and computes walk-forward efficiency", () => {
       const candles = createSyntheticCandles("RELIANCE", 180, 2500, 0.001);
 
-      const paramRanges: SweepParameterRange[] = [
-        { name: "fastPeriod", min: 3, max: 7, step: 2 },
-        { name: "slowPeriod", min: 10, max: 16, step: 2 },
-      ];
-
       const wfInput: WalkForwardAnalysisInput = {
         strategyVersionId: "test-version-1",
         definition: makeSimpleStrategy("RELIANCE"),
         symbol: "RELIANCE",
         candles,
-        parameterRanges: paramRanges,
+        parameters: [],
         numWindows: 3,
         windowType: "ROLLING",
         trainRatio: 0.6,

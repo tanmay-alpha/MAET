@@ -94,6 +94,11 @@ import {
   computeMACD as canonicalMACD,
   computeBollingerBands as canonicalBollinger,
   computeATR as canonicalATR,
+  computeADX as canonicalADX,
+  computeStochastic as canonicalStochastic,
+  computeROC as canonicalROC,
+  computeDonchian as canonicalDonchian,
+  computeVWAP as canonicalVWAP,
   computeSuperTrend as canonicalSuperTrend,
 } from "@shared/indicators";
 
@@ -202,129 +207,15 @@ export function calculateRSI(candles: OHLCV[] | number[], period: number = 14): 
 }
 
 /**
- * ADX (Average Directional Index) + DI
+ * ADX (Average Directional Index) + DI (delegated to canonical engine)
  */
 export function calculateADX(candles: OHLCV[], period: number = 14): ADXResult {
-  const result: ADXResult = {
-    adx: [],
-    plusDI: [],
-    minusDI: [],
+  const res = canonicalADX(candles, period);
+  return {
+    adx: res.adx.map((v) => (v === null ? NaN : v)),
+    plusDI: res.plusDI.map((v) => (v === null ? NaN : v)),
+    minusDI: res.minusDI.map((v) => (v === null ? NaN : v)),
   };
-
-  if (candles.length < period * 2) {
-    for (let i = 0; i < candles.length; i++) {
-      result.adx.push(NaN);
-      result.plusDI.push(NaN);
-      result.minusDI.push(NaN);
-    }
-    return result;
-  }
-
-  const plusDM: number[] = [];
-  const minusDM: number[] = [];
-  const tr: number[] = [];
-
-  for (let i = 1; i < candles.length; i++) {
-    const high = candles[i].high;
-    const low = candles[i].low;
-    const prevHigh = candles[i - 1].high;
-    const prevLow = candles[i - 1].low;
-    const prevClose = candles[i - 1].close;
-
-    // True Range
-    const tr1 = high - low;
-    const tr2 = Math.abs(high - prevClose);
-    const tr3 = Math.abs(low - prevClose);
-    tr.push(Math.max(tr1, tr2, tr3));
-
-    // Directional Movement
-    const highDiff = high - prevHigh;
-    const lowDiff = prevLow - low;
-
-    if (highDiff > lowDiff && highDiff > 0) {
-      plusDM.push(highDiff);
-    } else {
-      plusDM.push(0);
-    }
-
-    if (lowDiff > highDiff && lowDiff > 0) {
-      minusDM.push(lowDiff);
-    } else {
-      minusDM.push(0);
-    }
-  }
-
-  // Smooth with Wilder's smoothing
-  const smoothedTR = smoothWilder(tr, period);
-  const smoothedPlusDM = smoothWilder(plusDM, period);
-  const smoothedMinusDM = smoothWilder(minusDM, period);
-
-  const plusDI: number[] = [];
-  const minusDI: number[] = [];
-
-  for (let i = 0; i < candles.length - 1; i++) {
-    if (smoothedTR[i] === 0) {
-      plusDI.push(NaN);
-      minusDI.push(NaN);
-    } else {
-      plusDI.push((smoothedPlusDM[i] / smoothedTR[i]) * 100);
-      minusDI.push((smoothedMinusDM[i] / smoothedTR[i]) * 100);
-    }
-  }
-
-  result.plusDI.push(NaN);
-  result.minusDI.push(NaN);
-
-  for (let i = 0; i < plusDI.length; i++) {
-    if (!isNaN(plusDI[i]) && !isNaN(minusDI[i])) {
-      result.plusDI.push(plusDI[i]);
-      result.minusDI.push(minusDI[i]);
-    } else {
-      result.plusDI.push(NaN);
-      result.minusDI.push(NaN);
-    }
-  }
-
-  // Calculate ADX
-  const dx: number[] = [];
-  for (let i = 0; i < result.plusDI.length; i++) {
-    if (isNaN(result.plusDI[i]) || isNaN(result.minusDI[i])) {
-      dx.push(NaN);
-    } else {
-      const diSum = result.plusDI[i] + result.minusDI[i];
-      if (diSum === 0) {
-        dx.push(0);
-      } else {
-        dx.push(Math.abs(result.plusDI[i] - result.minusDI[i]) / diSum * 100);
-      }
-    }
-  }
-
-  result.adx = calculateEMA(dx.filter(d => !isNaN(d)), period);
-
-  // Pad to original length
-  while (result.adx.length < candles.length) {
-    result.adx.unshift(NaN);
-  }
-
-  return result;
-}
-
-function smoothWilder(data: number[], period: number): number[] {
-  const result: number[] = [];
-  let sum = 0;
-
-  for (let i = 0; i < period && i < data.length; i++) {
-    sum += data[i];
-  }
-  result.push(sum);
-
-  for (let i = period; i < data.length; i++) {
-    sum = sum - (sum / period) + data[i];
-    result.push(sum);
-  }
-
-  return result;
 }
 
 // ============================================================================
@@ -332,51 +223,18 @@ function smoothWilder(data: number[], period: number): number[] {
 // ============================================================================
 
 /**
- * Stochastic Oscillator
+ * Stochastic Oscillator (delegated to canonical engine)
  */
 export function calculateStochastic(
   candles: OHLCV[],
   kPeriod: number = 14,
   dPeriod: number = 3
 ): StochasticResult {
-  const k: number[] = [];
-  const d: number[] = [];
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i < kPeriod - 1) {
-      k.push(NaN);
-      continue;
-    }
-
-    let highestHigh = -Infinity;
-    let lowestLow = Infinity;
-
-    for (let j = i - kPeriod + 1; j <= i; j++) {
-      highestHigh = Math.max(highestHigh, candles[j].high);
-      lowestLow = Math.min(lowestLow, candles[j].low);
-    }
-
-    const range = highestHigh - lowestLow;
-    if (range === 0) {
-      k.push(50);
-    } else {
-      k.push(((candles[i].close - lowestLow) / range) * 100);
-    }
-  }
-
-  // %D is SMA of %K
-  const kWithoutNaN = k.filter(v => !isNaN(v));
-  const smoothedK = calculateSMA(k, dPeriod);
-
-  for (let i = 0; i < k.length; i++) {
-    if (isNaN(smoothedK[i])) {
-      d.push(NaN);
-    } else {
-      d.push(smoothedK[i]);
-    }
-  }
-
-  return { k: smoothedK, d };
+  const res = canonicalStochastic(candles, kPeriod, dPeriod);
+  return {
+    k: res.k.map((v) => (v === null ? NaN : v)),
+    d: res.d.map((v) => (v === null ? NaN : v)),
+  };
 }
 
 /**
@@ -428,25 +286,10 @@ export function calculateMomentum(candles: OHLCV[], period: number = 10): number
 }
 
 /**
- * Rate of Change (ROC)
+ * Rate of Change (ROC) (delegated to canonical engine)
  */
 export function calculateROC(candles: OHLCV[], period: number = 10): number[] {
-  const result: number[] = [];
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i < period) {
-      result.push(NaN);
-      continue;
-    }
-    const priorClose = candles[i - period].close;
-    if (priorClose === 0) {
-      result.push(NaN);
-    } else {
-      result.push(((candles[i].close - priorClose) / priorClose) * 100);
-    }
-  }
-
-  return result;
+  return canonicalROC(candles, period).map((v) => (v === null ? NaN : v));
 }
 
 /**
@@ -581,38 +424,18 @@ export function calculateKeltnerChannels(
 }
 
 /**
- * Donchian Channels
+ * Donchian Channels (delegated to canonical engine)
  */
 export function calculateDonchianChannels(
   candles: OHLCV[],
   period: number = 20
 ): { upper: number[]; middle: number[]; lower: number[] } {
-  const upper: number[] = [];
-  const middle: number[] = [];
-  const lower: number[] = [];
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i < period - 1) {
-      upper.push(NaN);
-      middle.push(NaN);
-      lower.push(NaN);
-      continue;
-    }
-
-    let highestHigh = -Infinity;
-    let lowestLow = Infinity;
-
-    for (let j = i - period + 1; j <= i; j++) {
-      highestHigh = Math.max(highestHigh, candles[j].high);
-      lowestLow = Math.min(lowestLow, candles[j].low);
-    }
-
-    upper.push(highestHigh);
-    lower.push(lowestLow);
-    middle.push((highestHigh + lowestLow) / 2);
-  }
-
-  return { upper, middle, lower };
+  const res = canonicalDonchian(candles, period);
+  return {
+    upper: res.upper.map((v) => (v === null ? NaN : v)),
+    middle: res.middle.map((v) => (v === null ? NaN : v)),
+    lower: res.lower.map((v) => (v === null ? NaN : v)),
+  };
 }
 
 // ============================================================================
@@ -639,26 +462,10 @@ export function calculateOBV(candles: OHLCV[]): number[] {
 }
 
 /**
- * VWAP (Volume Weighted Average Price)
+ * VWAP (Volume Weighted Average Price) (delegated to canonical engine)
  */
 export function calculateVWAP(candles: OHLCV[]): number[] {
-  const result: number[] = [];
-  let cumulativeTPV = 0;
-  let cumulativeVolume = 0;
-
-  for (let i = 0; i < candles.length; i++) {
-    const typicalPrice = (candles[i].high + candles[i].low + candles[i].close) / 3;
-    cumulativeTPV += typicalPrice * candles[i].volume;
-    cumulativeVolume += candles[i].volume;
-
-    if (cumulativeVolume === 0) {
-      result.push(typicalPrice);
-    } else {
-      result.push(cumulativeTPV / cumulativeVolume);
-    }
-  }
-
-  return result;
+  return canonicalVWAP(candles).map((v) => (v === null ? NaN : v));
 }
 
 /**

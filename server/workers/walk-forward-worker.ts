@@ -1,8 +1,9 @@
 /**
  * Strategy Walk-Forward Worker.
  *
- * Implements anchored and rolling window generators, out-of-sample evaluation,
- * and out-of-sample performance concatenation.
+ * Claims queued strategy_walk_forward_runs, runs them through the walk-forward engine
+ * (server/domain/strategy/walk-forward.ts) on the strategy's latest version, and persists each
+ * window's training, validation and out-of-sample test results.
  */
 
 import { db } from "../data/drizzle/client";
@@ -13,8 +14,8 @@ import {
   candles,
 } from "../db/schema";
 import { eq, and, desc, asc, gte, lte, sql } from "drizzle-orm";
-import { runBacktestV3 } from "../domain/strategy/runner-v3";
-import { generateCombinations, injectParametersIntoAST, type SweepParameterRange } from "./sweep-worker";
+import { runWalkForwardAnalysis, type WalkForwardAnalysisResult } from "../domain/strategy/walk-forward";
+import type { SweepParameter } from "../domain/strategy/parameter-sweep";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
 import type { Candle } from "@shared/types";
 import { randomUUID } from "crypto";
@@ -22,59 +23,54 @@ import { randomUUID } from "crypto";
 const WORKER_ID = `wfw-${randomUUID().slice(0, 8)}-${process.pid}`;
 const POLL_INTERVAL_MS = 3000;
 
-export interface WalkForwardWindow {
-  windowNumber: number;
-  trainStart: Date;
-  trainEnd: Date;
-  valStart: Date;
-  valEnd: Date;
+/** Share of each window's training segment held out for the engine's validation phase. */
+const VALIDATION_SHARE_OF_TRAINING = 0.25;
+
+export interface WalkForwardRunSettings {
+  mode: "ANCHORED" | "ROLLING";
+  windowCount: number;
+  trainingDays: number;
+  validationDays: number;
 }
 
-export function generateWalkForwardWindows(
-  startDate: Date,
-  endDate: Date,
-  windowType: "ANCHORED" | "ROLLING",
-  numWindows: number,
-  trainRatio = 0.7,
-): WalkForwardWindow[] {
-  const totalMs = endDate.getTime() - startDate.getTime();
-  if (totalMs <= 0 || numWindows <= 0) return [];
-
-  const windowSpanMs = Math.floor(totalMs / numWindows);
-  const windows: WalkForwardWindow[] = [];
-
-  for (let i = 0; i < numWindows; i++) {
-    const windowStart = windowType === "ANCHORED"
-      ? startDate
-      : new Date(startDate.getTime() + i * windowSpanMs);
-
-    const windowEnd = new Date(startDate.getTime() + (i + 1) * windowSpanMs);
-
-    const windowDuration = windowEnd.getTime() - windowStart.getTime();
-    const trainDuration = Math.floor(windowDuration * trainRatio);
-
-    const trainStart = windowStart;
-    const trainEnd = new Date(windowStart.getTime() + trainDuration);
-    const valStart = trainEnd;
-    const valEnd = windowEnd;
-
-    windows.push({
-      windowNumber: i + 1,
-      trainStart,
-      trainEnd,
-      valStart,
-      valEnd,
-    });
-  }
-
-  return windows;
+/**
+ * Maps a run's settings onto the 3-phase engine. The API's "validation" days are the
+ * out-of-sample test segment; the last quarter of the training days becomes the engine's
+ * validation (overfit rejection) phase, so the train : validation : test proportions follow the
+ * requested training and validation lengths.
+ */
+export function walkForwardEngineConfig(run: WalkForwardRunSettings) {
+  const span = run.trainingDays + run.validationDays;
+  return {
+    windowType: run.mode,
+    numWindows: run.windowCount,
+    trainRatio: (run.trainingDays * (1 - VALIDATION_SHARE_OF_TRAINING)) / span,
+    valRatio: (run.trainingDays * VALIDATION_SHARE_OF_TRAINING) / span,
+  };
 }
 
-async function claimNextWalkForwardJob(workerId: string) {
+export function walkForwardWindowRows(runId: string, userId: string, result: WalkForwardAnalysisResult) {
+  return result.windows.map((w) => ({
+    runId,
+    userId,
+    windowIndex: w.windowNumber,
+    trainingFrom: new Date(w.trainDates.from),
+    trainingTo: new Date(w.trainDates.to),
+    validationFrom: new Date(w.valDates.from),
+    validationTo: new Date(w.valDates.to),
+    testFrom: new Date(w.testDates.from),
+    testTo: new Date(w.testDates.to),
+    selectedParameters: w.selectedParameters,
+    trainingMetrics: w.isMetrics,
+    validationMetrics: { metrics: w.valMetrics, accepted: w.validationAccepted, rejectionReason: w.rejectionReason },
+    testMetrics: w.oosMetrics,
+  }));
+}
+
+export async function claimNextWalkForwardJob() {
   const result = await db.execute(sql`
     UPDATE strategy_walk_forward_runs
     SET status = 'RUNNING',
-        started_at = now(),
         updated_at = now()
     WHERE id = (
       SELECT id FROM strategy_walk_forward_runs
@@ -83,12 +79,11 @@ async function claimNextWalkForwardJob(workerId: string) {
       LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
-    RETURNING *
+    RETURNING id
   `);
 
-  const rows = result as unknown as Record<string, unknown>[];
-  if (!rows || rows.length === 0) return null;
-  return rows[0];
+  const rows = result as unknown as Array<{ id: string }>;
+  return rows[0]?.id ?? null;
 }
 
 async function fetchCandles(symbol: string, timeframe: string, from: Date, to: Date): Promise<Candle[]> {
@@ -107,7 +102,7 @@ async function fetchCandles(symbol: string, timeframe: string, from: Date, to: D
 
   return rows.map((r) => ({
     symbol: r.symbol,
-    tf: r.timeframe as any,
+    tf: r.timeframe as Candle["tf"],
     ts: r.ts.toISOString(),
     open: Number(r.open),
     high: Number(r.high),
@@ -118,117 +113,54 @@ async function fetchCandles(symbol: string, timeframe: string, from: Date, to: D
   }));
 }
 
-export async function processWalkForward(run: any): Promise<void> {
-  const runId = run.id as string;
-  const userId = run.user_id as string;
-  const versionId = run.strategy_version_id as string;
-  const windowType = (run.window_type as "ANCHORED" | "ROLLING") ?? "ROLLING";
-  const stepCount = (run.step_count as number) ?? 4;
-  const ranges = (run.parameter_ranges ?? []) as SweepParameterRange[];
-  const symbol = (run.symbol_or_universe as string) ?? "RELIANCE";
-  const timeframe = (run.timeframe as string) ?? "1d";
-  const fromDate = new Date(run.from_date ?? Date.now() - 180 * 86400000);
-  const toDate = new Date(run.to_date ?? Date.now());
+export async function processWalkForward(runId: string): Promise<void> {
+  const [run] = await db.select().from(strategyWalkForwardRuns).where(eq(strategyWalkForwardRuns.id, runId)).limit(1);
+  if (!run) return;
 
-  const [versionRow] = await db
-    .select()
-    .from(strategyVersions)
-    .where(eq(strategyVersions.id, versionId))
-    .limit(1);
+  try {
+    const [version] = await db
+      .select()
+      .from(strategyVersions)
+      .where(eq(strategyVersions.strategyId, run.strategyId))
+      .orderBy(desc(strategyVersions.versionNumber))
+      .limit(1);
+    if (!version) throw new Error("Strategy has no saved version to walk forward");
 
-  if (!versionRow) {
+    const candleData = await fetchCandles(run.symbol, run.timeframe, run.fromDate, run.toDate);
+    const result = runWalkForwardAnalysis({
+      strategyVersionId: version.id,
+      definition: version.definition as StrategyDefinition,
+      symbol: run.symbol,
+      candles: candleData,
+      // Validated against SweepParameterSchema when the run was created.
+      parameters: run.parameters as SweepParameter[],
+      timeframe: run.timeframe,
+      ...walkForwardEngineConfig({
+        mode: run.mode as WalkForwardRunSettings["mode"],
+        windowCount: run.windowCount,
+        trainingDays: run.trainingDays,
+        validationDays: run.validationDays,
+      }),
+    });
+
+    const windowRows = walkForwardWindowRows(run.id, run.userId, result);
+    if (windowRows.length > 0) {
+      await db.insert(strategyWalkForwardWindows).values(windowRows);
+    }
     await db
       .update(strategyWalkForwardRuns)
-      .set({ status: "FAILED", updatedAt: new Date() })
-      .where(eq(strategyWalkForwardRuns.id, runId));
-    return;
+      .set({ status: "COMPLETED", oosSummary: { ...result.summary, warnings: result.warnings }, updatedAt: new Date() })
+      .where(eq(strategyWalkForwardRuns.id, run.id));
+
+    console.log(`[walk-forward-worker:${WORKER_ID}] Completed WF run ${run.id} (${result.windows.length} windows)`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[walk-forward-worker:${WORKER_ID}] WF run ${run.id} failed:`, err);
+    await db
+      .update(strategyWalkForwardRuns)
+      .set({ status: "FAILED", oosSummary: { error: message }, updatedAt: new Date() })
+      .where(eq(strategyWalkForwardRuns.id, run.id));
   }
-
-  const baseDef = versionRow.definition as unknown as StrategyDefinition;
-  const windows = generateWalkForwardWindows(fromDate, toDate, windowType, stepCount);
-  const combinations = generateCombinations(ranges, 100);
-
-  const windowInserts: any[] = [];
-  let totalOutOfSampleReturn = 0;
-  let oosSharpeSum = 0;
-
-  for (let i = 0; i < windows.length; i++) {
-    const w = windows[i];
-
-    // 1. Training Phase: Optimize parameters strictly on training candles
-    const trainCandles = await fetchCandles(symbol, timeframe, w.trainStart, w.trainEnd);
-    let bestTrainSharpe = -Infinity;
-    let bestTrainCombo: Record<string, number> = {};
-
-    if (trainCandles.length >= 30) {
-      for (const combo of combinations) {
-        const modDef = injectParametersIntoAST(baseDef, combo);
-        const res = runBacktestV3({ strategyVersionId: versionId, definition: modDef, symbol, candles: trainCandles, timeframe });
-        if (res.metrics.sharpe > bestTrainSharpe) {
-          bestTrainSharpe = res.metrics.sharpe;
-          bestTrainCombo = combo;
-        }
-      }
-    }
-
-    // 2. Validation Phase: Evaluate ONLY selected bestTrainCombo on validation candles
-    const valCandles = await fetchCandles(symbol, timeframe, w.valStart, w.valEnd);
-    let valReturn = 0;
-    let valSharpe = 0;
-    let valDrawdown = 0;
-    let valTrades = 0;
-
-    if (valCandles.length >= 10) {
-      const selectedDef = injectParametersIntoAST(baseDef, bestTrainCombo);
-      const valRes = runBacktestV3({ strategyVersionId: versionId, definition: selectedDef, symbol, candles: valCandles, timeframe });
-      valReturn = valRes.metrics.totalReturn;
-      valSharpe = valRes.metrics.sharpe;
-      valDrawdown = valRes.metrics.maxDrawdown;
-      valTrades = valRes.tradeCount;
-    }
-
-    totalOutOfSampleReturn += valReturn;
-    oosSharpeSum += valSharpe;
-
-    windowInserts.push({
-      runId,
-      userId,
-      windowIndex: w.windowNumber,
-      trainingFrom: w.trainStart,
-      trainingTo: w.trainEnd,
-      validationFrom: w.valStart,
-      validationTo: w.valEnd,
-      selectedParameters: bestTrainCombo,
-      trainingMetrics: { sharpe: isFinite(bestTrainSharpe) ? bestTrainSharpe : 0 },
-      validationMetrics: {
-        return: valReturn,
-        sharpe: valSharpe,
-        drawdown: valDrawdown,
-        tradeCount: valTrades,
-      },
-    });
-  }
-
-  if (windowInserts.length > 0) {
-    await db.insert(strategyWalkForwardWindows).values(windowInserts);
-  }
-
-  const avgOosSharpe = windows.length > 0 ? oosSharpeSum / windows.length : 0;
-
-  await db
-    .update(strategyWalkForwardRuns)
-    .set({
-      status: "COMPLETED",
-      oosSummary: {
-        avgOosSharpe: avgOosSharpe.toFixed(4),
-        totalOutOfSampleReturn: totalOutOfSampleReturn.toFixed(6),
-        overallEfficiencyRatio: (avgOosSharpe / 1.5).toFixed(4),
-      },
-      updatedAt: new Date(),
-    })
-    .where(eq(strategyWalkForwardRuns.id, runId));
-
-  console.log(`[walk-forward-worker:${WORKER_ID}] Completed WF run ${runId} (${windows.length} windows)`);
 }
 
 let isShuttingDown = false;
@@ -239,9 +171,9 @@ async function wfWorkerLoop(): Promise<void> {
 
   while (!isShuttingDown) {
     try {
-      const run = await claimNextWalkForwardJob(WORKER_ID);
-      if (run) {
-        await processWalkForward(run);
+      const runId = await claimNextWalkForwardJob();
+      if (runId) {
+        await processWalkForward(runId);
       } else {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       }

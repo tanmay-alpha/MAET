@@ -11,9 +11,9 @@ import { validateAst, canonicalDefinitionJson } from "../../../shared/strategy/a
 import { StrategyDefinitionSchema } from "../../../shared/strategy/schemas";
 import {
   STRATEGY_ENGINE_VERSION,
-  INDICATOR_ENGINE_VERSION,
   STRATEGY_SCHEMA_VERSION,
 } from "../../../shared/strategy/version";
+import { INDICATOR_ENGINE_VERSION } from "../../../shared/indicators/canonical";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
 // ============================================================

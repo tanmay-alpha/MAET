@@ -25,7 +25,8 @@ import type {
   CanonicalIndicatorsSnapshot,
 } from "./types";
 
-export const INDICATOR_ENGINE_VERSION = "1.0.0";
+/** 1.1.0: VWAP resets each IST trading session; calculation engine uses canonical series. */
+export const INDICATOR_ENGINE_VERSION = "1.1.0";
 
 // ============================================================================
 // Helper: Extract price / candle field array
@@ -444,14 +445,24 @@ export function computeADX(
 // 9. Volume-Weighted Average Price (VWAP)
 // ============================================================================
 
+const IST_OFFSET_MS = 330 * 60 * 1000; // Asia/Kolkata = UTC+05:30, no DST
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Session VWAP. Candles that carry a `ts` (ISO string, epoch ms, or Date) are
+ * anchored to the Asia/Kolkata trading day: accumulation restarts on the first
+ * bar of each IST calendar day. Candles without `ts` accumulate over the whole
+ * series.
+ */
 export function computeVWAP(
-  candles: (OHLCV | { high: number; low: number; close: number; volume?: number; h?: number; l?: number; c?: number; v?: number })[]
+  candles: (OHLCV | { high: number; low: number; close: number; volume?: number; ts?: string | number | Date; h?: number; l?: number; c?: number; v?: number })[]
 ): (number | null)[] {
   const n = candles.length;
   const result: (number | null)[] = new Array(n).fill(null);
 
   let cumPV = 0;
   let cumV = 0;
+  let session: number | null = null;
 
   const getH = (c: any) => c.high ?? c.h;
   const getL = (c: any) => c.low ?? c.l;
@@ -459,6 +470,17 @@ export function computeVWAP(
   const getV = (c: any) => c.volume ?? c.v ?? 0;
 
   for (let i = 0; i < n; i++) {
+    const ts = candles[i].ts;
+    const tsMs = ts === undefined ? NaN : new Date(ts).getTime();
+    if (Number.isFinite(tsMs)) {
+      const istDay = Math.floor((tsMs + IST_OFFSET_MS) / DAY_MS);
+      if (istDay !== session) {
+        session = istDay;
+        cumPV = 0;
+        cumV = 0;
+      }
+    }
+
     const h = getH(candles[i]);
     const l = getL(candles[i]);
     const c = getC(candles[i]);
