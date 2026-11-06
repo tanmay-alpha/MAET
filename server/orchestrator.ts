@@ -1,7 +1,7 @@
 import { CandleWriter } from "./workers/candle-writer";
 import { MarketClockWorker } from "./workers/market-clock";
 import { ScreenerRunner } from "./workers/screener-runner";
-import { AngelOneWorker } from "./workers/angelone-ws";
+import { AngelOneWorker, AngelSubscriptionBudget } from "./workers/angelone-ws";
 import { OrderMatcherWorker } from "./workers/order-matcher";
 import { DAILY_PROCESSOR_LOCK_TTL_MS, DailyProcessorSchedule } from "./workers/daily-processor-schedule";
 import { ReloginBackoff } from "./workers/relogin-backoff";
@@ -57,11 +57,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// Symbols the paper-interest source holds, recorded before the shared ref count
+// changes so the token selection below already sees them in the paper group.
+const paperSymbols = new Set<string>();
+
 // Keeps symbols with working paper orders or open positions on the live feed,
 // so resting orders can fill and positions are marked without any viewer.
 const paperInterest = new PaperInterestSubscriptions({
-  subscribe: subscribeSymbol,
-  unsubscribe: unsubscribeSymbol,
+  subscribe: (symbol) => {
+    paperSymbols.add(symbol.toUpperCase());
+    subscribeSymbol(symbol);
+  },
+  unsubscribe: (symbol) => {
+    paperSymbols.delete(symbol.toUpperCase());
+    unsubscribeSymbol(symbol);
+  },
   log: {
     info: (fields, message) => log().info(fields, message),
     warn: (fields, message) => log().warn(fields, message),
@@ -69,13 +79,19 @@ const paperInterest = new PaperInterestSubscriptions({
   },
 });
 
+const angelBudget = new AngelSubscriptionBudget({ warn: (fields, message) => log().warn(fields, message) });
+
+/**
+ * Tokens for the feed session, capped under the Angel One session quota: working
+ * orders and positions first, then alert symbols, then open market streams.
+ */
 function activeAngelTokens(): string[] {
-  const tokens = new Set<string>();
-  for (const symbol of subscriptionRefs.keys()) {
+  const held = (symbols: Iterable<string>) => [...symbols].filter((symbol) => subscriptionRefs.has(symbol));
+  const groups = [held(paperSymbols), held(alertSubscriptionSymbols), [...subscriptionRefs.keys()]];
+  return angelBudget.select(groups, (symbol) => {
     const info = lookupSymbol("NSE", symbol) ?? lookupSymbol("BSE", symbol);
-    if (info?.token) tokens.add(String(info.token));
-  }
-  return Array.from(tokens);
+    return info?.token ? String(info.token) : undefined;
+  });
 }
 
 function scheduleAngelLogin(delayMs = 15_000): void {
@@ -179,8 +195,9 @@ export async function reconcileAlertSubscriptions(fetchActiveSymbols = listActiv
     // 1. Subscribe newly active symbols
     for (const s of currentActive) {
       if (!alertSubscriptionSymbols.has(s)) {
-        subscribeSymbol(s);
+        // Recorded first, so the feed's token selection already ranks it as an alert.
         alertSubscriptionSymbols.add(s);
+        subscribeSymbol(s);
       }
     }
 
@@ -358,6 +375,7 @@ export function getPaperInterestSymbols(): string[] {
 }
 
 export function resetSubscriptionRefsForTesting(): void {
+  paperSymbols.clear();
   paperInterest.stop();
   subscriptionRefs.clear();
   alertSubscriptionSymbols.clear();

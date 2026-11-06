@@ -10,6 +10,57 @@ const WS_URL = "wss://smartapisocket.angelone.in/smart-stream";
 const MAX_RECONNECT_ATTEMPTS = 10;
 const HEARTBEAT_MS = 30_000;
 
+/**
+ * SmartAPI WebSocket 2.0 allows 1000 token subscriptions per session (beyond that a
+ * request fails with E1002). We subscribe one mode per token, so one token is one
+ * subscription; the cap keeps a margin below the quota.
+ */
+export const ANGEL_SESSION_TOKEN_CAP = 990;
+
+/**
+ * Chooses the tokens one session subscribes to when sources compete for the quota.
+ * Groups are taken in priority order (paper orders/positions, alerts, open
+ * streams); a symbol wanted by several sources counts once. Dropped symbols are
+ * logged once per change, not on every sync.
+ */
+export class AngelSubscriptionBudget {
+  private lastDroppedKey = "";
+
+  constructor(
+    private readonly log: { warn: (fields: Record<string, unknown>, message: string) => void },
+    private readonly cap = ANGEL_SESSION_TOKEN_CAP,
+  ) {}
+
+  select(groups: readonly (readonly string[])[], tokenOf: (symbol: string) => string | undefined): string[] {
+    const tokens: string[] = [];
+    const taken = new Set<string>();
+    const dropped: string[] = [];
+    const droppedTokens = new Set<string>();
+    for (const group of groups) {
+      for (const symbol of group) {
+        const token = tokenOf(symbol);
+        if (!token || taken.has(token)) continue;
+        if (tokens.length >= this.cap) {
+          if (!droppedTokens.has(token)) dropped.push(symbol);
+          droppedTokens.add(token);
+          continue;
+        }
+        taken.add(token);
+        tokens.push(token);
+      }
+    }
+    const droppedKey = dropped.join(",");
+    if (droppedKey !== this.lastDroppedKey && dropped.length > 0) {
+      this.log.warn(
+        { cap: this.cap, dropped: dropped.length, symbols: dropped.slice(0, 20) },
+        "Angel One session subscription quota reached; lowest-priority symbols get no live ticks"
+      );
+    }
+    this.lastDroppedKey = droppedKey;
+    return tokens;
+  }
+}
+
 type UserState = {
   session: AngelOneSession;
   tokens: string[];

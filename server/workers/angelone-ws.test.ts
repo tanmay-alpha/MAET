@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { AngelOneWorker, parseAngelOnePacket } from "./angelone-ws";
+import { ANGEL_SESSION_TOKEN_CAP, AngelSubscriptionBudget, AngelOneWorker, parseAngelOnePacket } from "./angelone-ws";
 import { bus } from "../infra/bus";
 import type { AngelOneSession } from "../data/sources/angelone/client";
 
@@ -200,3 +200,48 @@ function makeWsLikeSocket() {
     },
   };
 }
+
+describe("Angel One session subscription quota", () => {
+  const tokenOf = (symbol: string) => `T-${symbol}`;
+  const many = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+
+  it("keeps the combined set under the 1000-subscription session quota", () => {
+    expect(ANGEL_SESSION_TOKEN_CAP).toBeLessThan(1000);
+    const budget = new AngelSubscriptionBudget({ warn() {} });
+    const tokens = budget.select([many("P", 150), many("A", 600), many("S", 600)], tokenOf);
+    expect(tokens).toHaveLength(ANGEL_SESSION_TOKEN_CAP);
+    expect(new Set(tokens).size).toBe(tokens.length);
+  });
+
+  it("keeps paper interest first, then alerts, then open streams", () => {
+    const budget = new AngelSubscriptionBudget({ warn() {} }, 5);
+    const tokens = budget.select([["ORD", "POS"], ["ALERT1", "ALERT2"], ["STREAM1", "STREAM2"]], tokenOf);
+    expect(tokens).toEqual(["T-ORD", "T-POS", "T-ALERT1", "T-ALERT2", "T-STREAM1"]);
+  });
+
+  it("counts a symbol once when several sources want it, and skips symbols without a token", () => {
+    const budget = new AngelSubscriptionBudget({ warn() {} }, 3);
+    const tokens = budget.select([["A"], ["A", "NOTOKEN", "B"], ["B", "C", "D"]], (s) => (s === "NOTOKEN" ? undefined : tokenOf(s)));
+    expect(tokens).toEqual(["T-A", "T-B", "T-C"]);
+  });
+
+  it("logs once per change of the dropped set, not on every sync", () => {
+    const warnings: unknown[] = [];
+    const budget = new AngelSubscriptionBudget({ warn: (fields) => warnings.push(fields) }, 2);
+    const groups = [["P"], ["A"], ["S1", "S2"]];
+    for (let i = 0; i < 10; i++) budget.select(groups, tokenOf);
+    expect(warnings).toHaveLength(1);
+    budget.select([["P"], ["A"], ["S1", "S2", "S3"]], tokenOf);
+    expect(warnings).toHaveLength(2);
+    budget.select([["P"]], tokenOf);
+    budget.select([["P"], ["A"], ["S1", "S2", "S3"]], tokenOf);
+    expect(warnings).toHaveLength(3);
+  });
+
+  it("reports a dropped symbol once even when several sources want it", () => {
+    const warnings: Record<string, unknown>[] = [];
+    const budget = new AngelSubscriptionBudget({ warn: (fields) => warnings.push(fields) }, 1);
+    budget.select([["P"], ["X"], ["X"]], tokenOf);
+    expect(warnings[0]?.dropped).toBe(1);
+  });
+});
