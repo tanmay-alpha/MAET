@@ -5,6 +5,17 @@ export interface SourceResult<T> {
   status: SourceStatus;
 }
 
+/**
+ * fetch() rejects with a bare "fetch failed" and hides the socket error in `cause`;
+ * append its code so an unreachable upstream is diagnosable from the API response.
+ */
+function describeFailure(cause: unknown): string {
+  if (!(cause instanceof Error)) return "Upstream request failed";
+  const inner = cause.cause as { code?: unknown; message?: unknown } | undefined;
+  const detail = typeof inner?.code === "string" ? inner.code : typeof inner?.message === "string" ? inner.message : undefined;
+  return detail ? `${cause.message} (${detail})` : cause.message;
+}
+
 export function createSourceCache<T>(options: {
   source: WorldSource;
   ttlMs: number;
@@ -26,7 +37,7 @@ export function createSourceCache<T>(options: {
       retryAt = fetchedAt + options.ttlMs;
       error = undefined;
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : "Upstream request failed";
+      error = describeFailure(cause);
       retryAt = options.now() + options.cooldownMs;
     }
   }

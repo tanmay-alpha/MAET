@@ -32,6 +32,20 @@ describe("world lazy source cache", () => {
     expect(calls).toBe(1);
   });
 
+  it("reports the network cause behind a generic fetch failure", async () => {
+    const cause = Object.assign(new Error("connect ETIMEDOUT 1.2.3.4:443"), { code: "ETIMEDOUT" });
+    const cache = createSourceCache({
+      source: "NASA EONET",
+      ttlMs: 100,
+      cooldownMs: 50,
+      now: () => 0,
+      load: async () => {
+        throw new TypeError("fetch failed", { cause });
+      },
+    });
+    expect((await cache.read()).status.error).toBe("fetch failed (ETIMEDOUT)");
+  });
+
   it("retains last good data and timestamp during failure cooldown, then recovers", async () => {
     let now = 0;
     let calls = 0;
