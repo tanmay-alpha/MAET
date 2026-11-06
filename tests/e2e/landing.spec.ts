@@ -1,3 +1,4 @@
+import { FIXED_NOW } from "./support/data";
 import { test, expect } from "./support/fixtures";
 
 test("landing exposes public heatmap, one index row and working research links", async ({ page, api }) => {
@@ -11,6 +12,8 @@ test("landing exposes public heatmap, one index row and working research links",
       errors.push(message.text());
     }
   });
+  // Fixture quotes are stamped FIXED_NOW; a live label needs them to be from today's IST session.
+  await page.clock.setFixedTime(new Date(FIXED_NOW));
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "NIFTY 50 heatmap" })).toBeVisible();
   await expect(page.getByTestId("heatmap-tile")).toHaveCount(50);
