@@ -1,30 +1,28 @@
 /**
- * Strategy Walk-Forward Worker.
+ * Strategy walk-forward job: runs one claimed strategy_walk_forward_runs row through the walk-forward
+ * engine (server/domain/strategy/walk-forward.ts) on the strategy's latest version, and persists each
+ * window's training, validation and out-of-sample test results plus the run summary.
  *
- * Claims queued strategy_walk_forward_runs, runs them through the walk-forward engine
- * (server/domain/strategy/walk-forward.ts) on the strategy's latest version, and persists each
- * window's training, validation and out-of-sample test results.
+ * The job runner (server/modules/strategy-jobs/runner.ts) claims the row, heartbeats it and owns
+ * shutdown / time-budget handling; the engine awaits `ctx.checkpoint()` after every backtest so the
+ * runner can interrupt it and the event loop stays responsive.
  */
 
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "../data/drizzle/client";
-import {
-  strategyWalkForwardRuns,
-  strategyWalkForwardWindows,
-  strategyVersions,
-  candles,
-} from "../db/schema";
-import { eq, and, desc, asc, gte, lte, sql } from "drizzle-orm";
+import { strategyWalkForwardRuns, strategyWalkForwardWindows, strategyVersions } from "../db/schema";
 import { runWalkForwardAnalysis, type WalkForwardAnalysisResult } from "../domain/strategy/walk-forward";
 import type { SweepParameter } from "../domain/strategy/parameter-sweep";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
-import type { Candle } from "@shared/types";
-import { randomUUID } from "crypto";
-
-const WORKER_ID = `wfw-${randomUUID().slice(0, 8)}-${process.pid}`;
-const POLL_INTERVAL_MS = 3000;
+import { loadJobCandles } from "../modules/strategy-jobs/candles";
+import { downsample } from "../modules/strategy-jobs/downsample";
+import { JobInterruptedError, type JobContext } from "../modules/strategy-jobs/job-context";
+import { failWalkForward } from "../modules/strategy-optimisation/repository";
 
 /** Share of each window's training segment held out for the engine's validation phase. */
 const VALIDATION_SHARE_OF_TRAINING = 0.25;
+/** Points of the aggregate out-of-sample equity curve kept in the run summary for charting. */
+const MAX_OOS_CURVE_POINTS = 500;
 
 export interface WalkForwardRunSettings {
   mode: "ANCHORED" | "ROLLING";
@@ -67,53 +65,19 @@ export function walkForwardWindowRows(runId: string, userId: string, result: Wal
   }));
 }
 
-export async function claimNextWalkForwardJob() {
-  const result = await db.execute(sql`
-    UPDATE strategy_walk_forward_runs
-    SET status = 'RUNNING',
-        updated_at = now()
-    WHERE id = (
-      SELECT id FROM strategy_walk_forward_runs
-      WHERE status = 'QUEUED'
-      ORDER BY created_at ASC
-      LIMIT 1
-      FOR UPDATE SKIP LOCKED
-    )
-    RETURNING id
-  `);
-
-  const rows = result as unknown as Array<{ id: string }>;
-  return rows[0]?.id ?? null;
+/** The run's stored `oos_summary`: engine summary, warnings and a chartable aggregate OOS curve. */
+export function walkForwardRunSummary(result: WalkForwardAnalysisResult) {
+  return {
+    ...result.summary,
+    warnings: result.warnings,
+    oosEquityCurve: downsample(result.aggregateOosEquityCurve, MAX_OOS_CURVE_POINTS).map((p) => ({
+      timestamp: p.timestamp,
+      equity: p.equity,
+    })),
+  };
 }
 
-async function fetchCandles(symbol: string, timeframe: string, from: Date, to: Date): Promise<Candle[]> {
-  const rows = await db
-    .select()
-    .from(candles)
-    .where(
-      and(
-        eq(candles.symbol, symbol),
-        eq(candles.timeframe, timeframe),
-        gte(candles.ts, from),
-        lte(candles.ts, to),
-      ),
-    )
-    .orderBy(asc(candles.ts));
-
-  return rows.map((r) => ({
-    symbol: r.symbol,
-    tf: r.timeframe as Candle["tf"],
-    ts: r.ts.toISOString(),
-    open: Number(r.open),
-    high: Number(r.high),
-    low: Number(r.low),
-    close: Number(r.close),
-    volume: r.volume ?? 0,
-    source: r.source,
-  }));
-}
-
-export async function processWalkForward(runId: string): Promise<void> {
+export async function runWalkForwardJob(runId: string, ctx: JobContext): Promise<void> {
   const [run] = await db.select().from(strategyWalkForwardRuns).where(eq(strategyWalkForwardRuns.id, runId)).limit(1);
   if (!run) return;
 
@@ -126,70 +90,42 @@ export async function processWalkForward(runId: string): Promise<void> {
       .limit(1);
     if (!version) throw new Error("Strategy has no saved version to walk forward");
 
-    const candleData = await fetchCandles(run.symbol, run.timeframe, run.fromDate, run.toDate);
-    const result = runWalkForwardAnalysis({
-      strategyVersionId: version.id,
-      definition: version.definition as StrategyDefinition,
-      symbol: run.symbol,
-      candles: candleData,
-      // Validated against SweepParameterSchema when the run was created.
-      parameters: run.parameters as SweepParameter[],
-      timeframe: run.timeframe,
-      ...walkForwardEngineConfig({
-        mode: run.mode as WalkForwardRunSettings["mode"],
-        windowCount: run.windowCount,
-        trainingDays: run.trainingDays,
-        validationDays: run.validationDays,
-      }),
-    });
+    const candleData = await loadJobCandles(run.symbol, run.timeframe, run.fromDate, run.toDate);
+    const result = await runWalkForwardAnalysis(
+      {
+        strategyVersionId: version.id,
+        definition: version.definition as StrategyDefinition,
+        symbol: run.symbol,
+        candles: candleData,
+        // Validated against SweepParameterSchema when the run was created.
+        parameters: run.parameters as SweepParameter[],
+        timeframe: run.timeframe,
+        ...walkForwardEngineConfig({
+          mode: run.mode as WalkForwardRunSettings["mode"],
+          windowCount: run.windowCount,
+          trainingDays: run.trainingDays,
+          validationDays: run.validationDays,
+        }),
+      },
+      { yieldControl: () => ctx.checkpoint() },
+    );
 
     const windowRows = walkForwardWindowRows(run.id, run.userId, result);
-    if (windowRows.length > 0) {
-      await db.insert(strategyWalkForwardWindows).values(windowRows);
-    }
-    await db
-      .update(strategyWalkForwardRuns)
-      .set({ status: "COMPLETED", oosSummary: { ...result.summary, warnings: result.warnings }, updatedAt: new Date() })
-      .where(eq(strategyWalkForwardRuns.id, run.id));
+    await db.transaction(async (tx) => {
+      const [owned] = await tx
+        .update(strategyWalkForwardRuns)
+        .set({ status: "COMPLETED", oosSummary: walkForwardRunSummary(result), updatedAt: new Date() })
+        .where(and(eq(strategyWalkForwardRuns.id, run.id), eq(strategyWalkForwardRuns.status, "RUNNING")))
+        .returning({ id: strategyWalkForwardRuns.id });
+      if (!owned) throw new JobInterruptedError("LEASE_LOST");
+      if (windowRows.length > 0) await tx.insert(strategyWalkForwardWindows).values(windowRows);
+    });
 
-    console.log(`[walk-forward-worker:${WORKER_ID}] Completed WF run ${run.id} (${result.windows.length} windows)`);
+    console.log(`[strategy-jobs] Completed walk-forward run ${run.id} (${result.windows.length} windows)`);
   } catch (err) {
+    if (err instanceof JobInterruptedError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[walk-forward-worker:${WORKER_ID}] WF run ${run.id} failed:`, err);
-    await db
-      .update(strategyWalkForwardRuns)
-      .set({ status: "FAILED", oosSummary: { error: message }, updatedAt: new Date() })
-      .where(eq(strategyWalkForwardRuns.id, run.id));
+    console.error(`[strategy-jobs] Walk-forward run ${run.id} failed:`, err);
+    await failWalkForward(run.id, message);
   }
-}
-
-let isShuttingDown = false;
-async function wfWorkerLoop(): Promise<void> {
-  console.log(`[walk-forward-worker] Starting walk-forward worker ${WORKER_ID}`);
-  process.on("SIGTERM", () => { isShuttingDown = true; });
-  process.on("SIGINT", () => { isShuttingDown = true; });
-
-  while (!isShuttingDown) {
-    try {
-      const runId = await claimNextWalkForwardJob();
-      if (runId) {
-        await processWalkForward(runId);
-      } else {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      }
-    } catch (err) {
-      console.error(`[walk-forward-worker] Error in walk-forward worker loop:`, err);
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-    }
-  }
-
-  console.log(`[walk-forward-worker:${WORKER_ID}] Shutdown complete.`);
-  process.exit(0);
-}
-
-if (import.meta.main || process.argv[1]?.endsWith("walk-forward-worker.ts")) {
-  wfWorkerLoop().catch((err) => {
-    console.error("[walk-forward-worker] Fatal error:", err);
-    process.exit(1);
-  });
 }

@@ -335,7 +335,7 @@ describe("MAET P2 Research & Simulation Invariants", () => {
   // 5. Walk-Forward Analysis & Parameter Robustness
   // ------------------------------------------------------------
   describe("5. Walk-Forward Analysis & Parameter Robustness", () => {
-    it("evaluates walk-forward windows and computes walk-forward efficiency", () => {
+    it("evaluates walk-forward windows and computes walk-forward efficiency", async () => {
       const candles = createSyntheticCandles("RELIANCE", 180, 2500, 0.001);
 
       const wfInput: WalkForwardAnalysisInput = {
@@ -352,7 +352,7 @@ describe("MAET P2 Research & Simulation Invariants", () => {
         initialCapital: 1_000_000,
       };
 
-      const result = runWalkForwardAnalysis(wfInput);
+      const result = await runWalkForwardAnalysis(wfInput);
 
       expect(result.windows.length).toBeGreaterThan(0);
       expect(result.summary.walkForwardEfficiency).toBeDefined();

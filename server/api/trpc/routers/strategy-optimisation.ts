@@ -17,6 +17,8 @@ import {
 import { eq, and, desc } from "drizzle-orm";
 import { CreateSweepInputSchema, CreateWalkForwardInputSchema } from "../../../../shared/strategy/contracts";
 import { insertWithinActiveJobCap } from "../../../modules/strategy-jobs/repository";
+import { analyseSweepRobustness } from "../../../modules/strategy-optimisation/sweep-robustness";
+import type { SweepParameter } from "../../../domain/strategy/parameter-sweep";
 
 const MAX_COMBINATIONS = 500;
 
@@ -61,7 +63,7 @@ export const strategyOptimisationRouter = createRouter({
       return { sweep };
     }),
 
-  /** Get a parameter sweep and its results */
+  /** Get a parameter sweep, its results and (once completed) their robustness analysis */
   getSweep: protectedProcedure
     .input(z.object({ sweepId: z.string().uuid() }).strict())
     .query(async ({ ctx, input }) => {
@@ -78,7 +80,12 @@ export const strategyOptimisationRouter = createRouter({
         .where(eq(strategySweepResults.sweepId, input.sweepId))
         .orderBy(strategySweepResults.combinationIndex);
 
-      return { sweep, results };
+      const robustness = sweep.status === "COMPLETED" && results.length > 0
+        // Validated against SweepParameterSchema when the sweep was created.
+        ? analyseSweepRobustness(sweep.parameters as SweepParameter[], results)
+        : null;
+
+      return { sweep, results, robustness };
     }),
 
   /** List sweeps for a strategy */
@@ -170,5 +177,18 @@ export const strategyOptimisationRouter = createRouter({
         .orderBy(strategyWalkForwardWindows.windowIndex);
 
       return { run, windows };
+    }),
+
+  /** List walk-forward runs for a strategy */
+  listWalkForwards: protectedProcedure
+    .input(z.object({ strategyId: z.string().uuid() }).strict())
+    .query(async ({ ctx, input }) => {
+      const runs = await db
+        .select()
+        .from(strategyWalkForwardRuns)
+        .where(and(eq(strategyWalkForwardRuns.strategyId, input.strategyId), eq(strategyWalkForwardRuns.userId, ctx.userId!)))
+        .orderBy(desc(strategyWalkForwardRuns.createdAt))
+        .limit(20);
+      return { runs };
     }),
 });

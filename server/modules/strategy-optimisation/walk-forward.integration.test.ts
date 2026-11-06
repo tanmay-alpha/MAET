@@ -8,11 +8,9 @@
 import { describe, expect, it } from "bun:test";
 import { applyMigrations } from "../../scripts/apply-migrations";
 import { getSqlClient } from "../../data/drizzle/client";
-import {
-  claimNextWalkForwardJob,
-  processWalkForward,
-  walkForwardEngineConfig,
-} from "../../workers/walk-forward-worker";
+import { runWalkForwardJob, walkForwardEngineConfig } from "../../workers/walk-forward-worker";
+import { claimNextWalkForward } from "./repository";
+import { uninterruptedJobContext } from "../strategy-jobs/job-context";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
 describe("Walk-forward worker", () => {
@@ -80,11 +78,11 @@ describe("Walk-forward worker", () => {
     // Other queued runs may exist in a shared test DB; drain until ours is claimed.
     let claimed: string | null;
     do {
-      claimed = await claimNextWalkForwardJob();
-      if (claimed && claimed !== runId) await processWalkForward(claimed);
+      claimed = await claimNextWalkForward();
+      if (claimed && claimed !== runId) await runWalkForwardJob(claimed, uninterruptedJobContext);
     } while (claimed && claimed !== runId);
     expect(claimed).toBe(runId);
-    await processWalkForward(runId);
+    await runWalkForwardJob(runId, uninterruptedJobContext);
 
     const [run] = await sql`SELECT status, oos_summary FROM public.strategy_walk_forward_runs WHERE id = ${runId}`;
     expect(run.status).toBe("COMPLETED");

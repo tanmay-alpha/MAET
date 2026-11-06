@@ -13,7 +13,8 @@ export interface StrategyTemplate {
   hypothesis: string;
   limitations: string;
   timeframes: string[];
-  definition: Partial<StrategyDefinition>;
+  /** The template's rules; templateCreateInput() adds the universe, risk and execution defaults. */
+  definition: Pick<StrategyDefinition, "direction" | "timeframe" | "entry" | "exit">;
 }
 
 export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
@@ -302,3 +303,27 @@ export const TEMPLATE_CATEGORY_COLORS: Record<StrategyTemplate["category"], stri
   breakout: "text-emerald-400 bg-emerald-400/10 border-emerald-400/30",
   volatility: "text-rose-400 bg-rose-400/10 border-rose-400/30",
 };
+
+/** Starting point for a strategy created from a template; the user edits it in the Strategy Lab. */
+const TEMPLATE_DEFAULTS = {
+  universe: { type: "SINGLE_SYMBOL", symbolOrId: "RELIANCE" },
+  risk: { sizingMethod: "PERCENT_OF_EQUITY", sizeValue: 100, maximumOpenPositions: 1, allowPyramiding: false },
+  execution: {
+    fillPolicy: "NEXT_BAR_OPEN",
+    intrabarPolicy: "CONSERVATIVE",
+    feeModel: "VOLUME_AWARE",
+    exchange: "NSE",
+    product: "DELIVERY",
+    slippageBps: 5,
+    initialCapital: 100_000,
+  },
+} satisfies Pick<StrategyDefinition, "universe" | "risk" | "execution">;
+
+/** The strategyDefinitions.create payload for a template: a complete definition the server accepts. */
+export function templateCreateInput(template: StrategyTemplate): { name: string; description: string; definition: StrategyDefinition } {
+  return {
+    name: template.name,
+    description: template.description,
+    definition: { name: template.name, description: template.description, ...TEMPLATE_DEFAULTS, ...template.definition },
+  };
+}

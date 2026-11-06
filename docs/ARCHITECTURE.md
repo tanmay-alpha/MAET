@@ -70,7 +70,7 @@ flowchart LR
 | `AngelOneWorker` | Logs in (retry 15 s, fresh login daily at 08:30 IST), streams subscribed tokens. | `server/orchestrator.ts`, `server/workers/angelone-ws.ts` |
 | Daily processor | Checked every 60 s; runs after 18:30 IST on trading days under a Redis `SET NX` lock. | `server/orchestrator.ts`, `server/workers/daily-processor-schedule.ts` |
 
-Not started by the web process: the backtest, sweep, walk-forward and strategy-evaluator loops (each runs only as its own script, `package.json` `worker:*`), the paper outbox publisher (`server/workers/paper-outbox-publisher.ts`, `startOutboxPublisherWorker` has no caller) and the technical-snapshot worker. See §9.
+Also started by the web process: the strategy job runner (`server/plugins/strategy-jobs.ts`, unless `STRATEGY_JOBS_IN_PROCESS=false`), which executes queued backtests, sweeps and walk-forward runs. Not started by the web process: the strategy-evaluator loop (`bun run worker:evaluator`), the paper outbox publisher (`server/workers/paper-outbox-publisher.ts`, `startOutboxPublisherWorker` has no caller) and the technical-snapshot worker. See §9.
 
 ## 2. Request flows
 
@@ -227,7 +227,7 @@ sequenceDiagram
     W->>DB: INSERT trades, equity points, performance snapshot, job COMPLETED
 ```
 
-Sources: `server/api/trpc/routers/backtest-v2.ts`, `server/domain/backtest/preset-to-v3-adapter.ts`, `server/api/trpc/routers/strategy-backtests.ts`, `server/modules/strategy-jobs/repository.ts`, `server/workers/backtest-worker.ts`, `server/domain/strategy/runner-v3.ts`. The job path only completes when someone runs `bun run worker:backtest`; `render.yaml` declares no worker service (§9). Details of the engine are in [RESEARCH_ENGINE.md](RESEARCH_ENGINE.md).
+Sources: `server/api/trpc/routers/backtest-v2.ts`, `server/domain/backtest/preset-to-v3-adapter.ts`, `server/api/trpc/routers/strategy-backtests.ts`, `server/modules/strategy-jobs/repository.ts`, `server/workers/backtest-worker.ts`, `server/domain/strategy/runner-v3.ts`. The job runner in the web process (`server/modules/strategy-jobs/runner.ts`, started by `server/plugins/strategy-jobs.ts`) claims queued jobs one at a time; set `STRATEGY_JOBS_IN_PROCESS=false` and run `bun run worker:strategy-jobs` to move it to its own process. Details of the engine are in [RESEARCH_ENGINE.md](RESEARCH_ENGINE.md).
 
 ## 3. Module map
 
@@ -243,7 +243,7 @@ Sources: `server/api/trpc/routers/backtest-v2.ts`, `server/domain/backtest/prese
 | `server/domain/calculations/`, `screener/`, `technical/`, `analysis/`, `company/`, `portfolio/` | Calculator registry and batch runner, screener engine, technical indicators, stock scorecard, company detail, position reconciliation. |
 | `server/modules/` | Feature services and repositories: `paper-trading/` (service, fill writer, tick processor, liquidation, risk monitor, outbox), `strategy-jobs/`, `strategy-definitions/`, `alerts/`, `capabilities/`, `options/`, `peers/`, `screener-dsl/`, `market-breadth/`, `chart-workspaces/`, `trade-theses/`, `technical-snapshots/`, `data-quality/`. |
 | `server/data/` | Clients and provider adapters: Drizzle, Redis, BigQuery, Angel One, Yahoo, NSE master and index constituents, Yahoo fundamentals. |
-| `server/workers/` | In-process workers (Angel One WS, candle writer, market clock, order matcher, alert evaluator, daily processor) and standalone job workers (backtest, sweep, walk-forward, strategy evaluator), plus the ingestion engine. |
+| `server/workers/` | In-process workers (Angel One WS, candle writer, market clock, order matcher, alert evaluator, daily processor), the backtest, sweep and walk-forward job functions run by the in-process strategy job runner, the standalone strategy evaluator, plus the ingestion engine. |
 | `server/infra/` | Event bus, logger (pino with redaction), health probes, AES-256-GCM credential encryption, client-IP derivation, DB diagnostics, and an unregistered shutdown helper (`shutdown.ts`). |
 | `server/db/` | Drizzle `schema.ts`, numbered SQL migrations (0001–0026), seeds. |
 | `server/scripts/` | Migration runner, DB connection check, backfills, test-wiring check. |
@@ -339,7 +339,7 @@ The backend connects with whatever credentials its connection string carries (`s
 ## 9. Known gaps and risks
 
 1. **Paper events are best-effort realtime.** The outbox publisher (`server/workers/paper-outbox-publisher.ts`, started by `server/orchestrator.ts`) claims a batch with `FOR UPDATE SKIP LOCKED`, publishes to Redis and marks it `PUBLISHED` in one transaction (at-least-once). It polls every 1 s while Redis is up and does nothing while it is not; a failing event backs off (2^n s, max 300 s) with no dead-letter state. One Redis subscriber per process (`server/modules/paper-trading/stream-hub.ts`) fans out to SSE connections; the UI still polls as a fallback (`src/hooks/use-paper-account.ts`).
-2. **Research workers are not deployed (fix in progress).** Queued backtests, sweeps, walk-forward runs and deployments stay `QUEUED` unless someone runs the `worker:*` scripts; Render declares only the web service (`render.yaml`, `package.json`).
+2. **Research jobs share the web process.** Queued backtests, sweeps and walk-forward runs execute inside the web service (`server/plugins/strategy-jobs.ts`): one job at a time, yielding to the event loop after every backtest, with a per-job time budget (`STRATEGY_JOB_TIME_BUDGET_MS`, default 15 min) and a per-job bar cap (`MAX_JOB_CANDLES`, default 50,000); stale `RUNNING` jobs are requeued, or failed once older than 6 h. A single backtest still runs in one block (about 80 ms for 20,000 intraday bars on a dev machine, longer on Render's free CPU), and on the free plan an idle service sleeps, so queued jobs wait until it wakes. Strategy deployments are still not evaluated: the evaluator runs only as `bun run worker:evaluator`.
 3. **CPU work in the web process.** `backtestV2.run` executes the backtest synchronously inside the request (`server/api/trpc/routers/backtest-v2.ts`), on the same event loop as tick matching and SSE.
 4. **Single-instance state.** Quote cache, quote store, volume tracker, risk-monitor marks, rate-limit buckets (memory store) and paper stream slots live in process memory (`server/domain/market/quote-service.ts`, `server/modules/paper-trading/volume-tracker.ts`, `server/modules/paper-trading/risk-monitor.ts`, `server/modules/paper-trading/stream-slots.ts`). A second instance would duplicate matching work (still safe, see the paper doc) and split rate limits.
 5. **The feed covers subscribed NSE symbols only.** The WebSocket subscribes exchange type 1 (NSE cash) (`server/workers/angelone-ws.ts`). Subscriptions come from open market SSE connections, active alerts, and paper interest: working orders and open positions across current generations (`server/modules/paper-trading/interest-subscriptions.ts`, capped at 150, working orders first). There is no global budget across these sources against Angel's token limit, BSE symbols get no ticks, and an account in `LIQUIDATION_PENDING` is only re-evaluated once its positions receive a tick.

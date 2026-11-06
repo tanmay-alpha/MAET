@@ -12,6 +12,7 @@
 import type { Page, Request, Route } from "@playwright/test";
 import type { MarketCandle, MarketCompany } from "../../../src/lib/market-api";
 import { PaperOrderCommandSchema } from "../../../server/modules/paper-trading/contracts";
+import { CreateStrategyInputSchema } from "../../../shared/strategy/contracts";
 import {
   ACCESS_TOKEN,
   BASE_PRICES,
@@ -444,24 +445,20 @@ export class MockApi {
 
     const strategies = new Map<string, unknown>();
     this.onMutation("strategyDefinitions.create", (input) => {
-      const name = requireString(input, "name");
-      const description = inputValue(input, "description");
-      const definition = inputValue(input, "definition");
-      if (typeof definition !== "object" || definition === null) {
-        throw new TrpcError("BAD_REQUEST", 'Expected object "definition"');
+      // The real procedure validates strictly with this contract (server/api/trpc/routers/strategy-definitions.ts).
+      const parsed = CreateStrategyInputSchema.strict().safeParse(input);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        throw new TrpcError("BAD_REQUEST", issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid strategy");
       }
+      const { name, description, definition } = parsed.data;
       const strategy = {
         id: CREATED_STRATEGY_ID,
         userId: USER_ID,
         name,
-        description: typeof description === "string" ? description : null,
+        description: description ?? null,
         status: "DRAFT",
-        currentDraft: {
-          name,
-          universe: { type: "SINGLE_SYMBOL", symbolOrId: "RELIANCE" },
-          risk: {},
-          ...definition,
-        },
+        currentDraft: definition,
         schemaVersion: 1,
         createdAt: FIXED_NOW,
         updatedAt: FIXED_NOW,

@@ -58,3 +58,26 @@ describe("config", () => {
     expect(c.angeloneTotpSecret).toBe("test-totp-secret-16chars");
   });
 });
+describe("strategy job settings", () => {
+  it("runs jobs in process by default outside tests and not in tests", async () => {
+    const { readStrategyJobSettings } = await import("./config");
+    expect(readStrategyJobSettings({ NODE_ENV: "production" }).inProcess).toBe(true);
+    expect(readStrategyJobSettings({ NODE_ENV: "development" }).inProcess).toBe(true);
+    expect(readStrategyJobSettings({ NODE_ENV: "test" }).inProcess).toBe(false);
+    expect(readStrategyJobSettings({ NODE_ENV: "production", BUN_TEST: "1" }).inProcess).toBe(false);
+  });
+
+  it("lets STRATEGY_JOBS_IN_PROCESS override the default either way", async () => {
+    const { readStrategyJobSettings } = await import("./config");
+    expect(readStrategyJobSettings({ NODE_ENV: "production", STRATEGY_JOBS_IN_PROCESS: "false" }).inProcess).toBe(false);
+    expect(readStrategyJobSettings({ NODE_ENV: "test", STRATEGY_JOBS_IN_PROCESS: "1" }).inProcess).toBe(true);
+    expect(() => readStrategyJobSettings({ STRATEGY_JOBS_IN_PROCESS: "yes" })).toThrow(/STRATEGY_JOBS_IN_PROCESS/);
+  });
+
+  it("parses the per-job time budget with a 15 minute default", async () => {
+    const { readStrategyJobSettings } = await import("./config");
+    expect(readStrategyJobSettings({}).jobTimeBudgetMs).toBe(15 * 60 * 1000);
+    expect(readStrategyJobSettings({ STRATEGY_JOB_TIME_BUDGET_MS: "120000" }).jobTimeBudgetMs).toBe(120_000);
+    expect(() => readStrategyJobSettings({ STRATEGY_JOB_TIME_BUDGET_MS: "5" })).toThrow(/STRATEGY_JOB_TIME_BUDGET_MS/);
+  });
+});

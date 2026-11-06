@@ -13,7 +13,7 @@ How MAET backtests a strategy and evaluates it out of sample, as implemented at 
 
 Strategies are an AST (`shared/strategy/ast.ts`, validated by `shared/strategy/schemas.ts`): entry/exit rule groups of conditions over price, market and indicator operands with lags 0–50, plus risk and execution config. Versions are immutable and identified by a SHA-256 of their canonical JSON (`server/modules/strategy-definitions/service.ts`).
 
-Queued jobs: creation takes a per-user advisory transaction lock and enforces a cap of 3 queued/running jobs of a kind in the last 6 hours; workers claim the oldest job with `FOR UPDATE SKIP LOCKED`, heartbeat every 30 s, and recover `RUNNING` jobs whose heartbeat is older than 5 minutes (`server/modules/strategy-jobs/repository.ts`, `server/workers/backtest-worker.ts`). The workers run only as separate processes (`bun run worker:backtest|worker:sweep|worker:walk-forward`, `package.json`); the Render web service does not start them (`render.yaml`, `server/orchestrator.ts`).
+Queued jobs: creation takes a per-user advisory transaction lock and enforces a cap of 3 queued/running jobs of a kind in the last 6 hours; workers claim the oldest job with `FOR UPDATE SKIP LOCKED`, heartbeat every 30 s, and recover `RUNNING` jobs whose heartbeat is older than 5 minutes (`server/modules/strategy-jobs/repository.ts`, `server/modules/strategy-optimisation/repository.ts`; sweeps and walk-forward runs use `updated_at` as their heartbeat). The job runner (`server/modules/strategy-jobs/runner.ts`) runs inside the web service, started by `server/plugins/strategy-jobs.ts` unless `STRATEGY_JOBS_IN_PROCESS=false` (then `bun run worker:strategy-jobs` runs it standalone). It executes one job at a time, awaits a checkpoint after every backtest (handing the event loop back to the API and letting it stop the job), fails a job after `STRATEGY_JOB_TIME_BUDGET_MS` (default 15 min), requeues the running job on shutdown, and fails rather than requeues an abandoned job older than 6 hours. Results and the `COMPLETED` status are written in one transaction that commits only while the worker still holds the job.
 
 ## 2. runner-v3: the bar loop
 
@@ -124,7 +124,7 @@ $$
 
 Otherwise the value is `null` with a reason string. OOS total return is $(E^{OOS}_{final} - C_0)/C_0$; OOS max drawdown is the maximum of the per-window drawdowns, not recomputed on the stitched curve.
 
-**Robustness** (`server/domain/strategy/robustness.ts`, research only) scores a sweep: neighbours differ in 1–2 parameters by at most 1.5 steps; a "fragile spike" (best Sharpe > 1 with neighbour mean below half of it) raises `OVERFIT_RISK`; overall score $= 0.40\,s_{neighbour} + 0.25\,s_{sample} + 0.20\,s_{drawdown} + 0.15\,s_{cost}$. Its inline comments cite thresholds (1.5, 100 trades) that differ from the code (1.0, 60 trades).
+**Robustness** (`server/domain/strategy/robustness.ts`) scores a sweep; `strategyOptimisation.getSweep` returns it for a finished sweep (`server/modules/strategy-optimisation/sweep-robustness.ts`): neighbours differ in 1–2 parameters by at most 1.5 steps; a "fragile spike" (best Sharpe > 1 with neighbour mean below half of it) raises `OVERFIT_RISK`; overall score $= 0.40\,s_{neighbour} + 0.25\,s_{sample} + 0.20\,s_{drawdown} + 0.15\,s_{cost}$. Its inline comments cite thresholds (1.5, 100 trades) that differ from the code (1.0, 60 trades).
 
 ## 6. Metrics
 
@@ -151,7 +151,7 @@ All in `computeMetrics`, `server/domain/backtest/risk-metrics.ts`. Equity sample
 | Turnover | total traded notional / mean equity |
 | Ulcer index | $\sqrt{\overline{d_t^2}}$ with $d_t$ the percentage drawdown; UPI $= \mathrm{CAGR}/(\mathrm{UI}/100)$ |
 
-Edge cases: fewer than two equity points or $E_0 \le 0$ returns all zeros. The queued worker writes the fractional `exposure` into the `exposurePercent` column without ×100 (`server/workers/backtest-worker.ts`).
+Edge cases: fewer than two equity points or $E_0 \le 0$ returns all zeros. The queued backtest job stores `exposure × 100` in the `exposurePercent` column (`server/workers/backtest-worker.ts`); snapshots written before that fix hold the fraction.
 
 ## 7. Corporate actions
 
@@ -186,7 +186,7 @@ Rights issues and symbol changes are typed but not applied. A 2:1 split therefor
 
 `buildCanonicalSnapshot` builds the snapshot used by `server/modules/technical-snapshots/service.ts`. Consumers: the strategy `IndicatorStateCache` (which delegates SMA, EMA, RSI, MACD, Bollinger, ATR, VWAP and SuperTrend to canonical and keeps its own OBV and Donchian), the calculation registry, the screener, `server/domain/technical/indicators-extended.ts`, and the frontend chart (`src/components/trading/lightweight-chart.tsx`, `src/lib/technical-indicators.ts`). `tests/canonical-indicators.test.ts` checks canonical values against the strategy cache.
 
-Two adapter quirks: the MACD preset writes `{fast, slow, signal}` while the cache reads `{fastPeriod, slowPeriod, signalPeriod}`, so custom MACD periods from a preset fall back to 12/26/9; and the Donchian preset compares the close with a channel that includes the current bar (`preset-to-v3-adapter.ts`, `indicator-state.ts`).
+One adapter quirk: the Donchian preset compares the close with a channel that includes the current bar (`preset-to-v3-adapter.ts`, `indicator-state.ts`).
 
 ## 9. What production does not use yet
 
@@ -196,8 +196,7 @@ Two adapter quirks: the MACD preset writes `{fast, slow, signal}` while the cach
 | Portfolio engine | No endpoint or worker calls it; the frontend imports only its types. | `server/domain/strategy/portfolio-engine.ts`, `src/components/strategy/portfolio-analytics-view.tsx` |
 | Point-in-time fundamentals and universe membership | Only tests call them. | `server/domain/fundamentals/point-in-time.ts`, `point-in-time.test.ts`, `p2-research-invariants.test.ts` |
 | Corporate actions in backtests | Supported by the runner, never supplied by callers; no corporate-action ingestion. | §7 |
-| Robustness scoring, look-ahead detector | Only tests call them. | `robustness.ts`, `look-ahead-detector.ts` |
+| Look-ahead detector | Only tests call it. (Robustness scoring is returned by `strategyOptimisation.getSweep`.) | `look-ahead-detector.ts` |
 | In-memory replay engine | Only its test uses it; the replay router has its own DB-backed logic. | `server/modules/strategy-replay/replay-engine.ts`, `server/api/trpc/routers/strategy-replay.ts` |
-| Research workers on Render | Not started by the web service. | `render.yaml`, `package.json` `worker:*` |
 
-What production does use: runner-v3, `computeMetrics`, the fee model with the shared statutory schedule, the parameter sweep, and the walk-forward engine (through its worker).
+What production does use: runner-v3, `computeMetrics`, the fee model with the shared statutory schedule, the parameter sweep, the walk-forward engine and sweep robustness scoring, all run by the in-process job runner (`server/plugins/strategy-jobs.ts`).

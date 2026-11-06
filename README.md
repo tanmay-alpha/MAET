@@ -47,7 +47,7 @@ flowchart TB
         Live["In-process Quote Cache & Tick Bus"]
         API["REST & SSE Endpoints"]
         TRPC["Type-Safe tRPC Routers"]
-        Research["Backtest Runner & Walk-Forward\n(job workers run as separate processes)"]
+        Research["Backtest Runner & Walk-Forward\n(in-process job runner)"]
         Paper["Paper Trading Matcher & Margin Engine"]
     end
 
@@ -90,12 +90,12 @@ The calculation engine (`server/domain/calculations/engine/CalculationEngine.ts`
 
 MAET includes a research and simulation toolkit aimed at the usual pitfalls of naive backtesting (look-ahead bias, overfitting, survivorship bias and zero-cost assumptions). Not all of it is wired into production backtests yet; the status of each part is stated below.
 
-> **Wiring status.** Production backtests run `server/domain/strategy/runner-v3.ts`: the synchronous `backtestV2` tRPC router and the queued backtest, sweep and walk-forward job workers in `server/workers/`.
+> **Wiring status.** Production backtests run `server/domain/strategy/runner-v3.ts`: the synchronous `backtestV2` tRPC router and the queued backtest, sweep and walk-forward jobs in `server/workers/`.
 >
 > - **Look-ahead:** with the default `NEXT_BAR_OPEN` policy, rules are evaluated on bar *i−1* and filled at bar *i*'s open. `server/domain/strategy/truncated-history.test.ts` checks that a run which never saw bars after time *T* agrees with the full-history run on every trade and equity point before *T*. `fill-bar-look-ahead.test.ts` checks that changing the fill bar's high/low/close/volume does not change anything decided at its open. Indicators are trailing and `null` during warm-up. Corporate actions and point-in-time fundamentals are not applied (B, C), so results use the candles as stored.
 > - **Costs:** fees follow the strategy's `feeModel`. `backtestV2` presets use a flat 10 bps per leg (`FIXED_BPS`, `feeBps` default 10; no fee when 0). Strategy Lab definitions can select `VOLUME_AWARE`, the statutory Indian schedule in `shared/domain/costs`. Slippage is a per-leg bps debit (default 5 bps).
-> - **Modules:** walk-forward analysis (E) runs in production through `server/workers/walk-forward-worker.ts`. The execution model (A), point-in-time fundamentals (C), shared-capital portfolio engine (D) and robustness analysis (F) are **research modules covered by tests** (for example `server/domain/strategy/p2-research-invariants.test.ts`); production backtests do not call them.
-> - **In progress:** the Render web service does not start the job workers (`render.yaml` declares only the web service), so queued backtests, sweeps and walk-forward runs execute only where `bun run worker:backtest`, `worker:sweep` or `worker:walk-forward` is running.
+> - **Modules:** walk-forward analysis (E) runs in production through `server/workers/walk-forward-worker.ts`, and `strategyOptimisation.getSweep` returns the robustness analysis (F) of a finished sweep. The execution model (A), point-in-time fundamentals (C) and shared-capital portfolio engine (D) are **research modules covered by tests** (for example `server/domain/strategy/p2-research-invariants.test.ts`); production backtests do not call them.
+> - **Job execution:** queued backtests, sweeps and walk-forward runs execute inside the API process (`server/plugins/strategy-jobs.ts`): one job at a time, handing control back to the API between backtests, with a per-job time budget (`STRATEGY_JOB_TIME_BUDGET_MS`, default 15 min). Set `STRATEGY_JOBS_IN_PROCESS=false` to run them in a separate `bun run worker:strategy-jobs` process instead. On Render's free plan the service sleeps when idle, so queued jobs wait until it wakes.
 
 ### A. Execution Model: Spread, Impact and Participation (`server/domain/strategy/execution-model.ts`, research module)
 - **Status**: Exists as a research module used only by the portfolio engine (D). Production backtests do not use it: they charge slippage as a flat bps debit and model neither spread nor market impact.
@@ -133,13 +133,13 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 - **Leakage Isolation**: Each phase's candles are sliced to end at the phase boundary, so test candles never enter training/validation indicator caches; `assertNoDataLeakage` throws on overlapping timestamps.
 - **Walk-Forward Efficiency (WFE)**: Mean OOS annualised return divided by mean in-sample annualised return over the tested windows; `null` with a reason when the in-sample mean is $\le 0$. Performance retention is the same ratio of Sharpe ratios.
 - **Continuous OOS Curve**: Stitches out-of-sample equity curves across consecutive windows, compounding equity.
-- **Status**: Used in production by `server/workers/walk-forward-worker.ts` (a separate process; see wiring status above).
+- **Status**: Used in production by `server/workers/walk-forward-worker.ts`, run by the in-process job runner (see wiring status above).
 
 ### F. Parameter Robustness & Overfit Detection (`server/domain/strategy/robustness.ts`)
 - **2D Parameter Sensitivity Heatmap**: Identifies parameter plateaus vs overfit fragile spikes.
 - **Neighbor Stability Scoring**: Penalises isolated parameter spikes where adjacent settings collapse.
 - **Safeguard Flags**: `OVERFIT_RISK`, `PARAMETER_INSTABILITY`, `LOW_SAMPLE_SIZE` and `HIGH_COST_DRAG`.
-- **Status**: Research module; only tests call it.
+- **Status**: `strategyOptimisation.getSweep` returns this analysis for a finished parameter sweep (the Strategy Lab renders it as a heatmap). Sweeps do not record costs, so `HIGH_COST_DRAG` never fires there.
 
 ---
 
@@ -186,10 +186,10 @@ MAET/
 │   ├── infra/                    # Event bus, encryption, health, logger, client IP, DB diagnostics; unregistered shutdown helper
 │   ├── middleware/               # CORS (FRONTEND_ORIGIN), token-bucket rate limiting, request body size limit
 │   ├── modules/                  # Feature services (alerts, paper-trading, screener-dsl, strategy jobs, ...)
-│   ├── plugins/orchestrator.ts   # Starts/stops the orchestrator with the Nitro server
+│   ├── plugins/                  # Nitro plugins: orchestrator, in-process strategy job runner
 │   ├── routes/health/            # Admin-only /health/detailed report
 │   ├── scripts/                  # Migrations, seeds, DB checks, backfills, test wiring check
-│   ├── workers/                  # In-process market workers (Angel One feed, order matcher, alerts, daily processor), job workers run separately, ingestion engine
+│   ├── workers/                  # In-process market workers (Angel One feed, order matcher, alerts, daily processor), Strategy Lab jobs (run by the in-process job runner), ingestion engine
 │   ├── config.ts                 # Environment validation
 │   ├── orchestrator.ts           # Worker/market-data orchestration
 │   └── nitro.config.ts           # Nitro build configuration

@@ -26,10 +26,14 @@ test("strategy lab: creating from a template opens /strategies/:id", async ({ pa
   expect(body).toMatchObject({
     name: "SMA Crossover",
     definition: {
+      name: "SMA Crossover",
       direction: "LONG_ONLY",
       timeframe: "1d",
+      universe: { type: "SINGLE_SYMBOL", symbolOrId: "RELIANCE" },
       entry: { kind: "GROUP" },
       exit: { kind: "GROUP" },
+      risk: { maximumOpenPositions: 1, allowPyramiding: false },
+      execution: { feeModel: "VOLUME_AWARE", initialCapital: 100_000 },
     },
   });
 

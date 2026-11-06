@@ -246,7 +246,7 @@ These naming rules help you understand almost every file without opening it firs
 - **Market data:** Some data can be delayed, stale, provider-dependent, or unavailable. The API carries source and delay information for this reason.
 - **Angel One:** The server can use Angel One when credentials and symbol tokens are available. It is not proof that every deployed environment has a live session.
 - **Options:** The Angel One options client, the options database tables, an admin-triggered ingestion mutation (`ingestion.triggerOptionsChain`), the `options` tRPC router and the options screen are wired together. There is no scheduled options ingestion, so the screen shows only chains an admin has ingested.
-- **Strategy workers (in progress):** Scripts exist for backtests, sweeps, walk-forward analysis, and evaluation. The single Render web-service definition starts only the web server, so queued jobs run only where those worker processes are started. `backtestV2.run` runs inside the request instead.
+- **Strategy jobs:** Backtests, parameter sweeps and walk-forward runs queued from the Strategy Lab run inside the single Render web service, one at a time with a per-job time budget, handing control back to the API between backtests. On the free plan the service sleeps when idle, so queued jobs wait until it wakes. `backtestV2.run` still runs inside the request. The live-signal evaluator (`server/workers/strategy-evaluator.ts`) still runs only as a separate script, so strategy deployment stays disabled in the UI.
 - **Paper updates:** Fill, order and account events go to a database outbox; the in-process publisher pushes them through Redis to `/api/paper/stream` (at-least-once). With Redis down the stream answers 503 and the UI polls. Failed events retry with backoff indefinitely; there is no dead-letter state yet.
 - **Live feed:** The Angel One WebSocket streams NSE symbols that have an open market stream, an active alert, a working paper order or an open paper position (paper interest is capped at 150 symbols). BSE has no live feed, so BSE resting orders do not fill and BSE positions are not margin-monitored live.
 - **BigQuery:** The ingestion engine has an optional BigQuery output path. Do not say it is actively populated unless that deployment is verified.
@@ -309,7 +309,7 @@ The providers are kept behind server-side adapters. The backend validates values
 
 ### Why use background workers?
 
-Tasks such as streaming prices, matching resting paper orders, evaluating alerts, aggregating candles, and running long strategy jobs should not block a normal browser request. Workers let the application do that work separately. The market workers run inside the web server process; the strategy job workers are separate processes.
+Tasks such as streaming prices, matching resting paper orders, evaluating alerts, aggregating candles, and running long strategy jobs should not block a normal browser request. Workers let the application do that work separately. The market workers run inside the web server process, and so does the strategy job runner, which executes one queued job at a time and hands control back to the API between backtests.
 
 ### Why use both REST and tRPC?
 
@@ -321,7 +321,7 @@ It lets users practise the lifecycle of orders, fills, positions, and profit/los
 
 ### What would you build next?
 
-I would complete one end-to-end vertical slice at a time: start the paper outbox publisher so the stream carries real updates, subscribe the live feed to symbols with orders and positions, schedule options ingestion, and run the strategy job workers as their own deployed service. I would keep the same rule: unavailable provider data stays unavailable instead of being invented.
+I would complete one end-to-end vertical slice at a time: start the paper outbox publisher so the stream carries real updates, subscribe the live feed to symbols with orders and positions, schedule options ingestion, and move the strategy job runner to its own deployed service once the web instance can no longer absorb the load. I would keep the same rule: unavailable provider data stays unavailable instead of being invented.
 
 ## Final one-line explanation
 
