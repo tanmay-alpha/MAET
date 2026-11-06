@@ -6,6 +6,7 @@ import { useSignedIn } from "@/hooks/use-signed-in";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import { trpc } from "@/lib/trpc";
 import type { PaperPositionRow } from "../../server/modules/paper-trading/contracts";
+import { closedTrades, rupees, signedRupees } from "./-journal";
 
 export const Route = createFileRoute("/_app/journal")({
   head: () => ({
@@ -55,17 +56,6 @@ const DIRECTION_CLASS: Record<string, string> = {
   SHORT: "text-bear",
 };
 
-function rupees(value: number | string | null): string {
-  if (value === null) return "—";
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return "—";
-  return `₹${amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function signedRupees(value: number): string {
-  return `${value > 0 ? "+" : value < 0 ? "−" : ""}${rupees(Math.abs(value))}`;
-}
-
 function JournalPage() {
   const [activeTab, setActiveTab] = useState<"THESES" | "REVIEWS">("THESES");
   const signedIn = useSignedIn();
@@ -74,7 +64,7 @@ function JournalPage() {
 
   const theses: ThesisRow[] = thesesQuery.data ?? [];
   const activeTheses = theses.filter((t) => t.status === "ACTIVE" || t.status === "PLANNED").length;
-  const closedPositions = positions.filter((position) => position.totalShares === 0);
+  const closedPositions = closedTrades(positions);
 
   const [reviewModalPos, setReviewModalPos] = useState<PaperPositionRow | null>(null);
   const [reviewOutcome, setReviewOutcome] = useState("AS_PLANNED");

@@ -1,123 +1,148 @@
-import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { CreatableAlertTypeSchema, isSupportedAlertType } from "../../server/modules/alerts/contracts";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { CreatableAlertTypeSchema } from "../../server/modules/alerts/contracts";
+import { AlertRowItem, CONDITIONS, formatThreshold, HistoryTab, NotificationsTab } from "@/components/alerts/alert-lists";
+import { summarizeAlerts, type AlertTriggerView, type AlertView } from "@/hooks/use-alerts";
+import { trpc } from "@/lib/trpc";
 
-describe("Alerts Route & UX Integrity Suite (Checkpoint 3)", () => {
-  const alertsRoutePath = resolve(import.meta.dir, "_app.alerts.tsx");
-  const alertsHookPath = resolve(import.meta.dir, "../hooks/use-alerts.ts");
-  const trpcClientPath = resolve(import.meta.dir, "../lib/trpc.ts");
+const noop = () => {};
 
-  const alertsRouteContent = readFileSync(alertsRoutePath, "utf-8");
-  const alertsHookContent = readFileSync(alertsHookPath, "utf-8");
-  const trpcClientContent = readFileSync(trpcClientPath, "utf-8");
+function alert(overrides: Partial<AlertView> = {}): AlertView {
+  return {
+    id: "a1",
+    symbol: "RELIANCE",
+    exchange: "NSE",
+    type: "PRICE_ABOVE",
+    label: null,
+    threshold: 2500,
+    enabled: true,
+    mode: "one_time",
+    cooldownMinutes: 60,
+    triggered: false,
+    triggeredAt: null,
+    lastTriggeredAt: null,
+    triggerCount: 0,
+    supported: true,
+    createdAt: "2026-11-02T04:00:00.000Z",
+    updatedAt: "2026-11-02T04:00:00.000Z",
+    ...overrides,
+  };
+}
 
-  it("1. Canonical alertsEngine API is used across frontend hook and client", () => {
-    expect(alertsHookContent).toContain('queryKey: ["alertsEngine", "listAlerts"]');
-    expect(alertsHookContent).toContain("trpc.alertsEngine.listAlerts.query");
-    expect(alertsHookContent).toContain("trpc.alertsEngine.createAlert.mutate");
-    expect(trpcClientContent).toContain("alertsEngine:");
+function row(item: AlertView): string {
+  return renderToStaticMarkup(createElement(AlertRowItem, { alert: item, onToggle: noop, onRearm: noop, onDelete: noop }));
+}
+
+describe("alert conditions", () => {
+  it("offers exactly the condition types the server can create", () => {
+    expect(CONDITIONS.map((condition) => condition.type)).toEqual(CreatableAlertTypeSchema.options);
   });
 
-  it("2. No trpc.alerts stub namespace is referenced anywhere in alerts code", () => {
-    expect(alertsRouteContent).not.toContain("trpc.alerts.");
-    expect(alertsHookContent).not.toContain("trpc.alerts.");
-    expect(trpcClientContent).not.toContain("alerts: {");
+  it("shows a dash for a missing threshold instead of inventing zero", () => {
+    expect(formatThreshold("PRICE_ABOVE", null)).toBe("—");
+    expect(formatThreshold("VOLUME_ABOVE", Number.NaN)).toBe("—");
+    expect(formatThreshold("PRICE_ABOVE", 0)).toBe("₹0.00");
   });
+});
 
-  it("3. No volume_spike -> VOLUME_SPIKE transformation exists", () => {
-    expect(alertsRouteContent).not.toContain("volume_spike");
-    expect(alertsHookContent).not.toContain("volume_spike");
-    expect(alertsHookContent).not.toContain("input.type.toUpperCase()");
-  });
-
-  it("4. No generic INDICATOR alert creation exists", () => {
-    expect(alertsRouteContent).not.toContain('"indicator"');
-    expect(alertsHookContent).not.toContain('"indicator"');
-    expect(alertsRouteContent).not.toContain("INDICATOR");
-  });
-
-  it("5. Only the five production-supported creation types are exposed", () => {
-    const supported = CreatableAlertTypeSchema.options;
-    expect(supported).toEqual([
-      "PRICE_ABOVE",
-      "PRICE_BELOW",
-      "PERCENT_CHANGE_ABOVE",
-      "PERCENT_CHANGE_BELOW",
-      "VOLUME_ABOVE",
+describe("summarizeAlerts", () => {
+  it("counts only enabled, supported alerts as active", () => {
+    const { activeAlerts, triggeredAlerts, unsupportedAlerts } = summarizeAlerts([
+      alert({ id: "on" }),
+      alert({ id: "off", enabled: false }),
+      alert({ id: "legacy", supported: false }),
+      alert({ id: "fired", triggered: true, triggerCount: 1 }),
     ]);
 
-    for (const t of supported) {
-      expect(alertsRouteContent).toContain(t);
-    }
+    expect(activeAlerts.map((a) => a.id)).toEqual(["on", "fired"]);
+    expect(triggeredAlerts.map((a) => a.id)).toEqual(["fired"]);
+    expect(unsupportedAlerts.map((a) => a.id)).toEqual(["legacy"]);
+  });
+});
+
+describe("AlertRowItem", () => {
+  it("offers Re-arm only for a triggered one-time alert", () => {
+    expect(row(alert({ triggered: true }))).toContain("Re-arm");
+    expect(row(alert({ triggered: true, mode: "repeating" }))).not.toContain("Re-arm");
+    expect(row(alert())).not.toContain("Re-arm");
   });
 
-  it("6. No target ?? 0 fabrication exists in hook or UI", () => {
-    expect(alertsHookContent).not.toContain("target ?? 0");
-    expect(alertsRouteContent).not.toContain("target ?? 0");
-    expect(alertsHookContent).not.toContain("threshold ?? 0");
+  it("marks a legacy condition and will not let it be enabled", () => {
+    const markup = row(alert({ supported: false, enabled: false }));
+
+    expect(markup).toContain("Unsupported legacy condition");
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Enable<\/button>/);
+    expect(markup).not.toContain("₹2,500.00");
+  });
+});
+
+describe("HistoryTab", () => {
+  it("names the quote provider and leaves missing values blank", () => {
+    const fired: AlertTriggerView = {
+      id: "t1",
+      alertId: "a1",
+      symbol: "RELIANCE",
+      exchange: "NSE",
+      conditionType: "PRICE_ABOVE",
+      observedValue: 2510,
+      targetValue: null,
+      message: null,
+      provider: "angelone",
+      providerTimestamp: null,
+      triggeredAt: "2026-11-02T04:00:00.000Z",
+    };
+    const markup = renderToStaticMarkup(createElement(HistoryTab, { history: [fired] }));
+
+    expect(markup).toContain("Angel One");
+    expect(markup).toContain("₹2,510.00");
+    expect(markup).toMatch(/Target <span[^>]*>—<\/span>/);
+    expect(markup).not.toContain("tick");
+  });
+});
+
+describe("NotificationsTab", () => {
+  it("offers Mark read only for unread notifications", () => {
+    const base = { kind: "ALERT_TRIGGERED", body: null, symbol: "RELIANCE", alertId: "a1", alertEventId: "t1", dismissedAt: null, createdAt: "2026-11-02T04:00:00.000Z" };
+    const unread = renderToStaticMarkup(
+      createElement(NotificationsTab, { notifications: [{ ...base, id: "n1", title: "Fired", readAt: null }], onMarkRead: noop, onDismiss: noop }),
+    );
+    const read = renderToStaticMarkup(
+      createElement(NotificationsTab, { notifications: [{ ...base, id: "n2", title: "Fired", readAt: base.createdAt }], onMarkRead: noop, onDismiss: noop }),
+    );
+
+    expect(unread).toContain("Mark read");
+    expect(read).not.toContain("Mark read");
+    expect(read).toContain("Dismiss notification");
+  });
+});
+
+describe("alertsEngine client", () => {
+  const originalFetch = globalThis.fetch;
+  let posted: { path: string; body: unknown }[] = [];
+
+  beforeEach(() => {
+    posted = [];
+    globalThis.window = { localStorage: { getItem: () => null, setItem: noop, removeItem: noop } } as unknown as Window & typeof globalThis;
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      posted.push({ path: new URL(String(url), "http://localhost").pathname, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ result: { data: { success: true } } }), { status: 200 });
+    }) as unknown as typeof fetch;
   });
 
-  it("7. No fabricated createdAt new Date() fallback exists", () => {
-    expect(alertsHookContent).not.toContain("new Date().toISOString()");
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
   });
 
-  it("8. Rearm uses real server procedure alertsEngine.rearmAlert", () => {
-    expect(alertsHookContent).toContain("trpc.alertsEngine.rearmAlert.mutate");
-    expect(trpcClientContent).toContain("rearmAlert:");
-    expect(alertsRouteContent).toContain("onRearm");
-    expect(alertsRouteContent).toContain("Re-arm");
-  });
+  it("sends re-arm, mark-read and dismiss to the server procedures", async () => {
+    await trpc.alertsEngine.rearmAlert.mutate({ alertId: "a1" });
+    await trpc.alertsEngine.markNotificationRead.mutate({ notificationId: "n1" });
+    await trpc.alertsEngine.dismissNotification.mutate({ notificationId: "n1" });
 
-  it("9. Trigger history tab and view are rendered with provider provenance", () => {
-    expect(alertsRouteContent).toContain("HistoryTab");
-    expect(alertsRouteContent).toContain("item.provider");
-    expect(alertsRouteContent).toContain("item.providerTimestamp");
-  });
-
-  it("10. In-app notifications tab and view are rendered", () => {
-    expect(alertsRouteContent).toContain("NotificationsTab");
-    expect(alertsRouteContent).toContain("markNotificationRead");
-    expect(alertsRouteContent).toContain("dismissNotification");
-  });
-
-  it("11. Mark read procedure exists and is wired", () => {
-    expect(alertsHookContent).toContain("markNotificationReadMutation");
-    expect(trpcClientContent).toContain("markNotificationRead:");
-  });
-
-  it("12. Dismiss notification procedure exists and is wired", () => {
-    expect(alertsHookContent).toContain("dismissNotificationMutation");
-    expect(trpcClientContent).toContain("dismissNotification:");
-  });
-
-  it("13. No browser-local storage claim is made to the user", () => {
-    expect(alertsRouteContent).not.toContain("stored locally in your browser");
-  });
-
-  it("14. No false delivery claims (email, SMS, push, webhook) are made", () => {
-    expect(alertsRouteContent).not.toContain("emailSent");
-    expect(alertsRouteContent).not.toContain("pushSent");
-    expect(alertsRouteContent).not.toContain("smsSent");
-    expect(alertsRouteContent).not.toContain("webhook");
-  });
-
-  it("15. Active statistics strictly require enabled = true and supported = true", () => {
-    expect(alertsHookContent).toContain("alerts.filter((a) => a.enabled && a.supported)");
-  });
-
-  it("16. Unsupported legacy condition badge and state are visible", () => {
-    expect(alertsRouteContent).toContain("Unsupported legacy condition");
-    expect(alertsRouteContent).toContain("Cannot enable unsupported legacy condition");
-  });
-
-  it("17. Missing and unavailable threshold values display '—'", () => {
-    expect(alertsRouteContent).toContain('return "—";');
-  });
-
-  it("18. Clear all alerts loop has been removed", () => {
-    expect(alertsRouteContent).not.toContain("clearAllAlerts");
-    expect(alertsHookContent).not.toContain("clearAllAlerts");
-    expect(alertsRouteContent).not.toContain("Clear all alerts");
+    expect(posted).toEqual([
+      { path: "/api/trpc/alertsEngine.rearmAlert", body: { alertId: "a1" } },
+      { path: "/api/trpc/alertsEngine.markNotificationRead", body: { notificationId: "n1" } },
+      { path: "/api/trpc/alertsEngine.dismissNotification", body: { notificationId: "n1" } },
+    ]);
   });
 });

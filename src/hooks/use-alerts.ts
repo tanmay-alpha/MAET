@@ -19,6 +19,15 @@ export type {
   AlertMode,
 };
 
+/** Splits alerts for the page's counters: only enabled, supported alerts count as active. */
+export function summarizeAlerts(alerts: AlertView[]) {
+  return {
+    activeAlerts: alerts.filter((a) => a.enabled && a.supported),
+    triggeredAlerts: alerts.filter((a) => a.triggered || a.triggerCount > 0),
+    unsupportedAlerts: alerts.filter((a) => !a.supported),
+  };
+}
+
 export function useAlerts() {
   const queryClient = useQueryClient();
   // Alerts belong to the signed-in user; don't query them for logged-out visitors.
@@ -89,9 +98,7 @@ export function useAlerts() {
   });
 
   const alerts: AlertView[] = alertsQuery.data?.items ?? [];
-  const activeAlerts = alerts.filter((a) => a.enabled && a.supported);
-  const triggeredAlerts = alerts.filter((a) => a.triggered || a.triggerCount > 0);
-  const unsupportedAlerts = alerts.filter((a) => !a.supported);
+  const { activeAlerts, triggeredAlerts, unsupportedAlerts } = summarizeAlerts(alerts);
 
   const triggerHistory: AlertTriggerView[] = historyQuery.data?.items ?? [];
   const notifications: AlertNotificationView[] = (notificationsQuery.data?.items ?? []).filter(
