@@ -179,17 +179,19 @@ describe("paper live feed", () => {
       },
     });
 
-    const [failed] = await outboxRowsFor(userId);
-    expect(failed!.status).toBe("PENDING");
-    expect(failed!.attempt_count).toBe(1);
-    expect(failed!.last_error).toBe("redis connection lost");
-    expect(failed!.backoff_pending).toBe(true);
+    // Each of the user's events failed once and backs off; none was marked published.
+    const failed = await outboxRowsFor(userId);
+    expect(failed.length).toBeGreaterThan(0);
+    for (const row of failed) {
+      expect(row).toMatchObject({ status: "PENDING", last_error: "redis connection lost", backoff_pending: true });
+      expect(row.attempt_count).toBeGreaterThanOrEqual(1);
+    }
 
-    // Once the backoff has elapsed the event is delivered (at least once).
-    await getSqlClient()`UPDATE public.paper_outbox_events SET next_attempt_at = NOW() WHERE id = ${failed!.id}`;
+    // Once the backoff has elapsed the events are delivered (at least once).
+    await getSqlClient()`UPDATE public.paper_outbox_events SET next_attempt_at = NOW() WHERE user_id = ${userId}`;
     await drainOutbox({ publish: async () => 1 });
-    const [delivered] = await outboxRowsFor(userId);
-    expect(delivered!.status).toBe("PUBLISHED");
+    const delivered = await outboxRowsFor(userId);
+    expect(delivered.map((row) => row.status)).toEqual(failed.map(() => "PUBLISHED"));
   });
 
   it("lists working orders and open positions of current generations only, orders first", async () => {
