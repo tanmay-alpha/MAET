@@ -95,6 +95,9 @@ export class PaperStreamManager {
         if (event.type === PAPER_STREAM_CONNECTED_EVENT) {
           this.failures = 0;
           this.setConnected(true);
+          // Polling stops once connected, and nothing committed before this subscription
+          // (first open, or while the stream was down) is replayed on it: reload state now.
+          this.invalidateState();
           // Every outbox event is a committed change to the account's state.
         } else if (isPaperOutboxEventType(event.type)) this.invalidateState();
       },

@@ -72,11 +72,30 @@ describe("PaperStreamManager", () => {
     expect(connections).toHaveLength(1);
 
     connections[0].options.onEvent?.({ type: "CONNECTED", data: {} });
+    invalidations.length = 0;
     connections[0].options.onEvent?.({ type: "PAPER_ORDER_FILLED", data: {} });
 
     expect(first.statuses.at(-1)).toBe(true);
     // One invalidation per QueryClient, not per consumer.
     expect(invalidations).toEqual([[{ queryKey: ["paperTrading"] }]]);
+  });
+
+  test("refetches the account each time the server confirms a (re)connected subscription", async () => {
+    const { manager, connections, runPendingTimer } = createHarness();
+    const invalidations: unknown[][] = [];
+    manager.subscribe(subscriber(invalidations).sub);
+    await flush();
+
+    // Changes committed before the first subscription or while the stream was down
+    // were never announced on it, so the stream cannot be trusted until state is reloaded.
+    connections[0].options.onEvent?.({ type: "CONNECTED", data: {} });
+    expect(invalidations).toEqual([[{ queryKey: ["paperTrading"] }]]);
+
+    connections[0].options.onError?.(new Error("dropped"));
+    await runPendingTimer();
+    expect(invalidations).toHaveLength(1);
+    connections[1].options.onEvent?.({ type: "CONNECTED", data: {} });
+    expect(invalidations).toEqual([[{ queryKey: ["paperTrading"] }], [{ queryKey: ["paperTrading"] }]]);
   });
 
   test("closes the connection after the last consumer unsubscribes", async () => {
