@@ -1,28 +1,35 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import type { WorkspaceExchange } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
 
 export function useResearchWorkspace() {
   const queryClient = useQueryClient();
+  // The workspace belongs to the signed-in user; don't query it for logged-out visitors.
+  const signedIn = useSignedIn();
 
   const overviewQuery = useQuery({
     queryKey: ["workspace", "overview"],
     queryFn: () => trpc.workspace.getOverview.query(),
+    enabled: signedIn,
   });
 
   const watchlistsQuery = useQuery({
     queryKey: ["workspace", "watchlists"],
     queryFn: () => trpc.workspace.listWatchlists.query({ limit: 50 }),
+    enabled: signedIn,
   });
 
   const savedScreenersQuery = useQuery({
     queryKey: ["workspace", "savedScreeners"],
     queryFn: () => trpc.workspace.listSavedScreeners.query(),
+    enabled: signedIn,
   });
 
   const recentRunsQuery = useQuery({
     queryKey: ["workspace", "recentRuns"],
     queryFn: () => trpc.workspace.listRecentRuns.query(),
+    enabled: signedIn,
   });
 
   const createWatchlistMutation = useMutation({

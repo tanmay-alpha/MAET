@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import { MarketHeatmap } from "@/components/trading/market-heatmap";
 import { BreadthGauge } from "@/components/trading/breadth-gauge";
 import { CONTRACT_PANEL } from "@/components/common/contract-panel";
@@ -11,9 +12,11 @@ export const Route = createFileRoute("/_app/heatmap")({
 });
 
 function Heatmap() {
+  const signedIn = useSignedIn();
   const { data: overview } = useQuery({
     queryKey: ["marketBreadth", "overview", "ALL_NSE"],
     queryFn: () => trpc.marketBreadth.getOverview.query({ universe: "ALL_NSE" }),
+    enabled: signedIn,
     refetchInterval: 30_000,
   });
 

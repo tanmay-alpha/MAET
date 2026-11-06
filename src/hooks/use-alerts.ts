@@ -8,6 +8,7 @@ import {
   type CreatableAlertType,
   type AlertMode,
 } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
 
 export type {
   AlertView,
@@ -20,20 +21,25 @@ export type {
 
 export function useAlerts() {
   const queryClient = useQueryClient();
+  // Alerts belong to the signed-in user; don't query them for logged-out visitors.
+  const signedIn = useSignedIn();
 
   const alertsQuery = useQuery({
     queryKey: ["alertsEngine", "listAlerts"],
     queryFn: () => trpc.alertsEngine.listAlerts.query(),
+    enabled: signedIn,
   });
 
   const historyQuery = useQuery({
     queryKey: ["alertsEngine", "listTriggerHistory"],
     queryFn: () => trpc.alertsEngine.listTriggerHistory.query({ limit: 50 }),
+    enabled: signedIn,
   });
 
   const notificationsQuery = useQuery({
     queryKey: ["alertsEngine", "listNotifications"],
     queryFn: () => trpc.alertsEngine.listNotifications.query({ limit: 50 }),
+    enabled: signedIn,
   });
 
   const createAlertMutation = useMutation({
