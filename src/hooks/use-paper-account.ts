@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { PaperStreamManager } from "@/lib/paper-stream-manager";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import type {
   PaperAccountRow,
   PaperOrderRow,
@@ -36,13 +37,16 @@ export interface UsePaperAccountResult {
 
 export function usePaperAccount(): UsePaperAccountResult {
   const queryClient = useQueryClient();
+  const signedIn = useSignedIn();
   const [sseConnected, setSseConnected] = useState(false);
 
+  // The paper account is per user: logged-out visitors get no polling and no stream.
   const stateQuery = useQuery({
     queryKey: ["paperTrading", "state"],
     queryFn: async () => {
       return await trpc.paperTrading.getState.query();
     },
+    enabled: signedIn,
     staleTime: 5000,
     refetchOnWindowFocus: true,
     refetchInterval: (query) => {
@@ -52,14 +56,13 @@ export function usePaperAccount(): UsePaperAccountResult {
       );
       return openOrders ? 3000 : 10000;
     },
-    retry: 2,
   });
 
   // All consumers share one ref-counted stream; it only triggers state refetches.
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (!signedIn) return;
     return PaperStreamManager.getInstance().subscribe({ queryClient, onStatusChange: setSseConnected });
-  }, [queryClient]);
+  }, [queryClient, signedIn]);
 
   const placeOrderMutation = useMutation({
     mutationFn: async (command: PaperOrderDraft) => {

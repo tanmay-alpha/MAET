@@ -323,7 +323,7 @@ Tests never fall back to a default database either: with `NODE_ENV=test` the ser
 ### 5. Production Migrations
 Run from a trusted machine, never from CI:
 
-1. Check the target with `bun run check:db` (connectivity check using `.env`).
+1. Check connectivity with `bun run check:db` (uses `.env`). After restoring the database, run `bun run verify:db` (`server/scripts/verify-db-restore.ts`), a read-only verifier: it checks the migration history, the schema against Drizzle, key-table row counts, paper invariants (ledger sums to cash, no fills on another user's or generation's order, no non-positive positions) and RLS on `paper_*` tables inside a read-only transaction that is always rolled back. It reads `SUPABASE_DB_URL`/`DATABASE_URL` (or `--url-env=VAR`), never `.env`; exit codes are 0 pass, 1 failure, 2 cannot connect, 3 usage error.
 2. Apply pending migrations against Supabase's **direct** connection (not the transaction pooler):
    ```bash
    MIGRATION_DATABASE_URL="<supabase direct connection url>" bun run server/scripts/apply-migrations.ts

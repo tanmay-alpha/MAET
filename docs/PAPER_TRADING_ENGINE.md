@@ -192,7 +192,7 @@ Supporting mechanisms:
 - `paper_fills` and `paper_ledger_entries` are append-only: BEFORE UPDATE OR DELETE triggers raise SQLSTATE `55000` (`0012_enforce_paper_history_immutability.sql`), and `authenticated`/`anon` have UPDATE/DELETE revoked (`0011`).
 - Accounts created before `INITIAL_CASH` was written at open were backfilled for generation 1 (`0023b`).
 - Both rows of a fill carry `balance_after` = cash after the fill, so the realised-P&L row does not show an intermediate pre-fee balance.
-- Tested at the domain level by tests 30 ("Transaction fees are exactly deducted from cash on fill") and 32 (full lifecycle reconciliation) in `server/modules/paper-trading/financial-invariants.test.ts`, and against PostgreSQL by A6 (fee equals the schedule, cash = initial − fee, exactly one `EXECUTION_FEE` row) and A15 (`INITIAL_CASH` row on open) in `engine-integrity.integration.test.ts`. No test yet asserts $\sum \text{ledger} = \text{cash}$ over a long random sequence of fills.
+- Tested at the domain level by tests 30 ("Transaction fees are exactly deducted from cash on fill") and 32 (full lifecycle reconciliation) in `server/modules/paper-trading/financial-invariants.test.ts`, and against PostgreSQL by A6 (fee equals the schedule, cash = initial − fee, exactly one `EXECUTION_FEE` row) and A15 (`INITIAL_CASH` row on open) in `engine-integrity.integration.test.ts`. On a live database, `bun run verify:db` (`server/scripts/verify-db-restore.ts`) checks cash = initial cash + Σ non-`INITIAL_CASH` ledger amounts for every account's current generation, read-only. No test yet asserts the identity over a long random sequence of fills.
 
 ## 9. Statutory charges
 

@@ -67,7 +67,7 @@ For live-style updates, `server/api/market/stream.get.ts` keeps a Server-Sent Ev
 ### Example: paper trading
 
 1. The user enters a paper order in the React interface.
-2. The frontend sends a signed-in tRPC request with the user's Supabase access token.
+2. The frontend sends a tRPC request with the user's Supabase access token. Signed-in-only hooks such as `usePaperAccount` are gated by `useSignedIn`, so logged-out visitors send no paper requests.
 3. The backend checks the user, validates the input, and checks whether a quote is safe enough for paper execution.
 4. For an immediately executable paper order, it writes the order, fill, position, ledger entries, and related events in a database transaction.
 5. A limit or stop paper order can remain pending; background matching watches later ticks and performs the fill when its rule is met.
@@ -129,8 +129,9 @@ This folder is the website users interact with. It is built mainly with React, T
 | `src/components/` | Reusable visual building blocks. `trading/` holds market widgets, `chart/` and `charting/` hold charts, `workspace/` holds saved-workspace widgets, and `ui/` holds generic buttons, dialogs, tables, tabs, and forms. |
 | `src/hooks/` | Reusable data and interaction logic. Examples include quote, candle, stream, paper-account, portfolio, and workspace hooks. |
 | `src/lib/market-api.ts` | Defines and validates market API responses before the UI trusts them. |
-| `src/lib/trpc.ts` | Browser client for signed-in tRPC features such as paper trading, workspace, alerts, backtests, and strategies. |
-| `src/lib/auth-token.ts` | Retrieves and refreshes the browser's Supabase access token. |
+| `src/lib/trpc.ts` | Browser tRPC client. It attaches the Supabase access token when the browser has a session, so public procedures work signed out; a 401 from a protected procedure becomes `AuthenticationError`, which React Query does not retry (`src/router.tsx`). |
+| `src/lib/auth-token.ts` | Retrieves and refreshes the browser's Supabase access token; `hasStoredSession` reports whether a session exists. |
+| `src/hooks/use-signed-in.ts` | `useSignedIn()` gates signed-in-only queries (paper account, alerts, watchlists, workspace, market breadth) so logged-out visitors don't send requests that would fail with 401. |
 | `src/lib/paper-sse-client.ts` | Opens the authenticated paper-trading stream (`/api/paper/stream`). In progress: the server does not publish paper events yet, so `src/hooks/use-paper-account.ts` refreshes by polling. |
 | `src/lib/technical-indicators.ts`, `src/lib/financial-metrics.ts` | Frontend-side helper calculations and formatting for displayed analysis. |
 | `src/store/` | Small browser-only state. For example, a selected terminal symbol belongs here, not in the durable database. |
@@ -286,8 +287,12 @@ bun test
 # Run every registered test group
 bun run test:all
 
-# Check whether the server can connect to its configured database
+# Check whether the server can connect to its configured database (uses .env)
 bun run check:db
+
+# After a database restore: read-only verification of migrations, schema, row counts,
+# paper-trading invariants and RLS (reads SUPABASE_DB_URL or DATABASE_URL, not .env)
+bun run verify:db
 ```
 
 ## A short interview question-and-answer guide
