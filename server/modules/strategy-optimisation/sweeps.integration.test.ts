@@ -8,7 +8,8 @@
 import { describe, expect, it } from "bun:test";
 import { applyMigrations } from "../../scripts/apply-migrations";
 import { getSqlClient } from "../../data/drizzle/client";
-import { processSweep } from "../../workers/sweep-worker";
+import { runSweepJob } from "../../workers/sweep-worker";
+import { uninterruptedJobContext } from "../strategy-jobs/job-context";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
 describe("Strategy parameter sweep worker", () => {
@@ -62,8 +63,7 @@ describe("Strategy parameter sweep worker", () => {
         ${new Date(start).toISOString()}::timestamptz, ${new Date(start + 199 * 86_400_000).toISOString()}::timestamptz, 'RUNNING')
     `;
 
-    const [sweep] = await sql`SELECT * FROM public.strategy_parameter_sweeps WHERE id = ${sweepId}`;
-    await processSweep(sweep);
+    await runSweepJob(sweepId, uninterruptedJobContext);
 
     const [done] = await sql`SELECT status, completed_count FROM public.strategy_parameter_sweeps WHERE id = ${sweepId}`;
     expect(done.status).toBe("COMPLETED");

@@ -18,7 +18,8 @@ import { eq, and, lt, gte, sql, isNull, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
-const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+/** RUNNING jobs whose heartbeat is older than this are presumed abandoned by a dead worker. */
+export const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Queued + running jobs a single user may hold per job kind (backtests, sweeps, walk-forwards). */
 export const MAX_ACTIVE_JOBS_PER_USER = 3;
@@ -37,7 +38,7 @@ const ACTIVE_JOB_TABLES = {
 } as const;
 
 export type StrategyJobKind = keyof typeof ACTIVE_JOB_TABLES;
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * Runs `insert` only while the user holds fewer than MAX_ACTIVE_JOBS_PER_USER
@@ -210,18 +211,35 @@ export async function updateProgress(jobId: string, progress: number): Promise<v
 // Complete
 // ============================================================
 
-export async function completeJob(jobId: string, runId: string): Promise<void> {
+/**
+ * Marks the job COMPLETED inside `tx` (the transaction that persists its results), but only while
+ * `workerId` still holds it. Returns false when the lease was lost (the job was recovered as
+ * stale and handed to another worker); the caller must roll back.
+ */
+export async function completeJob(tx: Tx, jobId: string, workerId: string, runId: string): Promise<boolean> {
+  const now = new Date();
+  const owned = await tx
+    .update(strategyBacktestJobs)
+    .set({ status: "COMPLETED", progress: 100, completedAt: now, runId, heartbeatAt: now, updatedAt: now })
+    .where(and(
+      eq(strategyBacktestJobs.id, jobId),
+      eq(strategyBacktestJobs.workerId, workerId),
+      eq(strategyBacktestJobs.status, "RUNNING"),
+    ))
+    .returning({ id: strategyBacktestJobs.id });
+  return owned.length > 0;
+}
+
+/** Puts a job this worker holds back on the queue (worker shutdown); it starts over when reclaimed. */
+export async function releaseJob(jobId: string, workerId: string): Promise<void> {
   await db
     .update(strategyBacktestJobs)
-    .set({
-      status: "COMPLETED",
-      progress: 100,
-      completedAt: new Date(),
-      runId,
-      heartbeatAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(strategyBacktestJobs.id, jobId));
+    .set({ status: "QUEUED", workerId: null, startedAt: null, heartbeatAt: null, progress: 0, updatedAt: new Date() })
+    .where(and(
+      eq(strategyBacktestJobs.id, jobId),
+      eq(strategyBacktestJobs.workerId, workerId),
+      eq(strategyBacktestJobs.status, "RUNNING"),
+    ));
 }
 
 // ============================================================
@@ -287,22 +305,33 @@ export async function markCancelled(jobId: string): Promise<void> {
 // Abandoned job recovery
 // ============================================================
 
+/**
+ * Returns RUNNING jobs whose worker stopped heartbeating to the queue. A job requested longer ago
+ * than ACTIVE_JOB_STALE_AFTER_MS is failed instead: a job that keeps killing its worker (e.g. out of
+ * memory) must not be retried forever. Returns the number of requeued jobs.
+ */
 export async function recoverAbandonedJobs(maxStaleMs: number = HEARTBEAT_TIMEOUT_MS): Promise<number> {
-  const cutoff = new Date(Date.now() - maxStaleMs);
-  const result = await db
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - maxStaleMs);
+  const abandoned = and(eq(strategyBacktestJobs.status, "RUNNING"), lt(strategyBacktestJobs.heartbeatAt, cutoff));
+  const retryableSince = new Date(now.getTime() - ACTIVE_JOB_STALE_AFTER_MS);
+
+  await db
     .update(strategyBacktestJobs)
     .set({
-      status: "QUEUED",
-      workerId: null,
-      startedAt: null,
-      heartbeatAt: null,
-      updatedAt: new Date(),
+      status: "FAILED",
+      errorCode: "ABANDONED",
+      errorSummary: "The job's worker stopped responding and the job is too old to retry.",
+      completedAt: now,
+      updatedAt: now,
     })
-    .where(and(
-      eq(strategyBacktestJobs.status, "RUNNING"),
-      lt(strategyBacktestJobs.heartbeatAt, cutoff),
-    ))
-    .returning();
+    .where(and(abandoned, lt(strategyBacktestJobs.requestedAt, retryableSince)));
+
+  const result = await db
+    .update(strategyBacktestJobs)
+    .set({ status: "QUEUED", workerId: null, startedAt: null, heartbeatAt: null, progress: 0, updatedAt: now })
+    .where(abandoned)
+    .returning({ id: strategyBacktestJobs.id });
   return result.length;
 }
 

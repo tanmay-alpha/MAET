@@ -171,4 +171,17 @@ export const strategyOptimisationRouter = createRouter({
 
       return { run, windows };
     }),
+
+  /** List walk-forward runs for a strategy */
+  listWalkForwards: protectedProcedure
+    .input(z.object({ strategyId: z.string().uuid() }).strict())
+    .query(async ({ ctx, input }) => {
+      const runs = await db
+        .select()
+        .from(strategyWalkForwardRuns)
+        .where(and(eq(strategyWalkForwardRuns.strategyId, input.strategyId), eq(strategyWalkForwardRuns.userId, ctx.userId!)))
+        .orderBy(desc(strategyWalkForwardRuns.createdAt))
+        .limit(20);
+      return { runs };
+    }),
 });

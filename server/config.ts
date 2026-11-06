@@ -121,3 +121,34 @@ export function getConfig(): AppConfig {
 export function resetConfigForTests(): void {
   cached = undefined;
 }
+
+export interface StrategyJobSettings {
+  /** Run queued strategy jobs inside the API process (server/plugins/strategy-jobs.ts). */
+  inProcess: boolean;
+  /** A single strategy job still running after this long is failed. */
+  jobTimeBudgetMs: number;
+}
+
+const StrategyJobEnvSchema = z.object({
+  STRATEGY_JOBS_IN_PROCESS: z.enum(["true", "false", "1", "0"]).optional(),
+  STRATEGY_JOB_TIME_BUDGET_MS: z.coerce.number().int().min(10_000).default(15 * 60 * 1000),
+});
+
+/**
+ * Read separately from getConfig() so the job runner does not depend on the broker and Supabase
+ * secrets. The in-process runner defaults on outside tests: Render's free plan has one web
+ * instance and no background workers, so without it queued jobs never run.
+ */
+export function readStrategyJobSettings(env: NodeJS.ProcessEnv = process.env): StrategyJobSettings {
+  const parsed = StrategyJobEnvSchema.safeParse(env);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+    throw new Error(`Invalid environment configuration: ${issues}`);
+  }
+  const flag = parsed.data.STRATEGY_JOBS_IN_PROCESS;
+  const testRun = env.BUN_TEST === "1" || env.NODE_ENV === "test";
+  return {
+    inProcess: flag === undefined ? !testRun : flag === "true" || flag === "1",
+    jobTimeBudgetMs: parsed.data.STRATEGY_JOB_TIME_BUDGET_MS,
+  };
+}
