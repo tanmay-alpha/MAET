@@ -1,6 +1,7 @@
 import type { SourceStatus, WorldEvent, WorldEventsResponse } from "@shared/world/contracts";
+import { WORLD_FRESHNESS } from "@shared/world/freshness";
 import { normalizeEonet, normalizeGdelt } from "@shared/world/normalize";
-import { EONET_EVENTS_URL, gdeltQuery, gdeltUrl } from "@shared/world/upstreams";
+import { EONET_EVENTS_URL, GDELT_SPACING_MS, gdeltQuery, gdeltUrl } from "@shared/world/upstreams";
 
 /**
  * Render's egress cannot reach NASA EONET or GDELT, while both send
@@ -11,6 +12,9 @@ export type BrowserFallbackSource = "NASA EONET" | "GDELT";
 
 /** GDELT can take ~15 s to answer a browser; anything slower is treated as a failure. */
 export const BROWSER_FETCH_TIMEOUT_MS = 25_000;
+
+/** Browser data nobody is looking at is discarded after this, well inside every source's max age. */
+export const BROWSER_FALLBACK_GC_MS = 30 * 60_000;
 
 /**
  * One combined query instead of the server's six keeps the browser within GDELT's rate rule.
@@ -35,6 +39,14 @@ export const BROWSER_GDELT_URL = gdeltUrl(gdeltQuery(BROWSER_GDELT_TERMS), 50);
 export interface BrowserFetch {
   events: WorldEvent[];
   fetchedAt: string;
+}
+
+/** The browser query's state as the page sees it. */
+export interface BrowserAttempt {
+  data?: BrowserFetch;
+  /** Set while the latest attempt has failed; `data` then still holds the last success. */
+  error?: Error | null;
+  fetching: boolean;
 }
 
 /** A source status as displayed, noting when the browser rather than the server fetched it. */
@@ -77,24 +89,61 @@ export async function fetchFromBrowser(
   };
 }
 
-/** Server data with the browser's result substituted for a source the server could not read. */
+/**
+ * React Query timing for a source's browser query, matching the server cache: data is current
+ * for the source's TTL, an open page and a revisit after it revalidate once, and an unobserved
+ * result is dropped after BROWSER_FALLBACK_GC_MS. Focus never refetches, so a failing source is
+ * asked again only on that schedule, on a revisit or on Retry. GDELT answers one request per five
+ * seconds, so a revisit that soon after its last attempt waits for the interval or Retry.
+ */
+export function browserQueryPolicy(
+  source: BrowserFallbackSource,
+  lastSettledAt: number,
+  now: number,
+) {
+  const { ttlMs } = WORLD_FRESHNESS[source];
+  const mayAsk = source !== "GDELT" || now - lastSettledAt >= GDELT_SPACING_MS;
+  return {
+    staleTime: ttlMs,
+    refetchInterval: ttlMs,
+    gcTime: BROWSER_FALLBACK_GC_MS,
+    refetchOnMount: mayAsk,
+    retryOnMount: mayAsk,
+    refetchOnWindowFocus: false,
+  };
+}
+
+/** When browser data reaches its source's max age and stops being shown. */
+export function browserDataExpiresAt(source: BrowserFallbackSource, data: BrowserFetch): number {
+  return Date.parse(data.fetchedAt) + WORLD_FRESHNESS[source].maxAgeMs;
+}
+
+/**
+ * Server data with the browser's result substituted for a source the server could not read.
+ * Browser data from before a failed revalidation stays, marked stale with that failure; once it
+ * reaches the source's max age at `now` it is dropped and the server's own status shows again.
+ */
 export function applyBrowserFallback(
   response: WorldEventsResponse | undefined,
   source: BrowserFallbackSource,
-  attempt: { data?: BrowserFetch; fetching: boolean },
+  attempt: BrowserAttempt,
+  now: number,
 ): { events: WorldEvent[]; sources: DisplayedSource[] } {
   const events = response?.events ?? [];
   const sources: DisplayedSource[] = response?.sources ?? [];
-  if (!needsBrowserFallback(response, source) || (!attempt.data && !attempt.fetching))
+  const data =
+    attempt.data && now < browserDataExpiresAt(source, attempt.data) ? attempt.data : undefined;
+  if (!needsBrowserFallback(response, source) || (!data && !attempt.fetching))
     return { events, sources };
-  const { data } = attempt;
+  const { error } = attempt;
   return {
     events: data ? [...events, ...data.events] : events,
-    sources: sources.map((status) => {
+    sources: sources.map((status): DisplayedSource => {
       if (status.source !== source) return status;
-      return data
-        ? { source, fetchedAt: data.fetchedAt, stale: false, browser: "fetched" }
-        : { ...status, browser: "fetching" };
+      if (!data) return { ...status, browser: "fetching" };
+      return error
+        ? { source, fetchedAt: data.fetchedAt, stale: true, error: error.message, browser: "fetched" }
+        : { source, fetchedAt: data.fetchedAt, stale: false, browser: "fetched" };
     }),
   };
 }

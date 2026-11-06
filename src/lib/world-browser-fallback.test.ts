@@ -7,11 +7,14 @@ import {
   BROWSER_FETCH_TIMEOUT_MS,
   BROWSER_GDELT_TERMS,
   BROWSER_GDELT_URL,
+  browserQueryPolicy,
   fetchFromBrowser,
   needsBrowserFallback,
 } from "./world-browser-fallback";
 
 const now = Date.parse("2026-11-07T08:00:00.000Z");
+const minute = 60_000;
+const hour = 60 * minute;
 
 const quake: WorldEvent = {
   id: "usgs:a",
@@ -105,7 +108,7 @@ describe("applyBrowserFallback", () => {
 
   it("merges browser events and reports the browser path instead of the server failure", () => {
     expect(
-      applyBrowserFallback(response, "NASA EONET", { data: fetched, fetching: false }),
+      applyBrowserFallback(response, "NASA EONET", { data: fetched, fetching: false }, now),
     ).toEqual({
       events: [quake, wildfire],
       sources: [
@@ -121,11 +124,20 @@ describe("applyBrowserFallback", () => {
   });
 
   it("marks an in-flight browser attempt and keeps the server error when the attempt failed", () => {
-    expect(applyBrowserFallback(response, "NASA EONET", { fetching: true }).sources[1]).toEqual({
+    expect(
+      applyBrowserFallback(response, "NASA EONET", { fetching: true }, now).sources[1],
+    ).toEqual({
       ...staleEonet,
       browser: "fetching",
     });
-    expect(applyBrowserFallback(response, "NASA EONET", { fetching: false })).toEqual({
+    expect(
+      applyBrowserFallback(
+        response,
+        "NASA EONET",
+        { error: new Error("Failed to fetch"), fetching: false },
+        now,
+      ),
+    ).toEqual({
       events: response.events,
       sources: response.sources,
     });
@@ -138,12 +150,79 @@ describe("applyBrowserFallback", () => {
       stale: false,
     });
     expect(
-      applyBrowserFallback(recovered, "NASA EONET", { data: fetched, fetching: false }),
+      applyBrowserFallback(recovered, "NASA EONET", { data: fetched, fetching: false }, now),
     ).toEqual({ events: recovered.events, sources: recovered.sources });
-    expect(applyBrowserFallback(undefined, "NASA EONET", { fetching: false })).toEqual({
+    expect(applyBrowserFallback(undefined, "NASA EONET", { fetching: false }, now)).toEqual({
       events: [],
       sources: [],
     });
+  });
+});
+
+describe("browser data freshness", () => {
+  const response = serverResponse([quake], staleEonet);
+  const fetched = { events: [wildfire], fetchedAt: new Date(now).toISOString() };
+  const failed = { data: fetched, error: new Error("Failed to fetch"), fetching: false };
+
+  it("keeps data from a failed revalidation labelled with its fetch time and the error, never as fresh", () => {
+    const view = applyBrowserFallback(response, "NASA EONET", failed, now + 6 * minute);
+    expect(view.events).toEqual([quake, wildfire]);
+    expect(view.sources[1]).toEqual({
+      source: "NASA EONET",
+      fetchedAt: fetched.fetchedAt,
+      stale: true,
+      error: "Failed to fetch",
+      browser: "fetched",
+    });
+  });
+
+  it("drops natural events at six hours and GDELT headlines at 24 hours, restoring the server's error", () => {
+    expect(applyBrowserFallback(response, "NASA EONET", failed, now + 6 * hour - 1).events).toEqual([
+      quake,
+      wildfire,
+    ]);
+    expect(applyBrowserFallback(response, "NASA EONET", failed, now + 6 * hour)).toEqual({
+      events: response.events,
+      sources: response.sources,
+    });
+    // Expiry does not depend on a failure being recorded: an unrevalidated tab drops it too.
+    expect(
+      applyBrowserFallback(response, "NASA EONET", { data: fetched, fetching: false }, now + 7 * hour),
+    ).toEqual({ events: response.events, sources: response.sources });
+
+    const news: WorldEventsResponse = {
+      events: [],
+      sources: [{ source: "GDELT", fetchedAt: null, stale: true, error: "Upstream request timed out" }],
+    };
+    const headline: WorldEvent = { ...quake, id: "gdelt:a", category: "news", source: "GDELT" };
+    const headlines = { data: { events: [headline], fetchedAt: fetched.fetchedAt }, fetching: false };
+    expect(applyBrowserFallback(news, "GDELT", headlines, now + 24 * hour - 1).events).toEqual([
+      headline,
+    ]);
+    expect(applyBrowserFallback(news, "GDELT", headlines, now + 24 * hour)).toEqual(news);
+  });
+
+  it("revalidates at the server's TTL, bounds the cache and keeps GDELT's five-second spacing", () => {
+    expect(browserQueryPolicy("NASA EONET", 0, now)).toMatchObject({
+      staleTime: 5 * minute,
+      refetchInterval: 5 * minute,
+    });
+    expect(browserQueryPolicy("GDELT", 0, now)).toMatchObject({
+      staleTime: 15 * minute,
+      refetchInterval: 15 * minute,
+    });
+    for (const source of ["NASA EONET", "GDELT"] as const) {
+      const { gcTime } = browserQueryPolicy(source, 0, now);
+      expect(gcTime).toBeGreaterThan(0);
+      expect(gcTime).toBeLessThanOrEqual(30 * minute);
+    }
+    const again = { refetchOnMount: true, retryOnMount: true };
+    const wait = { refetchOnMount: false, retryOnMount: false };
+    expect(browserQueryPolicy("GDELT", now - 4_999, now)).toMatchObject(wait);
+    expect(browserQueryPolicy("GDELT", now - 5_000, now)).toMatchObject(again);
+    expect(browserQueryPolicy("NASA EONET", now - 1, now)).toMatchObject(again);
+    // A failing source is not asked again each time the window regains focus.
+    expect(browserQueryPolicy("NASA EONET", 0, now).refetchOnWindowFocus).toBe(false);
   });
 });
 

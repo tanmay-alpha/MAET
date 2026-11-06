@@ -18,6 +18,13 @@ export function formatISTDate(value: string): string {
   });
 }
 
+/** "HH:MM IST", preceded by the IST date when that is not today's, so older data reads as such. */
+export function formatAsOf(value: string, now = Date.now()): string {
+  const day = formatISTDate(value);
+  const time = `${formatIST(value)} IST`;
+  return day === formatISTDate(new Date(now).toISOString()) ? time : `${day} ${time}`;
+}
+
 export function WorldPanel({
   title,
   sources,
@@ -44,7 +51,7 @@ export function WorldPanel({
             {[
               status.source,
               ...(status.browser === "fetched" ? ["fetched by your browser"] : []),
-              status.fetchedAt ? `updated ${formatIST(status.fetchedAt)} IST` : "not yet available",
+              status.fetchedAt ? `updated ${formatAsOf(status.fetchedAt)}` : "not yet available",
             ].join(" · ")}
           </span>
         ))}
@@ -76,7 +83,7 @@ export function SourceWarnings({
               {status.browser === "fetching"
                 ? "Server could not reach the source; fetching from your browser"
                 : status.stale && status.fetchedAt
-                  ? `Showing data from ${formatIST(status.fetchedAt)}; source unavailable`
+                  ? `Showing data from ${formatAsOf(status.fetchedAt)}, now unavailable${status.error ? `: ${status.error}` : ""}`
                   : (status.error ?? "Source unavailable")}
             </span>
             {status.browser === "fetching" ? null : (
