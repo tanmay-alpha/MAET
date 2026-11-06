@@ -15,6 +15,7 @@ import {
   type JobKind,
   type SweepParameterInput,
 } from "@/lib/strategy-jobs";
+import { DEFAULT_INITIAL_CAPITAL_INR } from "@shared/strategy/ast";
 
 export interface StrategyVersionSummary {
   id: string;
@@ -61,7 +62,7 @@ function definitionDefaults(definition: unknown) {
   return {
     symbol: d.universe?.type === "SINGLE_SYMBOL" && typeof d.universe.symbolOrId === "string" ? d.universe.symbolOrId : "",
     timeframe: typeof d.timeframe === "string" && TIMEFRAMES.includes(d.timeframe) ? d.timeframe : "1d",
-    capital: typeof d.execution?.initialCapital === "number" ? String(d.execution.initialCapital) : "100000",
+    capital: String(typeof d.execution?.initialCapital === "number" ? d.execution.initialCapital : DEFAULT_INITIAL_CAPITAL_INR),
   };
 }
 
