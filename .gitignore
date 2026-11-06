@@ -58,10 +58,6 @@ tmp/
 .eslintcache
 .turbo/
 
-# Local AI / helper markdown files
-CLAUDE.md
-AGENTS.md
-
 # Local docs / checklists
 docs/smoke-test-checklist.md
 
