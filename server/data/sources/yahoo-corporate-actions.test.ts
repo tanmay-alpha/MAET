@@ -50,13 +50,34 @@ describe("normalizeYahooCorporateActions", () => {
       exDate: "2025-08-14",
       amount: 5.5,
       currency: "INR",
-      splitAdjusted: false,
+      adjusted: false,
     });
     // ₹10 was paid before the 1:1 bonus; Yahoo restates it as ₹5.
     expect(normalized.find((event) => event.exDate === "2024-08-19")).toMatchObject({
       amount: 5,
-      splitAdjusted: true,
+      adjusted: true,
     });
+  });
+
+  it("flags amounts Yahoo restated for a rights issue, which it does not report as an event", () => {
+    // BHARTIARTL as served on 7 Nov 2026: NSE lists ₹2 (6 Aug 2020) and ₹3 (1 Aug 2022);
+    // Yahoo restates the 2020 dividend for the 2021 rights issue. A declared rate has at
+    // most three decimals (37.5% of a ₹1 face value is ₹0.375).
+    const parsed = normalizeYahooCorporateActions(
+      {
+        dividends: {
+          a: { amount: 1.963142, date: Date.UTC(2020, 7, 6, 3, 45) / 1000 },
+          b: { amount: 3, date: Date.UTC(2022, 7, 1, 3, 45) / 1000 },
+          c: { amount: 0.375, date: Date.UTC(2023, 7, 1, 3, 45) / 1000 },
+        },
+      },
+      { currency: "INR", gmtoffset: 19800 }
+    );
+    expect(parsed.map((event) => [event.exDate, event.kind === "dividend" && event.adjusted])).toEqual([
+      ["2023-08-01", false],
+      ["2022-08-01", false],
+      ["2020-08-06", true],
+    ]);
   });
 
   it("drops duplicate events that arrive under different keys", () => {
@@ -92,7 +113,7 @@ describe("normalizeYahooCorporateActions", () => {
       },
     });
     expect(parsed).toEqual([
-      { kind: "dividend", exDate: "2025-08-15", amount: 4, currency: "USD", splitAdjusted: false },
+      { kind: "dividend", exDate: "2025-08-15", amount: 4, currency: "USD", adjusted: false },
     ]);
   });
 });
