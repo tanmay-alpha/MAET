@@ -1,6 +1,6 @@
 # Research engine
 
-How MAET backtests a strategy and evaluates it out of sample, as implemented at `ca8b1bb`. File paths are cited for each mechanism. Section 9 separates what production runs from research modules that are only exercised by tests.
+How MAET backtests a strategy and evaluates it out of sample, as implemented at `16b2310`. File paths are cited for each mechanism. Section 9 separates what production runs from research modules that are only exercised by tests.
 
 ## 1. Where a backtest comes from
 
@@ -205,7 +205,7 @@ What production does use: runner-v3, `computeMetrics`, the fee model with the sh
 
 `/payoff` (`src/routes/_app.payoff.tsx`) prices hand-entered multi-leg option positions. All maths is in `shared/domain/options/` and runs in the browser; there is no server call and no live price.
 
-- **Pricing** (`black-scholes.ts`): European Black-Scholes on a non-dividend underlying, $T$ in calendar days / 365, one IV for every strike. The normal CDF is Hart's double-precision approximation (West, 2005), so the Greeks agree with finite differences of the price. Theta is per calendar day; vega and rho are per percentage point. At or after expiry an option is worth its intrinsic value.
+- **Pricing** (`shared/domain/options/black-scholes.ts`, which replaced `src/lib/greeks.ts`): European Black-Scholes on a non-dividend underlying, $T$ in calendar days / 365, one IV for every strike. The normal CDF is Hart's double-precision approximation (West, 2005), so the Greeks agree with finite differences of the price. Theta is per calendar day; vega and rho are per percentage point. At or after expiry an option is worth its intrinsic value.
 - **Position** (`payoff.ts`): every rupee figure is per-unit value × lots × lot size. Futures are delta-one on the underlying (no cost of carry). The "today" curve and the scenario grid value each leg with Black-Scholes at the shifted IV; the summary Greeks use the entered IV.
 - **Expiry profile**: the expiry P&L is piecewise linear in the underlying, bending only at option strikes, and the underlying cannot go below zero. So max profit and max loss are the extremes over {0, strikes} unless the right tail slopes (net units of calls and futures): a positive slope makes profit unlimited, a negative one makes loss unlimited. Breakevens are the exact zero crossings on each segment and in the tail. Nothing is sampled, so an iron condor's max profit is exactly its net credit × lots × lot size.
 - **Defaults**: NIFTY 65 / 50, BANKNIFTY 30 / 100, FINNIFTY 60 / 50 (lot size / strike step; lots per NSE circular NSE/FAOP/70616, 3 October 2025), rate 6.5%, IV 14%. Every input is editable.

@@ -1,6 +1,6 @@
 # MAET architecture
 
-This document describes the system as the code on `main` (commit `ca8b1bb`) implements it. Every statement cites the file that implements it. Where the code is a deployment *intention* (for example `render.yaml`), that is stated: the repository cannot prove what a live environment is running.
+This document describes the system as the code on `main` (commit `16b2310`) implements it. Every statement cites the file that implements it. Where the code is a deployment *intention* (for example `render.yaml`), that is stated: the repository cannot prove what a live environment is running.
 
 Companion documents:
 
@@ -70,7 +70,7 @@ flowchart LR
 | `AngelOneWorker` | Logs in (retry 15 s, fresh login daily at 08:30 IST), streams subscribed tokens. | `server/orchestrator.ts`, `server/workers/angelone-ws.ts` |
 | Daily processor | Checked every 60 s; runs after 18:30 IST on trading days under a Redis `SET NX` lock. | `server/orchestrator.ts`, `server/workers/daily-processor-schedule.ts` |
 
-Also started by the web process: the strategy job runner (`server/plugins/strategy-jobs.ts`, unless `STRATEGY_JOBS_IN_PROCESS=false`), which executes queued backtests, sweeps and walk-forward runs. Not started by the web process: the strategy-evaluator loop (`bun run worker:evaluator`), the paper outbox publisher (`server/workers/paper-outbox-publisher.ts`, `startOutboxPublisherWorker` has no caller) and the technical-snapshot worker. See §9.
+Also started by the web process: the strategy job runner (`server/plugins/strategy-jobs.ts`, unless `STRATEGY_JOBS_IN_PROCESS=false`), which executes queued backtests, sweeps and walk-forward runs, and the paper outbox publisher (`server/workers/paper-outbox-publisher.ts`, started by `server/orchestrator.ts`). Not started by the web process: the strategy-evaluator loop (`bun run worker:evaluator`) and the technical-snapshot worker. See §9.
 
 ## 2. Request flows
 
@@ -115,7 +115,7 @@ Details (all `server/domain/market/quote-service.ts` unless noted):
 - If Angel One REST fails the service logs a warning and falls through to Yahoo; if Yahoo fails, the last cached tick is returned, relabelled `stale` once older than the TTL.
 - `sessionQuality` (`server/domain/market/quote-quality.ts`) is why a broker quote cached at 15:29 is served as `delayed` at 15:45.
 - The response envelope (`buildQuotesPayload`) carries `source`, `delayed`, `marketPhase` and `errors`, so the UI never presents Yahoo data as live.
-- Live streaming uses `GET /api/market/stream` (`server/api/market/stream.get.ts`): unauthenticated SSE, 100 connections per process and 5 per IP, initial snapshot from `loadQuotes`, then ticks coalesced per symbol and flushed every 200 ms. Each connection takes reference-counted symbol subscriptions on the Angel One feed (`subscribeMarketSymbols` in `server/orchestrator.ts`).
+- Live streaming uses `GET /api/market/stream` (`server/api/market/stream.get.ts`): unauthenticated SSE, 100 connections per process and 20 per IP by default (`MARKET_STREAM_MAX_PER_IP`), initial snapshot from `loadQuotes`, then ticks coalesced per symbol and flushed every 200 ms. Each connection takes reference-counted symbol subscriptions on the Angel One feed (`subscribeMarketSymbols` in `server/orchestrator.ts`).
 
 #### Corporate actions (dividends and splits)
 
