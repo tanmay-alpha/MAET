@@ -126,6 +126,22 @@ function matchAgainstQueue(incoming: OpenLot, queue: LotQueue, matched: MatchedL
  * for unavailable product/settlement metadata; it is not a legal FIFO assertion.
  */
 export function matchFifoLots(fills: readonly Fill[], generation: number): MatchedLot[] {
+  return matchFifoPositions(fills, generation).matched;
+}
+
+/** An unmatched FIFO remainder: still held (LONG) or still owed (SHORT). */
+export interface OpenFifoLot {
+  fillId: string;
+  symbol: string;
+  exchange: string;
+  side: "LONG" | "SHORT";
+  date: string;
+  price: number;
+  quantity: number;
+}
+
+/** matchFifoLots plus the open lots left in each queue, oldest first per symbol. */
+export function matchFifoPositions(fills: readonly Fill[], generation: number): { matched: MatchedLot[]; open: OpenFifoLot[] } {
   const ordered = fills.filter((fill) => fill.generation === generation);
   ordered.sort((left, right) => left.date.localeCompare(right.date));
   const queues = new Map<string, LotQueue>();
@@ -157,7 +173,22 @@ export function matchFifoLots(fills: readonly Fill[], generation: number): Match
       }
     }
   }
-  return matched;
+  const open: OpenFifoLot[] = [];
+  for (const queue of queues.values()) {
+    for (let index = queue.head; index < queue.lots.length; index += 1) {
+      const { fill, remaining } = queue.lots[index]!;
+      open.push({ fillId: fill.id, symbol: fill.symbol, exchange: fill.exchange, side: fill.side === "BUY" ? "LONG" : "SHORT", date: fill.date, price: fill.price, quantity: remaining });
+    }
+  }
+  return { matched, open };
+}
+
+/**
+ * Twelve calendar months after entryDate (YYYY-MM-DD). Selling on this date is
+ * still short-term; LTCG needs a later exit. Feb 29 clamps to Feb 28.
+ */
+export function twelveMonthAnniversary(entryDate: string): string {
+  return `${Number(entryDate.slice(0, 4)) + 1}-${entryDate.slice(5) === "02-29" ? "02-28" : entryDate.slice(5)}`;
 }
 
 /**
@@ -210,9 +241,7 @@ export function buildCapitalGainsReport(fills: readonly Fill[], financialYearSta
       continue;
     }
     // Calendar months, not 365 days: exact first anniversary is still short-term.
-    // Feb 29 clamps to Feb 28 of the following (non-leap) year.
-    const anniversary = `${Number(lot.entryDate.slice(0, 4)) + 1}-${lot.entryDate.slice(5) === "02-29" ? "02-28" : lot.entryDate.slice(5)}`;
-    const longTerm = lot.exitDate > anniversary;
+    const longTerm = lot.exitDate > twelveMonthAnniversary(lot.entryDate);
     const newRate = lot.exitDate >= "2024-07-23";
     const bucket = buckets[(longTerm ? 2 : 0) + (newRate ? 1 : 0)]!;
     if (lot.grossPnl >= 0) bucket.grossGains += lot.grossPnl;

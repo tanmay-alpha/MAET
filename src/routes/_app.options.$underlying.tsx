@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, Database } from "lucide-react";
+import { ArrowLeft, Database, LineChart } from "lucide-react";
 import type {
   OptionChainContractView,
   PersistedOptionExpiryView,
@@ -8,9 +8,14 @@ import type {
 import { GreekDisplay } from "@/components/options/greek-display";
 import { trpc } from "@/lib/trpc";
 import { useSignedIn } from "@/hooks/use-signed-in";
+import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { payoffSearchForChainContract, type PayoffSearch } from "@/lib/payoff-lab-state";
 
 const UNAVAILABLE = "—";
+
+/** Option underlyings whose cash-market quote symbol differs (server/domain/market/symbol.ts). */
+const QUOTE_SYMBOL: Record<string, string> = { NIFTY: "NIFTY50" };
 
 export const Route = createFileRoute("/_app/options/$underlying")({
   head: () => ({ meta: [{ title: "Options Chain — MAET" }] }),
@@ -81,15 +86,30 @@ function pairContracts(contracts: OptionChainContractView[]): OptionPair[] {
 
 function OptionSide({
   contract,
+  payoffSearch,
   reverse = false,
 }: {
   contract: OptionChainContractView | null;
+  payoffSearch: (contract: OptionChainContractView) => PayoffSearch;
   reverse?: boolean;
 }) {
   const quote = contract?.quote ?? null;
+  const ltp = formatDecimal(quote?.ltp ?? null);
   const cells = [
     <td key="ltp" className="px-3 py-2 text-right font-mono tabular">
-      {formatDecimal(quote?.ltp ?? null)}
+      {contract ? (
+        <Link
+          to="/payoff"
+          search={payoffSearch(contract)}
+          aria-label={`Open ${contract.strikePrice} ${contract.optionType} in Payoff Lab`}
+          title="Open in Payoff Lab with this contract as a bought leg; the premium stays editable"
+          className="underline-offset-2 hover:text-primary hover:underline"
+        >
+          {ltp}
+        </Link>
+      ) : (
+        ltp
+      )}
     </td>,
     <td key="oi" className="px-3 py-2 text-right font-mono tabular">
       {formatQuantity(quote?.openInterest ?? null)}
@@ -137,6 +157,24 @@ function OptionsChain() {
     (chain.coverage.quotes < chain.coverage.contracts ||
       chain.coverage.greeks < chain.coverage.contracts);
 
+  // Spot comes from the public quote feed, so the Payoff Lab link works signed out too.
+  const quoteSymbol = QUOTE_SYMBOL[symbol] ?? symbol;
+  const { quoteMap } = useMarketQuotes([quoteSymbol]);
+  const spot = quoteMap.get(quoteSymbol)?.price ?? null;
+  const payoffContext = {
+    underlying: symbol,
+    spot,
+    expiry: chain?.expiryDate ?? null,
+    lotSize: chain?.contracts[0]?.lotSize ?? null,
+  };
+  const payoffSearchFor = (contract: OptionChainContractView) =>
+    payoffSearchForChainContract({
+      ...payoffContext,
+      lotSize: contract.lotSize,
+      impliedVolatility: contract.greeks?.impliedVolatility ? Number(contract.greeks.impliedVolatility) : null,
+      leg: { instrument: contract.optionType, strike: contract.strikePrice, premium: contract.quote?.ltp ?? null },
+    });
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3">
@@ -158,6 +196,11 @@ function OptionsChain() {
             Angel One / NFO persisted market observations
           </p>
         </div>
+        {spot !== null && (
+          <span className="font-mono text-xs tabular text-muted-foreground">
+            Spot <span className="text-foreground">{spot.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          </span>
+        )}
         <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
           Expiry
           <select
@@ -175,6 +218,15 @@ function OptionsChain() {
             ))}
           </select>
         </label>
+        <Link
+          to="/payoff"
+          search={payoffSearchForChainContract(payoffContext)}
+          className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-xs hover:border-primary/60 hover:text-primary"
+          title="Build a strategy on this underlying; click an LTP to add that contract as a leg"
+        >
+          <LineChart className="h-3.5 w-3.5" />
+          Open in Payoff Lab
+        </Link>
       </div>
 
       <div className="flex flex-1 flex-col gap-4 overflow-auto p-5">
@@ -286,11 +338,11 @@ function OptionsChain() {
                         key={pair.strikePrice}
                         className="border-b border-border/70 last:border-0 hover:bg-accent/30"
                       >
-                        <OptionSide contract={pair.call} />
+                        <OptionSide contract={pair.call} payoffSearch={payoffSearchFor} />
                         <td className="border-x border-border px-3 py-2 text-center font-mono tabular font-semibold">
                           {formatDecimal(pair.strikePrice, 2)}
                         </td>
-                        <OptionSide contract={pair.put} reverse />
+                        <OptionSide contract={pair.put} payoffSearch={payoffSearchFor} reverse />
                       </tr>
                     ))}
                   </tbody>

@@ -33,12 +33,14 @@ import {
 const researchItems = [
   { title: "Screener", url: "/screener", icon: Table2 },
   { title: "Watchlists", url: "/watchlists", icon: ListFilter },
+  { title: "World Monitor", url: "/world", icon: Activity },
 ];
 
 const tradingItems = [
   { title: "Terminal", url: "/terminal", icon: CandlestickChart },
   { title: "Orders", url: "/orders", icon: ClipboardList },
   { title: "Portfolio", url: "/portfolio", icon: Briefcase },
+  { title: "Import portfolio", url: "/import", icon: Layers },
 ];
 
 const reviewItems = [
@@ -55,6 +57,7 @@ const strategyItems = [
   { title: "Strategy Lab", url: "/strategies", icon: FlaskConical },
   { title: "Performance", url: "/performance", icon: BarChart2 },
   { title: "Bar Replay", url: "/replay", icon: Play },
+  { title: "Payoff Lab", url: "/payoff", icon: LineChart },
 ];
 
 const experimentalItems = [

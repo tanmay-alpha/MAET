@@ -31,9 +31,7 @@ async function tooltipsAcross(page: Page, chart: Locator): Promise<string[]> {
 
 test("stock page: dividend and split markers with hover details, a toggle and the corporate actions table", async ({
   page,
-  api,
 }) => {
-  void api;
   await page.goto("/stock/RELIANCE");
 
   const table = page.getByRole("region", { name: "Corporate actions" });
@@ -77,8 +75,7 @@ test("stock page: says so when the provider reports no dividends or splits", asy
   await expect(chart.getByText(NONE_IN_RANGE, { exact: true })).toBeVisible();
 });
 
-test("full chart: dividends and splits are off by default and follow the selected range", async ({ page, api }) => {
-  void api;
+test("full chart: dividends and splits are off by default and follow the selected range", async ({ page }) => {
   await page.goto("/chart/RELIANCE");
   await expect(page.getByRole("heading", { level: 1, name: "RELIANCE" })).toBeVisible();
 

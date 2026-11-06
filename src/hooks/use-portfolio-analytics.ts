@@ -5,9 +5,10 @@ import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { createQueryProcedure } from "@/lib/trpc";
 import { curveToHistory, type PerformanceDataPoint } from "@/lib/portfolio-curve";
-import type { PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
+import type { PaperAccountRow, PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
 import type { PortfolioAnalyticsResult } from "../../server/modules/paper-trading/portfolio-analytics-contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
+import type { MarketQuote } from "@/lib/market-api";
 
 export type {
   DrawdownResult,
@@ -44,8 +45,8 @@ export interface TradeStats {
 }
 
 export interface PortfolioAnalytics {
-  /** Live valuation of the open account from current quotes. */
-  metrics: PerformanceMetrics;
+  /** Live valuation of the open account from current quotes; null until the account loads. */
+  metrics: PerformanceMetrics | null;
   trades: TradeStats;
   /** Daily equity curve of the current account generation, from server snapshots. */
   history: PerformanceDataPoint[];
@@ -78,6 +79,59 @@ export function usePortfolioPerformance(riskFreeRate = 0) {
   return { query, signedIn };
 }
 
+function valueAccount(
+  account: PaperAccountRow,
+  positions: PaperPositionRow[],
+  quoteMap: ReadonlyMap<string, MarketQuote>
+): PerformanceMetrics {
+  let unrealizedPnl = 0;
+  let positionsValue = 0;
+  let dayPnl = 0;
+
+  const cash = Number(account.cashBalance);
+  const initialCash = Number(account.initialCash);
+  const realisedPnl = Number(account.realisedPnl);
+
+  positions.forEach((position: PaperPositionRow) => {
+    const quote = quoteMap.get(position.symbol);
+    const avgPrice = Number(position.averageEntryPrice);
+    const currentPrice = quote?.price || avgPrice;
+    const prevPrice = quote?.previousClose;
+
+    const isShort = position.side === "SHORT" || position.totalShares < 0;
+    const absQty = Math.abs(position.totalShares);
+    const signedQty = isShort ? -absQty : absQty;
+
+    positionsValue += currentPrice * absQty;
+    unrealizedPnl += calculateMarkedUnrealisedPnl(
+      { quantity: signedQty, averagePrice: avgPrice },
+      currentPrice
+    );
+
+    if (prevPrice && prevPrice > 0) {
+      dayPnl += isShort
+        ? (prevPrice - currentPrice) * absQty
+        : (currentPrice - prevPrice) * absQty;
+    }
+  });
+
+  const totalValue = cash + unrealizedPnl;
+  const totalCost = initialCash;
+  const totalPnl = unrealizedPnl + realisedPnl;
+  return {
+    totalValue,
+    totalCost,
+    unrealizedPnl,
+    realizedPnl: realisedPnl,
+    totalPnl,
+    totalReturnPct: totalCost > 0 ? (totalPnl / totalCost) * 100 : 0,
+    dayPnl,
+    dayPnlPct: totalValue > 0 ? (dayPnl / totalValue) * 100 : 0,
+    cash,
+    positionsValue,
+  };
+}
+
 export function usePortfolioAnalytics(): PortfolioAnalytics {
   const { account, positions, orders, fills } = usePaperAccount();
   const { query: performanceQuery, signedIn } = usePortfolioPerformance();
@@ -90,55 +144,8 @@ export function usePortfolioAnalytics(): PortfolioAnalytics {
   const { quoteMap } = useMarketQuotes(positionSymbols);
 
   const live = useMemo(() => {
-    let unrealizedPnl = 0;
-    let positionsValue = 0;
-    let dayPnl = 0;
-
-    const cash = account ? Number(account.cashBalance) : 1000000;
-    const initialCash = account ? Number(account.initialCash) : 1000000;
-    const realisedPnl = account ? Number(account.realisedPnl) : 0;
-
-    positions.forEach((position: PaperPositionRow) => {
-      const quote = quoteMap.get(position.symbol);
-      const avgPrice = Number(position.averageEntryPrice);
-      const currentPrice = quote?.price || avgPrice;
-      const prevPrice = quote?.previousClose;
-
-      const isShort = position.side === "SHORT" || position.totalShares < 0;
-      const absQty = Math.abs(position.totalShares);
-      const signedQty = isShort ? -absQty : absQty;
-
-      positionsValue += currentPrice * absQty;
-      unrealizedPnl += calculateMarkedUnrealisedPnl(
-        { quantity: signedQty, averagePrice: avgPrice },
-        currentPrice
-      );
-
-      if (prevPrice && prevPrice > 0) {
-        dayPnl += isShort
-          ? (prevPrice - currentPrice) * absQty
-          : (currentPrice - prevPrice) * absQty;
-      }
-    });
-
-    const totalValue = cash + unrealizedPnl;
-    const totalCost = initialCash;
-    const totalPnl = unrealizedPnl + realisedPnl;
-    const totalReturnPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
-    const dayPnlPct = totalValue > 0 ? (dayPnl / totalValue) * 100 : 0;
-
-    const metrics: PerformanceMetrics = {
-      totalValue,
-      totalCost,
-      unrealizedPnl,
-      realizedPnl: realisedPnl,
-      totalPnl,
-      totalReturnPct,
-      dayPnl,
-      dayPnlPct,
-      cash,
-      positionsValue,
-    };
+    // Valuation needs the server's account: there is no default balance to value against.
+    const metrics = account ? valueAccount(account, positions, quoteMap) : null;
 
     const tradePnlList: number[] = fills.map((f: PaperFillRow) => Number(f.realizedPnl));
     const winningTrades = tradePnlList.filter((p) => p > 0);
