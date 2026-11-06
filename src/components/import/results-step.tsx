@@ -93,6 +93,10 @@ export function ResultsStep({ analysis, onBack }: { analysis: ImportAnalysis; on
       <button type="button" onClick={onBack} className="rounded border border-border px-3 py-1.5 hover:bg-accent">Back to rows</button>
     </div>
     <p className="mt-1 text-muted-foreground">FIFO per symbol across NSE and BSE, gross of brokerage and charges. {analysis.trades.length} accepted trades.</p>
+    {analysis.partialHistory.symbols.length > 0 && <p data-testid="partial-history" className="mt-1 text-amber-400">
+      History incomplete for {analysis.partialHistory.symbols.join(", ")}: a sell exceeded the shares this file shows as held, so it was rejected and these holdings and gains are incomplete.
+      Shares bought before {analysis.partialHistory.firstTradeDate} (the file's first trade), transferred in, allotted in an IPO or received in a bonus or split are not in the file.
+    </p>}
 
     <Tabs defaultValue="holdings" className="mt-3">
       <TabsList className="h-8 rounded border border-border bg-background p-0.5">

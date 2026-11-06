@@ -47,6 +47,12 @@ export interface ImportAnalysis {
   trips: RoundTrip[];
   /** Exit financial years that have realised trips, newest first. */
   financialYears: number[];
+  /**
+   * Symbols with a sell rejected for exceeding the shares bought in the file:
+   * their history starts before the file's first trade, so their holdings and
+   * gains are incomplete.
+   */
+  partialHistory: { symbols: string[]; firstTradeDate: string | undefined };
   /** The portfolio page's capital-gains report, computed over this file's fills. */
   taxReport: (financialYearStart: number) => CapitalGainsReport;
 }
@@ -80,6 +86,7 @@ export function analyseImport(format: BrokerFormat, headers: readonly string[], 
     return reason ? { line: row.line, cells: row.cells, status: "rejected", reason } : row;
   });
   const trades = candidates.filter((trade) => !oversells.has(trade.line));
+  const oversoldSymbols = new Set(candidates.filter((trade) => oversells.has(trade.line)).map((trade) => trade.symbol));
 
   const fills: Fill[] = trades.map((trade) => ({
     id: String(trade.line), generation: GENERATION, symbol: trade.symbol, exchange: DEMAT,
@@ -126,6 +133,7 @@ export function analyseImport(format: BrokerFormat, headers: readonly string[], 
     holdings: [...holdings.values()].sort((left, right) => left.symbol.localeCompare(right.symbol)),
     trips,
     financialYears: [...new Set(trips.map((trip) => trip.financialYearStart))].sort((left, right) => right - left),
+    partialHistory: { symbols: [...oversoldSymbols].sort(), firstTradeDate: trades[0]?.date },
     taxReport: (year) => buildCapitalGainsReport(fills, year, GENERATION),
   };
 }

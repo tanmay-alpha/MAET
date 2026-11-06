@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { analyseImport, cashFlowReturn, type ImportAnalysis } from "./analyse";
-import { CsvStreamParser, parseCsv, toCsv } from "./csv";
+import { CsvStreamParser, parseCsv, sniffDelimiter, toCsv } from "./csv";
 import { financialYearStart, ltcgEligibleFrom, parseTradeDate } from "./dates";
 import { detectFormat, guessMapping } from "./normalize";
 import { SAMPLE_TRADEBOOK_CSV } from "./sample";
@@ -197,5 +197,106 @@ describe("cash-flow XIRR", () => {
     const result = cashFlowReturn(analysis, {}, "2026-06-01");
     expect(result.missing).toEqual([]);
     expect(result.xirr).toBeCloseTo(0.1, 6);
+  });
+});
+
+describe("malformed and unusual files", () => {
+  it("rejects a row whose column count differs from the header instead of reading shifted columns", () => {
+    // An unquoted Indian-formatted price splits into two cells: price 1 and a shifted trade id.
+    const text = `${ZERODHA_HEADER}\nABC,INE000000000,2024-01-01,NSE,EQ,EQ,buy,false,10,1,234.50,1,1,2024-01-01T10:00:00\nABC,INE000000000,2024-01-02,NSE,EQ,EQ,buy,false,5,100,2,2`;
+    const analysis = analyseText(text);
+    expect(analysis.rows.map((row) => [row.status, row.reason])).toEqual([
+      ["rejected", "Row has 14 columns; the header has 13"],
+      ["rejected", "Row has 12 columns; the header has 13"],
+    ]);
+    expect(analysis.trades).toEqual([]);
+  });
+
+  it("accepts trailing empty cells that some exports add after the last column", () => {
+    const analysis = analyseText(`${zerodha([["ABC", "2024-01-01", "buy", 10, 100]])},,`);
+    expect(analysis.counts.accepted).toBe(1);
+  });
+
+  it("parses tab-separated text (Excel 'Unicode text') and refuses semicolon-separated files", () => {
+    expect(sniffDelimiter("a\tb\tc\r\n1\t2\t3")).toBe("\t");
+    expect(sniffDelimiter('"a,b"\tc')).toBe("\t");
+    expect(sniffDelimiter("a,b,c")).toBe(",");
+    expect(() => sniffDelimiter("symbol;date;qty\n")).toThrow(/semicolon/i);
+    const parser = new CsvStreamParser({ delimiter: "\t" });
+    parser.push('symbol\tnote\r\nINFY\t"a\tb, c"\r\n');
+    expect(parser.end().map((row) => row.cells)).toEqual([["symbol", "note"], ["INFY", "a\tb, c"]]);
+  });
+
+  it("counts records as they stream in so a reader can stop at a limit", () => {
+    const parser = new CsvStreamParser();
+    parser.push("h\n1\n2\n\n3");
+    expect(parser.recordCount).toBe(3);
+    expect(parser.end()).toHaveLength(4);
+  });
+});
+
+describe("duplicates and partial history", () => {
+  it("keeps trades that reuse a trade id on another day, and flags a same-day id with different values", () => {
+    const text = [
+      ZERODHA_HEADER,
+      "ABC,INE000000000,2024-01-01,NSE,EQ,EQ,buy,false,10,100,77,1,",
+      "ABC,INE000000000,2024-02-01,NSE,EQ,EQ,buy,false,10,110,77,2,",
+      "ABC,INE000000000,2024-02-01,NSE,EQ,EQ,buy,false,10,110,77,2,",
+      "ABC,INE000000000,2024-02-01,NSE,EQ,EQ,buy,false,12,110,77,2,",
+    ].join("\n");
+    expect(analyseText(text).rows.map((row) => [row.status, row.reason])).toEqual([
+      ["accepted", undefined],
+      ["accepted", undefined],
+      ["duplicate", "Duplicate trade id 77"],
+      ["rejected", "Trade id 77 repeats line 3 with a different side, quantity or price"],
+    ]);
+  });
+
+  it("names the symbols whose history starts before the file, with the file's first trade date", () => {
+    const analysis = analyseText(zerodha([["ABC", "2024-01-01", "buy", 5, 10], ["XYZ", "2024-01-02", "buy", 1, 10], ["ABC", "2024-01-03", "sell", 8, 12]]));
+    expect(analysis.partialHistory).toEqual({ symbols: ["ABC"], firstTradeDate: "2024-01-01" });
+    expect(analyseText(zerodha([["ABC", "2024-01-01", "buy", 5, 10]])).partialHistory.symbols).toEqual([]);
+  });
+
+  it("rejects fractional quantities, which NSE/BSE equity never trades, before float residue fakes an oversell", () => {
+    const analysis = analyseText(zerodha([["ABC", "2024-01-01", "buy", 0.3, 10], ["ABC", "2024-01-02", "sell", 0.1, 12], ["ABC", "2024-01-03", "sell", 0.2, 12], ["ABC", "2024-01-04", "buy", 10.0, 10]]));
+    expect(analysis.rows.map((row) => [row.status, row.reason])).toEqual([
+      ["rejected", "Fractional quantity 0.3; NSE/BSE shares trade in whole units"],
+      ["rejected", "Fractional quantity 0.1; NSE/BSE shares trade in whole units"],
+      ["rejected", "Fractional quantity 0.2; NSE/BSE shares trade in whole units"],
+      ["accepted", undefined],
+    ]);
+  });
+});
+
+describe("dates and symbols from other exports", () => {
+  it("reads Excel serial dates, year-first slashes and execution times with a timezone, as IST calendar dates", () => {
+    expect(parseTradeDate("45292")).toEqual({ date: "2024-01-01", time: "00:00:00" });
+    expect(parseTradeDate("45292.5")).toEqual({ date: "2024-01-01", time: "12:00:00" });
+    expect(parseTradeDate("2024/09/03")).toEqual({ date: "2024-09-03", time: "00:00:00" });
+    expect(parseTradeDate("2024-09-03T14:55:02+05:30")).toEqual({ date: "2024-09-03", time: "14:55:02" });
+    expect(parseTradeDate("2024-09-03T09:25:02Z")).toEqual({ date: "2024-09-03", time: "14:55:02" });
+    // 20:00 UTC is already the next day in India.
+    expect(parseTradeDate("2024-09-03 20:00:00 UTC")).toEqual({ date: "2024-09-04", time: "01:30:00" });
+    expect(parseTradeDate("03-09-2024 14:55 IST")).toEqual({ date: "2024-09-03", time: "14:55:00" });
+    // A plain number outside the plausible trade-date range is not a date.
+    expect(parseTradeDate("150")).toBeNull();
+    expect(parseTradeDate("2024-09-03T14:55:02+25:00")).toBeNull();
+  });
+
+  it("pools series and exchange suffixes (-EQ, -BE, .NS, .BO) into one symbol, keeping hyphenated names", () => {
+    const analysis = analyseText(zerodha([
+      ["INFY-EQ", "2024-01-01", "buy", 10, 100], ["INFY.NS", "2024-01-02", "buy", 10, 100], ["infy-be", "2024-01-03", "sell", 15, 110],
+      ["INFY.BO", "2024-01-04", "sell", 5, 110], ["BAJAJ-AUTO", "2024-01-05", "buy", 1, 9000],
+    ]));
+    expect(analysis.counts.accepted).toBe(5);
+    expect(analysis.trips.map((trip) => [trip.symbol, trip.quantity])).toEqual([["INFY", 10], ["INFY", 5], ["INFY", 5]]);
+    expect(analysis.holdings.map((holding) => holding.symbol)).toEqual(["BAJAJ-AUTO"]);
+  });
+
+  it("guesses Upstox-style columns by exact header before partial matches", () => {
+    const headers = ["Date", "Company", "Amount", "Exchange", "Segment", "Scrip Code", "Instrument Type", "Strike Price", "Expiry", "Trade Num", "Trade Time", "Side", "Quantity", "Price"];
+    expect(detectFormat(headers)).toBeNull();
+    expect(guessMapping(headers)).toEqual({ date: 0, symbol: 5, side: 11, quantity: 12, price: 13, tradeId: 9 });
   });
 });
