@@ -131,7 +131,7 @@ This folder is the website users interact with. It is built mainly with React, T
 | `src/lib/market-api.ts` | Defines and validates market API responses before the UI trusts them. |
 | `src/lib/trpc.ts` | Browser client for signed-in tRPC features such as paper trading, workspace, alerts, backtests, and strategies. |
 | `src/lib/auth-token.ts` | Retrieves and refreshes the browser's Supabase access token. |
-| `src/lib/paper-sse-client.ts` | Receives paper-trading updates through a stream. |
+| `src/lib/paper-sse-client.ts` | Receives paper-trading updates from `GET /api/paper/stream`: named SSE events (`CONNECTED`, `heartbeat`, and the outbox event types) defined in `shared/domain/paper-trading/stream-events.ts`, which the server uses too. Falls back to polling while the stream is unavailable (503). |
 | `src/lib/technical-indicators.ts`, `src/lib/financial-metrics.ts` | Frontend-side helper calculations and formatting for displayed analysis. |
 | `src/store/` | Small browser-only state. For example, a selected terminal symbol belongs here, not in the durable database. |
 | `src/styles.css` | Global Tailwind CSS setup, theme variables, typography, colours, and animations. |
@@ -145,8 +145,8 @@ This folder contains the web server, APIs, provider integrations, business rules
 
 | Location | What it does |
 |---|---|
-| `server/plugins/orchestrator.ts` | Starts the market-data and background-work coordinator when the Nitro server starts. |
-| `server/orchestrator.ts` | Starts and stops workers, manages market subscriptions, and attempts Angel One login when credentials are configured. |
+| `server/plugins/orchestrator.ts` | Starts the market-data and background-work coordinator when the Nitro server starts, and on shutdown (SIGTERM, via Nitro's close hook) stops the workers, then closes Redis and the database pool within 20s. |
+| `server/orchestrator.ts` | Starts and stops workers (including the paper outbox publisher), manages ref-counted market subscriptions (open market streams, active alerts, and the NSE symbols of working paper orders and open paper positions), and attempts Angel One login when credentials are configured. |
 | `server/config.ts` | Reads and validates server settings and secret names. |
 | `server/api/` | File-based REST and streaming endpoints. For example, `market/quotes.get.ts`, `market/candles.get.ts`, and `market/stream.get.ts`. |
 | `server/api/trpc/[trpc].ts` | The tRPC entry point used by signed-in frontend features. |
