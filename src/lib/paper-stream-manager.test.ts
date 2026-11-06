@@ -72,7 +72,7 @@ describe("PaperStreamManager", () => {
     expect(connections).toHaveLength(1);
 
     connections[0].options.onEvent?.({ type: "CONNECTED", data: {} });
-    connections[0].options.onEvent?.({ type: "ORDER_FILLED", data: {} });
+    connections[0].options.onEvent?.({ type: "PAPER_ORDER_FILLED", data: {} });
 
     expect(first.statuses.at(-1)).toBe(true);
     // One invalidation per QueryClient, not per consumer.

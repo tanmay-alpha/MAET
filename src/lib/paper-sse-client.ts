@@ -3,6 +3,7 @@
  * Replaces native EventSource to send Bearer token in Authorization headers.
  */
 
+import { PAPER_STREAM_HEARTBEAT_EVENT } from "@shared/domain/paper-trading/stream-events";
 import { apiUrl } from "./api-url";
 
 export interface SseEvent {
@@ -85,7 +86,7 @@ export async function connectPaperTradingStream(
             // Raw text
           }
 
-          if (currentEventName === "heartbeat") {
+          if (currentEventName === PAPER_STREAM_HEARTBEAT_EVENT) {
             onHeartbeat?.();
           } else {
             onEvent?.({ type: currentEventName, data: parsedData });
