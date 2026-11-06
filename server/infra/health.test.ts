@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { createApp, toWebHandler, type EventHandler } from "h3";
 import healthRoute, { createHealthRoute } from "../api/health.get";
 import { closeDb, resetDb } from "../data/drizzle/client";
+import { DatabaseCircuitBreaker, resetDatabaseBreakerForTests } from "../data/drizzle/availability";
 import { closeRedis } from "../data/redis/client";
 import { createHealthChecker } from "./health";
 
@@ -33,6 +34,8 @@ describe("GET /api/health", () => {
       if (previousUrl === undefined) delete process.env.TEST_DATABASE_URL;
       else process.env.TEST_DATABASE_URL = previousUrl;
       await closeDb();
+      // The shared availability breaker followed the failed probe; reset it for other tests.
+      resetDatabaseBreakerForTests();
     }
   });
 
@@ -97,5 +100,55 @@ describe("GET /api/health", () => {
     const body = await checker.check();
     expect(body.status).toBe("degraded");
     expect(body.checks.marketData).toBe(false);
+  });
+
+  it("opens and closes the database circuit from probe results and reports its state", async () => {
+    let reachable = false;
+    const breaker = new DatabaseCircuitBreaker();
+    const checker = createHealthChecker({
+      probes: {
+        database: async () => {
+          if (!reachable) throw new Error("connect ECONNREFUSED");
+        },
+        redis: healthy,
+      },
+      cacheTtlMs: 0,
+      databaseCircuit: breaker,
+    });
+
+    const down = await checker.check();
+    expect(breaker.state()).toBe("open");
+    expect(down).toMatchObject({ status: "degraded", databaseCircuit: "open", checks: { database: false } });
+
+    reachable = true;
+    const up = await checker.check();
+    expect(breaker.state()).toBe("closed");
+    expect(up).toMatchObject({ status: "ok", databaseCircuit: "closed", checks: { database: true } });
+  });
+
+  it("reports the database as down while request failures hold the circuit open", async () => {
+    const breaker = new DatabaseCircuitBreaker();
+    const checker = createHealthChecker({ probes: { database: healthy, redis: healthy }, databaseCircuit: breaker });
+    await checker.check();
+    breaker.recordFailure(Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" }));
+
+    // Probe result is cached as healthy, but live traffic just saw the database vanish.
+    const body = await checker.check();
+    expect(body).toMatchObject({ status: "degraded", databaseCircuit: "open", checks: { database: false } });
+  });
+
+  it("does not open the database circuit on one probe timeout (busy pool)", async () => {
+    const breaker = new DatabaseCircuitBreaker();
+    const checker = createHealthChecker({
+      probes: { database: () => new Promise(() => {}), redis: healthy },
+      timeoutMs: 20,
+      cacheTtlMs: 0,
+      databaseCircuit: breaker,
+    });
+
+    const body = await checker.check();
+
+    expect(body.checks.database).toBe(false);
+    expect(breaker.state()).toBe("closed");
   });
 });

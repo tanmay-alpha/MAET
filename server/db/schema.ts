@@ -750,18 +750,29 @@ export const paperMarginLogs = pgTable("paper_margin_logs", {
   index("paper_margin_logs_created_idx").on(table.createdAt),
 ]);
 
+/** One row per account generation and IST trading date (migration 0027). */
 export const paperPortfolioSnapshots = pgTable("paper_portfolio_snapshots", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull(),
+  snapshotDate: date("snapshot_date", { mode: "string" }).notNull(),
+  initialCash: numeric("initial_cash", { precision: 18, scale: 4 }).notNull(),
   cashBalance: numeric("cash_balance", { precision: 18, scale: 4 }).notNull(),
+  positionsMarketValue: numeric("positions_market_value", { precision: 18, scale: 4 }).notNull(),
   equity: numeric("equity", { precision: 18, scale: 4 }).notNull(),
-  marginUsed: numeric("margin_used", { precision: 18, scale: 4 }).notNull(),
-  unrealizedPnl: numeric("unrealized_pnl", { precision: 18, scale: 4 }).notNull(),
   realizedPnl: numeric("realized_pnl", { precision: 18, scale: 4 }).notNull(),
+  unrealizedPnl: numeric("unrealized_pnl", { precision: 18, scale: 4 }).notNull(),
+  feesToDate: numeric("fees_to_date", { precision: 18, scale: 4 }).notNull(),
+  marginUsed: numeric("margin_used", { precision: 18, scale: 4 }).notNull().default("0"),
+  positionsCount: integer("positions_count").notNull().default(0),
+  stalePrices: boolean("stale_prices").notNull(),
+  priceSource: text("price_source").notNull(),
+  positionPrices: jsonb("position_prices").notNull().default([]),
+  isFinal: boolean("is_final").notNull(),
+  capturedBy: text("captured_by").notNull(),
   snapshotTime: timestamp("snapshot_time", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  index("paper_portfolio_snapshots_user_idx").on(table.userId),
-  index("paper_portfolio_snapshots_time_idx").on(table.snapshotTime),
+  uniqueIndex("paper_portfolio_snapshots_user_generation_date_unique").on(table.userId, table.generation, table.snapshotDate),
 ]);
 
 // =============================================================================
@@ -861,22 +872,6 @@ export const userNotifications = pgTable("user_notifications", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("user_notifications_user_created_idx").on(table.userId, table.createdAt),
-]);
-
-export const portfolioSnapshots = pgTable("portfolio_snapshots", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  snapshotDate: text("snapshot_date").notNull(),
-  cashBalance: numeric("cash_balance", { precision: 18, scale: 4 }).notNull(),
-  totalEquity: numeric("total_equity", { precision: 18, scale: 4 }).notNull(),
-  marginUsed: numeric("margin_used", { precision: 18, scale: 4 }).notNull().default("0"),
-  unrealizedPnl: numeric("unrealized_pnl", { precision: 18, scale: 4 }).notNull().default("0"),
-  realizedPnl: numeric("realized_pnl", { precision: 18, scale: 4 }).notNull().default("0"),
-  positionsCount: integer("positions_count").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [
-  uniqueIndex("portfolio_snapshots_date_unique").on(table.userId, table.snapshotDate),
-  index("portfolio_snapshots_user_date_idx").on(table.userId, table.snapshotDate),
 ]);
 
 export const researchNotes = pgTable("research_notes", {

@@ -228,8 +228,6 @@ The frontend generates a fresh `idempotencyKey` per mutation call (`src/hooks/us
 
 The concurrency suite checks monotonic account versions under concurrent orders, cancel-versus-fill races, consecutive execution sequences, concurrent partial-fill ticks without lost quantity, and cross-symbol overspend (`concurrency.integration.test.ts`).
 
-The generic Redis helper `withIdempotency` (`server/infra/idempotency.ts`) is not used by the paper engine.
-
 ## 11. Known limitations
 
 1. **DELIVERY charge assumption.** Orders have no CNC/MIS product field, so every fill is charged at delivery rates (`PAPER_CHARGE_PRODUCT`). An intraday round trip of ₹1,00,000 costs ₹222.24 here against ₹35.24 at intraday rates (§9). Shorts are also charged delivery rates although cash-market shorts cannot be carried overnight, and there is no automatic intraday square-off.

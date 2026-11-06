@@ -10,9 +10,6 @@ describe("RedisKeys", () => {
   it("quoteKey formats cache:quote:NSE:RELIANCE", () => {
     expect(RedisKeys.quoteKey("NSE", "RELIANCE")).toBe("cache:quote:NSE:RELIANCE");
   });
-  it("idempotencyKey formats idempotency:user:k", () => {
-    expect(RedisKeys.idempotencyKey("u1", "abc")).toBe("idempotency:u1:abc");
-  });
   it("candlesKey includes timeframe and dates", () => {
     expect(RedisKeys.candlesKey("NSE", "RELIANCE", "1d", "2026-01-01", "2026-02-01")).toBe(
       "cache:candles:NSE:RELIANCE:1d:2026-01-01:2026-02-01"
@@ -23,8 +20,8 @@ describe("RedisKeys", () => {
 describe("redis (integration)", () => {
   afterAll(() => r.disconnect());
 
-  it("SETNX and TTL on idempotencyKey", async () => {
-    const k = RedisKeys.idempotencyKey("test", `k-${Date.now()}`);
+  it("SETNX and TTL on a lock key", async () => {
+    const k = RedisKeys.dailyProcessorLockKey(`test-${Date.now()}`);
     const ok = await r.set(k, "v", "EX", 60, "NX");
     expect(ok).toBe("OK");
     const t = await r.ttl(k);

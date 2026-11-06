@@ -8,7 +8,7 @@ import { ReloginBackoff } from "./workers/relogin-backoff";
 import { quoteStore } from "./domain/market/quote-store";
 import { hasHolidaysForIstYear, nextIstTime } from "./domain/market/clock";
 import { configuredHolidays } from "./domain/market/quote-quality";
-import { closeRedis, getRedis, setnxWithTtl } from "./data/redis/client";
+import { closeRedis, keyExists, setnxWithTtl } from "./data/redis/client";
 import { RedisKeys } from "./data/redis/keys";
 import { login, onAngelOneSessionRejected, setAngelOneMarketSession } from "./data/sources/angelone/client";
 import { getConfig } from "./config";
@@ -85,7 +85,7 @@ let dailyProcessorTimer: ReturnType<typeof setInterval> | undefined;
 const dailyProcessor = new DailyProcessorSchedule({
   acquireLock: (istDate) =>
     setnxWithTtl(RedisKeys.dailyProcessorLockKey(istDate), String(process.pid), DAILY_PROCESSOR_LOCK_TTL_MS / 1000),
-  isCompleted: async (istDate) => (await getRedis().exists(RedisKeys.dailyProcessorDoneKey(istDate))) > 0,
+  isCompleted: (istDate) => keyExists(RedisKeys.dailyProcessorDoneKey(istDate)),
   markCompleted: async (istDate) => {
     await setnxWithTtl(RedisKeys.dailyProcessorDoneKey(istDate), String(process.pid), DAILY_PROCESSOR_DONE_TTL_SECONDS);
   },

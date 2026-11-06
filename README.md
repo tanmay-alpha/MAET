@@ -183,8 +183,7 @@ MAET/
 │   ├── domain/                   # Business logic: analysis, backtest, calculations, company, data
 │   │                             # (corporate actions), fundamentals, market, portfolio, screener,
 │   │                             # strategy (runner-v3, execution model, portfolio engine, walk-forward), technical
-│   ├── http/sse/                 # Alternate SSE hub, not wired (live streams: api/market/stream.get.ts, api/paper/stream.get.ts)
-│   ├── infra/                    # Event bus, encryption, health, logger, client IP, DB diagnostics; unused idempotency/rate-limit/shutdown helpers
+│   ├── infra/                    # Event bus, encryption, health, logger, client IP, DB diagnostics; unregistered shutdown helper
 │   ├── middleware/               # CORS (FRONTEND_ORIGIN), token-bucket rate limiting, request body size limit
 │   ├── modules/                  # Feature services (alerts, paper-trading, screener-dsl, strategy jobs, ...)
 │   ├── plugins/                  # Nitro plugins: orchestrator, in-process strategy job runner
