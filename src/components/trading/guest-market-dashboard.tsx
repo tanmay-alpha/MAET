@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { useWatchlist } from "@/hooks/use-watchlist";
 import type { MarketQuote } from "@/lib/market-api";
@@ -28,7 +28,16 @@ function GuestWatchlistRows({ items }: { items: MarketCatalogItem[] }) {
   return <tbody>{items.map((item) => <QuoteRow key={item.symbol} symbol={item.symbol} name={item.name} quote={quoteMap.get(item.symbol)} />)}</tbody>;
 }
 
-export function GuestMarketDashboard() {
+/**
+ * Public market workspace (NIFTY 50 movers, device watchlist, research links). Signed-out
+ * visitors get it with a sign-in line; a signed-in user whose paper account could not be
+ * loaded gets it with that account notice instead, so the page stays useful.
+ */
+export function GuestMarketDashboard({
+  accountNotice = <p role="status" className="mt-2 text-xs text-muted-foreground">Paper account requires sign-in.</p>,
+}: {
+  accountNotice?: ReactNode;
+}) {
   const { quoteMap, marketPhase, delayed, isError, isLoading } = useMarketQuotes(NIFTY50_SYMBOLS);
   const { items } = useWatchlist();
   const { gainers, losers } = useMemo(() => rankNiftyMovers(quoteMap), [quoteMap]);
@@ -50,7 +59,7 @@ export function GuestMarketDashboard() {
           <span>{isError ? "Quote service unavailable" : delayed ? "Delayed quotes" : "Live quotes"}</span>
           {sources && <span>· {sources}</span>}
         </p>
-        <p role="status" className="mt-2 text-xs text-muted-foreground">Paper account requires sign-in.</p>
+        {accountNotice}
         <nav aria-label="Research shortcuts" className="mt-3 flex items-center gap-5 text-xs font-medium text-primary">
           <Link to="/screener" className="hover:underline">Screener</Link>
           <Link to="/chart/$symbol" params={{ symbol: "RELIANCE" }} className="hover:underline">Charts</Link>

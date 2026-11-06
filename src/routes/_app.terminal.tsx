@@ -10,7 +10,6 @@ import { usePaperAccount } from "@/hooks/use-paper-account";
 import type { MarketCandle } from "@/lib/market-api";
 import { WATCHLIST } from "@/lib/market-catalog";
 import { ShieldAlert, RefreshCw, Layers, ClipboardList, History, TrendingUp, BarChart3 } from "lucide-react";
-import { useSignedIn } from "@/hooks/use-signed-in";
 import type { PaperOrderRow, PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
 import { buildClosePositionOrder } from "@/lib/paper-orders";
@@ -36,8 +35,25 @@ const INTERVAL_CONFIG: Record<string, { timeframe: MarketCandle["tf"]; range: st
 };
 const WATCHLIST_SYMBOLS = WATCHLIST.map((item) => item.symbol);
 
+const inr = (value: number) => `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
+/** One account summary figure; a skeleton (no digits) until the account has loaded. */
+function AccountFigure({ label, value, className = "text-xs font-semibold text-foreground" }: {
+  label: string;
+  value: string | null;
+  className?: string;
+}) {
+  return (
+    <div className="flex flex-col" aria-busy={value === null}>
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      {value === null
+        ? <span aria-hidden className="mt-0.5 inline-block h-4 w-20 animate-pulse rounded bg-accent" />
+        : <span className={`font-mono ${className}`}>{value}</span>}
+    </div>
+  );
+}
+
 function Terminal() {
-  const signedIn = useSignedIn();
   const navigate = useNavigate();
   const { activeSymbol: active, context, setSymbolContext } = useActiveSymbol();
   const [interval, setInterval] = useState("5m");
@@ -51,7 +67,7 @@ function Terminal() {
   }, [active]);
 
   const { quoteMap } = useMarketQuotes(quoteSymbols);
-  const { account, positions, orders, fills, placeOrder, cancelOrder, resetAccount, isTradingAvailable } = usePaperAccount();
+  const { status, account, positions, orders, fills, placeOrder, cancelOrder, resetAccount, isTradingAvailable } = usePaperAccount();
 
   const liveQuote = quoteMap.get(active);
   const intervalConfig = INTERVAL_CONFIG[interval];
@@ -72,10 +88,12 @@ function Terminal() {
   const currentChange = liveQuote?.change;
   const currentChangePct = liveQuote?.changePct;
 
-  const { totalUnrealizedPnl, nav, freeMargin, marginUsagePercent } = useMemo(() => {
+  // Summary figures exist only for an account the server returned; there is no default balance.
+  const summary = useMemo(() => {
+    if (!account) return null;
     let unrealized = 0;
-    const cash = account ? Number(account.cashBalance) : 1000000;
-    const allocated = account ? Number(account.allocatedMargin) : 0;
+    const cash = Number(account.cashBalance);
+    const allocated = Number(account.allocatedMargin);
 
     positions.forEach((pos: PaperPositionRow) => {
       const q = quoteMap.get(pos.symbol);
@@ -90,12 +108,15 @@ function Terminal() {
     const usage = netAssetVal > 0 ? (allocated / netAssetVal) * 100 : 0;
 
     return {
+      cash,
+      allocated,
       totalUnrealizedPnl: unrealized,
       nav: netAssetVal,
       freeMargin: freeMarg,
       marginUsagePercent: Math.max(0, Math.min(100, usage)),
     };
   }, [positions, account, quoteMap]);
+  const marginUsagePercent = summary?.marginUsagePercent ?? 0;
 
   const paperOverlay = useMemo(
     () => extractPaperOverlay(active, positions, orders),
@@ -144,40 +165,24 @@ function Terminal() {
 
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col bg-background">
-      {/* Top Account Summary Dashboard Bar */}
-      {signedIn && <div className="flex flex-wrap items-center justify-between border-b border-border bg-panel/40 px-4 py-2 text-xs">
+      {/* Top Account Summary Dashboard Bar: skeletons while loading; when the session was
+          rejected or the server failed, the order ticket says so and no figures are shown. */}
+      {(status === "ready" || status === "loading") && <div className="flex flex-wrap items-center justify-between border-b border-border bg-panel/40 px-4 py-2 text-xs">
         <div className="flex flex-wrap items-center gap-6">
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Net Asset Value (NAV)</span>
-            <span className="font-mono text-sm font-bold text-foreground">₹{nav.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-          </div>
-
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Available Cash</span>
-            <span className="font-mono text-xs font-semibold text-foreground">₹{account ? Number(account.cashBalance).toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "0.00"}</span>
-          </div>
-
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Allocated Margin (5x)</span>
-            <span className="font-mono text-xs font-semibold text-foreground">₹{account ? Number(account.allocatedMargin).toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "0.00"}</span>
-          </div>
-
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Unrealized P&L</span>
-            <span className={`font-mono text-xs font-bold ${totalUnrealizedPnl >= 0 ? "text-bull" : "text-bear"}`}>
-              {totalUnrealizedPnl >= 0 ? "+" : ""}₹{totalUnrealizedPnl.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-            </span>
-          </div>
-
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Free Margin</span>
-            <span className="font-mono text-xs font-semibold text-foreground">₹{freeMargin.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-          </div>
+          <AccountFigure label="Net Asset Value (NAV)" value={summary && inr(summary.nav)} className="text-sm font-bold text-foreground" />
+          <AccountFigure label="Available Cash" value={summary && inr(summary.cash)} />
+          <AccountFigure label="Allocated Margin (5x)" value={summary && inr(summary.allocated)} />
+          <AccountFigure
+            label="Unrealized P&L"
+            value={summary && `${summary.totalUnrealizedPnl >= 0 ? "+" : ""}${inr(summary.totalUnrealizedPnl)}`}
+            className={`text-xs font-bold ${(summary?.totalUnrealizedPnl ?? 0) >= 0 ? "text-bull" : "text-bear"}`}
+          />
+          <AccountFigure label="Free Margin" value={summary && inr(summary.freeMargin)} />
 
           <div className="flex flex-col w-28">
             <div className="flex justify-between text-[9px] uppercase tracking-wider text-muted-foreground mb-1">
               <span>Margin Util</span>
-              <span>{marginUsagePercent.toFixed(0)}%</span>
+              <span>{summary ? `${marginUsagePercent.toFixed(0)}%` : ""}</span>
             </div>
             <div className="h-1.5 w-full rounded-full bg-accent overflow-hidden">
               <div
@@ -190,6 +195,7 @@ function Terminal() {
 
         <div className="flex items-center gap-3">
           <ResetAccountButton
+            accountStatus={status}
             onReset={resetAccount}
             confirmMessage="Reset the paper account to its initial cash? Open positions and orders are cleared."
             className="flex items-center gap-1.5 rounded border border-border bg-panel px-2.5 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-accent hover:text-foreground transition"
@@ -351,7 +357,7 @@ function Terminal() {
           )}
 
           {/* Bottom Tabs Panel */}
-          {signedIn && <div className="border-t border-border bg-panel flex shrink-0 flex-col h-60 overflow-hidden">
+          {status === "ready" && <div className="border-t border-border bg-panel flex shrink-0 flex-col h-60 overflow-hidden">
             <div className="flex items-center gap-1 border-b border-border bg-panel-elevated/40 px-3 text-xs">
               <button
                 onClick={() => setActiveTab("positions")}

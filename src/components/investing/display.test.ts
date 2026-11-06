@@ -6,7 +6,11 @@ describe("Portfolio monetary and valuation labels", () => {
     expect(rupees(22365)).toBe("₹22,365.00");
     expect(rupees(5967)).toBe("₹5,967.00");
     expect(rupees(1005811.03)).toBe("₹10,05,811.03");
-    expect(rupees(-125000.5)).toBe("₹-1,25,000.50");
+  });
+  it("puts the minus sign before the rupee symbol and never shows a negative zero", () => {
+    expect(rupees(-125000.5)).toBe("−₹1,25,000.50");
+    expect(rupees(-2070)).toBe("−₹2,070.00");
+    expect(rupees(-0.001)).toBe("₹0.00");
   });
   it("identifies the oldest server mark with its IST date and time", () => {
     const label = serverMarkLabel("2026-11-07T00:00:00.000Z");

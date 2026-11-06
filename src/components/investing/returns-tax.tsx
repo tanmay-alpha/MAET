@@ -1,19 +1,14 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { SESSION_EXPIRED_MESSAGE } from "@/components/common/sign-in-required";
 import { useSignedIn } from "@/hooks/use-signed-in";
-import { createQueryProcedure } from "@/lib/trpc";
+import { AuthenticationError, createQueryProcedure } from "@/lib/trpc";
 import type { PaperInvestingReport } from "../../../server/modules/paper-trading/investing-report";
-import { rupees, serverMarkLabel } from "./display";
+import { CapitalGainsBuckets, CapitalGainsFigures, Figure } from "./capital-gains-summary";
+import { percent, rupees, serverMarkLabel } from "./display";
 
 const reportProcedure = createQueryProcedure<{ financialYearStart?: number }, PaperInvestingReport>("paperTrading.investingReport");
-const percent = (value: number | null) => value === null ? "—" : `${(value * 100).toFixed(2)}%`;
-
-function Figure({ label, value }: { label: string; value: string }) {
-  return <div className="flex justify-between gap-3 border-b border-border/40 py-1.5 last:border-0">
-    <dt className="text-muted-foreground">{label}</dt><dd className="font-mono tabular-nums">{value}</dd>
-  </div>;
-}
 
 export function ReturnsTaxSection() {
   const signedIn = useSignedIn();
@@ -37,6 +32,7 @@ export function ReturnsTaxSection() {
     </div>
     {!signedIn ? <div className="mt-2"><SignedOutNotice feature="Portfolio returns and tax estimates" /></div>
       : query.isPending ? <p className="mt-2 text-muted-foreground" role="status">Loading returns and tax estimate…</p>
+      : query.error instanceof AuthenticationError ? <p className="mt-2 text-amber-400" role="status">{SESSION_EXPIRED_MESSAGE}</p>
       : query.error ? <p className="mt-2 text-bear" role="status">Returns and tax unavailable: {query.error.message}</p>
       : !report?.account ? <p className="mt-2 text-muted-foreground">No paper account yet. Place your first paper trade to start recording returns.</p>
       : tax && <>
@@ -49,16 +45,7 @@ export function ReturnsTaxSection() {
             <p className="mt-1 text-[11px] text-muted-foreground">{serverMarkLabel(report.valuationAsOf)}</p>
             <p className="mt-1 text-[11px] text-muted-foreground">XIRR uses server marks; the live total below uses browser quotes and can differ.</p>
           </dl>
-          <dl><Figure label="Realised STCG" value={rupees(tax.grossStcg)} />
-            <Figure label="Realised LTCG" value={rupees(tax.grossLtcg)} />
-            <Figure label="LTCG exemption used" value={rupees(tax.exemptionUsed)} />
-          </dl>
-          <dl><Figure label="Estimated capital-gains tax" value={rupees(tax.estimatedTax)} />
-            <Figure label="Includes 4% cess" value={rupees(tax.cess)} />
-            <Figure label="Intraday P&L / turnover" value={`${rupees(tax.intradayPnl)} / ${rupees(tax.intradayTurnover)}`} />
-            <p className="mt-1 text-[11px] text-muted-foreground">Intraday: taxed at your slab rate, not included above.</p>
-            {tax.overnightShortPnl !== 0 && <Figure label="Non-delivery short P&L · slab" value={rupees(tax.overnightShortPnl)} />}
-          </dl>
+          <CapitalGainsFigures tax={tax} />
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">Estimate for a paper account, not tax advice. Surcharge depends on total income and is not computed.</p>
         <details className="mt-2 text-[11px] text-muted-foreground"><summary className="cursor-pointer text-foreground">Calculation &amp; assumptions</summary>
@@ -66,17 +53,7 @@ export function ReturnsTaxSection() {
             <li>XIRR uses initial cash as an outflow and server-marked equity as an inflow, on IST dates (actual days / 365). Server marks can differ from browser live quotes. Fees and realised P&amp;L are already in cash.</li>
             {tax.assumptions.map((assumption) => <li key={assumption}>{assumption}</li>)}
           </ul>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full whitespace-nowrap text-left">
-              <caption className="mb-1 text-left">Tax calculation · losses applied before the annual LTCG exemption</caption>
-              <thead><tr className="border-b border-border"><th className="py-1 pr-3">Bucket / rate</th><th className="pr-3">Net gain</th><th className="pr-3">Loss set-off</th><th className="pr-3">Exemption</th><th className="pr-3">Taxable</th><th>Tax</th></tr></thead>
-              <tbody>{tax.buckets.map((bucket) => <tr key={`${bucket.term}-${bucket.regime}`} className="border-b border-border/40 font-mono tabular-nums">
-                <td className="py-1 pr-3">{bucket.term} · {percent(bucket.rate)}</td><td className="pr-3">{rupees(bucket.netGain)}</td><td className="pr-3">{rupees(bucket.lossOffset)}</td>
-                <td className="pr-3">{rupees(bucket.exemptionUsed)}</td><td className="pr-3">{rupees(bucket.taxableGain)}</td><td>{rupees(bucket.tax)}</td>
-              </tr>)}</tbody>
-            </table>
-          </div>
-          {(tax.unabsorbedStcl > 0 || tax.unabsorbedLtcl > 0) && <p className="mt-2">Unabsorbed losses: STCL {rupees(tax.unabsorbedStcl)}, LTCL {rupees(tax.unabsorbedLtcl)}. Carry-forward is not computed.</p>}
+          <CapitalGainsBuckets tax={tax} />
           {report.closedLots.length > 0 && <div className="mt-3 overflow-x-auto">
             <table className="w-full whitespace-nowrap text-left"><caption className="mb-1 text-left">Closed FIFO lots · selected FY, current generation · gross XIRR excludes charges; shorts have no invested-capital XIRR</caption>
               <thead><tr className="border-b border-border"><th className="py-1 pr-3">Symbol</th><th className="pr-3">Entry → exit</th><th className="pr-3">Qty</th><th className="pr-3">P&amp;L</th><th>XIRR</th></tr></thead>

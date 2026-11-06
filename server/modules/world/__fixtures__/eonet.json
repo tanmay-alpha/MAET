@@ -1,0 +1,34 @@
+{
+  "title": "EONET Events",
+  "link": "https://eonet.gsfc.nasa.gov/api/v3/events",
+  "events": [
+    {
+      "id": "EONET_26057",
+      "title": "Wildfire Wild River, Coos, New Hampshire",
+      "description": "5 Miles SW from Shelburne, NH",
+      "link": "https://eonet.gsfc.nasa.gov/api/v3/events/EONET_26057",
+      "closed": null,
+      "categories": [
+        {
+          "id": "wildfires",
+          "title": "Wildfires"
+        }
+      ],
+      "sources": [
+        {
+          "id": "IRWIN",
+          "url": "https://irwin.doi.gov/observer/incidents/2026-NHWMF-000182"
+        }
+      ],
+      "geometry": [
+        {
+          "magnitudeValue": 982,
+          "magnitudeUnit": "acres",
+          "date": "2026-11-02T07:58:00Z",
+          "type": "Point",
+          "coordinates": [-71.031283, 44.330583]
+        }
+      ]
+    }
+  ]
+}
