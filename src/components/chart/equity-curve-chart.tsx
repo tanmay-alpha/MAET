@@ -12,6 +12,12 @@ interface EquityCurveChartProps {
   showArea?: boolean;
 }
 
+const STALE_COLOR = "#f59e0b";
+
+function formatRupees(value: number): string {
+  return `₹${Math.round(value).toLocaleString("en-IN")}`;
+}
+
 export function EquityCurveChart({ data, height = 200, showArea = true }: EquityCurveChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -39,9 +45,14 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
     const minVal = Math.min(...values);
     const maxVal = Math.max(...values);
     const range = maxVal - minVal || 1;
-    const padding = { top: 20, bottom: 30, left: 60, right: 20 };
+    const padding = { top: 20, bottom: 30, left: 80, right: 20 };
     const chartWidth = width - padding.left - padding.right;
     const chartAreaHeight = chartHeight - padding.top - padding.bottom;
+    // A single snapshot sits at the left edge instead of dividing by zero.
+    const step = data.length > 1 ? chartWidth / (data.length - 1) : 0;
+    const xAt = (i: number) => padding.left + step * i;
+    const yAt = (value: number) => padding.top + chartAreaHeight * (1 - (value - minVal) / range);
+    const trendColor = data[data.length - 1].value >= data[0].value ? "#22c55e" : "#ef4444";
 
     // Draw grid lines
     ctx.strokeStyle = "#e5e5e5";
@@ -58,12 +69,19 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
       ctx.stroke();
 
       const value = maxVal - (range / gridLines) * i;
-      ctx.fillText(`₹${(value / 1000).toFixed(0)}K`, 0, y + 3);
+      ctx.fillText(formatRupees(value), 0, y + 3);
+    }
+
+    // Date labels for the first and last snapshot
+    ctx.fillText(data[0].date, padding.left, chartHeight - 8);
+    if (data.length > 1) {
+      const lastLabel = data[data.length - 1].date;
+      ctx.fillText(lastLabel, width - padding.right - ctx.measureText(lastLabel).width, chartHeight - 8);
     }
 
     // Draw zero line if within range
     if (minVal < 0 && maxVal > 0) {
-      const zeroY = padding.top + chartAreaHeight * (1 - (0 - minVal) / range);
+      const zeroY = yAt(0);
       ctx.strokeStyle = "#999";
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
@@ -75,13 +93,11 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
     }
 
     // Draw area
-    if (showArea) {
+    if (showArea && data.length > 1) {
       ctx.beginPath();
       data.forEach((point, i) => {
-        const x = padding.left + (chartWidth / (data.length - 1)) * i;
-        const y = padding.top + chartAreaHeight * (1 - (point.value - minVal) / range);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        if (i === 0) ctx.moveTo(xAt(i), yAt(point.value));
+        else ctx.lineTo(xAt(i), yAt(point.value));
       });
       ctx.lineTo(padding.left + chartWidth, padding.top + chartAreaHeight);
       ctx.lineTo(padding.left, padding.top + chartAreaHeight);
@@ -102,37 +118,32 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
 
     // Draw line
     ctx.beginPath();
-    ctx.strokeStyle = data[data.length - 1].value >= data[0].value ? "#22c55e" : "#ef4444";
+    ctx.strokeStyle = trendColor;
     ctx.lineWidth = 2;
     ctx.lineJoin = "round";
 
     data.forEach((point, i) => {
-      const x = padding.left + (chartWidth / (data.length - 1)) * i;
-      const y = padding.top + chartAreaHeight * (1 - (point.value - minVal) / range);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      if (i === 0) ctx.moveTo(xAt(i), yAt(point.value));
+      else ctx.lineTo(xAt(i), yAt(point.value));
     });
     ctx.stroke();
 
-    // Draw points
-    if (data.length <= 20) {
-      data.forEach((point, i) => {
-        const x = padding.left + (chartWidth / (data.length - 1)) * i;
-        const y = padding.top + chartAreaHeight * (1 - (point.value - minVal) / range);
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = data[data.length - 1].value >= data[0].value ? "#22c55e" : "#ef4444";
-        ctx.fill();
-      });
-    }
+    // Draw points; snapshots valued with stale prices are amber.
+    data.forEach((point, i) => {
+      if (data.length > 20 && !point.stale) return;
+      ctx.beginPath();
+      ctx.arc(xAt(i), yAt(point.value), 3, 0, Math.PI * 2);
+      ctx.fillStyle = point.stale ? STALE_COLOR : trendColor;
+      ctx.fill();
+    });
 
     // Current value label
     const lastPoint = data[data.length - 1];
-    const lastX = padding.left + chartWidth;
-    const lastY = padding.top + chartAreaHeight * (1 - (lastPoint.value - minVal) / range);
-    ctx.fillStyle = data[data.length - 1].value >= data[0].value ? "#22c55e" : "#ef4444";
+    ctx.fillStyle = trendColor;
     ctx.font = "bold 11px monospace";
-    ctx.fillText(`₹${(lastPoint.value / 1000).toFixed(1)}K`, lastX - 60, lastY - 8);
+    const lastLabel = formatRupees(lastPoint.value);
+    const labelX = Math.max(padding.left, xAt(data.length - 1) - ctx.measureText(lastLabel).width);
+    ctx.fillText(lastLabel, labelX, yAt(lastPoint.value) - 8);
   }, [data, height, showArea]);
 
   return (

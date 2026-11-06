@@ -1,8 +1,19 @@
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { createQueryProcedure } from "@/lib/trpc";
 import type { PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
+import type { PortfolioAnalyticsResult } from "../../server/modules/paper-trading/portfolio-analytics-contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
+
+export type {
+  DrawdownResult,
+  MetricResult,
+  PortfolioAnalyticsResult,
+  PortfolioCurvePoint,
+  PortfolioMetrics,
+} from "../../server/modules/paper-trading/portfolio-analytics-contracts";
 
 export interface PerformanceMetrics {
   totalValue: number;
@@ -15,14 +26,6 @@ export interface PerformanceMetrics {
   dayPnlPct: number;
   cash: number;
   positionsValue: number;
-}
-
-export interface RiskMetrics {
-  sharpeRatio: number | null;
-  maxDrawdown: number | null;
-  maxDrawdownPct: number | null;
-  volatility: number | null;
-  beta: number | null;
 }
 
 export interface TradeStats {
@@ -38,76 +41,60 @@ export interface TradeStats {
   avgHoldingDays: number;
 }
 
+/** One point of the server-side equity curve, shaped for the chart. */
 export interface PerformanceDataPoint {
   date: string;
   value: number;
   pnl: number;
+  /** Valued with a price not from that session. */
+  stale?: boolean;
+  /** Intraday snapshot the session close will still replace. */
+  provisional?: boolean;
 }
 
 export interface PortfolioAnalytics {
+  /** Live valuation of the open account from current quotes. */
   metrics: PerformanceMetrics;
-  risk: RiskMetrics;
   trades: TradeStats;
+  /** Daily equity curve of the current account generation, from server snapshots. */
   history: PerformanceDataPoint[];
+  /** Server-computed curve metrics; undefined until loaded. */
+  performance: PortfolioAnalyticsResult | undefined;
+  isPerformanceLoading: boolean;
+  performanceError: string | null;
   hasData: boolean;
 }
 
-// Constants
-const TRADING_DAYS_PER_YEAR = 252;
-const RISK_FREE_RATE = 0.05; // 5% annual risk-free rate
+const portfolioAnalyticsProcedure = createQueryProcedure<{ riskFreeRate?: number }, PortfolioAnalyticsResult>(
+  "paperTrading.portfolioAnalytics"
+);
 
-// Generate mock equity curve from trades for visualization
-function generateEquityCurve(
-  orders: { filledAt?: string; status?: string; side: string; fillPrice: number; qty: number; symbol: string }[],
-  initialCash: number
-): PerformanceDataPoint[] {
-  const filledOrders = orders
-    .filter((o) => o.status === "filled" && o.filledAt)
-    .sort((a, b) => new Date(a.filledAt!).getTime() - new Date(b.filledAt!).getTime());
-
-  if (filledOrders.length === 0) {
-    // Return initial value as single point
-    return [{ date: new Date().toISOString().split("T")[0], value: initialCash, pnl: 0 }];
-  }
-
-  const points: PerformanceDataPoint[] = [];
-  let runningCash = initialCash;
-  const holdings: Map<string, { qty: number; avgPrice: number }> = new Map();
-
-  filledOrders.forEach((order) => {
-    const date = order.filledAt!.split("T")[0];
-
-    if (order.side === "BUY") {
-      runningCash -= order.fillPrice * order.qty;
-      const existing = holdings.get(order.symbol);
-      if (existing) {
-        const totalQty = existing.qty + order.qty;
-        const totalCost = existing.avgPrice * existing.qty + order.fillPrice * order.qty;
-        holdings.set(order.symbol, { qty: totalQty, avgPrice: totalCost / totalQty });
-      } else {
-        holdings.set(order.symbol, { qty: order.qty, avgPrice: order.fillPrice });
-      }
-    } else {
-      runningCash += order.fillPrice * order.qty;
-      const existing = holdings.get(order.symbol);
-      if (existing) {
-        existing.qty -= order.qty;
-        if (existing.qty <= 0) holdings.delete(order.symbol);
-      }
-    }
+/** Server equity curve and metrics; shares the ["paperTrading"] key so trades and resets refresh it. */
+export function usePortfolioPerformance(riskFreeRate = 0) {
+  return useQuery({
+    queryKey: ["paperTrading", "portfolioAnalytics", riskFreeRate],
+    queryFn: () => portfolioAnalyticsProcedure.query({ riskFreeRate }),
+    staleTime: 60_000,
+    retry: 1,
   });
-
-  // Simplified: just return the cash position
-  points.push({
-    date: new Date().toISOString().split("T")[0],
-    value: runningCash,
-    pnl: runningCash - initialCash,
-  });
-
-  return points;
 }
-export function usePortfolioAnalytics() {
+
+/** Chart points for the server equity curve (P&L relative to the generation's initial cash). */
+export function curveToHistory(performance: PortfolioAnalyticsResult | undefined): PerformanceDataPoint[] {
+  if (!performance?.account) return [];
+  const initialCash = performance.account.initialCash;
+  return performance.curve.map((point) => ({
+    date: point.date,
+    value: point.equity,
+    pnl: point.equity - initialCash,
+    stale: point.stalePrices,
+    provisional: !point.isFinal,
+  }));
+}
+
+export function usePortfolioAnalytics(): PortfolioAnalytics {
   const { account, positions, orders, fills } = usePaperAccount();
+  const performanceQuery = usePortfolioPerformance();
 
   const positionSymbols = useMemo(
     () => [...new Set(positions.map((p: PaperPositionRow) => p.symbol))],
@@ -116,10 +103,9 @@ export function usePortfolioAnalytics() {
 
   const { quoteMap } = useMarketQuotes(positionSymbols);
 
-  const analytics = useMemo<PortfolioAnalytics>(() => {
+  const live = useMemo(() => {
     let unrealizedPnl = 0;
     let positionsValue = 0;
-    let positionsCost = 0;
     let dayPnl = 0;
 
     const cash = account ? Number(account.cashBalance) : 1000000;
@@ -137,7 +123,6 @@ export function usePortfolioAnalytics() {
       const signedQty = isShort ? -absQty : absQty;
 
       positionsValue += currentPrice * absQty;
-      positionsCost += avgPrice * absQty;
       unrealizedPnl += calculateMarkedUnrealisedPnl(
         { quantity: signedQty, averagePrice: avgPrice },
         currentPrice
@@ -200,26 +185,19 @@ export function usePortfolioAnalytics() {
       avgHoldingDays: 0,
     };
 
-    const risk: RiskMetrics = {
-      sharpeRatio: null,
-      maxDrawdown: null,
-      maxDrawdownPct: null,
-      volatility: null,
-      beta: null,
-    };
-
-    const history: PerformanceDataPoint[] = fills.length > 0
-      ? [{
-          date: new Date(fills[0].executedAt).toISOString().split("T")[0],
-          value: totalValue,
-          pnl: totalPnl,
-        }]
-      : [{ date: new Date().toISOString().split("T")[0], value: cash, pnl: 0 }];
-
     const hasData = orders.length > 0 || positions.length > 0 || fills.length > 0;
 
-    return { metrics, risk, trades, history, hasData };
+    return { metrics, trades, hasData };
   }, [account, positions, orders, fills, quoteMap]);
 
-  return analytics;
+  const performance = performanceQuery.data;
+  const history = useMemo(() => curveToHistory(performance), [performance]);
+
+  return {
+    ...live,
+    history,
+    performance,
+    isPerformanceLoading: performanceQuery.isLoading,
+    performanceError: performanceQuery.error?.message ?? null,
+  };
 }
