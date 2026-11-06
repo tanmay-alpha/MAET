@@ -1,15 +1,25 @@
 /**
  * Simple equity curve chart component using canvas
  * No external chart library dependency
+ *
+ * Points are spaced by calendar date, so days without a snapshot show as gaps.
+ * Stale-price points are amber; provisional (intraday, never closed) points
+ * are hollow; the generation-start anchor is a hollow square.
  */
 
 import { useRef, useEffect } from "react";
-import type { PerformanceDataPoint } from "@/hooks/use-portfolio-analytics";
+import { dateSpacedX, type PerformanceDataPoint } from "@/lib/portfolio-curve";
 
 interface EquityCurveChartProps {
   data: PerformanceDataPoint[];
   height?: number;
   showArea?: boolean;
+}
+
+const STALE_COLOR = "#f59e0b";
+
+function formatRupees(value: number): string {
+  return `₹${Math.round(value).toLocaleString("en-IN")}`;
 }
 
 export function EquityCurveChart({ data, height = 200, showArea = true }: EquityCurveChartProps) {
@@ -39,9 +49,13 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
     const minVal = Math.min(...values);
     const maxVal = Math.max(...values);
     const range = maxVal - minVal || 1;
-    const padding = { top: 20, bottom: 30, left: 60, right: 20 };
+    const padding = { top: 20, bottom: 30, left: 80, right: 20 };
     const chartWidth = width - padding.left - padding.right;
     const chartAreaHeight = chartHeight - padding.top - padding.bottom;
+    const xs = dateSpacedX(data.map((point) => point.date), padding.left, chartWidth);
+    const xAt = (i: number) => xs[i]!;
+    const yAt = (value: number) => padding.top + chartAreaHeight * (1 - (value - minVal) / range);
+    const trendColor = data[data.length - 1].value >= data[0].value ? "#22c55e" : "#ef4444";
 
     // Draw grid lines
     ctx.strokeStyle = "#e5e5e5";
@@ -58,12 +72,19 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
       ctx.stroke();
 
       const value = maxVal - (range / gridLines) * i;
-      ctx.fillText(`₹${(value / 1000).toFixed(0)}K`, 0, y + 3);
+      ctx.fillText(formatRupees(value), 0, y + 3);
+    }
+
+    // Date labels for the first and last snapshot
+    ctx.fillText(data[0].date, padding.left, chartHeight - 8);
+    if (data.length > 1) {
+      const lastLabel = data[data.length - 1].date;
+      ctx.fillText(lastLabel, width - padding.right - ctx.measureText(lastLabel).width, chartHeight - 8);
     }
 
     // Draw zero line if within range
     if (minVal < 0 && maxVal > 0) {
-      const zeroY = padding.top + chartAreaHeight * (1 - (0 - minVal) / range);
+      const zeroY = yAt(0);
       ctx.strokeStyle = "#999";
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
@@ -75,13 +96,11 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
     }
 
     // Draw area
-    if (showArea) {
+    if (showArea && data.length > 1) {
       ctx.beginPath();
       data.forEach((point, i) => {
-        const x = padding.left + (chartWidth / (data.length - 1)) * i;
-        const y = padding.top + chartAreaHeight * (1 - (point.value - minVal) / range);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        if (i === 0) ctx.moveTo(xAt(i), yAt(point.value));
+        else ctx.lineTo(xAt(i), yAt(point.value));
       });
       ctx.lineTo(padding.left + chartWidth, padding.top + chartAreaHeight);
       ctx.lineTo(padding.left, padding.top + chartAreaHeight);
@@ -102,37 +121,47 @@ export function EquityCurveChart({ data, height = 200, showArea = true }: Equity
 
     // Draw line
     ctx.beginPath();
-    ctx.strokeStyle = data[data.length - 1].value >= data[0].value ? "#22c55e" : "#ef4444";
+    ctx.strokeStyle = trendColor;
     ctx.lineWidth = 2;
     ctx.lineJoin = "round";
 
     data.forEach((point, i) => {
-      const x = padding.left + (chartWidth / (data.length - 1)) * i;
-      const y = padding.top + chartAreaHeight * (1 - (point.value - minVal) / range);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      if (i === 0) ctx.moveTo(xAt(i), yAt(point.value));
+      else ctx.lineTo(xAt(i), yAt(point.value));
     });
     ctx.stroke();
 
-    // Draw points
-    if (data.length <= 20) {
-      data.forEach((point, i) => {
-        const x = padding.left + (chartWidth / (data.length - 1)) * i;
-        const y = padding.top + chartAreaHeight * (1 - (point.value - minVal) / range);
-        ctx.beginPath();
+    // Draw points: stale prices amber, provisional hollow, the start anchor a hollow square.
+    ctx.lineWidth = 1.5;
+    data.forEach((point, i) => {
+      if (data.length > 20 && !point.stale && !point.provisional && !point.anchor) return;
+      const color = point.stale ? STALE_COLOR : trendColor;
+      const x = xAt(i);
+      const y = yAt(point.value);
+      ctx.beginPath();
+      if (point.anchor) {
+        ctx.rect(x - 3, y - 3, 6, 6);
+      } else {
         ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = data[data.length - 1].value >= data[0].value ? "#22c55e" : "#ef4444";
+      }
+      if (point.anchor || point.provisional) {
+        ctx.fillStyle = "#ffffff";
         ctx.fill();
-      });
-    }
+        ctx.strokeStyle = color;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = color;
+        ctx.fill();
+      }
+    });
 
     // Current value label
     const lastPoint = data[data.length - 1];
-    const lastX = padding.left + chartWidth;
-    const lastY = padding.top + chartAreaHeight * (1 - (lastPoint.value - minVal) / range);
-    ctx.fillStyle = data[data.length - 1].value >= data[0].value ? "#22c55e" : "#ef4444";
+    ctx.fillStyle = trendColor;
     ctx.font = "bold 11px monospace";
-    ctx.fillText(`₹${(lastPoint.value / 1000).toFixed(1)}K`, lastX - 60, lastY - 8);
+    const lastLabel = formatRupees(lastPoint.value);
+    const labelX = Math.max(padding.left, xAt(data.length - 1) - ctx.measureText(lastLabel).width);
+    ctx.fillText(lastLabel, labelX, yAt(lastPoint.value) - 8);
   }, [data, height, showArea]);
 
   return (

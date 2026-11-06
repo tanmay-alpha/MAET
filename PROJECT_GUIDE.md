@@ -249,6 +249,7 @@ These naming rules help you understand almost every file without opening it firs
 - **Paper updates (in progress):** Fill, order and account events are written to a database outbox, but the publisher that would push them to `/api/paper/stream` is not started yet, so the UI polls.
 - **Live feed (in progress):** The Angel One WebSocket streams only NSE symbols that have an open market stream or an active alert; resting paper orders and positions do not subscribe their own symbols yet.
 - **BigQuery:** The ingestion engine has an optional BigQuery output path. Do not say it is actively populated unless that deployment is verified.
+- **Paper portfolio performance:** The equity curve and its metrics (total return, CAGR, volatility, Sharpe, max drawdown) come from daily server-side snapshots in `paper_portfolio_snapshots`, written after each NSE close (15:45 IST) by an in-process job and on demand when the analytics are read. The curve and total return start from the generation's initial cash on the day it began. Days the server was asleep have no snapshot: the curve has gaps, and returns across missed sessions are left out of volatility and Sharpe (counted as `gapCount`). A closing snapshot needs a price from the 15:00–15:30 IST closing window, otherwise it is flagged `stale_prices`; an intraday value whose session closed while the server slept stays flagged as provisional. Metrics are `null` with a reason until there is enough history.
 
 ### Do not claim
 
@@ -256,7 +257,7 @@ These naming rules help you understand almost every file without opening it firs
 - That all quotes are live or exchange-grade.
 - That the options screen has live or continuously refreshed chain data; it shows persisted snapshots from manual ingestion runs.
 - That every screen is production-ready just because its route exists.
-- That local mock, synthetic, or illustrative calculations are provider-supplied market data. In particular, the portfolio hook's displayed equity curve is generated in the browser from trade data for visualisation; do not present it as an authoritative database-backed performance record.
+- That local mock, synthetic, or illustrative calculations are provider-supplied market data.
 
 ## Useful commands
 

@@ -8,6 +8,7 @@ import { usePaperAccount } from "@/hooks/use-paper-account";
 import { TiltCard } from "@/components/trading/tilt-card";
 import { EquityCurveChart } from "@/components/chart/equity-curve-chart";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
+import { PortfolioPerformancePanel } from "@/components/trading/portfolio-performance-panel";
 import { PlusCircle } from "lucide-react";
 import type { PaperPositionRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
@@ -19,6 +20,9 @@ export const Route = createFileRoute("/_app/portfolio")({
   }),
   component: PortfolioPage,
 });
+
+type ChartPeriod = "1W" | "1M" | "3M" | "1Y" | "ALL";
+const PERIOD_DAYS: Record<Exclude<ChartPeriod, "ALL">, number> = { "1W": 7, "1M": 31, "3M": 92, "1Y": 366 };
 
 function StatCard({ icon: Icon, label, value, sub, trend }: {
   icon: LucideIcon;
@@ -45,9 +49,9 @@ function StatCard({ icon: Icon, label, value, sub, trend }: {
 
 function PortfolioPage() {
   const { account, positions, resetAccount, placeOrder, isTradingAvailable } = usePaperAccount();
-  const { metrics, risk, trades, history, hasData } = usePortfolioAnalytics();
+  const { metrics, trades, history, performance, isPerformanceLoading, performanceError, signedIn } = usePortfolioAnalytics();
   const navigate = useNavigate();
-  const [selectedPeriod, setSelectedPeriod] = useState<"1W" | "1M" | "3M" | "1Y" | "ALL">("ALL");
+  const [selectedPeriod, setSelectedPeriod] = useState<ChartPeriod>("ALL");
   const [tradeModal, setTradeModal] = useState<{ isOpen: boolean; symbol: string; side: "BUY" | "SELL" }>({
     isOpen: false,
     symbol: "",
@@ -60,6 +64,12 @@ function PortfolioPage() {
   );
 
   const { quoteMap, isError, delayed, marketPhase } = useMarketQuotes(positionSymbols);
+
+  const visibleHistory = useMemo(() => {
+    if (selectedPeriod === "ALL" || history.length === 0) return history;
+    const cutoff = Date.parse(history[history.length - 1].date) - PERIOD_DAYS[selectedPeriod] * 86_400_000;
+    return history.filter((point) => Date.parse(point.date) >= cutoff);
+  }, [history, selectedPeriod]);
 
   const totalAllocation = useMemo(() => {
     if (metrics.positionsValue === 0) return [];
@@ -167,7 +177,10 @@ function PortfolioPage() {
             <TiltCard>
               <div className="p-4 space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">Equity Curve</div>
+                  <div className="text-sm font-semibold">
+                    Equity Curve
+                    <span className="ml-2 text-[10px] font-normal text-muted-foreground">daily closing snapshots</span>
+                  </div>
                   <div className="flex gap-1 bg-accent/40 p-1 rounded-md">
                     {(["1W", "1M", "3M", "1Y", "ALL"] as const).map((period) => (
                       <button
@@ -183,13 +196,28 @@ function PortfolioPage() {
                     ))}
                   </div>
                 </div>
-                {hasData && history.length > 0 ? (
-                  <EquityCurveChart data={history} height={220} />
+                {visibleHistory.length > 0 ? (
+                  <>
+                    <EquityCurveChart data={visibleHistory} height={220} />
+                    {(performance?.metrics.snapshotCount ?? 0) <= 1 && (
+                      <div className="text-xs text-muted-foreground">
+                        The curve starts at your starting cash (square) and grows by one point after each NSE close.
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="h-48 bg-panel/80 rounded border border-border flex items-center justify-center">
-                    <div className="text-center">
-                      <div className="text-sm text-muted-foreground">No trade history yet</div>
-                      <div className="text-xs text-muted-foreground mt-1">Place orders to see your equity curve</div>
+                    <div className="text-center px-4">
+                      <div className="text-sm text-muted-foreground">
+                        {!signedIn ? "Sign in to see your equity curve" : isPerformanceLoading ? "Loading equity curve…" : "No daily snapshots yet"}
+                      </div>
+                      {signedIn && !isPerformanceLoading && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {performanceError
+                            ? `Equity curve unavailable: ${performanceError}`
+                            : "The first point is recorded during the next NSE session or after its close (15:45 IST)."}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -309,6 +337,18 @@ function PortfolioPage() {
                     100% Cash (No open stock positions)
                   </div>
                 )}
+              </div>
+            </TiltCard>
+
+            <TiltCard>
+              <div className="p-4">
+                <div className="text-sm font-semibold mb-2">Performance</div>
+                <PortfolioPerformancePanel
+                  performance={performance}
+                  isLoading={isPerformanceLoading}
+                  error={performanceError}
+                  signedIn={signedIn}
+                />
               </div>
             </TiltCard>
 

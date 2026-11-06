@@ -21,8 +21,13 @@ import {
   PaperOrderCommandSchema,
   PaperOrderCommand,
 } from "../../../modules/paper-trading/contracts";
+import {
+  createPaperPortfolioSnapshotService,
+  PaperPortfolioSnapshotService,
+} from "../../../modules/paper-trading/portfolio-snapshots";
 
 const defaultService = createPaperTradingService();
+const defaultSnapshotService = createPaperPortfolioSnapshotService();
 
 export function toTrpcError(error: unknown): TRPCError {
   if (error instanceof TRPCError) {
@@ -57,7 +62,10 @@ export function toTrpcError(error: unknown): TRPCError {
   });
 }
 
-export function createPaperTradingRouter(service: PaperTradingService = defaultService) {
+export function createPaperTradingRouter(
+  service: PaperTradingService = defaultService,
+  snapshots: PaperPortfolioSnapshotService = defaultSnapshotService
+) {
   return createRouter({
     getState: protectedProcedure.query(async ({ ctx }) => {
       const userId = ctx.userId;
@@ -191,6 +199,25 @@ export function createPaperTradingRouter(service: PaperTradingService = defaultS
           limit: input.limit,
           cursor: input.cursor,
         });
+      }),
+
+    /**
+     * Equity curve of the current account generation from daily snapshots, and
+     * metrics computed from it. Writes the current session's snapshot first when
+     * it is missing. riskFreeRate is annual (0.065 = 6.5%), default 0.
+     */
+    portfolioAnalytics: protectedProcedure
+      .input(z.object({ riskFreeRate: z.number().min(0).max(1).default(0) }).optional())
+      .query(async ({ ctx, input }) => {
+        const userId = ctx.userId;
+        if (!userId) {
+          throw new TRPCError({ code: "UNAUTHORIZED" });
+        }
+        try {
+          return await snapshots.getAnalytics(userId, { riskFreeRate: input?.riskFreeRate ?? 0 });
+        } catch (error) {
+          throw toTrpcError(error);
+        }
       }),
   });
 }

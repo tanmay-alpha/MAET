@@ -1,7 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { BarChart3, TrendingUp, TrendingDown, FlaskConical, ChevronRight, Layers } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { usePortfolioPerformance } from "@/hooks/use-portfolio-analytics";
+import { curveToHistory } from "@/lib/portfolio-curve";
+import { EquityCurveChart } from "@/components/chart/equity-curve-chart";
+import { PortfolioPerformancePanel } from "@/components/trading/portfolio-performance-panel";
 
 export const Route = createFileRoute("/_app/performance")({
   head: () => ({ meta: [{ title: "Performance — MAET Strategy Lab" }] }),
@@ -43,6 +47,8 @@ function PerformancePage() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-5">
+        <PaperPortfolioSection />
+
         {isLoading ? (
           <div className="space-y-2">
             {[1, 2, 3].map((i) => (
@@ -132,6 +138,35 @@ function PerformancePage() {
         )}
       </div>
     </div>
+  );
+}
+
+/** The paper account's server-side equity curve and metrics, next to the backtest runs. */
+function PaperPortfolioSection() {
+  const { query, signedIn } = usePortfolioPerformance();
+  const { data, isLoading, error } = query;
+  const history = useMemo(() => curveToHistory(data), [data]);
+  return (
+    <section className="mb-5 rounded-lg border border-border bg-panel p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-medium">Paper portfolio</h2>
+        <Link to="/portfolio" className="flex items-center gap-1 text-xs text-primary">
+          Portfolio <ChevronRight className="h-3 w-3" />
+        </Link>
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="md:col-span-2">
+          {history.length > 0 ? (
+            <EquityCurveChart data={history} height={180} />
+          ) : (
+            <div className="flex h-44 items-center justify-center rounded border border-dashed border-border text-xs text-muted-foreground">
+              {!signedIn ? "Sign in to see your paper portfolio's equity curve" : isLoading ? "Loading equity curve…" : "No daily snapshots of the paper account yet"}
+            </div>
+          )}
+        </div>
+        <PortfolioPerformancePanel performance={data} isLoading={isLoading} error={error?.message ?? null} signedIn={signedIn} />
+      </div>
+    </section>
   );
 }
 
