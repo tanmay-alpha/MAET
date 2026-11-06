@@ -123,6 +123,9 @@ function fetchQuote(symbol: string, force: boolean): Promise<Tick> {
   return request;
 }
 
+/** SmartAPI's market quote endpoint accepts at most 50 tokens per request. */
+const ANGEL_QUOTE_BATCH_SIZE = 50;
+
 /** Refreshes catalogued NSE symbols from Angel One REST; returns the symbols it refreshed. */
 async function refreshFromAngelOne(symbols: string[]): Promise<Set<string>> {
   const refreshed = new Set<string>();
@@ -130,9 +133,13 @@ async function refreshFromAngelOne(symbols: string[]): Promise<Set<string>> {
     const record = lookupSymbol("NSE", symbol);
     return record ? [{ symbol, token: record.token }] : [];
   });
+  const batches: Array<typeof requests> = [];
+  for (let start = 0; start < requests.length; start += ANGEL_QUOTE_BATCH_SIZE) {
+    batches.push(requests.slice(start, start + ANGEL_QUOTE_BATCH_SIZE));
+  }
   let snapshots: AngelOneMarketQuote[];
   try {
-    snapshots = await getAngelOneMarketQuotes(requests);
+    snapshots = (await Promise.all(batches.map((batch) => getAngelOneMarketQuotes(batch)))).flat();
   } catch (error) {
     // Yahoo below remains the delayed fallback, but the switch must be visible.
     try {

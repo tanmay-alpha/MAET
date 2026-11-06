@@ -60,6 +60,13 @@ export type MarketPhase = z.infer<typeof MarketPhaseSchema>;
  */
 export type MarketQuote = Tick & { delayed: boolean };
 
+/**
+ * Most symbols one SSE market stream may carry. The browser shares a single
+ * stream across mounted components (a 50-row screener page plus the header
+ * ticker), so this is larger than the 50-symbol REST quotes cap.
+ */
+export const MAX_STREAM_SYMBOLS = 150;
+
 /** Body of GET /api/market/quotes and of the SSE `snapshot` event. */
 export type QuotesPayload = {
   asOf: string;

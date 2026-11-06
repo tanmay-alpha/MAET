@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { setAngelOneMarketSession } from "../../data/sources/angelone/client";
-import { loadQuote, MAX_CACHED_QUOTES } from "./quote-service";
+import { loadQuote, loadQuotes, MAX_CACHED_QUOTES } from "./quote-service";
 import { quoteStore } from "./quote-store";
+import { registerMarketSymbols } from "./symbol";
 
 const realFetch = globalThis.fetch;
 
@@ -142,5 +143,35 @@ describe("quote cache", () => {
     await loadQuote(symbols[0]);
     expect(fetchedTickers.at(-1)).toBe("QCACHE0.NS");
     expect(fetchedTickers).toHaveLength(MAX_CACHED_QUOTES + 2);
+  });
+});
+
+describe("loadQuotes Angel One batching", () => {
+  it("splits a stream-sized symbol set into Angel One requests of at most 50 tokens", async () => {
+    setSystemTime(IN_SESSION);
+    activateAngelSession();
+    const symbols = Array.from({ length: 120 }, (_, index) => `QBATCH${index}`);
+    registerMarketSymbols(symbols.map((symbol, index) => ({
+      exchange: "NSE" as const, symbol, name: symbol, token: String(900_000 + index), yahooTicker: `${symbol}.NS`, isActive: true,
+    })));
+    const batchSizes: number[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes("apiconnect.angelone.in")) throw new Error("unexpected Yahoo fallback");
+      const body: { exchangeTokens: { NSE: string[] } } = JSON.parse(String(init?.body));
+      const tokens = body.exchangeTokens.NSE;
+      batchSizes.push(tokens.length);
+      // SmartAPI's quote endpoint rejects more than 50 tokens per request.
+      if (tokens.length > 50) return Response.json({ status: false, message: "Too many tokens", errorcode: "AB4005" });
+      return Response.json({
+        status: true,
+        data: { fetched: tokens.map((symbolToken) => ({ symbolToken, ltp: 10, tradeVolume: 1, close: 9, exchFeedTime: "05-Nov-2026 10:29:59" })) },
+      });
+    }) as typeof fetch;
+
+    const result = await loadQuotes(symbols);
+
+    expect(batchSizes).toEqual([50, 50, 20]);
+    expect(result.quotes).toHaveLength(120);
+    expect(result.quotes.every((quote) => quote.source === "angelone")).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import {
 } from "@/lib/market-api";
 import { API_BASE_URL } from "@/lib/api-url";
 import { reconnectDelayMs, scheduleTimeout, type ScheduleFn } from "@/lib/reconnect-backoff";
+import { MAX_STREAM_SYMBOLS } from "@shared/types";
 
 function mergeQuote(
   response: MarketQuotesResponse | undefined,
@@ -54,6 +55,25 @@ export interface MarketStreamDeps {
   createEventSource: (url: string) => EventSource;
   schedule: ScheduleFn;
   random: () => number;
+  /**
+   * HTTP status the stream URL answers with. EventSource hides the status of a
+   * failed connection, so this is asked only when the browser gave up on it.
+   */
+  probeStatus: (url: string) => Promise<number>;
+  warn: (message: string) => void;
+}
+
+const EVENT_SOURCE_CLOSED = 2;
+
+async function probeStreamStatus(url: string): Promise<number> {
+  const controller = new AbortController();
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { Accept: "text/event-stream" } });
+    return response.status;
+  } finally {
+    // Only the status line is needed; drop the (possibly open) stream at once.
+    controller.abort();
+  }
 }
 
 // Coalesces symbol changes from components mounting together into one reconnect.
@@ -67,7 +87,12 @@ const SUBSCRIPTION_DEBOUNCE_MS = 400;
 export class MarketStreamManager {
   private static instance: MarketStreamManager | null = null;
   private eventSource: EventSource | null = null;
-  private listeners = new Map<string, Set<StreamCallback>>();
+  /** Symbol → subscribed callbacks, each with its subscription order (higher = newer). */
+  private listeners = new Map<string, Map<StreamCallback, number>>();
+  private nextSubscription = 0;
+  private warnedTruncation = false;
+  /** Stream URL the server rejected with 400; not retried until the symbol set changes. */
+  private rejectedUrl: string | null = null;
   private statusListeners = new Set<(connected: boolean) => void>();
   private cancelReconnect: (() => void) | null = null;
   private failures = 0;
@@ -81,18 +106,21 @@ export class MarketStreamManager {
       createEventSource: (url) => new EventSource(url),
       schedule: scheduleTimeout,
       random: Math.random,
+      probeStatus: probeStreamStatus,
+      warn: import.meta.env.DEV ? (message) => console.warn(message) : () => {},
     });
     return MarketStreamManager.instance;
   }
 
   public subscribe(symbols: string[], callback: StreamCallback, onStatusChange: (connected: boolean) => void): () => void {
+    const order = this.nextSubscription++;
     symbols.forEach((symbol) => {
       let symbolListeners = this.listeners.get(symbol);
       if (!symbolListeners) {
-        symbolListeners = new Set();
+        symbolListeners = new Map();
         this.listeners.set(symbol, symbolListeners);
       }
-      symbolListeners.add(callback);
+      symbolListeners.set(callback, order);
     });
 
     this.statusListeners.add(onStatusChange);
@@ -138,12 +166,17 @@ export class MarketStreamManager {
       return;
     }
 
-    const params = new URLSearchParams();
-    Array.from(this.listeners.keys()).sort().forEach((symbol) => params.append("symbols", symbol));
+    const url = this.streamUrl();
+    // A 400 is the server rejecting this exact symbol set; retrying it cannot succeed.
+    if (url === this.rejectedUrl) {
+      this.failures = 0;
+      this.setConnected(false);
+      return;
+    }
 
     let source: EventSource;
     try {
-      source = this.deps.createEventSource(`${this.deps.baseUrl}/api/market/stream?${params}`);
+      source = this.deps.createEventSource(url);
     } catch (err) {
       console.error("Error creating EventSource:", err);
       this.scheduleReconnect(reconnectDelayMs(this.failures++, this.deps.random));
@@ -151,7 +184,9 @@ export class MarketStreamManager {
     }
     this.eventSource = source;
 
+    let opened = false;
     source.onopen = () => {
+      opened = true;
       this.failures = 0;
       this.setConnected(true);
     };
@@ -160,7 +195,7 @@ export class MarketStreamManager {
       try {
         const { quotes, marketPhase } = parseStreamMessage(JSON.parse(event.data), type);
         quotes.forEach((quote) => {
-          this.listeners.get(quote.symbol)?.forEach((callback) => callback(quote, marketPhase));
+          for (const callback of this.listeners.get(quote.symbol)?.keys() ?? []) callback(quote, marketPhase);
         });
       } catch (error: unknown) {
         console.error("Failed to parse market stream message:", error);
@@ -180,8 +215,48 @@ export class MarketStreamManager {
       source.close();
       if (this.eventSource === source) this.eventSource = null;
       this.setConnected(false);
+      // CLOSED before ever opening means the browser failed the connection on
+      // its HTTP response (not a network drop, which leaves it CONNECTING).
+      if (!opened && source.readyState === EVENT_SOURCE_CLOSED) {
+        void this.deps.probeStatus(url)
+          .catch(() => 0)
+          .then((status) => {
+            if (this.eventSource !== null || this.cancelReconnect !== null) return;
+            if (status === 400) {
+              this.rejectedUrl = url;
+              this.failures = 0;
+              return;
+            }
+            this.scheduleReconnect(reconnectDelayMs(this.failures++, this.deps.random));
+          });
+        return;
+      }
       this.scheduleReconnect(reconnectDelayMs(this.failures++, this.deps.random));
     };
+  }
+
+  /**
+   * Stream URL for the current subscriptions, capped at MAX_STREAM_SYMBOLS.
+   * When over the cap, symbols of the most recent subscribers (the page the
+   * user just opened) win over older ones such as the header ticker.
+   */
+  private streamUrl(): string {
+    const newestOrder = (symbol: string) => Math.max(...(this.listeners.get(symbol)?.values() ?? []));
+    let symbols = Array.from(this.listeners.keys());
+    if (symbols.length > MAX_STREAM_SYMBOLS) {
+      symbols = symbols
+        .sort((a, b) => newestOrder(b) - newestOrder(a) || a.localeCompare(b))
+        .slice(0, MAX_STREAM_SYMBOLS);
+      if (!this.warnedTruncation) {
+        this.warnedTruncation = true;
+        this.deps.warn(
+          `Market stream limited to ${MAX_STREAM_SYMBOLS} symbols; ${this.listeners.size - MAX_STREAM_SYMBOLS} older subscriptions fall back to polling.`
+        );
+      }
+    }
+    const params = new URLSearchParams();
+    symbols.sort().forEach((symbol) => params.append("symbols", symbol));
+    return `${this.deps.baseUrl}/api/market/stream?${params}`;
   }
 
   private setConnected(connected: boolean) {
