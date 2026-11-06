@@ -23,6 +23,8 @@
 
 MAET combines technical screening, strategy research, paper trading and market data in one web terminal.
 
+- **World Monitor** (`/world`): mapped USGS M4.5+ earthquakes and NASA EONET open events, source-linked GDELT market headlines, transparent Indian-sector exposure rules, and World Bank GDP/CPI observations with data years. Each source carries fetch time and stale/error status. TradingView's attributed global ticker is display-only, never an input to MAET calculations.
+
 ```mermaid
 flowchart TB
     subgraph Providers["Market Data Sources"]
