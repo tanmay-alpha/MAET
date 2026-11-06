@@ -204,7 +204,7 @@ function PayoffLab() {
                 <p className="flex h-[260px] items-center justify-center px-6 text-center text-xs text-muted-foreground lg:h-[380px]">
                   {draft.legs.length === 0
                     ? "Add legs or pick a template to see the payoff."
-                    : "Fill in the highlighted inputs to see the payoff."}
+                    : "Fill in the empty or highlighted inputs to see the payoff."}
                 </p>
               )}
             </div>

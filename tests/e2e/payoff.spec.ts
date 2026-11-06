@@ -34,6 +34,8 @@ test("payoff lab: an iron condor from a template shows exact risk figures, a cha
 
   const template = page.getByRole("combobox", { name: "Strategy template" });
   await expect(template).toBeDisabled();
+  // A fresh page has no spot yet: that blocks templates but isn't shown as an error.
+  await expect(page.getByRole("textbox", { name: /^spot/i })).not.toHaveAttribute("aria-invalid", "true");
   await page.getByRole("textbox", { name: /^spot/i }).fill("24010");
   await template.selectOption("Iron condor");
 
@@ -41,7 +43,7 @@ test("payoff lab: an iron condor from a template shows exact risk figures, a cha
     await expect(page.getByRole("textbox", { name: `Leg ${index + 1} strike` })).toHaveValue(strike);
     await expect(page.getByRole("textbox", { name: `Leg ${index + 1} premium` })).toHaveValue("");
   }
-  await expect(page.getByText("Fill in the highlighted inputs to see the payoff.")).toBeVisible();
+  await expect(page.getByText("Fill in the empty or highlighted inputs to see the payoff.")).toBeVisible();
 
   for (const [index, premium] of CONDOR_PREMIUMS.entries()) {
     await page.getByRole("textbox", { name: `Leg ${index + 1} premium` }).fill(premium);
