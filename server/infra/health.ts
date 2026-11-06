@@ -1,4 +1,5 @@
 import { getSqlClient } from "../data/drizzle/client";
+import { databaseBreaker, type DatabaseBreakerState, type DatabaseProbeTicket } from "../data/drizzle/availability";
 import { getRedis } from "../data/redis/client";
 import { logger } from "./logger";
 
@@ -9,7 +10,19 @@ export type HealthCheckStatus = {
   uptime: number;
   version: string;
   checks: Record<HealthComponent, boolean>;
+  /** State of the database availability circuit used by read paths, when wired. */
+  databaseCircuit?: DatabaseBreakerState;
 };
+
+/** The part of the database availability breaker the health check drives and reports. */
+export type DatabaseCircuit = {
+  state(): DatabaseBreakerState;
+  startProbe(): DatabaseProbeTicket;
+  recordProbe(ticket: DatabaseProbeTicket, ok: boolean, error?: unknown): void;
+};
+
+/** Called when a probe starts; the returned callback receives its outcome. */
+type ProbeObserver = () => (ok: boolean, error?: unknown) => void;
 
 type Probe = () => Promise<unknown>;
 
@@ -20,6 +33,8 @@ export type HealthCheckerOptions = {
   /** Probe results are reused for this long so frequent health polls don't hammer dependencies. */
   cacheTtlMs?: number;
   now?: () => number;
+  /** Fresh database probe results open/close this circuit, and its state is reported. */
+  databaseCircuit?: DatabaseCircuit;
 };
 
 export type HealthChecker = {
@@ -39,12 +54,15 @@ function createCachedProbe(
   timeoutMs: number,
   cacheTtlMs: number,
   now: () => number,
+  observe?: ProbeObserver,
 ): () => Promise<boolean> {
   let last: { ok: boolean; at: number } | undefined;
   let inflight: Promise<boolean> | undefined;
 
   const run = async (): Promise<boolean> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const finished = observe?.();
+    let failure: unknown;
     // Executor form on purpose: Render runs Node 20, which lacks Promise.withResolvers.
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`${component} probe timed out after ${timeoutMs}ms`)), timeoutMs);
@@ -57,12 +75,14 @@ function createCachedProbe(
       ok = true;
     } catch (err) {
       ok = false;
+      failure = err;
       if (last?.ok !== false) logger.warn({ component, err }, "health probe failed");
     } finally {
       clearTimeout(timer);
     }
     if (ok && last?.ok === false) logger.info({ component }, "health probe recovered");
     last = { ok, at: now() };
+    finished?.(ok, failure);
     return ok;
   };
 
@@ -79,7 +99,14 @@ export function createHealthChecker(options: HealthCheckerOptions): HealthChecke
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_PROBE_CACHE_TTL_MS;
   const now = options.now ?? Date.now;
-  const probeDatabase = createCachedProbe("database", options.probes.database, timeoutMs, cacheTtlMs, now);
+  const circuit = options.databaseCircuit;
+  const probeDatabase = createCachedProbe(
+    "database", options.probes.database, timeoutMs, cacheTtlMs, now,
+    circuit && (() => {
+      const ticket = circuit.startProbe();
+      return (ok, error) => circuit.recordProbe(ticket, ok, error);
+    }),
+  );
   const probeRedis = createCachedProbe("redis", options.probes.redis, timeoutMs, cacheTtlMs, now);
 
   // Push-style status reported by long-running components. Database and Redis
@@ -94,8 +121,10 @@ export function createHealthChecker(options: HealthCheckerOptions): HealthChecke
   return {
     async check() {
       const [databaseReachable, redisReachable] = await Promise.all([probeDatabase(), probeRedis()]);
+      // Request-path failures can open the circuit between (cached) probes.
+      const databaseCircuit = circuit?.state();
       const checks: Record<HealthComponent, boolean> = {
-        database: reported.database && databaseReachable,
+        database: reported.database && databaseReachable && databaseCircuit !== "open",
         redis: reported.redis && redisReachable,
         orchestrator: reported.orchestrator,
         marketData: reported.marketData,
@@ -105,6 +134,7 @@ export function createHealthChecker(options: HealthCheckerOptions): HealthChecke
         uptime: Math.floor((Date.now() - startedAt) / 1000),
         version,
         checks,
+        ...(databaseCircuit ? { databaseCircuit } : {}),
       };
     },
     setComponentStatus(component, ok) {
@@ -118,6 +148,7 @@ export const healthChecker = createHealthChecker({
     database: () => getSqlClient()`select 1`,
     redis: () => getRedis().ping(),
   },
+  databaseCircuit: databaseBreaker,
 });
 
 export function updateHealthStatus(component: HealthComponent, ok: boolean): void {

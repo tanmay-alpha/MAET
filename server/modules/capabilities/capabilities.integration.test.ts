@@ -98,4 +98,21 @@ describe("Capabilities Readiness Evaluator Test Suite", () => {
       delete process.env.FEATURE_DATA_QUALITY;
     }
   });
+
+  it("5. portfolioAnalytics is available to signed-in users once the 0027 snapshot table exists", async () => {
+    const find = async (userId: string | null, tables: Record<string, boolean>) =>
+      (await evaluateReadiness({ userId, schemaMap: tables })).find((c) => c.key === "portfolioAnalytics");
+    const migrated = { paper_portfolio_snapshots: true, "paper_portfolio_snapshots.snapshot_date": true };
+
+    expect(await find("user-1", migrated)).toMatchObject({ available: true });
+    // The 0008 table has the same name but not the 0027 columns: code needing 0027 would fail.
+    const before0027 = await find("user-1", { paper_portfolio_snapshots: true });
+    expect(before0027?.available).toBe(false);
+    expect(before0027?.reason).toContain("migration 0027");
+    // The never-written 0013 table does not count either.
+    expect((await find("user-1", { portfolio_snapshots: true }))?.available).toBe(false);
+    const signedOut = await find(null, migrated);
+    expect(signedOut?.available).toBe(false);
+    expect(signedOut?.reason).toContain("sign in");
+  });
 });
