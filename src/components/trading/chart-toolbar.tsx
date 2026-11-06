@@ -9,10 +9,16 @@ import {
   TrendingUp,
   Minus,
   Plus,
-  Settings,
   Download,
   Upload
 } from "lucide-react";
+import type { CorporateActionsResponse } from "@shared/types";
+import {
+  CORPORATE_ACTION_SOURCE_LABEL,
+  NO_CORPORATE_ACTIONS_MESSAGE,
+  formatExDate,
+  type PlacedCorporateActions,
+} from "./chart-corporate-actions";
 
 export interface DrawingTool {
   id: string;
@@ -64,6 +70,52 @@ interface ChartToolbarProps {
   fullscreen: boolean;
   onSaveLayout?: () => void;
   onLoadLayout?: () => void;
+  corporateActions?: { enabled: boolean; onToggle: () => void };
+}
+
+/** Shows or hides dividend and split markers on a chart. */
+export function CorporateActionsToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={enabled}
+      onClick={onToggle}
+      className={`whitespace-nowrap rounded border px-2 py-1 text-xs ${
+        enabled ? "border-primary/60 bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:bg-accent"
+      }`}
+    >
+      Dividends &amp; splits
+    </button>
+  );
+}
+
+/** One line under a chart: what the dividend and split markers show, or why there are none. */
+export function CorporateActionsStatus({
+  data,
+  isError,
+  placed,
+}: {
+  data: CorporateActionsResponse | undefined;
+  isError: boolean;
+  placed: PlacedCorporateActions[];
+}) {
+  let text: string;
+  if (!data) {
+    text = isError ? "Dividends & splits unavailable: Yahoo Finance did not respond." : "Loading dividends & splits…";
+  } else if (placed.length === 0) {
+    text = NO_CORPORATE_ACTIONS_MESSAGE;
+  } else {
+    const events = placed.flatMap((bar) => bar.events);
+    const dividends = events.filter((event) => event.kind === "dividend").length;
+    const splits = events.length - dividends;
+    const counts = [
+      dividends > 0 && `${dividends} ${dividends === 1 ? "dividend" : "dividends"}`,
+      splits > 0 && `${splits} ${splits === 1 ? "split" : "splits"}`,
+    ].filter(Boolean);
+    text = `${counts.join(" · ")} in range · ${CORPORATE_ACTION_SOURCE_LABEL[data.source]}`;
+  }
+  if (data?.stale) text += ` · cached ${formatExDate(data.asOf.slice(0, 10))}`;
+  return <p className="border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground">{text}</p>;
 }
 
 export function ChartToolbar({
@@ -75,12 +127,19 @@ export function ChartToolbar({
   selectedTool,
   fullscreen,
   onSaveLayout,
-  onLoadLayout
+  onLoadLayout,
+  corporateActions
 }: ChartToolbarProps) {
   const [showTools, setShowTools] = useState(false);
 
   return (
     <div className="absolute top-4 right-4 flex items-center gap-2 bg-panel/95 backdrop-blur rounded-lg border border-border shadow-lg z-20">
+      {corporateActions && (
+        <div className="pl-1">
+          <CorporateActionsToggle enabled={corporateActions.enabled} onToggle={corporateActions.onToggle} />
+        </div>
+      )}
+
       {/* Tool selection dropdown */}
       <div className="relative">
         <button

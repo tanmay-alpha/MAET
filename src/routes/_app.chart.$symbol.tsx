@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { useCorporateActions } from "@/hooks/use-corporate-actions";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
 import { mapBacktestTradesToMarkers } from "@/components/trading/chart-trade-markers";
@@ -12,7 +13,8 @@ import { useChartLayout, useChartShortcuts, useFullscreen } from "@/hooks/use-ch
 import { TiltCard } from "@/components/trading/tilt-card";
 import { ContractPanel } from "@/components/common/contract-panel";
 import { CandlestickChart } from "@/components/trading/candlestick-chart";
-import { ChartToolbar, DRAWING_TOOLS } from "@/components/trading/chart-toolbar";
+import { ChartToolbar, CorporateActionsStatus, DRAWING_TOOLS } from "@/components/trading/chart-toolbar";
+import { placeCorporateActions } from "@/components/trading/chart-corporate-actions";
 import { getTradingViewUrl } from "@/lib/tradingview";
 import type { MarketCandle } from "@/lib/market-api";
 import type { ChartState } from "@/components/trading/candlestick-chart";
@@ -182,6 +184,16 @@ function ChartPage() {
       v: candle.volume,
     })),
     [candleQuery.data?.candles]
+  );
+
+  const [showCorporateActions, setShowCorporateActions] = useState(false);
+  const corporateActionsQuery = useCorporateActions(symbol, showCorporateActions);
+  const placedCorporateActions = useMemo(
+    () =>
+      showCorporateActions && corporateActionsQuery.data
+        ? placeCorporateActions(candles.map((candle) => candle.t), corporateActionsQuery.data.events)
+        : [],
+    [showCorporateActions, corporateActionsQuery.data, candles]
   );
 
   const currentPrice = liveQuote?.price;
@@ -465,6 +477,7 @@ function ChartPage() {
                   selectedTool={selectedTool}
                   fullscreen={isFullscreen}
                   onSaveLayout={() => toggleLayoutPanel("save")}
+                  corporateActions={{ enabled: showCorporateActions, onToggle: () => setShowCorporateActions((on) => !on) }}
                   onLoadLayout={() => toggleLayoutPanel("load")}
                 />
 
@@ -502,7 +515,15 @@ function ChartPage() {
                       indicators={{ sma: showMA, ema: showMA, rsi: showRSI, macd: showMACD, volume: showVolume }}
                       trades={tradeMarkers}
                       paperOverlay={paperOverlay}
+                      corporateActions={placedCorporateActions}
                     />
+                    {showCorporateActions && (
+                      <CorporateActionsStatus
+                        data={corporateActionsQuery.data}
+                        isError={corporateActionsQuery.isError}
+                        placed={placedCorporateActions}
+                      />
+                    )}
                   </div>
                 )}
               </div>
