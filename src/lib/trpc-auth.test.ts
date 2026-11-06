@@ -1,5 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { trpc, AuthenticationError, retryUnlessUnauthenticated } from "./trpc";
+import { hasStoredSession } from "./auth-token";
+import { MemoryStorage } from "@/test-utils/memory-storage";
 
 describe("Authenticated tRPC Client", () => {
   const originalFetch = globalThis.fetch;
@@ -162,5 +164,94 @@ describe("Authenticated tRPC Client", () => {
     expect(capturedHeaders["Authorization"]).toBe("Bearer test-mutation-token");
     expect(capturedHeaders["Content-Type"]).toBe("application/json");
     expect(capturedBody).toContain("RELIANCE");
+  });
+});
+
+describe("a 401 for a session the browser still holds", () => {
+  const originalWindow = globalThis.window;
+  const originalFetch = globalThis.fetch;
+  const originalEnv = { url: process.env.VITE_SUPABASE_URL, key: process.env.VITE_SUPABASE_ANON_KEY };
+  const SUPABASE = "https://project.supabase.test";
+  let storage: MemoryStorage;
+
+  const okState = () => Response.json({ result: { data: { account: null, positions: [], orders: [], fills: [] } } });
+  const unauthorized = () => Response.json({ error: { message: "UNAUTHORIZED" } }, { status: 401 });
+  const bearer = (init?: RequestInit) => (init?.headers as Record<string, string> | undefined)?.Authorization ?? null;
+
+  beforeEach(() => {
+    storage = new MemoryStorage();
+    globalThis.window = Object.assign(new EventTarget(), { localStorage: storage }) as unknown as Window & typeof globalThis;
+    process.env.VITE_SUPABASE_URL = SUPABASE;
+    process.env.VITE_SUPABASE_ANON_KEY = "anon";
+    // Not expired by the clock: only the server knows it was revoked.
+    storage.setItem(
+      "sb-project-auth-token",
+      JSON.stringify({ access_token: "revoked-access", refresh_token: "refresh-1", expires_at: Math.floor(Date.now() / 1000) + 3600 }),
+    );
+  });
+
+  afterEach(() => {
+    globalThis.window = originalWindow;
+    globalThis.fetch = originalFetch;
+    for (const [name, value] of [["VITE_SUPABASE_URL", originalEnv.url], ["VITE_SUPABASE_ANON_KEY", originalEnv.key]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  test("forces a refresh and retries once with the new token", async () => {
+    const sent: Array<string | null> = [];
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).startsWith(SUPABASE)) {
+        return Response.json({ access_token: "fresh-access", refresh_token: "refresh-2", expires_in: 3600 });
+      }
+      sent.push(bearer(init));
+      return bearer(init) === "Bearer fresh-access" ? okState() : unauthorized();
+    }) as unknown as typeof fetch;
+
+    await trpc.paperTrading.getState.query();
+
+    expect(sent).toEqual(["Bearer revoked-access", "Bearer fresh-access"]);
+    expect(JSON.parse(storage.getItem("sb-project-auth-token")!).access_token).toBe("fresh-access");
+  });
+
+  test("signs out locally when the server still rejects the refreshed token", async () => {
+    let apiCalls = 0;
+    globalThis.fetch = mock(async (url: string | URL | Request) => {
+      if (String(url).startsWith(SUPABASE)) {
+        return Response.json({ access_token: "fresh-access", refresh_token: "refresh-2", expires_in: 3600 });
+      }
+      apiCalls++;
+      return unauthorized();
+    }) as unknown as typeof fetch;
+
+    await expect(trpc.paperTrading.getState.query()).rejects.toThrow(AuthenticationError);
+    expect(apiCalls).toBe(2);
+    expect(hasStoredSession()).toBe(false);
+  });
+
+  test("signs out locally when Supabase rejects the refresh token", async () => {
+    let apiCalls = 0;
+    globalThis.fetch = mock(async (url: string | URL | Request) => {
+      if (String(url).startsWith(SUPABASE)) {
+        return Response.json({ error: "invalid_grant", error_description: "Refresh Token Not Found" }, { status: 400 });
+      }
+      apiCalls++;
+      return unauthorized();
+    }) as unknown as typeof fetch;
+
+    await expect(trpc.paperTrading.getState.query()).rejects.toThrow(AuthenticationError);
+    expect(apiCalls).toBe(1);
+    expect(hasStoredSession()).toBe(false);
+  });
+
+  test("keeps the session when Supabase is unreachable (it may recover)", async () => {
+    globalThis.fetch = mock(async (url: string | URL | Request) => {
+      if (String(url).startsWith(SUPABASE)) throw new TypeError("Failed to fetch");
+      return unauthorized();
+    }) as unknown as typeof fetch;
+
+    await expect(trpc.paperTrading.getState.query()).rejects.toThrow(AuthenticationError);
+    expect(hasStoredSession()).toBe(true);
   });
 });

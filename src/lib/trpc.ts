@@ -1,5 +1,5 @@
 import { useQuery as useReactQuery, useMutation as useReactMutation } from "@tanstack/react-query";
-import { getCurrentAccessToken } from "./auth-token";
+import { clearStoredSession, getCurrentAccessToken, refreshAfterRejection } from "./auth-token";
 import { apiUrl } from "./api-url";
 import type {
   PaperOrderCommandInput,
@@ -82,9 +82,14 @@ async function fetchTrpc(url: string, options: RequestInit = {}): Promise<Respon
   const token = await getCurrentAccessToken();
   let res = await send(token);
   if (res.status === 401 && token) {
-    // The token may have expired in flight; retry once with a refreshed one.
-    const refreshedToken = await getCurrentAccessToken();
-    if (refreshedToken && refreshedToken !== token) res = await send(refreshedToken);
+    // The server rejected a token the clock still trusts (revoked, or expired in flight):
+    // force one refresh and retry. A refresh token Supabase rejects already signs out.
+    const refreshedToken = await refreshAfterRejection(token);
+    if (refreshedToken && refreshedToken !== token) {
+      res = await send(refreshedToken);
+      // A brand-new token rejected too: this session is no good here; sign out locally.
+      if (res.status === 401) clearStoredSession();
+    }
   }
   if (res.status === 401) throw new AuthenticationError();
   return res;

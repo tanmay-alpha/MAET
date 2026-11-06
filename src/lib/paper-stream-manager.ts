@@ -11,7 +11,7 @@ export interface PaperStreamSubscriber {
 
 export interface PaperStreamDeps {
   getToken: () => Promise<string | null>;
-  /** Subscribes to session changes made outside this tab; returns the unsubscribe function. */
+  /** Subscribes to session changes (sign-in, sign-out, refresh, in this tab or another); returns the unsubscribe function. */
   watchAuth: (onChange: () => void) => () => void;
   connect: (options: ConnectPaperTradingStreamOptions) => Promise<void>;
   schedule: ScheduleFn;
