@@ -30,7 +30,11 @@ describe("preview script", () => {
 
       expect(response?.status).toBe(200);
       const terminal = await fetch(`${origin}/terminal`);
-      expect(await terminal.text()).toContain("Net Asset Value");
+      const html = await terminal.text();
+      expect(terminal.status).toBe(200);
+      expect(html).toContain("Paper account balances and positions");
+      expect(html).toContain("require a signed-in account.");
+      expect(html).not.toContain("Net Asset Value");
     } finally {
       child.kill();
       await child.exited;

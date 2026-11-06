@@ -10,8 +10,8 @@ import { usePaperAccount } from "@/hooks/use-paper-account";
 import type { MarketCandle } from "@/lib/market-api";
 import { WATCHLIST } from "@/lib/market-catalog";
 import { ShieldAlert, RefreshCw, Layers, ClipboardList, History, TrendingUp, BarChart3 } from "lucide-react";
-import { useTerminalStore } from "@/store/useTerminalStore";
-import { DepthMeter } from "@/components/trading/depth-meter";
+import { useSignedIn } from "@/hooks/use-signed-in";
+import { PaperAccountGate } from "@/components/trading/paper-account-gate";
 import type { PaperOrderRow, PaperPositionRow, PaperFillRow } from "../../server/modules/paper-trading/contracts";
 import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margin";
 import { buildClosePositionOrder } from "@/lib/paper-orders";
@@ -38,6 +38,7 @@ const INTERVAL_CONFIG: Record<string, { timeframe: MarketCandle["tf"]; range: st
 const WATCHLIST_SYMBOLS = WATCHLIST.map((item) => item.symbol);
 
 function Terminal() {
+  const signedIn = useSignedIn();
   const navigate = useNavigate();
   const { activeSymbol: active, context, setSymbolContext } = useActiveSymbol();
   const [interval, setInterval] = useState("5m");
@@ -140,11 +141,12 @@ function Terminal() {
   };
 
   const dataQuality = liveQuote?.quality ?? (candleQuery.data?.delayed ? "delayed" : "historical");
-  const dataSource = liveQuote?.source ?? candleQuery.data?.source ?? "database";
+  const dataSource = liveQuote?.source ?? candleQuery.data?.source;
 
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col bg-background">
       {/* Top Account Summary Dashboard Bar */}
+      <PaperAccountGate signedIn={signedIn}>
       <div className="flex flex-wrap items-center justify-between border-b border-border bg-panel/40 px-4 py-2 text-xs">
         <div className="flex flex-wrap items-center gap-6">
           <div className="flex flex-col">
@@ -199,6 +201,7 @@ function Terminal() {
           </ResetAccountButton>
         </div>
       </div>
+      </PaperAccountGate>
 
       {context.sourceContext === "screener" && (
         <div className="flex items-center justify-between border-b border-primary/20 bg-primary/10 px-4 py-1.5 text-xs text-primary">
@@ -244,7 +247,7 @@ function Terminal() {
               <span className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase ${
                 dataQuality === "live" ? "bg-bull/15 text-bull border border-bull/30" : "bg-amber-500/15 text-amber-400 border border-amber-500/30"
               }`}>
-                {dataSource} · {dataQuality}
+                {dataSource === "angelone" ? "Angel One" : dataSource === "yahoo" ? "Yahoo" : dataSource ?? "Source unavailable"} · {dataQuality}
               </span>
             </div>
 
@@ -351,7 +354,7 @@ function Terminal() {
           )}
 
           {/* Bottom Tabs Panel */}
-          <div className="border-t border-border bg-panel flex shrink-0 flex-col h-60 overflow-hidden">
+          {signedIn && <div className="border-t border-border bg-panel flex shrink-0 flex-col h-60 overflow-hidden">
             <div className="flex items-center gap-1 border-b border-border bg-panel-elevated/40 px-3 text-xs">
               <button
                 onClick={() => setActiveTab("positions")}
@@ -538,15 +541,12 @@ function Terminal() {
                 </table>
               )}
             </div>
-          </div>
+          </div>}
         </div>
 
-        {/* Right Order Panel & Depth */}
+        {/* Right Order Panel */}
         <div className="order-2 flex w-full flex-col border-t border-border bg-panel lg:order-none lg:w-72 lg:shrink-0 lg:border-l lg:border-t-0">
           <OrderPanel symbol={active} exchange={context.exchange} price={currentPrice} />
-          <div className="border-t border-border p-2">
-            <DepthMeter />
-          </div>
         </div>
       </div>
     </div>
