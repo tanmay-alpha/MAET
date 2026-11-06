@@ -1,5 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../../data/drizzle/client";
+import { withOptionalDatabase } from "../../data/drizzle/availability";
 import { candles, companies, financialStatements, fundamentals, quoteSnapshots } from "../../db/schema";
 import { getCandles } from "../../data/sources/yahoo";
 import { getYahooFundamentals, type YahooStatement } from "../../data/sources/yahoo-fundamentals";
@@ -90,7 +91,7 @@ export async function getCompanyDetail(symbolInput: string) {
 
   let stored: Awaited<ReturnType<typeof databaseDetail>>;
   try {
-    stored = await databaseDetail(symbol);
+    stored = await withOptionalDatabase(() => databaseDetail(symbol));
   } catch {
     stored = undefined;
   }
@@ -133,10 +134,10 @@ export async function getCompanyDetail(symbolInput: string) {
         marketCap: numeric(master.marketCap), asOf: live.ts, source: live.source,
       };
       try {
-        await db.insert(quoteSnapshots).values({
+        await withOptionalDatabase(() => db.insert(quoteSnapshots).values({
           companyId: master.id, price: String(live.price), changePct: live.changePct?.toString(),
           volume: live.volume, marketCap: master.marketCap, asOf: new Date(live.ts), source: live.source,
-        }).onConflictDoNothing();
+        }).onConflictDoNothing());
       } catch {
         // The public endpoint remains available when the optional database is offline.
       }
