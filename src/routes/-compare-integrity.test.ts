@@ -35,9 +35,8 @@ describe("Compare route integrity and peer contract", () => {
     expect(routeSource).toContain("As of: {peerData?.asOf ?");
   });
 
-  it("surfaces peer median and comparison median truthfully", () => {
-    expect(routeSource).toContain("Peer Median");
-    expect(routeSource).toContain("Comparison Median");
+  it("surfaces peer median and comparison median from the API", () => {
+    expect(routeSource).toContain("peerData.medians");
     expect(routeSource).toContain("peerData.comparisonMedian");
   });
 

@@ -289,19 +289,11 @@ export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
 ];
 
 export const TEMPLATE_CATEGORY_LABELS: Record<StrategyTemplate["category"], string> = {
-  trend_following: "Trend Following",
-  mean_reversion: "Mean Reversion",
+  trend_following: "Trend following",
+  mean_reversion: "Mean reversion",
   momentum: "Momentum",
   breakout: "Breakout",
   volatility: "Volatility",
-};
-
-export const TEMPLATE_CATEGORY_COLORS: Record<StrategyTemplate["category"], string> = {
-  trend_following: "text-blue-400 bg-blue-400/10 border-blue-400/30",
-  mean_reversion: "text-purple-400 bg-purple-400/10 border-purple-400/30",
-  momentum: "text-amber-400 bg-amber-400/10 border-amber-400/30",
-  breakout: "text-emerald-400 bg-emerald-400/10 border-emerald-400/30",
-  volatility: "text-rose-400 bg-rose-400/10 border-rose-400/30",
 };
 
 /** Starting point for a strategy created from a template; the user edits it in the Strategy Lab. */

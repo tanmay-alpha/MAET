@@ -1,118 +1,118 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { Code2, FlaskConical, GitBranch, Play, Save, CheckCircle, AlertCircle, Clock } from "lucide-react";
-import { trpc } from "@/lib/trpc";
+import type { StrategyCondition, StrategyDefinition, StrategyRuleGroup } from "@shared/strategy/ast";
+import { trpc, TrpcRequestError } from "@/lib/trpc";
 import { RunJobDialog } from "@/components/strategy/run-job-dialog";
+import { EmptyLine, ErrorLine, PageHeader, primaryButton, secondaryButton, ViewSwitch } from "@/components/strategy/page-chrome";
+import { conditionText, executionRows, groupText, riskRows } from "@/components/strategy/rule-text";
+import { dateTime } from "@/components/strategy/format";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import { RESEARCH_TAB_FOR_KIND, type JobKind } from "@/lib/strategy-jobs";
 
 export const Route = createFileRoute("/_app/strategies/$strategyId/")({
-  head: () => ({ meta: [{ title: "Strategy Editor — MAET" }] }),
+  head: () => ({ meta: [{ title: "Strategy — MAET Strategy Lab" }] }),
   component: StrategyWorkspace,
 });
 
-type WorkspaceTab = "editor" | "preview" | "versions";
+type WorkspaceView = "rules" | "versions";
+
+const VIEWS = [
+  { id: "rules", label: "Rules" },
+  { id: "versions", label: "Versions" },
+] as const;
+
+interface VersionRow {
+  id: string;
+  versionNumber: number;
+  definition: unknown;
+  definitionHash: string;
+  engineVersion: string;
+  createdAt: string;
+}
 
 function StrategyWorkspace() {
   const { strategyId } = Route.useParams();
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("editor");
+  const signedIn = useSignedIn();
+  const [view, setView] = useState<WorkspaceView>("rules");
   const [dialogKind, setDialogKind] = useState<JobKind | null>(null);
   const navigate = useNavigate();
 
-  const { data, isLoading, refetch } = trpc.strategyDefinitions.get.useQuery({ strategyId });
+  const { data, isLoading, error, refetch } = trpc.strategyDefinitions.get.useQuery({ strategyId }, { enabled: signedIn });
   const strategy = data?.strategy;
-  const versions = data?.versions ?? [];
+  const versions: VersionRow[] = data?.versions ?? [];
 
   // Jobs run the latest saved version, so a new version must show up immediately.
   const createVersionMutation = trpc.strategyDefinitions.createVersion.useMutation({ onSuccess: () => refetch() });
 
-  if (isLoading) {
+  if (!signedIn) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted-foreground text-sm animate-pulse">Loading strategy...</div>
+      <div className="flex h-full flex-col">
+        <PageHeader title="Strategy" />
+        <div className="p-4"><SignedOutNotice feature="Saved strategies" /></div>
       </div>
     );
   }
-
-  if (!strategy) {
+  if (error) {
+    const notFound = error instanceof TrpcRequestError && error.code === "NOT_FOUND";
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-center">
-          <AlertCircle className="h-10 w-10 text-bear/50 mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground">Strategy not found</p>
+      <div className="flex h-full flex-col">
+        <PageHeader title="Strategy" />
+        <div className="space-y-2 p-4">
+          {notFound ? <p className="text-sm text-muted-foreground">Strategy not found.</p> : <ErrorLine title="Could not load the strategy" error={error} />}
+          <Link to="/strategies" className="text-xs text-primary">Back to Strategy Lab</Link>
         </div>
       </div>
     );
   }
+  if (isLoading || !strategy) return <EmptyLine>Loading strategy…</EmptyLine>;
 
-  const statusColors: Record<string, string> = {
-    DRAFT: "text-muted-foreground",
-    VALIDATED: "text-emerald-400",
-    ARCHIVED: "text-muted-foreground/50",
-  };
+  const latest = versions[0];
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-5 py-3">
-        <div className="flex items-center gap-3">
-          <Code2 className="h-5 w-5 text-primary" />
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-base font-semibold">{strategy.name}</h1>
-              <span className={`text-[10px] font-medium uppercase tracking-wide ${statusColors[strategy.status] ?? ""}`}>
-                {strategy.status}
-              </span>
-            </div>
-            {strategy.description && (
-              <p className="text-xs text-muted-foreground">{strategy.description}</p>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Tab switcher */}
-          {(["editor", "preview", "versions"] as WorkspaceTab[]).map((tab) => (
+      <PageHeader
+        title={strategy.name}
+        meta={
+          <>
+            {strategy.status.charAt(0) + strategy.status.slice(1).toLowerCase()}
+            {latest ? ` · latest version v${latest.versionNumber}` : " · no saved version"}
+            {strategy.description ? ` · ${strategy.description}` : ""}
+          </>
+        }
+        actions={
+          <>
+            <ViewSwitch label="Strategy view" options={VIEWS} value={view} onChange={setView} />
+            <Link to="/strategies/$strategyId/backtests" params={{ strategyId }} className={secondaryButton}>Research</Link>
+            <Link to="/strategies/$strategyId/deployments" params={{ strategyId }} className={secondaryButton}>Deployments</Link>
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`rounded-md border px-3 py-1.5 text-xs transition-colors ${
-                activeTab === tab
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {tab === "editor" ? "Rule Editor" : tab === "preview" ? "Preview" : "Versions"}
-            </button>
-          ))}
-
-          {/* Actions */}
-          <div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
-            <button
+              type="button"
               onClick={() => createVersionMutation.mutate({ strategyId })}
               disabled={createVersionMutation.isPending || strategy.status === "ARCHIVED"}
-              className="flex items-center gap-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-40"
+              className={primaryButton}
             >
-              <GitBranch className="h-3.5 w-3.5" />
-              {createVersionMutation.isPending ? "Creating..." : "Create Version"}
+              {createVersionMutation.isPending ? "Saving…" : "Save version"}
             </button>
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
+      {createVersionMutation.error && (
+        <div className="px-4 pt-3"><ErrorLine title="Could not save a version" error={createVersionMutation.error} /></div>
+      )}
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-hidden">
-        {activeTab === "editor" && (
-          <RuleEditorTab strategy={strategy} latestVersionNumber={versions[0]?.versionNumber} onRunJob={setDialogKind} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {view === "rules" ? (
+          <RulesView definition={strategy.currentDraft as StrategyDefinition | undefined} latestVersion={latest?.versionNumber} onRunJob={setDialogKind} />
+        ) : (
+          <VersionsView versions={versions} />
         )}
-        {activeTab === "preview" && <PreviewTab strategy={strategy} />}
-        {activeTab === "versions" && <VersionsTab versions={versions} strategyId={strategyId} />}
       </div>
 
       <RunJobDialog
         kind={dialogKind}
         onOpenChange={(open) => !open && setDialogKind(null)}
         strategyId={strategyId}
-        version={versions[0]}
+        version={latest}
         onCreated={(kind, id) => {
           setDialogKind(null);
           void navigate({
@@ -126,267 +126,127 @@ function StrategyWorkspace() {
   );
 }
 
-function RuleEditorTab({ strategy, latestVersionNumber, onRunJob }: {
-  strategy: any;
-  latestVersionNumber: number | undefined;
+const JOBS: ReadonlyArray<{ kind: JobKind; label: string }> = [
+  { kind: "backtest", label: "Backtest" },
+  { kind: "sweep", label: "Parameter sweep" },
+  { kind: "walk-forward", label: "Walk-forward test" },
+];
+
+function RulesView({ definition, latestVersion, onRunJob }: {
+  definition: StrategyDefinition | undefined;
+  latestVersion: number | undefined;
   onRunJob: (kind: JobKind) => void;
 }) {
-  const definition = strategy.currentDraft as any;
+  const settings: Array<[string, string]> = [
+    ["Symbol", definition?.universe?.symbolOrId ?? "—"],
+    ["Timeframe", definition?.timeframe ?? "—"],
+    ["Direction", definition?.direction === "SHORT_ONLY" ? "Short only" : definition?.direction === "LONG_SHORT" ? "Long and short" : "Long only"],
+  ];
 
   return (
-    <div className="flex h-full overflow-hidden">
-      {/* Editor panel */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* General */}
-        <EditorSection title="General" icon={Code2}>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="text-xs text-muted-foreground">Name</label>
-              <div className="mt-1 rounded border border-border bg-background px-2.5 py-1.5 text-sm">{definition?.name ?? "—"}</div>
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground">Direction</label>
-              <div className="mt-1 rounded border border-border bg-background px-2.5 py-1.5 text-sm">{definition?.direction ?? "LONG_ONLY"}</div>
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground">Timeframe</label>
-              <div className="mt-1 rounded border border-border bg-background px-2.5 py-1.5 text-sm font-mono">{definition?.timeframe ?? "1d"}</div>
-            </div>
-          </div>
-        </EditorSection>
+    <div className="flex flex-col lg:flex-row">
+      <div className="min-w-0 flex-1 space-y-4 p-4">
+        <RuleSection title="Entry" group={definition?.entry} />
+        <RuleSection title="Exit" group={definition?.exit} />
+        <SettingsTable title="Setup" rows={settings} />
+        <SettingsTable title="Risk" rows={riskRows(definition?.risk)} />
+        <SettingsTable title="Execution" rows={executionRows(definition?.execution)} />
+      </div>
 
-        {/* Universe */}
-        <EditorSection title="Universe" icon={FlaskConical}>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-muted-foreground">Universe Type</label>
-              <div className="mt-1 rounded border border-border bg-background px-2.5 py-1.5 text-sm">{definition?.universe?.type ?? "SINGLE_SYMBOL"}</div>
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground">Symbol / ID</label>
-              <div className="mt-1 rounded border border-border bg-background px-2.5 py-1.5 text-sm font-mono">{definition?.universe?.symbolOrId ?? "—"}</div>
-            </div>
-          </div>
-        </EditorSection>
-
-        {/* Entry Rules */}
-        <EditorSection title="Entry Rules" icon={Play} badge="ENTRY">
-          <RuleGroupDisplay group={definition?.entry} />
-        </EditorSection>
-
-        {/* Exit Rules */}
-        <EditorSection title="Exit Rules" icon={Play} badge="EXIT">
-          <RuleGroupDisplay group={definition?.exit} />
-        </EditorSection>
-
-        {/* Risk */}
-        <EditorSection title="Risk Management" icon={AlertCircle}>
-          <div className="grid grid-cols-3 gap-3 text-sm">
-            {definition?.risk && Object.entries(definition.risk).slice(0, 6).map(([k, v]) => (
-              <div key={k}>
-                <label className="text-[10px] text-muted-foreground uppercase tracking-wide">{k.replace(/([A-Z])/g, " $1")}</label>
-                <div className="mt-0.5 font-mono text-xs">{String(v)}</div>
-              </div>
+      <aside className="space-y-4 border-t border-border p-4 lg:w-64 lg:shrink-0 lg:border-l lg:border-t-0">
+        <section>
+          <h2 className="mb-2 text-xs font-medium text-muted-foreground">Run</h2>
+          <div className="flex flex-wrap gap-1.5 lg:flex-col">
+            {JOBS.map((job) => (
+              <button
+                key={job.kind}
+                type="button"
+                onClick={() => onRunJob(job.kind)}
+                disabled={latestVersion === undefined}
+                className={`${secondaryButton} lg:w-full`}
+              >
+                {job.label}
+              </button>
             ))}
           </div>
-        </EditorSection>
-      </div>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            {latestVersion === undefined
+              ? "Save a version first: jobs run a saved version, not the draft."
+              : `Jobs run the latest saved version (v${latestVersion}).`}
+          </p>
+        </section>
+        <section>
+          <h2 className="mb-1 text-xs font-medium text-muted-foreground">Deployment</h2>
+          {/* Live trading is not supported, and the paper signal evaluator does not run on the server yet. */}
+          <p className="text-[11px] text-muted-foreground">Not available: live trading is unsupported and automated paper deployment is not built yet.</p>
+        </section>
+      </aside>
+    </div>
+  );
+}
 
-      {/* Right panel — quick actions */}
-      <div className="w-60 border-l border-border p-4 flex-shrink-0 overflow-y-auto">
-        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">Quick Actions</div>
-        <div className="space-y-2">
-          {([
-            { kind: "backtest", label: "Run Backtest", icon: FlaskConical, color: "text-primary" },
-            { kind: "sweep", label: "Parameter Sweep", icon: Play, color: "text-amber-400" },
-            { kind: "walk-forward", label: "Walk-Forward Test", icon: GitBranch, color: "text-purple-400" },
-          ] as const).map((a) => (
-            <button
-              key={a.label}
-              onClick={() => onRunJob(a.kind)}
-              disabled={latestVersionNumber === undefined}
-              className="w-full flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground"
-            >
-              <a.icon className={`h-3.5 w-3.5 ${a.color}`} />
-              {a.label}
-            </button>
+function RuleSection({ title, group }: { title: string; group: StrategyRuleGroup | undefined }) {
+  const conditions = group?.children ?? [];
+  return (
+    <section>
+      <h2 className="mb-1.5 flex items-baseline gap-2 text-xs font-medium text-muted-foreground">
+        {title}
+        {conditions.length > 1 && <span className="font-mono">{group?.negate ? `NOT ${group.combinator}` : group?.combinator}</span>}
+      </h2>
+      {conditions.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No rules</p>
+      ) : (
+        <ol className="divide-y divide-border rounded border border-border bg-panel font-mono text-xs">
+          {conditions.map((child: StrategyCondition | StrategyRuleGroup) => (
+            <li key={child.id} className="px-3 py-1.5">
+              {child.kind === "CONDITION" ? conditionText(child) : `(${groupText(child)})`}
+            </li>
           ))}
-        </div>
-        <p className="mt-2 text-[10px] text-muted-foreground">
-          {latestVersionNumber === undefined
-            ? "Create a version first: jobs run a saved version, not the draft."
-            : `Jobs run the latest saved version (v${latestVersionNumber}).`}
-        </p>
-
-        <div className="mt-6 text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">Deployments</div>
-        {/* Live trading is not supported, and the paper signal evaluator does not run on the server yet. */}
-        <span title="Live deployment is disabled; paper only." className="block">
-          <button
-            disabled
-            aria-describedby="deploy-disabled-reason"
-            className="w-full flex items-center gap-2 rounded-md bg-primary/10 border border-primary/30 px-3 py-2 text-xs text-primary opacity-50 cursor-not-allowed"
-          >
-            <Play className="h-3.5 w-3.5" />
-            Deploy Strategy
-          </button>
-        </span>
-        <p id="deploy-disabled-reason" className="mt-2 text-[10px] text-muted-foreground">
-          Live deployment is disabled; paper only. Automated paper deployment is not available yet.
-        </p>
-      </div>
-    </div>
+        </ol>
+      )}
+    </section>
   );
 }
 
-function EditorSection({ title, icon: Icon, badge, children }: {
-  title: string;
-  icon: React.ComponentType<{ className?: string }>;
-  badge?: string;
-  children: React.ReactNode;
-}) {
+function SettingsTable({ title, rows }: { title: string; rows: Array<[string, string]> }) {
+  if (rows.length === 0) return null;
   return (
-    <div className="rounded-lg border border-border bg-panel overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-sm font-medium">{title}</span>
-        {badge && (
-          <span className="ml-auto text-[10px] rounded border border-border px-1.5 py-0.5 uppercase tracking-wide text-muted-foreground">
-            {badge}
-          </span>
-        )}
-      </div>
-      <div className="p-4">{children}</div>
-    </div>
-  );
-}
-
-function RuleGroupDisplay({ group }: { group: any }) {
-  if (!group) {
-    return <div className="text-xs text-muted-foreground italic">No rules defined</div>;
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-xs">
-        <span className="rounded border border-border bg-background px-1.5 py-0.5 font-mono">
-          {group.combinator}
-        </span>
-        {group.negate && <span className="text-bear text-[10px]">NOT</span>}
-        <span className="text-muted-foreground">{group.children?.length ?? 0} conditions</span>
-      </div>
-      <div className="pl-3 border-l border-border space-y-1.5">
-        {(group.children ?? []).map((child: any, i: number) => (
-          <div key={i}>
-            {child.kind === "CONDITION" ? (
-              <ConditionDisplay condition={child} />
-            ) : (
-              <RuleGroupDisplay group={child} />
-            )}
+    <section>
+      <h2 className="mb-1.5 text-xs font-medium text-muted-foreground">{title}</h2>
+      <dl className="grid grid-cols-1 border-l border-t border-border text-xs sm:grid-cols-2 xl:grid-cols-3">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex items-baseline justify-between gap-3 border-b border-r border-border px-3 py-1.5">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="text-right font-mono">{value}</dd>
           </div>
         ))}
-      </div>
-    </div>
+      </dl>
+    </section>
   );
 }
 
-function ConditionDisplay({ condition }: { condition: any }) {
-  const leftStr = operandToString(condition.left);
-  const rightStr = operandToString(condition.right);
+function VersionsView({ versions }: { versions: VersionRow[] }) {
+  if (versions.length === 0) return <EmptyLine>No saved versions. Save version freezes the current rules so jobs can run them.</EmptyLine>;
   return (
-    <div className="flex items-center gap-2 rounded bg-background px-3 py-2 text-xs font-mono">
-      <span className="text-blue-400">{leftStr}</span>
-      <span className="text-muted-foreground">{condition.operator.toLowerCase().replace(/_/g, " ")}</span>
-      <span className="text-amber-400">{rightStr}</span>
-    </div>
-  );
-}
-
-function operandToString(op: any): string {
-  if (!op) return "?";
-  if (op.kind === "CONSTANT") return String(op.value);
-  if (op.kind === "PRICE") return `${op.field}${op.lag ? `[${op.lag}]` : ""}`;
-  if (op.kind === "INDICATOR") {
-    const params = Object.entries(op.params ?? {}).map(([k, v]) => `${k}=${v}`).join(",");
-    return `${op.indicator}(${params})${op.lag ? `[${op.lag}]` : ""}`;
-  }
-  return "?";
-}
-
-function PreviewTab({ strategy }: { strategy: any }) {
-  const definition = strategy.currentDraft as any;
-  return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="max-w-2xl space-y-4">
-        <div>
-          <h2 className="font-medium mb-1">Strategy Summary</h2>
-          <p className="text-sm text-muted-foreground">Human-readable interpretation of the rule tree</p>
-        </div>
-
-        <div className="rounded-lg border border-border bg-panel p-4 text-sm space-y-2">
-          <div className="font-medium">{definition?.name ?? "Unnamed Strategy"}</div>
-          <div className="text-muted-foreground">
-            Direction: <span className="text-foreground">{definition?.direction ?? "LONG_ONLY"}</span>
-            {" | "}Timeframe: <span className="text-foreground font-mono">{definition?.timeframe ?? "1d"}</span>
-            {" | "}Universe: <span className="text-foreground font-mono">{definition?.universe?.symbolOrId ?? "—"}</span>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
-          <div className="text-xs font-medium text-emerald-400 uppercase tracking-wide mb-2">Entry Logic</div>
-          <div className="text-sm">{describeGroup(definition?.entry)}</div>
-        </div>
-
-        <div className="rounded-lg border border-bear/20 bg-bear/5 p-4">
-          <div className="text-xs font-medium text-bear uppercase tracking-wide mb-2">Exit Logic</div>
-          <div className="text-sm">{describeGroup(definition?.exit)}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function describeGroup(group: any): string {
-  if (!group || !group.children || group.children.length === 0) return "No rules defined";
-  const parts = group.children.map((child: any) => {
-    if (child.kind === "CONDITION") {
-      return `${operandToString(child.left)} ${child.operator.toLowerCase().replace(/_/g, " ")} ${operandToString(child.right)}`;
-    }
-    return `(${describeGroup(child)})`;
-  });
-  const joined = parts.join(group.combinator === "AND" ? " AND " : " OR ");
-  return group.negate ? `NOT (${joined})` : joined;
-}
-
-function VersionsTab({ versions, strategyId }: { versions: any[]; strategyId: string }) {
-  return (
-    <div className="h-full overflow-y-auto p-4">
-      {versions.length === 0 ? (
-        <div className="flex h-48 flex-col items-center justify-center rounded-lg border border-dashed border-border">
-          <Clock className="h-8 w-8 text-muted-foreground/30 mb-2" />
-          <p className="text-sm text-muted-foreground">No versions yet</p>
-          <p className="text-xs text-muted-foreground mt-0.5">Create a version from the editor header</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {versions.map((v: any) => (
-            <div key={v.id} className="flex items-center gap-4 rounded-lg border border-border bg-panel p-4">
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-sm font-medium">v{v.versionNumber}</span>
-                  <span className="text-xs text-muted-foreground font-mono truncate">{v.definitionHash?.slice(0, 12)}…</span>
-                </div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  Engine {v.engineVersion} · {new Date(v.createdAt).toLocaleDateString()}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-emerald-400" />
-                <span className="text-xs text-emerald-400">Immutable</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <table className="w-full text-xs">
+      <thead className="border-b border-border bg-panel text-muted-foreground">
+        <tr>
+          <th className="px-4 py-2 text-left font-medium">Version</th>
+          <th className="px-3 py-2 text-left font-medium">Definition hash</th>
+          <th className="hidden px-3 py-2 text-left font-medium sm:table-cell">Engine</th>
+          <th className="px-4 py-2 text-right font-medium">Saved (IST)</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-border font-mono">
+        {versions.map((v) => (
+          <tr key={v.id}>
+            <td className="px-4 py-2">v{v.versionNumber}</td>
+            <td className="px-3 py-2 text-muted-foreground" title={v.definitionHash}>{v.definitionHash.slice(0, 12)}</td>
+            <td className="hidden px-3 py-2 text-muted-foreground sm:table-cell">{v.engineVersion}</td>
+            <td className="whitespace-nowrap px-4 py-2 text-right text-muted-foreground">{dateTime(v.createdAt)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

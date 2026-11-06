@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, FlaskConical, GitBranch, Play, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
 import {
@@ -32,12 +32,11 @@ interface Props {
 }
 
 const TIMEFRAMES = ["1d", "1h", "15m", "5m", "1m", "1wk"];
-const TITLES: Record<JobKind, { title: string; icon: typeof FlaskConical; description: string }> = {
-  backtest: { title: "Run backtest", icon: FlaskConical, description: "Simulate the strategy on stored candles." },
-  sweep: { title: "Parameter sweep", icon: Play, description: "Backtest every combination of the parameter values below." },
+const TITLES: Record<JobKind, { title: string; description: string }> = {
+  backtest: { title: "Run backtest", description: "Simulate the strategy on stored candles." },
+  sweep: { title: "Parameter sweep", description: "Backtest every combination of the parameter values below." },
   "walk-forward": {
     title: "Walk-forward test",
-    icon: GitBranch,
     description: "Pick parameters on past windows, validate them, then test them on the following unseen window.",
   },
 };
@@ -118,7 +117,7 @@ function RunJobForm({ kind, strategyId, version, onCreated }: Omit<Props, "kind"
   const combos = Array.isArray(parameters) ? combinationCount(parameters) : 0;
   const comboLimit = kind === "sweep" ? MAX_SWEEP_COMBINATIONS : MAX_WALK_FORWARD_COMBINATIONS;
 
-  const { title, icon: Icon, description } = TITLES[kind];
+  const { title, description } = TITLES[kind];
 
   const submit = () => {
     setFormError(null);
@@ -181,10 +180,7 @@ function RunJobForm({ kind, strategyId, version, onCreated }: Omit<Props, "kind"
   return (
     <>
       <DialogHeader>
-        <DialogTitle className="flex items-center gap-2">
-          <Icon className="h-4 w-4 text-primary" />
-          {title}
-        </DialogTitle>
+        <DialogTitle>{title}</DialogTitle>
         <DialogDescription>
           {description} {version ? `Runs version v${version.versionNumber}.` : "This strategy has no saved version yet."}
         </DialogDescription>
@@ -214,7 +210,7 @@ function RunJobForm({ kind, strategyId, version, onCreated }: Omit<Props, "kind"
         </div>
 
         {kind === "walk-forward" && (
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Field label="Mode">
               <select value={mode} onChange={(e) => setMode(e.target.value as "ROLLING" | "ANCHORED")} className={inputClass}>
                 <option value="ROLLING">Rolling</option>
