@@ -1,0 +1,34 @@
+import { test, expect } from "./support/fixtures";
+
+test("signed out: /terminal makes no protected calls and asks the visitor to sign in", async ({
+  page,
+  api,
+}) => {
+  await page.goto("/terminal");
+
+  const ticket = page.getByText("Order Ticket", { exact: true }).locator("xpath=../..");
+  await expect(ticket.getByText("₹2450.00", { exact: true })).toBeVisible();
+  await expect(
+    ticket
+      .getByRole("status")
+      .filter({ hasText: "Paper trading requires a signed-in account. Sign-in is coming soon." }),
+  ).toBeVisible();
+  await expect(ticket.getByRole("button", { name: "BUY 10 RELIANCE", exact: true })).toBeDisabled();
+  await expect(ticket.getByRole("button", { name: "BUY", exact: true })).toBeDisabled();
+
+  // The market stream opens after the 400 ms subscription debounce, well after the paper
+  // account query and paper stream would have started on mount.
+  await expect
+    .poll(() => api.requests.some((entry) => entry.url.pathname === "/api/market/stream"))
+    .toBe(true);
+  await expect(
+    page.getByText("No open positions. Place an order to execute a trade."),
+  ).toBeVisible();
+
+  const protectedCalls = api.requests
+    .filter(
+      ({ url }) => url.pathname.startsWith("/api/trpc/") || url.pathname.startsWith("/api/paper/"),
+    )
+    .map(({ method, url }) => `${method} ${url.pathname}`);
+  expect(protectedCalls).toEqual([]);
+});

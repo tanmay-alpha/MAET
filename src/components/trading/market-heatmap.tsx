@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { trpc, type HeatmapCell } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
 
 function shadeFor(chg?: number) {
   if (chg === undefined) return "var(--color-panel)";
@@ -69,13 +70,27 @@ function computeLayout(cells: HeatmapCell[], totalW: number, totalH: number): La
 }
 
 export function MarketHeatmap({ height = 500 }: { height?: number }) {
+  // marketBreadth procedures require a session on the server; don't poll them signed out.
+  const signedIn = useSignedIn();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["marketBreadth", "heatmap", "ALL_NSE"],
     queryFn: () => trpc.marketBreadth.getHeatmapCells.query({ universe: "ALL_NSE" }),
+    enabled: signedIn,
     refetchInterval: 30_000,
   });
 
   const cells = data?.cells ?? [];
+
+  if (!signedIn) {
+    return (
+      <div
+        className="flex w-full items-center justify-center rounded-lg border border-border bg-panel text-xs text-muted-foreground"
+        style={{ height }}
+      >
+        Sign in to see the verified market heatmap.
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (

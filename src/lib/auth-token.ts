@@ -131,6 +131,15 @@ async function refreshAccessToken(
   }
 }
 
+/**
+ * Whether this browser holds a Supabase session (an access token, possibly expired but
+ * refreshable). Synchronous, for gating requests that only make sense when signed in.
+ */
+export function hasStoredSession(): boolean {
+  const data = getStoredSession()?.data;
+  return Boolean(data?.currentSession?.access_token || data?.access_token);
+}
+
 export async function getCurrentAccessToken(): Promise<string | null> {
   const stored = getStoredSession();
   if (!stored) {

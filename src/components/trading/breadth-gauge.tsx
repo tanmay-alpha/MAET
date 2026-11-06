@@ -1,12 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
 
 export function BreadthGauge() {
+  // marketBreadth procedures require a session on the server; don't poll them signed out.
+  const signedIn = useSignedIn();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["marketBreadth", "overview", "ALL_NSE"],
     queryFn: () => trpc.marketBreadth.getOverview.query({ universe: "ALL_NSE" }),
+    enabled: signedIn,
     refetchInterval: 30_000,
   });
+
+  if (!signedIn) {
+    return (
+      <div className="rounded-lg border border-border bg-panel p-5 text-center text-xs text-muted-foreground">
+        Sign in to see verified market breadth.
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (

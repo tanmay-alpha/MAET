@@ -239,10 +239,14 @@ export type MarketCandlesResponse = {
   candles: MarketCandle[];
 };
 
-async function fetchMarketEndpoint(path: string, signal?: AbortSignal): Promise<Response> {
-  if (!API_BASE_URL) return fetch(path, { signal });
+async function fetchMarketEndpoint(
+  path: string,
+  signal?: AbortSignal,
+  baseUrl: string = API_BASE_URL
+): Promise<Response> {
+  if (!baseUrl) return fetch(path, { signal });
 
-  const primaryUrl = `${API_BASE_URL}${path}`;
+  const primaryUrl = `${baseUrl}${path}`;
   const controller = new AbortController();
   // Render free instances and the Supabase transaction pooler can need several
   // seconds after an idle period. Keep a bounded timeout, but do not abandon a
@@ -306,26 +310,19 @@ export async function fetchMarketCandles(
   symbol: string,
   timeframe: MarketCandle["tf"],
   range: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  baseUrl: string = API_BASE_URL
 ): Promise<MarketCandlesResponse> {
   const params = new URLSearchParams({ symbol, tf: timeframe, range });
   const path = `/api/market/candles?${params}`;
 
-  // Historical data is delayed and does not depend on Render's live broker
-  // process. Prefer the same-origin server route in the browser so a degraded
-  // Render database/Yahoo worker does not emit a failed request before the
-  // already-working Vercel fallback is used.
-  let response: Response;
-  if (typeof window !== "undefined" && API_BASE_URL) {
-    // Do not forward TanStack Query's observer signal here. During route/layout
-    // hydration that signal can be replaced before this fast serverless request
-    // settles, producing an abort/refetch loop. Query keys still prevent a
-    // superseded timeframe response from being displayed.
-    response = await fetch(path);
-    if (!response.ok) response = await fetchMarketEndpoint(path, signal);
-  } else {
-    response = await fetchMarketEndpoint(path, signal);
-  }
+  // Ask the backend (VITE_API_URL) first: it serves candles, while the same-origin
+  // Vercel route depends on a database/Yahoo path that fails in production (502).
+  // fetchMarketEndpoint falls back to the same-origin route if the backend fails.
+  // In the browser, don't forward TanStack Query's observer signal: during route/layout
+  // hydration it can be replaced before the request settles, causing an abort/refetch
+  // loop. Query keys still keep a superseded timeframe's response off the screen.
+  const response = await fetchMarketEndpoint(path, typeof window === "undefined" ? signal : undefined, baseUrl);
   if (!response.ok) throw new Error(`Candle service returned ${response.status}`);
   return response.json() as Promise<MarketCandlesResponse>;
 }

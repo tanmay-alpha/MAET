@@ -12,43 +12,49 @@
 - **Corporate actions**: applied oldest-first; BONUS a:b scales prices by b/(a+b).
 - **Removed**: `SimulatedOrder` (order-simulator), legacy `backtest/engine.ts`, `runner.ts`, `strategies.ts`, `strategies-v2.ts`, and the unauthenticated `/api/backtest/run` endpoint.
 
-## [P2] 2026-09-16 — Professional-Grade Research & Simulation Engine
+## [P2] 2026-09-16 — Research & Simulation Engine
 
-### New: Realistic Execution Model (`server/domain/strategy/execution-model.ts`)
+> **Status at `ca8b1bb`.** Of the modules below, only the walk-forward engine runs in production (through `server/workers/walk-forward-worker.ts`, a separate process that the Render web service does not start: in progress). The execution model, point-in-time fundamentals, portfolio engine and robustness analysis are research modules exercised by tests only; production backtests use `runner-v3`. Corrections against the code are marked inline. See `docs/RESEARCH_ENGINE.md`.
+
+### New: Execution Model (`server/domain/strategy/execution-model.ts`, research module)
 - **Spread models**: NONE, FIXED_BPS, VOLATILITY_BASED, LIQUIDITY_BASED
 - **Square-root market impact**: `impactBps = coeff × √(participation) × volFactor`
-- BUY orders shift price up; SELL orders shift price down — correctly penalising both sides
+- BUY orders shift price up; SELL orders shift price down
 - **Participation rate cap**: `maxFill = floor(barVolume × maxParticipationRate)`
-- Multi-bar order state machine: NEW → PARTIALLY_FILLED → FILLED / EXPIRED / CANCELLED
-- Full cost breakdown: brokerage, taxes, spread, slippage, market impact, cost drag %
+- Cost breakdown: brokerage, taxes, spread, slippage, market impact
+- Correction: there is no multi-bar order state machine (NEW → PARTIALLY_FILLED → FILLED / EXPIRED / CANCELLED) in this module; each call computes a single fill.
+- Status: used only by the portfolio engine; production backtests charge slippage as a flat bps debit.
 
 ### New: Corporate-Action Adjusted Historical Data (`server/domain/data/corporate-actions.ts`)
 - **Three series**: RAW, SPLIT_ADJUSTED, TOTAL_RETURN_ADJUSTED
 - Backward-adjusted OHLCV: split factors applied to all candles strictly before ex-date
 - Dividend reinvestment factor: `k = 1 - dividend/priorClose`
-- **Financial invariant**: a 2:1 stock split NEVER produces an artificial 50% drawdown
+- **Invariant**: a 2:1 stock split, when supplied, does not produce an artificial 50% drawdown
+- Status: no production backtest caller supplies corporate actions, and no corporate-action data is ingested.
 
 ### New: Point-in-Time Fundamentals (`server/domain/fundamentals/point-in-time.ts`)
-- `availableFrom <= T` invariant — zero look-ahead bias on financial statements
+- `availableFrom <= T` invariant: a statement revision is invisible before it is available
 - Full revision tracking: backtests before restatement see Revision 1, after see Revision 2
 - Historical universe membership: survivorship bias prevention with `SURVIVORSHIP_BIAS_POSSIBLE` warnings
 - `getActiveUniverseConstituents()` — point-in-time index constituent lookup
+- Status: not yet used by any backtest.
 
-### New: Multi-Symbol Portfolio Backtest Engine (`server/domain/strategy/portfolio-engine.ts`)
+### New: Multi-Symbol Portfolio Backtest Engine (`server/domain/strategy/portfolio-engine.ts`, research module)
 - Synchronized bar-by-bar timeline across all instruments
 - **Shared cash pool**: symbols compete for capital — capital cannot be double-spent
-- Deterministic signal ranking: MOMENTUM, RELATIVE_VOLUME, SCORECARD_SCORE, SYMBOL_ASCENDING
+- Deterministic signal ranking: MOMENTUM, RELATIVE_VOLUME, SCORECARD_SCORE, SYMBOL_ASCENDING (RELATIVE_VOLUME currently uses raw signal-bar volume; SCORECARD_SCORE uses volume × momentum)
 - Portfolio constraints: maximumOpenPositions, maximumPositionPercent, maximumGrossExposurePercent, maximumSectorExposurePercent, cashReservePercent
-- Rebalancing schedules: DAILY, WEEKLY, MONTHLY, SIGNAL_DRIVEN (sells before buys)
+- Correction: a `rebalanceSchedule` option (DAILY, WEEKLY, MONTHLY, SIGNAL_DRIVEN) is accepted but never read; there is no scheduled rebalancing. Each timestamp processes exits before entries.
 - Full portfolio attribution: PnL by symbol, sector, month, reason
-- Institutional metrics: CAGR, Sharpe, Sortino, MaxDrawdown, Calmar, Turnover, Cost Drag, Beta, Alpha
-- Benchmark comparison curve + tracking error
-- Reproducibility hash for deterministic run verification
+- Metrics: CAGR, Sharpe, Sortino, MaxDrawdown, Calmar, win rate, profit factor, raw turnover (traded notional), cost drag
+- Benchmark comparison curve when benchmark candles are supplied. Correction: no beta, alpha or tracking error is computed.
+- Correction: `reproducibilityHash` is a string of timeline length, per-symbol candle counts and capital, not a hash of the price data.
+- Status: no endpoint or worker calls it.
 
 ### New: Walk-Forward Analysis Engine (`server/domain/strategy/walk-forward.ts`)
 - 3-phase windows: Training → Validation → Test
-- **Zero-leakage invariants**: test candles never enter training or validation indicator caches
-- Parameter sweep across each training window, parameter selection on validation
+- **Leakage isolation**: each phase's candles are sliced to end at the phase boundary, so test candles never enter training or validation indicator caches; `assertNoDataLeakage` throws on overlapping timestamps
+- Parameter sweep across each training window; parameters are selected by the best training Sharpe. Correction: validation does not select parameters; it rejects a window whose validation Sharpe is below −1, and rejected windows are not tested out of sample.
 - OOS equity curve concatenation across all test windows
 - Walk-Forward Efficiency ratio, performance retention, OOS Sharpe, OOS drawdown
 
@@ -58,9 +64,10 @@
 - Robustness score 0–100 (weighted: neighbor stability 40%, sample size 25%, drawdown 20%, cost drag 15%)
 - Safeguard flags: LOW_SAMPLE_SIZE, OVERFIT_RISK, PARAMETER_INSTABILITY, HIGH_COST_DRAG
 - 2D parameter heatmap matrix for UI visualization
+- Status: research module; only tests call it.
 
 ### New: Analytics UI Components
-- `PortfolioAnalyticsView` — equity curve, drawdown, sector exposure, cost drag, monthly returns, top/bottom contributors
+- `PortfolioAnalyticsView` — equity curve, drawdown, sector exposure, cost drag, monthly returns, top/bottom contributors (no production endpoint supplies portfolio-engine results to it yet)
 - `WalkForwardView` — aggregate OOS equity curve, per-window OOS/IS breakdown table, OOS vs IS scatter
 - `RobustnessHeatmapView` — 2D parameter sensitivity heatmap, robustness score, safeguard flags
 

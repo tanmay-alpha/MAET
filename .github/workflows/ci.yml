@@ -156,6 +156,42 @@ jobs:
       - name: Run Advanced Feature Tests & Verification
         run: bun run test:advanced
 
+  e2e:
+    name: End-to-End Critical Flows (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Bun Environment
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install Dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: bunx playwright install --with-deps chromium
+
+      - name: Type Check E2E Suite
+        run: bunx tsc -p tests/e2e/tsconfig.json --noEmit
+
+      # Builds the production bundle against a fake API origin and serves it; every
+      # backend request is answered by tests/e2e/support/mock-api.ts.
+      - name: Run E2E Suite
+        run: bun run test:e2e
+
+      - name: Upload Playwright Report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: test-results/
+          retention-days: 14
+
   build-frontend:
     name: Frontend Production Build
     runs-on: ubuntu-latest

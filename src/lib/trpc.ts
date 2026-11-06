@@ -62,31 +62,31 @@ export class AuthenticationError extends Error {
   }
 }
 
-async function fetchWithAuth(
-  url: string,
-  options: RequestInit = {},
-  isRetry = false
-): Promise<Response> {
+/** React Query retry policy: up to 3 retries, but none once the server rejected the session. */
+export function retryUnlessUnauthenticated(failureCount: number, error: unknown): boolean {
+  return !(error instanceof AuthenticationError) && failureCount < 3;
+}
+
+// Attaches the session token when there is one. Public procedures work signed out; a
+// protected procedure answers 401, which surfaces as AuthenticationError.
+async function fetchTrpc(url: string, options: RequestInit = {}): Promise<Response> {
+  const send = (accessToken: string | null) =>
+    fetch(url, {
+      ...options,
+      headers: {
+        ...(options.headers as Record<string, string> | undefined),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+    });
+
   const token = await getCurrentAccessToken();
-  if (!token) {
-    throw new AuthenticationError("AUTHENTICATION_REQUIRED");
-  }
-
-  const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string> | undefined),
-    Authorization: `Bearer ${token}`,
-  };
-
-  const res = await fetch(url, { ...options, headers });
-
-  if (res.status === 401 && !isRetry) {
+  let res = await send(token);
+  if (res.status === 401 && token) {
+    // The token may have expired in flight; retry once with a refreshed one.
     const refreshedToken = await getCurrentAccessToken();
-    if (refreshedToken && refreshedToken !== token) {
-      headers.Authorization = `Bearer ${refreshedToken}`;
-      return await fetch(url, { ...options, headers });
-    }
+    if (refreshedToken && refreshedToken !== token) res = await send(refreshedToken);
   }
-
+  if (res.status === 401) throw new AuthenticationError();
   return res;
 }
 
@@ -112,14 +112,14 @@ async function trpcQuery<T>(path: string, queryParams?: Record<string, any>): Pr
     if (queryString) url += `?${queryString}`;
   }
 
-  const res = await fetchWithAuth(url);
+  const res = await fetchTrpc(url);
   if (!res.ok) throw await toRequestError(res, "tRPC query failed");
   const json = (await res.json()) as { result: { data: T } };
   return json.result.data;
 }
 
 async function trpcMutation<TInput, TOutput>(path: string, input: TInput): Promise<TOutput> {
-  const res = await fetchWithAuth(apiUrl(`/api/trpc/${path}`), {
+  const res = await fetchTrpc(apiUrl(`/api/trpc/${path}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

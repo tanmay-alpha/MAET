@@ -1,54 +1,48 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// The suite runs against a production build (src/scripts/preview.ts: `vite build` with the
+// node-server preset, then `node .output/server/index.mjs`). VITE_API_URL points the
+// bundle at a fake origin that tests/e2e/support/mock-api.ts answers via page.route, so
+// no request reaches a real backend. https keeps the app's CSP (connect-src 'self' https:)
+// in force.
+const PORT = Number(process.env.E2E_PORT ?? 4310);
+const BASE_URL = `http://127.0.0.1:${PORT}`;
+
 export default defineConfig({
   testDir: "./tests/e2e",
+  outputDir: "./test-results/e2e",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
-  reporter: "list",
+  retries: process.env.CI ? 1 : 0,
+  workers: process.env.CI ? 2 : undefined,
+  reporter: process.env.CI
+    ? [["list"], ["html", { outputFolder: "test-results/playwright-report", open: "never" }]]
+    : "list",
   use: {
-    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || "http://localhost:3000",
+    baseURL: BASE_URL,
+    locale: "en-IN",
+    timezoneId: "Asia/Kolkata",
     trace: "retain-on-failure",
-    screenshot: "on",
-    video: "retain-on-failure",
+    screenshot: "only-on-failure",
+    video: "off",
   },
   projects: [
     {
-      name: "chrome-desktop",
-      use: {
-        channel: "chrome",
-        viewport: { width: 1440, height: 900 },
-      },
+      name: "desktop",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
-    {
-      name: "chrome-1366",
-      use: {
-        channel: "chrome",
-        viewport: { width: 1366, height: 768 },
-      },
-    },
-    {
-      name: "chrome-1920",
-      use: {
-        channel: "chrome",
-        viewport: { width: 1920, height: 1080 },
-      },
-    },
-    {
-      name: "chrome-mobile",
-      use: {
-        channel: "chrome",
-        viewport: { width: 390, height: 844 },
-        isMobile: true,
-        hasTouch: true,
-      },
-    },
+    { name: "mobile", use: { ...devices["Pixel 7"] } },
   ],
-  webServer: process.env.PLAYWRIGHT_TEST_BASE_URL ? undefined : {
-    command: "bun run --cwd src dev --port 3000",
-    url: "http://localhost:3000",
-    reuseExistingServer: true,
-    timeout: 120 * 1000,
+  webServer: {
+    command: `bun run --cwd src preview --port ${PORT}`,
+    url: BASE_URL,
+    // Never reuse a server: one built without the fake API origin would hit real backends.
+    reuseExistingServer: false,
+    timeout: 240_000,
+    env: {
+      VITE_API_URL: "https://api.test",
+      VITE_SUPABASE_URL: "https://supabase.test",
+      VITE_SUPABASE_ANON_KEY: "e2e-anon-key",
+    },
   },
 });

@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import { WATCHLIST, type MarketCatalogItem } from "@/lib/market-catalog";
 
 const LOCAL_STORAGE_KEY = "maet_guest_watchlist_v1";
 
 export function useWatchlist() {
   const queryClient = useQueryClient();
+  const signedIn = useSignedIn();
 
   // Start from the default list on both server and first client render; the saved guest
   // list is restored after mount so hydration markup matches.
@@ -41,6 +43,8 @@ export function useWatchlist() {
         return null;
       }
     },
+    // Logged-out visitors use the guest list stored in this browser.
+    enabled: signedIn,
     retry: false,
     staleTime: 10000,
   });
