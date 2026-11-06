@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CorporateActionEvent } from "@shared/types";
 import { corporateActionTooltip, describeCorporateAction, placeCorporateActions } from "./chart-corporate-actions";
+import { formatIstCrosshairTime } from "./chart-time";
 
 const dividend = (exDate: string, amount = 24, splitAdjusted = false): CorporateActionEvent => ({
   kind: "dividend",
@@ -47,6 +48,7 @@ describe("placeCorporateActions", () => {
       { time: dailyBars[0] / 1000, events: [dividend("2025-08-11")] },
       { time: dailyBars[2] / 1000, events: [split("2025-08-13", 2, 1), dividend("2025-08-13")] },
     ]);
+    expect(placed.map(({ time }) => formatIstCrosshairTime(time, false))).toEqual(["11 Aug '25", "13 Aug '25"]);
   });
 
   test("drops events outside the bars", () => {
@@ -68,5 +70,7 @@ describe("placeCorporateActions", () => {
     expect(placeCorporateActions(fiveMinute, [dividend("2025-08-14"), dividend("2025-08-12")])).toEqual([
       { time: sessionOpen("2025-08-14") / 1000, events: [dividend("2025-08-14")] },
     ]);
+    // The chart labels that bar with the ex-date and its 09:15 IST open.
+    expect(formatIstCrosshairTime(sessionOpen("2025-08-14") / 1000, true)).toBe("14 Aug '25 09:15");
   });
 });

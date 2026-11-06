@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { extractPaperOverlay } from "./chart-paper-overlay";
-import { mapBacktestTradesToMarkers, mapFillsToTradeMarkers } from "./chart-trade-markers";
+import { mapBacktestTradesToMarkers, mapFillsToTradeMarkers, snapTradeMarkersToBars } from "./chart-trade-markers";
+import { formatIstCrosshairTime } from "./chart-time";
 import type { PaperPositionRow, PaperOrderRow } from "../../../server/modules/paper-trading/contracts";
 
 describe("Chart Paper Overlay", () => {
@@ -180,5 +181,22 @@ describe("Chart Trade Markers", () => {
     expect(markers[0].price).toBe(1850.5);
     expect(markers[1].side).toBe("sell");
     expect(markers[1].price).toBe(1890);
+  });
+
+  it("puts a fill on the bar that contains it, not the next one", () => {
+    const fills = mapFillsToTradeMarkers([
+      { id: "early", side: "BUY", price: 1400, quantity: 1, executedAt: "2026-11-04T10:00:00+05:30" },
+      { id: "fill", side: "BUY", price: 1500, quantity: 1, executedAt: "2026-11-06T09:22:00+05:30" },
+    ]);
+    const open = Date.parse("2026-11-06T03:45:00Z") / 1000;
+    const fiveMinute = [0, 5, 10].map((m) => open + m * 60);
+    const daily = [open - 86_400, open];
+
+    const onFiveMinute = snapTradeMarkersToBars(fills, fiveMinute);
+    expect(onFiveMinute.map((m) => m.id)).toEqual(["fill"]);
+    expect(formatIstCrosshairTime(onFiveMinute[0].time, true)).toBe("06 Nov '26 09:20");
+    // A fill after the daily bar's 09:15 stamp still belongs to that day.
+    expect(formatIstCrosshairTime(snapTradeMarkersToBars(fills, daily)[0].time, false)).toBe("06 Nov '26");
+    expect(snapTradeMarkersToBars(fills, [])).toEqual([]);
   });
 });

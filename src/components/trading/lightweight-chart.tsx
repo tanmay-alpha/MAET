@@ -24,6 +24,8 @@ import {
 } from "lightweight-charts";
 import { computeSMA, computeEMA, computeRSI, computeMACD } from "@shared/indicators";
 import { corporateActionTooltip, type PlacedCorporateActions } from "./chart-corporate-actions";
+import { formatIstCrosshairTime, formatIstTickMark, hasIntradayBars } from "./chart-time";
+import { snapTradeMarkersToBars } from "./chart-trade-markers";
 
 export interface ChartCandle {
   t: number;
@@ -92,7 +94,8 @@ export interface LightweightChartProps {
 const NO_TRADES: TradeMarkerData[] = [];
 const NO_CORPORATE_ACTIONS: PlacedCorporateActions[] = [];
 
-// Convert timestamp (ms or s) to UTC seconds for Lightweight Charts
+// Convert timestamp (ms or s) to UTC seconds for Lightweight Charts. Bars stay in
+// UTC; the axis and crosshair print them in IST (see chart-time).
 function toSeconds(ts: number): number {
   return ts > 1e11 ? Math.floor(ts / 1000) : ts;
 }
@@ -169,6 +172,8 @@ export function LightweightChart({
     return result;
   }, [data]);
 
+  const intraday = useMemo(() => hasIntradayBars(sanitizedCandles.map((c) => c.time as number)), [sanitizedCandles]);
+
   // Initialize main chart
   useEffect(() => {
     if (!containerRef.current) return;
@@ -206,6 +211,7 @@ export function LightweightChart({
         borderColor: "rgba(51, 65, 85, 0.6)",
         timeVisible: true,
         secondsVisible: false,
+        tickMarkFormatter: formatIstTickMark,
       },
       rightPriceScale: {
         borderColor: "rgba(51, 65, 85, 0.6)",
@@ -342,6 +348,7 @@ export function LightweightChart({
         borderColor: "rgba(51, 65, 85, 0.5)",
         timeVisible: true,
         secondsVisible: false,
+        tickMarkFormatter: formatIstTickMark,
       },
       rightPriceScale: {
         borderColor: "rgba(51, 65, 85, 0.5)",
@@ -405,6 +412,14 @@ export function LightweightChart({
       rsiSeriesRef.current = null;
     };
   }, [indicators.rsi]);
+
+  // Crosshair time in IST: a time of day only for intraday bars, a date otherwise.
+  useEffect(() => {
+    const localization = { timeFormatter: (time: Time) => formatIstCrosshairTime(time, intraday) };
+    chartRef.current?.applyOptions({ localization });
+    rsiChartRef.current?.applyOptions({ localization });
+    // The charts are rebuilt when seriesType, height or the RSI pane change.
+  }, [intraday, seriesType, height, indicators.rsi]);
 
   // Update data & indicators
   useEffect(() => {
@@ -517,8 +532,9 @@ export function LightweightChart({
   useEffect(() => {
     if (!mainSeriesRef.current) return;
 
-    const seriesMarkers: SeriesMarker<Time>[] = trades.map((tr) => {
-      const time = toSeconds(tr.time) as Time;
+    const barTimes = sanitizedCandles.map((c) => c.time as number);
+    const seriesMarkers: SeriesMarker<Time>[] = snapTradeMarkersToBars(trades, barTimes).map((tr) => {
+      const time = tr.time as Time;
       if (tr.side === "buy") {
         return {
           time,
@@ -567,7 +583,7 @@ export function LightweightChart({
       markersPluginRef.current.setMarkers(seriesMarkers);
     }
     // The chart (and its series) is rebuilt when these change.
-  }, [trades, corporateActions, seriesType, height, indicators.rsi]);
+  }, [trades, corporateActions, sanitizedCandles, seriesType, height, indicators.rsi]);
 
   // Hovering a bar that carries dividends or splits shows what they were.
   useEffect(() => {
