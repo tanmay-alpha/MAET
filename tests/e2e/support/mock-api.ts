@@ -10,7 +10,6 @@
  * Protected procedures answer 401 without a Bearer token, like protectedProcedure.
  */
 import type { Page, Request, Route } from "@playwright/test";
-import { z } from "zod";
 import type { MarketCandle, MarketCompany } from "../../../src/lib/market-api";
 import { PaperOrderCommandSchema } from "../../../server/modules/paper-trading/contracts";
 import {
@@ -75,6 +74,17 @@ const SORT_FIELDS: Record<string, keyof MarketCompany> = {
 
 function json(route: Route, status: number, body: unknown) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+}
+
+/** One field of a tRPC input object, or undefined; the fake validates only what it reads. */
+function inputValue(input: unknown, key: string): unknown {
+  return typeof input === "object" && input !== null ? Reflect.get(input, key) : undefined;
+}
+
+function requireString(input: unknown, key: string): string {
+  const value = inputValue(input, key);
+  if (typeof value !== "string") throw new TrpcError("BAD_REQUEST", `Expected string "${key}"`);
+  return value;
 }
 
 function sseFrame(event: string | null, data: unknown): string {
@@ -412,7 +422,7 @@ export class MockApi {
       };
     });
     this.onMutation("paperTrading.cancelOrder", (input) => {
-      const { orderId } = z.object({ orderId: z.string() }).parse(input);
+      const orderId = requireString(input, "orderId");
       const order = this.orders.find((row) => row.id === orderId);
       if (!order) throw new TrpcError("NOT_FOUND", "Order not found");
       if (order.status !== "PENDING" && order.status !== "TRIGGER_PENDING") {
@@ -434,18 +444,17 @@ export class MockApi {
 
     const strategies = new Map<string, unknown>();
     this.onMutation("strategyDefinitions.create", (input) => {
-      const { name, description, definition } = z
-        .object({
-          name: z.string(),
-          description: z.string().optional(),
-          definition: z.record(z.string(), z.unknown()),
-        })
-        .parse(input);
+      const name = requireString(input, "name");
+      const description = inputValue(input, "description");
+      const definition = inputValue(input, "definition");
+      if (typeof definition !== "object" || definition === null) {
+        throw new TrpcError("BAD_REQUEST", 'Expected object "definition"');
+      }
       const strategy = {
         id: CREATED_STRATEGY_ID,
         userId: USER_ID,
         name,
-        description: description ?? null,
+        description: typeof description === "string" ? description : null,
         status: "DRAFT",
         currentDraft: {
           name,
@@ -462,7 +471,7 @@ export class MockApi {
       return { strategy };
     });
     this.onQuery("strategyDefinitions.get", (input) => {
-      const strategy = strategies.get(z.object({ strategyId: z.string() }).parse(input).strategyId);
+      const strategy = strategies.get(requireString(input, "strategyId"));
       if (!strategy) throw new TrpcError("NOT_FOUND", "Strategy not found");
       return { strategy, versions: [] };
     });
