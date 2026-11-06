@@ -128,6 +128,10 @@ describe("Strategy job runner (PostgreSQL)", () => {
     expect(Number(points[0].equity)).toBe(250_000);
     const { trades } = await caller.getTrades({ jobId: job.id });
     expect(trades).toHaveLength(snapshot!.tradeCount);
+
+  });
+    expect(engine.metrics.exposure).toBeGreaterThan(0.01);
+    expect(Number(snapshot!.exposurePercent)).toBeCloseTo(engine.metrics.exposure * 100, 4);
   });
 
   it("requeues the running job on stop, without partial results, and keeps the event loop responsive", async () => {
@@ -165,6 +169,12 @@ describe("Strategy job runner (PostgreSQL)", () => {
       await second.stop();
     }
     expect(await sweepState(sweepId)).toEqual({ status: "COMPLETED", completedCount: 500, results: 500 });
+
+    const caller = strategyOptimisationRouter.createCaller({ userId, email: "runner@test.com", role: "user" });
+    const { robustness } = await caller.getSweep({ sweepId });
+    expect(robustness).not.toBeNull();
+    expect([robustness!.paramX, robustness!.paramY]).toEqual(["fast", "slow"]);
+    expect(robustness!.analysis.heatmapMatrix).toHaveLength(500);
   }, 90_000);
 
   it("requeues and runs a RUNNING job whose worker died, and fails one too old to retry", async () => {
