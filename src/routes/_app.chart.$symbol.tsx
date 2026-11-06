@@ -5,12 +5,14 @@ import { useQuery } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { useMarketCandles } from "@/hooks/use-market-candles";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
+import { useCorporateActions } from "@/hooks/use-corporate-actions";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
 import { mapBacktestTradesToMarkers } from "@/components/trading/chart-trade-markers";
 import { useChartLayout, useChartShortcuts, useFullscreen } from "@/hooks/use-chart-layout";
 import { CandlestickChart } from "@/components/trading/candlestick-chart";
-import { ChartToolbar } from "@/components/trading/chart-toolbar";
+import { ChartToolbar, CorporateActionsStatus } from "@/components/trading/chart-toolbar";
+import { placeCorporateActions } from "@/components/trading/chart-corporate-actions";
 import { getTradingViewUrl } from "@/lib/tradingview";
 import { quoteSourceLabel, sourceName } from "@/lib/quote-source";
 import type { MarketCandle } from "@/lib/market-api";
@@ -179,6 +181,16 @@ function ChartPage() {
     [candleQuery.data?.candles]
   );
   const lastBar = candles.at(-1);
+
+  const [showCorporateActions, setShowCorporateActions] = useState(false);
+  const corporateActionsQuery = useCorporateActions(symbol, showCorporateActions);
+  const placedCorporateActions = useMemo(
+    () =>
+      showCorporateActions && corporateActionsQuery.data
+        ? placeCorporateActions(candles.map((candle) => candle.t), corporateActionsQuery.data.events)
+        : [],
+    [showCorporateActions, corporateActionsQuery.data, candles]
+  );
 
   const currentPrice = liveQuote?.price;
   const changePct = liveQuote?.changePct;
@@ -408,6 +420,7 @@ function ChartPage() {
                 onResetZoom={handleResetZoom}
                 selectedTool={selectedTool}
                 fullscreen={isFullscreen}
+                corporateActions={{ enabled: showCorporateActions, onToggle: () => setShowCorporateActions((on) => !on) }}
               />
             </div>
 
@@ -431,7 +444,15 @@ function ChartPage() {
                   indicators={{ sma: showMA, ema: showMA, rsi: showRSI, macd: showMACD, volume: showVolume }}
                   trades={tradeMarkers}
                   paperOverlay={paperOverlay}
+                  corporateActions={placedCorporateActions}
                 />
+                {showCorporateActions && (
+                  <CorporateActionsStatus
+                    data={corporateActionsQuery.data}
+                    isError={corporateActionsQuery.isError}
+                    placed={placedCorporateActions}
+                  />
+                )}
               </div>
             )}
           </div>

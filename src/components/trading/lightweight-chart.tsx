@@ -1,10 +1,10 @@
 /**
  * MAET High-Performance Terminal Chart
  * Built on TradingView Lightweight Charts v5 with canonical indicator integration,
- * trade markers overlay, and paper trading position lines.
+ * trade markers overlay, corporate-action markers and paper trading position lines.
  */
 
-import React, { useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import {
   createChart,
   createSeriesMarkers,
@@ -18,10 +18,12 @@ import {
   type IChartApi,
   type ISeriesApi,
   type IPriceLine,
+  type MouseEventParams,
   type SeriesMarker,
   type Time,
 } from "lightweight-charts";
 import { computeSMA, computeEMA, computeRSI, computeMACD } from "@shared/indicators";
+import { corporateActionTooltip, type PlacedCorporateActions } from "./chart-corporate-actions";
 
 export interface ChartCandle {
   t: number;
@@ -82,8 +84,13 @@ export interface LightweightChartProps {
   indicators?: ChartIndicatorConfig;
   trades?: TradeMarkerData[];
   paperOverlay?: PaperOverlayState;
+  /** Dividends and splits already placed on bars (see placeCorporateActions). */
+  corporateActions?: PlacedCorporateActions[];
   className?: string;
 }
+
+const NO_TRADES: TradeMarkerData[] = [];
+const NO_CORPORATE_ACTIONS: PlacedCorporateActions[] = [];
 
 // Convert timestamp (ms or s) to UTC seconds for Lightweight Charts
 function toSeconds(ts: number): number {
@@ -103,8 +110,9 @@ export function LightweightChart({
   onChartStateChange,
   drawingTool = null,
   indicators = { sma: false, ema: false, rsi: false, macd: false, volume: true },
-  trades = [],
+  trades = NO_TRADES,
   paperOverlay,
+  corporateActions = NO_CORPORATE_ACTIONS,
   className = "",
 }: LightweightChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -121,6 +129,7 @@ export function LightweightChart({
   const ema20SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const ema50SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const markersPluginRef = useRef<any>(null);
+  const [eventTooltip, setEventTooltip] = useState<{ x: number; y: number; width: number; lines: string[] } | null>(null);
 
   // Price lines for paper trading & horizontal drawing
   const paperLinesRef = useRef<IPriceLine[]>([]);
@@ -299,6 +308,8 @@ export function LightweightChart({
       chartRef.current = null;
       mainSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      // The markers plugin belonged to the removed series.
+      markersPluginRef.current = null;
     };
   }, [seriesType, height, indicators.rsi]);
 
@@ -502,16 +513,9 @@ export function LightweightChart({
     rsiChartRef.current?.timeScale().fitContent();
   }, [sanitizedCandles, seriesType, indicators]);
 
-  // Update trade markers (backtest & execution fills)
+  // Update markers: backtest & execution fills, then dividends and splits
   useEffect(() => {
     if (!mainSeriesRef.current) return;
-
-    if (trades.length === 0) {
-      if (markersPluginRef.current) {
-        markersPluginRef.current.setMarkers([]);
-      }
-      return;
-    }
 
     const seriesMarkers: SeriesMarker<Time>[] = trades.map((tr) => {
       const time = toSeconds(tr.time) as Time;
@@ -546,12 +550,46 @@ export function LightweightChart({
       }
     });
 
+    for (const placed of corporateActions) {
+      const time = placed.time as Time;
+      if (placed.events.some((event) => event.kind === "dividend")) {
+        seriesMarkers.push({ time, position: "belowBar", color: "#38bdf8", shape: "circle", text: "D" });
+      }
+      if (placed.events.some((event) => event.kind === "split")) {
+        seriesMarkers.push({ time, position: "aboveBar", color: "#f59e0b", shape: "square", text: "S" });
+      }
+    }
+    seriesMarkers.sort((a, b) => (a.time as number) - (b.time as number));
+
     if (!markersPluginRef.current) {
       markersPluginRef.current = createSeriesMarkers(mainSeriesRef.current, seriesMarkers);
     } else {
       markersPluginRef.current.setMarkers(seriesMarkers);
     }
-  }, [trades]);
+    // The chart (and its series) is rebuilt when these change.
+  }, [trades, corporateActions, seriesType, height, indicators.rsi]);
+
+  // Hovering a bar that carries dividends or splits shows what they were.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || corporateActions.length === 0) return;
+    const linesByTime = new Map(
+      corporateActions.map((placed) => [placed.time, placed.events.map((event) => corporateActionTooltip(event))]),
+    );
+    const onCrosshairMove = (param: MouseEventParams<Time>) => {
+      const lines = typeof param.time === "number" ? linesByTime.get(param.time) : undefined;
+      setEventTooltip(
+        lines && param.point
+          ? { x: param.point.x, y: param.point.y, width: chart.chartElement().clientWidth, lines }
+          : null,
+      );
+    };
+    chart.subscribeCrosshairMove(onCrosshairMove);
+    return () => {
+      chart.unsubscribeCrosshairMove(onCrosshairMove);
+      setEventTooltip(null);
+    };
+  }, [corporateActions, seriesType, height, indicators.rsi]);
 
   // Update paper trading price lines (avg entry, SL, TP)
   useEffect(() => {
@@ -692,6 +730,24 @@ export function LightweightChart({
         className="w-full relative cursor-crosshair"
         style={{ height: indicators.rsi ? Math.max(height - 120, 260) : height }}
       />
+
+      {eventTooltip && (
+        <div
+          role="tooltip"
+          className="pointer-events-none absolute z-20 max-w-[320px] rounded border border-border bg-panel px-2 py-1 font-mono text-[11px] leading-5 text-foreground"
+          style={{
+            top: eventTooltip.y + 12,
+            // Flip to the left of the cursor on the right half so it stays inside the chart.
+            ...(eventTooltip.x > eventTooltip.width / 2
+              ? { right: eventTooltip.width - eventTooltip.x + 12 }
+              : { left: eventTooltip.x + 12 }),
+          }}
+        >
+          {eventTooltip.lines.map((line) => (
+            <div key={line}>{line}</div>
+          ))}
+        </div>
+      )}
 
       {/* RSI Sub-pane Container */}
       {indicators.rsi && (

@@ -41,6 +41,7 @@ import { Route as AppStrategiesIndexRouteImport } from './routes/_app.strategies
 import { Route as ApiMarketCandlesRouteImport } from './routes/api.market.candles'
 import { Route as ApiMarketCompaniesRouteImport } from './routes/api.market.companies'
 import { Route as ApiMarketCompanyRouteImport } from './routes/api.market.company'
+import { Route as ApiMarketCorporateActionsRouteImport } from './routes/api.market.corporate-actions'
 import { Route as ApiMarketQuotesRouteImport } from './routes/api.market.quotes'
 import { Route as AppStrategiesStrategyIdIndexRouteImport } from './routes/_app.strategies.$strategyId.index'
 import { Route as AppStrategiesStrategyIdBacktestsRouteImport } from './routes/_app.strategies.$strategyId.backtests'
@@ -205,6 +206,12 @@ const ApiMarketCompanyRoute = ApiMarketCompanyRouteImport.update({
   path: '/api/market/company',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMarketCorporateActionsRoute =
+  ApiMarketCorporateActionsRouteImport.update({
+    id: '/api/market/corporate-actions',
+    path: '/api/market/corporate-actions',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiMarketQuotesRoute = ApiMarketQuotesRouteImport.update({
   id: '/api/market/quotes',
   path: '/api/market/quotes',
@@ -260,6 +267,7 @@ export interface FileRoutesByFullPath {
   '/api/market/candles': typeof ApiMarketCandlesRoute
   '/api/market/companies': typeof ApiMarketCompaniesRoute
   '/api/market/company': typeof ApiMarketCompanyRoute
+  '/api/market/corporate-actions': typeof ApiMarketCorporateActionsRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
   '/strategies/': typeof AppStrategiesIndexRoute
   '/strategies/$strategyId/backtests': typeof AppStrategiesStrategyIdBacktestsRoute
@@ -297,6 +305,7 @@ export interface FileRoutesByTo {
   '/api/market/candles': typeof ApiMarketCandlesRoute
   '/api/market/companies': typeof ApiMarketCompaniesRoute
   '/api/market/company': typeof ApiMarketCompanyRoute
+  '/api/market/corporate-actions': typeof ApiMarketCorporateActionsRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
   '/strategies': typeof AppStrategiesIndexRoute
   '/strategies/$strategyId/backtests': typeof AppStrategiesStrategyIdBacktestsRoute
@@ -336,6 +345,7 @@ export interface FileRoutesById {
   '/api/market/candles': typeof ApiMarketCandlesRoute
   '/api/market/companies': typeof ApiMarketCompaniesRoute
   '/api/market/company': typeof ApiMarketCompanyRoute
+  '/api/market/corporate-actions': typeof ApiMarketCorporateActionsRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
   '/_app/strategies/': typeof AppStrategiesIndexRoute
   '/_app/strategies/$strategyId/backtests': typeof AppStrategiesStrategyIdBacktestsRoute
@@ -375,6 +385,7 @@ export interface FileRouteTypes {
     | '/api/market/candles'
     | '/api/market/companies'
     | '/api/market/company'
+    | '/api/market/corporate-actions'
     | '/api/market/quotes'
     | '/strategies/'
     | '/strategies/$strategyId/backtests'
@@ -412,6 +423,7 @@ export interface FileRouteTypes {
     | '/api/market/candles'
     | '/api/market/companies'
     | '/api/market/company'
+    | '/api/market/corporate-actions'
     | '/api/market/quotes'
     | '/strategies'
     | '/strategies/$strategyId/backtests'
@@ -450,6 +462,7 @@ export interface FileRouteTypes {
     | '/api/market/candles'
     | '/api/market/companies'
     | '/api/market/company'
+    | '/api/market/corporate-actions'
     | '/api/market/quotes'
     | '/_app/strategies/'
     | '/_app/strategies/$strategyId/backtests'
@@ -463,6 +476,7 @@ export interface RootRouteChildren {
   ApiMarketCandlesRoute: typeof ApiMarketCandlesRoute
   ApiMarketCompaniesRoute: typeof ApiMarketCompaniesRoute
   ApiMarketCompanyRoute: typeof ApiMarketCompanyRoute
+  ApiMarketCorporateActionsRoute: typeof ApiMarketCorporateActionsRoute
   ApiMarketQuotesRoute: typeof ApiMarketQuotesRoute
 }
 
@@ -692,6 +706,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMarketCompanyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/market/corporate-actions': {
+      id: '/api/market/corporate-actions'
+      path: '/api/market/corporate-actions'
+      fullPath: '/api/market/corporate-actions'
+      preLoaderRoute: typeof ApiMarketCorporateActionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/market/quotes': {
       id: '/api/market/quotes'
       path: '/api/market/quotes'
@@ -798,6 +819,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMarketCandlesRoute: ApiMarketCandlesRoute,
   ApiMarketCompaniesRoute: ApiMarketCompaniesRoute,
   ApiMarketCompanyRoute: ApiMarketCompanyRoute,
+  ApiMarketCorporateActionsRoute: ApiMarketCorporateActionsRoute,
   ApiMarketQuotesRoute: ApiMarketQuotesRoute,
 }
 export const routeTree = rootRouteImport

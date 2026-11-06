@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
+  CorporateActionsResponseSchema,
   ExecutionQuoteSchema,
+  type CorporateActionsResponse,
   type ExecutionQuote,
 } from "@shared/types";
 import { API_BASE_URL } from "./api-url";
@@ -325,4 +327,12 @@ export async function fetchMarketCandles(
   const response = await fetchMarketEndpoint(path, typeof window === "undefined" ? signal : undefined, baseUrl);
   if (!response.ok) throw new Error(`Candle service returned ${response.status}`);
   return response.json() as Promise<MarketCandlesResponse>;
+}
+
+// No abort signal, for the same hydration reason as fetchMarketCandles.
+export async function fetchCorporateActions(symbol: string): Promise<CorporateActionsResponse> {
+  const params = new URLSearchParams({ symbol });
+  const response = await fetchMarketEndpoint(`/api/market/corporate-actions?${params}`);
+  if (!response.ok) throw new Error(`Corporate actions returned ${response.status}`);
+  return CorporateActionsResponseSchema.parse(await response.json());
 }
