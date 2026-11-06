@@ -8,38 +8,75 @@ import { logger } from "../../infra/logger";
 // waited 0.3-1s+ per command, which production paid while Upstash was down.
 const CONNECT_TIMEOUT_MS = 2_000;
 const COMMAND_TIMEOUT_MS = 1_000;
+// A socket that stops answering while "ready" is destroyed after this, so
+// the client leaves the ready state and helpers fall back instead of every
+// command waiting out COMMAND_TIMEOUT_MS forever.
+const SOCKET_TIMEOUT_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
 let client: Redis | undefined;
-let lastReportedReady: boolean | undefined;
 
-function reportState(ready: boolean, detail?: string): void {
-  if (lastReportedReady === ready) return;
-  // The first report is only logged when Redis is down; a healthy start is silent.
-  if (lastReportedReady !== undefined || !ready) {
-    if (ready) logger.info("redis connection ready");
-    else logger.warn({ err: detail }, "redis unavailable; caches and locks fall back to in-process behaviour");
-  }
-  lastReportedReady = ready;
-}
+export type RedisClientOptions = {
+  /** Called once per real transition between ready and unavailable. */
+  onStateChange?: (ready: boolean, detail?: string) => void;
+  commandTimeoutMs?: number;
+  socketTimeoutMs?: number;
+};
 
-export function getRedis(): Redis {
-  if (client) return client;
-  const cfg = getConfig();
-  client = new Redis(cfg.redisUrl, {
+/** Clients being closed on purpose: their final "end" is not an outage. */
+const closing = new WeakSet<Redis>();
+
+export function createRedisClient(url: string, options: RedisClientOptions = {}): Redis {
+  const created = new Redis(url, {
     enableOfflineQueue: false,
     enableReadyCheck: true,
     connectTimeout: CONNECT_TIMEOUT_MS,
-    commandTimeout: COMMAND_TIMEOUT_MS,
+    commandTimeout: options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS,
+    socketTimeout: options.socketTimeoutMs ?? SOCKET_TIMEOUT_MS,
     maxRetriesPerRequest: 1,
     // Keep reconnecting in the background: 0.5s, 1s, 1.5s ... capped at 30s.
     retryStrategy: (attempt) => Math.min(attempt * 500, MAX_RECONNECT_DELAY_MS),
   });
+  let lastReady: boolean | undefined;
+  const report = (ready: boolean, detail?: string) => {
+    if (closing.has(created) || lastReady === ready) return;
+    lastReady = ready;
+    options.onStateChange?.(ready, detail);
+  };
   // Every ioredis instance needs an error listener; without one, connection
   // errors become process-level unhandled events.
-  client.on("error", (error: Error) => reportState(false, error.message));
-  client.on("ready", () => reportState(true));
-  client.on("end", () => reportState(false, "connection ended"));
+  created.on("error", (error: Error) => report(false, error.message));
+  created.on("ready", () => report(true));
+  created.on("close", () => report(false, "connection closed"));
+  return created;
+}
+
+/** Closes a client without reporting the deliberate disconnect as an outage. */
+export async function closeRedisClient(target: Redis): Promise<void> {
+  closing.add(target);
+  try {
+    await target.quit();
+  } catch {
+    target.disconnect(false);
+  }
+}
+
+function logRedisState(ready: boolean, detail?: string, firstReport = false): void {
+  // A healthy start is silent; every later transition is logged once.
+  if (ready && firstReport) return;
+  if (ready) logger.info("redis connection ready");
+  else logger.warn({ err: detail }, "redis unavailable; caches and locks fall back to in-process behaviour");
+}
+
+export function getRedis(): Redis {
+  if (client) return client;
+  let reported = false;
+  client = createRedisClient(getConfig().redisUrl, {
+    onStateChange: (ready, detail) => {
+      logRedisState(ready, detail, !reported);
+      reported = true;
+    },
+  });
   return client;
 }
 
@@ -101,12 +138,7 @@ export async function closeRedis(): Promise<void> {
   if (!client) return;
   const current = client;
   client = undefined;
-  lastReportedReady = undefined;
-  try {
-    await current.quit();
-  } catch {
-    current.disconnect(false);
-  }
+  await closeRedisClient(current);
 }
 
 export const redis = new Proxy({} as Redis, {
