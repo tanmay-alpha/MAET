@@ -16,6 +16,7 @@ export const Route = createFileRoute("/_app/dashboard")({
   component: Dashboard,
 });
 
+const INDEX_KEYS = ["NIFTY50", "BANKNIFTY", "SENSEX", "NIFTYIT", "NIFTYFMCG", "INDIAVIX"];
 
 function money(value: number): string {
   return `₹${value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -60,7 +61,7 @@ function Dashboard() {
   });
 
   const symbols = useMemo(
-    () => [...new Set(positions.map((position) => position.symbol))],
+    () => [...new Set([...positions.map((position) => position.symbol), ...INDEX_KEYS])],
     [positions]
   );
   const { quoteMap, isError, delayed, marketPhase } = useMarketQuotes(symbols);
