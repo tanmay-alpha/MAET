@@ -48,3 +48,50 @@ export const WORLD_MACRO: WorldMacroResponse = {
   ],
   sources: [{ source: "World Bank", fetchedAt: "2026-11-07T05:00:00.000Z", stale: false }],
 };
+
+/**
+ * Trimmed upstream payloads the browser fallback reads straight from NASA EONET and GDELT.
+ * Dates are relative to the browser's clock because EONET keeps only the last seven days.
+ */
+export function eonetUpstream(now = Date.now()) {
+  return {
+    title: "EONET Events",
+    events: [
+      {
+        id: "EONET_E2E_1",
+        title: "Tropical Cyclone Dana",
+        description: "Bay of Bengal",
+        link: "https://eonet.gsfc.nasa.gov/api/v3/events/EONET_E2E_1",
+        closed: null,
+        categories: [{ id: "severeStorms", title: "Severe Storms" }],
+        geometry: [
+          {
+            magnitudeValue: 55,
+            magnitudeUnit: "kts",
+            date: new Date(now - 2 * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+            type: "Point",
+            coordinates: [88.4, 16.2],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+export function gdeltUpstream(now = Date.now()) {
+  const seen = new Date(now - 3_600_000).toISOString().replace(/[-:]|\.\d{3}/g, "");
+  return {
+    articles: [
+      {
+        url: "https://www.example-news.com/markets/fed-policy-rate",
+        url_mobile: "",
+        title: "Federal Reserve holds policy rate as inflation cools",
+        seendate: seen,
+        socialimage: "",
+        domain: "example-news.com",
+        language: "English",
+        sourcecountry: "United States",
+      },
+    ],
+  };
+}

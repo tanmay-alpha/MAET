@@ -35,7 +35,7 @@ __root.tsx                                # App root shell: HTML, meta, theme sc
 │   ├── _app.strategies.$strategyId.deployments.tsx # Strategy deployments (/strategies/:strategyId/deployments)
 │   ├── _app.backtest.tsx                 # Standalone backtesting engine (/backtest)
 │   ├── _app.replay.tsx                   # Historical market replay simulator (/replay)
-│   ├── _app.news.tsx                     # Market news feed (with demo fixtures disclosure) (/news)
+│   ├── _app.news.tsx                     # Sample headlines (no market news feed connected) (/news)
 │   ├── _app.settings.tsx                 # Theme, shortcuts, browser data (/settings)
 │   ├── _app.workspace.tsx                # Workspace manager (/workspace)
 │   └── _app.admin.data-quality.tsx       # Public data status (backend health, quote source) + admin ingestion audits (/admin/data-quality)

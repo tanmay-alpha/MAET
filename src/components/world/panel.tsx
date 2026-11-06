@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { SourceStatus } from "@shared/world/contracts";
+import type { DisplayedSource } from "@/lib/world-browser-fallback";
 
 export function formatIST(value: string): string {
   return new Date(value).toLocaleTimeString("en-IN", {
@@ -26,7 +26,7 @@ export function WorldPanel({
   attribution,
 }: {
   title: string;
-  sources: readonly SourceStatus[];
+  sources: readonly DisplayedSource[];
   children: ReactNode;
   className?: string;
   attribution?: ReactNode;
@@ -41,8 +41,11 @@ export function WorldPanel({
       <footer className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground">
         {sources.map((status) => (
           <span key={status.source}>
-            {status.source} ·{" "}
-            {status.fetchedAt ? `updated ${formatIST(status.fetchedAt)} IST` : "not yet available"}
+            {[
+              status.source,
+              ...(status.browser === "fetched" ? ["fetched by your browser"] : []),
+              status.fetchedAt ? `updated ${formatIST(status.fetchedAt)} IST` : "not yet available",
+            ].join(" · ")}
           </span>
         ))}
         {attribution}
@@ -55,7 +58,7 @@ export function SourceWarnings({
   sources,
   retry,
 }: {
-  sources: readonly SourceStatus[];
+  sources: readonly DisplayedSource[];
   retry: () => void;
 }) {
   return (
@@ -70,13 +73,21 @@ export function SourceWarnings({
           >
             <span>
               {status.source}:{" "}
-              {status.stale && status.fetchedAt
-                ? `Showing data from ${formatIST(status.fetchedAt)}; source unavailable`
-                : (status.error ?? "Source unavailable")}
+              {status.browser === "fetching"
+                ? "Server could not reach the source; fetching from your browser"
+                : status.stale && status.fetchedAt
+                  ? `Showing data from ${formatIST(status.fetchedAt)}; source unavailable`
+                  : (status.error ?? "Source unavailable")}
             </span>
-            <button type="button" className="shrink-0 text-primary hover:underline" onClick={retry}>
-              Retry
-            </button>
+            {status.browser === "fetching" ? null : (
+              <button
+                type="button"
+                className="shrink-0 text-primary hover:underline"
+                onClick={retry}
+              >
+                Retry
+              </button>
+            )}
           </div>
         ))}
     </>

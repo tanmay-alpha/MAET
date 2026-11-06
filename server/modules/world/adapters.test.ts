@@ -4,7 +4,8 @@ import eonet from "./__fixtures__/eonet.json";
 import gdelt from "./__fixtures__/gdelt.json";
 import gdp from "./__fixtures__/world-bank-gdp.json";
 import cpi from "./__fixtures__/world-bank-cpi.json";
-import { normalizeEonet, normalizeGdelt, normalizeUsgs, normalizeWorldBank } from "./adapters";
+import { normalizeEonet, normalizeGdelt } from "../../../shared/world/normalize";
+import { normalizeUsgs, normalizeWorldBank } from "./adapters";
 
 const recordedNow = Date.parse("2026-11-07T00:00:00Z");
 
