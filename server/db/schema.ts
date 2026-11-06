@@ -874,22 +874,6 @@ export const userNotifications = pgTable("user_notifications", {
   index("user_notifications_user_created_idx").on(table.userId, table.createdAt),
 ]);
 
-export const portfolioSnapshots = pgTable("portfolio_snapshots", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  snapshotDate: text("snapshot_date").notNull(),
-  cashBalance: numeric("cash_balance", { precision: 18, scale: 4 }).notNull(),
-  totalEquity: numeric("total_equity", { precision: 18, scale: 4 }).notNull(),
-  marginUsed: numeric("margin_used", { precision: 18, scale: 4 }).notNull().default("0"),
-  unrealizedPnl: numeric("unrealized_pnl", { precision: 18, scale: 4 }).notNull().default("0"),
-  realizedPnl: numeric("realized_pnl", { precision: 18, scale: 4 }).notNull().default("0"),
-  positionsCount: integer("positions_count").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [
-  uniqueIndex("portfolio_snapshots_date_unique").on(table.userId, table.snapshotDate),
-  index("portfolio_snapshots_user_date_idx").on(table.userId, table.snapshotDate),
-]);
-
 export const researchNotes = pgTable("research_notes", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),

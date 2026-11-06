@@ -246,6 +246,7 @@ These naming rules help you understand almost every file without opening it firs
 - **Options:** The Angel One options client and normalized options database tables now exist, but no options ingestion worker, tRPC route, or frontend delivery path is wired to them yet.
 - **Strategy workers:** Scripts exist for backtests, sweeps, walk-forward analysis, and evaluation. The single Render web-service definition starts the web server; production needs separate worker processes or scheduling for queued jobs.
 - **BigQuery:** The ingestion engine has an optional BigQuery output path. Do not say it is actively populated unless that deployment is verified.
+- **Paper portfolio performance:** The equity curve and its metrics (total return, CAGR, volatility, Sharpe, max drawdown) come from daily server-side snapshots in `paper_portfolio_snapshots`, written after each NSE close (15:45 IST) by an in-process job and on demand when the analytics are read. Days the server was asleep have no snapshot, so the curve can have gaps; snapshots valued with prices from an earlier session are flagged `stale_prices`; metrics are `null` with a reason until there is enough history.
 
 ### Do not claim
 
@@ -253,7 +254,7 @@ These naming rules help you understand almost every file without opening it firs
 - That all quotes are live or exchange-grade.
 - That the options screen has verified live chain data today.
 - That every screen is production-ready just because its route exists.
-- That local mock, synthetic, or illustrative calculations are provider-supplied market data. In particular, the portfolio hook's displayed equity curve is generated in the browser from trade data for visualisation; do not present it as an authoritative database-backed performance record.
+- That local mock, synthetic, or illustrative calculations are provider-supplied market data.
 
 ## Useful commands
 

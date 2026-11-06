@@ -98,4 +98,18 @@ describe("Capabilities Readiness Evaluator Test Suite", () => {
       delete process.env.FEATURE_DATA_QUALITY;
     }
   });
+
+  it("5. portfolioAnalytics is available to signed-in users once paper_portfolio_snapshots exists", async () => {
+    const find = async (userId: string | null, tables: Record<string, boolean>) =>
+      (await evaluateReadiness({ userId, schemaMap: tables })).find((c) => c.key === "portfolioAnalytics");
+
+    expect(await find("user-1", { paper_portfolio_snapshots: true })).toMatchObject({ available: true });
+    // The never-written 0013 table no longer counts.
+    const legacyOnly = await find("user-1", { portfolio_snapshots: true });
+    expect(legacyOnly?.available).toBe(false);
+    expect(legacyOnly?.reason).toContain("paper_portfolio_snapshots");
+    const signedOut = await find(null, { paper_portfolio_snapshots: true });
+    expect(signedOut?.available).toBe(false);
+    expect(signedOut?.reason).toContain("sign in");
+  });
 });

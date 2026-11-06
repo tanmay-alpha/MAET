@@ -41,7 +41,7 @@ export async function checkDatabaseTablesExist(): Promise<Record<string, boolean
     "alerts",
     "alert_events",
     "user_notifications",
-    "portfolio_snapshots",
+    "paper_portfolio_snapshots",
     "research_notes",
     "feature_preferences",
     "ingestion_runs",
@@ -195,11 +195,16 @@ export async function evaluateReadiness(ctx: ReadinessContext): Promise<Capabili
       : undefined,
   });
 
-  // 9. portfolioAnalytics (Always unavailable in production per requirement)
+  // 9. portfolioAnalytics: daily paper snapshots (migration 0027) back the curve and its metrics.
+  const paSchema = Boolean(tables["paper_portfolio_snapshots"]);
   results.push({
     key: "portfolioAnalytics",
-    available: false,
-    reason: "Portfolio analytics unavailable in pre-production",
+    available: paSchema && hasAuth,
+    reason: !paSchema
+      ? "Portfolio analytics requires paper_portfolio_snapshots (migration 0027)"
+      : !hasAuth
+      ? "Portfolio analytics requires sign in"
+      : undefined,
   });
 
   // 10. researchTimeline (Always unavailable in production per requirement)

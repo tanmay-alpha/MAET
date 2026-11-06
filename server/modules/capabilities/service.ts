@@ -109,7 +109,7 @@ function evaluateOne(
         reason: !input.hasAuthenticatedSession
           ? "Portfolio analytics requires sign in"
           : !input.schemaAvailable
-            ? "Portfolio analytics requires portfolio_snapshots"
+            ? "Portfolio analytics requires paper_portfolio_snapshots"
             : undefined,
       };
     case "researchTimeline":
