@@ -4,12 +4,35 @@ import { paperAccounts } from "../../db/schema";
 import { evaluateExecutionQuote, type ExecutionQuote, type Tick } from "@shared/types";
 import { paperExecutionPolicy } from "./fill-writer";
 import { paperTradingLiquidationService, type PaperTradingLiquidationService } from "./liquidation-service";
+import { DatabaseGate } from "../../infra/database-gate";
 
 const MARGIN_CALL_REASON = "MARGIN_CALL_LIQUIDATION";
 
 function quoteKey(exchange: string, symbol: string): string {
   return `${exchange}:${symbol.trim().toUpperCase()}`;
 }
+
+/** Accounts breaching margin at `prices` plus accounts already LIQUIDATION_PENDING. */
+export async function findAccountsToLiquidate(prices: Record<string, number>): Promise<string[]> {
+  const db = getDb();
+  // Bound as text and cast in SQL so the driver cannot re-encode the JSON document.
+  const breached = await db.execute<{ user_id: string }>(
+    sql`SELECT user_id FROM calculate_live_margin(${JSON.stringify(prices)}::text::jsonb)`
+  );
+  const pending = await db
+    .select({ userId: paperAccounts.userId })
+    .from(paperAccounts)
+    .where(eq(paperAccounts.status, "LIQUIDATION_PENDING"));
+  if (breached.length > 0) {
+    console.warn(`[RiskMonitor] Detected ${breached.length} breached accounts requiring liquidation`);
+  }
+  return [...new Set([...breached.map((row) => row.user_id), ...pending.map((row) => row.userId)])];
+}
+
+export type PaperRiskMonitorDeps = {
+  findAccounts?: (prices: Record<string, number>) => Promise<string[]>;
+  logError?: (message: string, err: unknown) => void;
+};
 
 /**
  * Watches paper accounts for margin breaches using the latest tick per exchange:symbol and
@@ -19,8 +42,21 @@ export class PaperRiskMonitor {
   private readonly ticks = new Map<string, Tick>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  private readonly findAccounts: (prices: Record<string, number>) => Promise<string[]>;
+  private readonly logError: (message: string, err: unknown) => void;
+  private readonly database: DatabaseGate;
 
-  constructor(private readonly liquidation: PaperTradingLiquidationService = paperTradingLiquidationService) {}
+  constructor(
+    private readonly liquidation: PaperTradingLiquidationService = paperTradingLiquidationService,
+    deps: PaperRiskMonitorDeps = {}
+  ) {
+    this.findAccounts = deps.findAccounts ?? findAccountsToLiquidate;
+    this.logError = deps.logError ?? ((message, err) => console.error(message, err));
+    this.database = new DatabaseGate("risk-monitor", {
+      warn: (fields, message) => this.logError(`[RiskMonitor] ${message}`, fields),
+      info: (fields, message) => console.log(`[RiskMonitor] ${message}`, fields),
+    });
+  }
 
   /**
    * Keeps the latest executable (live, fresh) tick per EXCHANGE:SYMBOL. Delayed or stale
@@ -34,7 +70,7 @@ export class PaperRiskMonitor {
   start(intervalMs = 2000): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      this.monitorRisk().catch((err) => console.error("[RiskMonitor] error during risk monitoring:", err));
+      this.monitorRisk().catch((err) => this.logError("[RiskMonitor] error during risk monitoring:", err));
     }, intervalMs);
     console.log(`[RiskMonitor] Started background risk monitoring at ${intervalMs}ms interval`);
   }
@@ -68,26 +104,16 @@ export class PaperRiskMonitor {
     if (this.running || this.ticks.size === 0) return;
     this.running = true;
     try {
-      const db = getDb();
       // Mark only at quotes that are still executable now; a tick that has aged out is no mark.
       const prices = Object.fromEntries(
         [...this.ticks].flatMap(([key, tick]) =>
           this.executableQuote(tick.exchange, tick.symbol) ? [[key, tick.price]] : []
         )
       );
-      // Bound as text and cast in SQL so the driver cannot re-encode the JSON document.
-      const breached = await db.execute<{ user_id: string }>(
-        sql`SELECT user_id FROM calculate_live_margin(${JSON.stringify(prices)}::text::jsonb)`
-      );
-      const pending = await db
-        .select({ userId: paperAccounts.userId })
-        .from(paperAccounts)
-        .where(eq(paperAccounts.status, "LIQUIDATION_PENDING"));
-
-      const userIds = new Set([...breached.map((row) => row.user_id), ...pending.map((row) => row.userId)]);
-      if (breached.length > 0) {
-        console.warn(`[RiskMonitor] Detected ${breached.length} breached accounts requiring liquidation`);
-      }
+      // While the database circuit is open there is nothing to mark against: skip
+      // without querying; margin checks resume on the first pass after it closes.
+      const userIds = await this.database.run(() => this.findAccounts(prices));
+      if (!userIds) return;
 
       for (const userId of userIds) {
         try {
@@ -97,7 +123,7 @@ export class PaperRiskMonitor {
             quoteFor: (exchange, symbol) => this.executableQuote(exchange, symbol),
           });
         } catch (err) {
-          console.error(`[RiskMonitor] Failed to liquidate breached account for user ${userId}:`, err);
+          this.logError(`[RiskMonitor] Failed to liquidate breached account for user ${userId}:`, err);
         }
       }
     } finally {

@@ -8,6 +8,7 @@ import {
 import { recordAlertTriggerTransaction, loadActiveAlertsForSymbol } from "../modules/alerts/repository";
 import type { AlertConfig } from "../modules/alerts/contracts";
 import { getLogger } from "../infra/logger";
+import { DatabaseGate } from "../infra/database-gate";
 
 const logger = getLogger("alert-evaluator");
 
@@ -27,33 +28,50 @@ export interface AlertRow {
   config: AlertConfig;
 }
 
+export type AlertEvaluatorDeps = {
+  loadAlerts?: (symbol: string) => Promise<AlertRow[]>;
+  evaluate?: (quote: QuoteSnapshot, alerts: AlertRow[]) => Promise<unknown[]>;
+  log?: Pick<typeof logger, "info" | "warn" | "error">;
+};
+
 export class AlertEvaluatorWorker {
   private isRunning = false;
+  private readonly loadAlerts: (symbol: string) => Promise<AlertRow[]>;
+  private readonly evaluate: (quote: QuoteSnapshot, alerts: AlertRow[]) => Promise<unknown[]>;
+  private readonly log: Pick<typeof logger, "info" | "warn" | "error">;
+  private readonly database: DatabaseGate;
+
+  constructor(deps: AlertEvaluatorDeps = {}) {
+    this.loadAlerts = deps.loadAlerts ?? (loadActiveAlertsForSymbol as (symbol: string) => Promise<AlertRow[]>);
+    this.evaluate = deps.evaluate ?? processQuoteAlerts;
+    this.log = deps.log ?? logger;
+    this.database = new DatabaseGate("alert-evaluator", this.log);
+  }
 
   public async start(): Promise<void> {
     if (this.isRunning) return;
     this.isRunning = true;
-    logger.info("AlertEvaluatorWorker started");
+    this.log.info("AlertEvaluatorWorker started");
   }
 
   public async stop(): Promise<void> {
     this.isRunning = false;
-    logger.info("AlertEvaluatorWorker stopped");
+    this.log.info("AlertEvaluatorWorker stopped");
   }
 
-  public async processQuote(quote: QuoteSnapshot): Promise<any[]> {
+  public async processQuote(quote: QuoteSnapshot): Promise<unknown[]> {
     if (!this.isRunning) return [];
     if (!quote || !quote.symbol) return [];
 
-    let activeAlerts: AlertRow[] = [];
     try {
-      activeAlerts = await loadActiveAlertsForSymbol(quote.symbol);
-    } catch (dbErr) {
-      logger.error({ symbol: quote.symbol, err: dbErr }, "Database failure loading alerts");
-      throw dbErr;
+      // Skipped quietly while the database circuit is open; alerts are evaluated
+      // again on the first tick after it closes.
+      const triggered = await this.database.run(async () => this.evaluate(quote, await this.loadAlerts(quote.symbol)));
+      return triggered ?? [];
+    } catch (err) {
+      this.log.error({ symbol: quote.symbol, err }, "Alert evaluation failed");
+      return [];
     }
-
-    return await processQuoteAlerts(quote, activeAlerts);
   }
 }
 

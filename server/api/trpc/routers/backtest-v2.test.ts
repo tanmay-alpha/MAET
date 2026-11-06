@@ -1,6 +1,11 @@
 import { afterAll, describe, expect, it, mock } from "bun:test";
 import { TRPCError } from "@trpc/server";
 import * as drizzleClientModule from "../../../data/drizzle/client";
+import {
+  databaseBreakerState,
+  recordDatabaseFailure,
+  resetDatabaseBreakerForTests,
+} from "../../../data/drizzle/availability";
 
 interface MockQueryBuilder {
   where: (...args: unknown[]) => MockQueryBuilder;
@@ -12,11 +17,12 @@ interface MockQueryBuilder {
   ) => Promise<TResult1 | TResult2>;
 }
 
-const mockSelections: unknown[][] = [];
+// An Error entry makes that query reject with it (e.g. a connection failure).
+const mockSelections: (unknown[] | Error)[] = [];
 let lastCapturedLimit: number | null = null;
 let lastCapturedWhere: unknown[] = [];
 
-function createMockQuery(rows: unknown[]): MockQueryBuilder {
+function createMockQuery(rows: unknown[] | Error): MockQueryBuilder {
   const builder: MockQueryBuilder = {
     where: (...args: unknown[]) => {
       lastCapturedWhere = args;
@@ -30,7 +36,7 @@ function createMockQuery(rows: unknown[]): MockQueryBuilder {
     then: <TResult1 = unknown[], TResult2 = never>(
       onfulfilled?: ((value: unknown[]) => TResult1 | PromiseLike<TResult1>) | null,
       onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
-    ) => Promise.resolve(rows).then(onfulfilled, onrejected),
+    ) => (rows instanceof Error ? Promise.reject(rows) : Promise.resolve(rows)).then(onfulfilled, onrejected),
   };
   return builder;
 }
@@ -218,5 +224,35 @@ describe("backtestV2Router TRPC tests", () => {
     mockSelections.push([]);
     await caller.listRuns();
     expect(lastCapturedLimit).toBe(20);
+  });
+
+  it("8. Answers SERVICE_UNAVAILABLE without querying while the database circuit is open", async () => {
+    recordDatabaseFailure(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }));
+    const pending: unknown[] = [];
+    mockSelections.push(pending);
+    try {
+      await expect(caller.run(baseInput)).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        message: "Database unavailable",
+      });
+      // The candle query was never issued.
+      expect(mockSelections).toEqual([pending]);
+    } finally {
+      mockSelections.length = 0;
+      resetDatabaseBreakerForTests();
+    }
+  });
+
+  it("9. Maps a connection failure to SERVICE_UNAVAILABLE and opens the circuit", async () => {
+    mockSelections.push(Object.assign(new Error("write CONNECT_TIMEOUT 127.0.0.1:5432"), { code: "CONNECT_TIMEOUT" }));
+    try {
+      await expect(caller.run(baseInput)).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        message: "Database unavailable",
+      });
+      expect(databaseBreakerState()).toBe("open");
+    } finally {
+      resetDatabaseBreakerForTests();
+    }
   });
 });

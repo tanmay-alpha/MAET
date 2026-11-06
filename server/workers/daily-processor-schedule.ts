@@ -31,6 +31,12 @@ export type DailyProcessorScheduleDeps = {
   run: () => Promise<void>;
   holidays: () => Date[];
   onLockError?: (error: unknown) => void;
+  /**
+   * The run upserts thousands of rows; while the database circuit is open it
+   * would fail at once and then wait out the two-hour retry. Not starting
+   * leaves the next minute's tick free to run it as soon as the circuit closes.
+   */
+  isDatabaseAvailable?: () => boolean;
 };
 
 /**
@@ -51,6 +57,7 @@ export class DailyProcessorSchedule {
     if (this.running || !isDailyProcessorWindow(now, this.deps.holidays())) return false;
     const istDate = istDateKey(now);
     if (this.completedIstDate === istDate || now.getTime() < this.retryNotBefore) return false;
+    if (this.deps.isDatabaseAvailable && !this.deps.isDatabaseAvailable()) return false;
 
     this.running = true;
     try {

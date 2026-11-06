@@ -23,6 +23,8 @@ import { alertEvaluatorWorker } from "./workers/alert-evaluator";
 import { listActiveAlertSymbols } from "./modules/alerts/repository";
 import { startOutboxPublisherWorker, stopOutboxPublisherWorker } from "./workers/paper-outbox-publisher";
 import { PaperInterestSubscriptions } from "./modules/paper-trading/interest-subscriptions";
+import { DatabaseGate } from "./infra/database-gate";
+import { isDatabaseAvailable } from "./data/drizzle/availability";
 
 const angelOne = new AngelOneWorker();
 const candleWriter = new CandleWriter();
@@ -105,6 +107,7 @@ const dailyProcessor = new DailyProcessorSchedule({
     await setnxWithTtl(RedisKeys.dailyProcessorDoneKey(istDate), String(process.pid), DAILY_PROCESSOR_DONE_TTL_SECONDS);
   },
   holidays: configuredHolidays,
+  isDatabaseAvailable,
   onLockError: (error) =>
     log().warn({ err: errorMessage(error) }, "daily processor Redis guard unavailable; running without cross-instance guard"),
   run: async () => {
@@ -160,9 +163,17 @@ function syncAngelSubscriptions(): void {
   angelOne.updateTokens(ANGEL_FEED_USER, activeAngelTokens());
 }
 
+// Every 10 s while the database is down this would wait out the connect timeout and log;
+// through the circuit it is skipped and the current alert subscriptions stay as they are.
+const alertReconcileDatabase = new DatabaseGate("alert-subscriptions", {
+  warn: (fields, message) => log().warn(fields, message),
+  info: (fields, message) => log().info(fields, message),
+});
+
 export async function reconcileAlertSubscriptions(fetchActiveSymbols = listActiveAlertSymbols): Promise<void> {
   try {
-    const activeSymbols = await fetchActiveSymbols();
+    const activeSymbols = await alertReconcileDatabase.run(fetchActiveSymbols);
+    if (!activeSymbols) return;
     const currentActive = new Set(activeSymbols.map((s) => s.toUpperCase()));
 
     // 1. Subscribe newly active symbols

@@ -25,6 +25,7 @@ import { IndicatorStateCache } from "../domain/strategy/indicator-state";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
 import type { Candle } from "@shared/types";
 import { createHash } from "crypto";
+import { DatabaseGate } from "../infra/database-gate";
 
 export interface DeploymentRiskLimits {
   maxPositions?: number;
@@ -342,6 +343,95 @@ export async function evaluateDeploymentForBar(
   return { signalEvent, decision };
 }
 
+/** One pass over every ACTIVE deployment and its universe. */
+async function evaluateActiveDeployments(): Promise<void> {
+  // Poll active deployments using typed fields
+  const activeDeployments = await db
+    .select()
+    .from(strategyDeployments)
+    .where(eq(strategyDeployments.status, "ACTIVE"));
+
+  for (const depRow of activeDeployments) {
+    const deployment: DeploymentEvaluationContext = {
+      id: depRow.id,
+      userId: depRow.userId,
+      strategyVersionId: depRow.strategyVersionId,
+      mode: depRow.mode as any,
+      universe: depRow.universe,
+      timeframe: depRow.timeframe,
+      status: depRow.status,
+      riskLimits: (depRow.riskLimits as DeploymentRiskLimits) ?? {},
+      userKillSwitch: depRow.userKillSwitch,
+      deploymentKillSwitch: depRow.deploymentKillSwitch,
+      lastEvaluatedAt: depRow.lastEvaluatedAt,
+      lastSignalAt: depRow.lastSignalAt,
+    };
+
+    // Parse universe symbols (supporting '|' and ',' separators)
+    const symbols = deployment.universe
+      .split(/[|,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    for (const sym of symbols) {
+      const barRows = await db
+        .select()
+        .from(candles)
+        .where(and(eq(candles.symbol, sym), eq(candles.timeframe, deployment.timeframe)))
+        .orderBy(desc(candles.ts))
+        .limit(100);
+
+      if (barRows.length > 0) {
+        const barCandles: Candle[] = barRows.reverse().map((r) => ({
+          symbol: r.symbol,
+          tf: r.timeframe as any,
+          ts: r.ts.toISOString(),
+          open: Number(r.open),
+          high: Number(r.high),
+          low: Number(r.low),
+          close: Number(r.close),
+          volume: r.volume ?? 0,
+          source: r.source,
+        }));
+
+        const latestBar = barCandles[barCandles.length - 1];
+        await evaluateDeploymentForBar(deployment, latestBar, barCandles);
+      }
+    }
+
+    // Update lastEvaluatedAt
+    await db
+      .update(strategyDeployments)
+      .set({ lastEvaluatedAt: new Date(), updatedAt: new Date() })
+      .where(eq(strategyDeployments.id, deployment.id));
+  }
+}
+
+const evaluatorDatabase = new DatabaseGate("strategy-evaluator", {
+  warn: (fields, message) => console.warn(`[strategy-evaluator] ${message}`, fields),
+  info: (fields, message) => console.log(`[strategy-evaluator] ${message}`, fields),
+});
+
+export type EvaluatorCycleDeps = {
+  evaluate?: () => Promise<void>;
+  database?: DatabaseGate;
+  logError?: (message: string, err: unknown) => void;
+};
+
+/**
+ * Runs one evaluator pass through the database circuit: skipped without a query
+ * while it is open; other errors are logged and the loop carries on.
+ */
+export async function runEvaluatorCycle(deps: EvaluatorCycleDeps = {}): Promise<void> {
+  const evaluate = deps.evaluate ?? evaluateActiveDeployments;
+  const logError = deps.logError ?? ((message, err) => console.error(message, err));
+  try {
+    await (deps.database ?? evaluatorDatabase).run(evaluate);
+  } catch (err) {
+    logError(`[strategy-evaluator] Error in evaluator loop:`, err);
+  }
+}
+
 let isShuttingDown = false;
 async function evaluatorWorkerLoop(): Promise<void> {
   console.log(`[strategy-evaluator] Starting strategy evaluator worker`);
@@ -349,72 +439,8 @@ async function evaluatorWorkerLoop(): Promise<void> {
   process.on("SIGINT", () => { isShuttingDown = true; });
 
   while (!isShuttingDown) {
-    try {
-      // Poll active deployments using typed fields
-      const activeDeployments = await db
-        .select()
-        .from(strategyDeployments)
-        .where(eq(strategyDeployments.status, "ACTIVE"));
-
-      for (const depRow of activeDeployments) {
-        const deployment: DeploymentEvaluationContext = {
-          id: depRow.id,
-          userId: depRow.userId,
-          strategyVersionId: depRow.strategyVersionId,
-          mode: depRow.mode as any,
-          universe: depRow.universe,
-          timeframe: depRow.timeframe,
-          status: depRow.status,
-          riskLimits: (depRow.riskLimits as DeploymentRiskLimits) ?? {},
-          userKillSwitch: depRow.userKillSwitch,
-          deploymentKillSwitch: depRow.deploymentKillSwitch,
-          lastEvaluatedAt: depRow.lastEvaluatedAt,
-          lastSignalAt: depRow.lastSignalAt,
-        };
-
-        // Parse universe symbols (supporting '|' and ',' separators)
-        const symbols = deployment.universe
-          .split(/[|,]/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-
-        for (const sym of symbols) {
-          const barRows = await db
-            .select()
-            .from(candles)
-            .where(and(eq(candles.symbol, sym), eq(candles.timeframe, deployment.timeframe)))
-            .orderBy(desc(candles.ts))
-            .limit(100);
-
-          if (barRows.length > 0) {
-            const barCandles: Candle[] = barRows.reverse().map((r) => ({
-              symbol: r.symbol,
-              tf: r.timeframe as any,
-              ts: r.ts.toISOString(),
-              open: Number(r.open),
-              high: Number(r.high),
-              low: Number(r.low),
-              close: Number(r.close),
-              volume: r.volume ?? 0,
-              source: r.source,
-            }));
-
-            const latestBar = barCandles[barCandles.length - 1];
-            await evaluateDeploymentForBar(deployment, latestBar, barCandles);
-          }
-        }
-
-        // Update lastEvaluatedAt
-        await db
-          .update(strategyDeployments)
-          .set({ lastEvaluatedAt: new Date(), updatedAt: new Date() })
-          .where(eq(strategyDeployments.id, deployment.id));
-      }
-      await new Promise((r) => setTimeout(r, 5000));
-    } catch (err) {
-      console.error(`[strategy-evaluator] Error in evaluator loop:`, err);
-      await new Promise((r) => setTimeout(r, 5000));
-    }
+    await runEvaluatorCycle();
+    await new Promise((r) => setTimeout(r, 5000));
   }
 
   console.log(`[strategy-evaluator] Shutdown complete.`);

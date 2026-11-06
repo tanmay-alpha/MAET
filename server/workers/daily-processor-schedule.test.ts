@@ -137,4 +137,33 @@ describe("DailyProcessorSchedule", () => {
     expect(runs).toBe(1);
     expect(errors.length).toBeGreaterThan(0);
   });
+
+  it("does not start (or take the lock) while the database circuit is open, and runs once it closes", async () => {
+    const store = sharedStore();
+    let available = false;
+    let runs = 0;
+    let lockAttempts = 0;
+    const s = new DailyProcessorSchedule({
+      ...store.deps,
+      acquireLock: async (istDate) => {
+        lockAttempts++;
+        return store.deps.acquireLock(istDate);
+      },
+      run: async () => {
+        runs++;
+      },
+      holidays: () => [],
+      isDatabaseAvailable: () => available,
+    });
+    store.setNow(THU_1847_IST);
+    expect(await s.tick(THU_1847_IST)).toBe(false);
+    expect(await s.tick(THU_1848_IST)).toBe(false);
+    expect(runs).toBe(0);
+    expect(lockAttempts).toBe(0);
+
+    // No two-hour penalty for a skipped start: the next minute's tick runs it.
+    available = true;
+    expect(await s.tick(THU_1848_IST)).toBe(true);
+    expect(runs).toBe(1);
+  });
 });

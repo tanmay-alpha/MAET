@@ -2,6 +2,7 @@ import { createRouter, protectedProcedure } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
+import { DatabaseUnavailableError, isConnectionError, withOptionalDatabase } from "../../../data/drizzle/availability";
 import { backtestRuns, backtestPresets, candles } from "../../../db/schema";
 import { eq, and, desc, asc, gte, lte, sql } from "drizzle-orm";
 import { runBacktestV3, InsufficientHistoryV3Error } from "../../../domain/strategy/runner-v3";
@@ -111,13 +112,25 @@ export const backtestV2Router = createRouter({
         conditions.push(lte(candles.ts, toDate));
       }
 
-      // Fetch candles in chronological order with upper safety bound
-      const dbCandles = await db
-        .select()
-        .from(candles)
-        .where(and(...conditions))
-        .orderBy(asc(candles.ts))
-        .limit(MAX_BACKTEST_CANDLES + 1);
+      // Fetch candles in chronological order with upper safety bound. Through the
+      // database circuit: while it is open (or the connection fails) the caller gets
+      // a clear SERVICE_UNAVAILABLE instead of a connect timeout.
+      let dbCandles;
+      try {
+        dbCandles = await withOptionalDatabase(() =>
+          db
+            .select()
+            .from(candles)
+            .where(and(...conditions))
+            .orderBy(asc(candles.ts))
+            .limit(MAX_BACKTEST_CANDLES + 1)
+        );
+      } catch (err) {
+        if (err instanceof DatabaseUnavailableError || isConnectionError(err)) {
+          throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: "Database unavailable", cause: err });
+        }
+        throw err;
+      }
 
       if (dbCandles.length > MAX_BACKTEST_CANDLES) {
         throw new TRPCError({
