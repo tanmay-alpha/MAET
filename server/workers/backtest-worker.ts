@@ -12,7 +12,7 @@ import { randomUUID } from "crypto";
 import { db } from "../data/drizzle/client";
 import { strategyBacktestTrades, strategyEquityPoints, strategyPerformanceSnapshots } from "../db/schema";
 import * as jobs from "../modules/strategy-jobs/repository";
-import { loadJobCandles } from "../modules/strategy-jobs/candles";
+import { JobCandleLimitError, loadJobCandles } from "../modules/strategy-jobs/candles";
 import { downsample } from "../modules/strategy-jobs/downsample";
 import { JobInterruptedError, type JobContext } from "../modules/strategy-jobs/job-context";
 import { runBacktestV3, InsufficientHistoryV3Error } from "../domain/strategy/runner-v3";
@@ -153,7 +153,8 @@ export async function runBacktestJob(job: jobs.BacktestJobRow, workerId: string,
   } catch (err: unknown) {
     if (err instanceof JobInterruptedError) throw err;
     const message = err instanceof Error ? err.message : "Unknown error";
-    const code = err instanceof InsufficientHistoryV3Error ? "INSUFFICIENT_HISTORY" : "BACKTEST_ERROR";
+    const code =
+      err instanceof InsufficientHistoryV3Error ? "INSUFFICIENT_HISTORY" : err instanceof JobCandleLimitError ? "TOO_MANY_CANDLES" : "BACKTEST_ERROR";
     // Redact raw SQL errors before storing
     const safeMessage = message.replace(/column|table|index|constraint|syntax/gi, "[db]");
     await jobs.markFailed(job.id, code, safeMessage);

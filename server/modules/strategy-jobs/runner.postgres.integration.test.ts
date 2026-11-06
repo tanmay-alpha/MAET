@@ -11,7 +11,7 @@ import { getSqlClient } from "../../data/drizzle/client";
 import { strategyBacktestsRouter } from "../../api/trpc/routers/strategy-backtests";
 import { strategyOptimisationRouter } from "../../api/trpc/routers/strategy-optimisation";
 import { createStrategyJobRunner } from "./runner";
-import { loadJobCandles } from "./candles";
+import { JobCandleLimitError, loadJobCandles } from "./candles";
 import { runBacktestV3 } from "../../domain/strategy/runner-v3";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
@@ -262,4 +262,11 @@ describe("Strategy job runner (PostgreSQL)", () => {
     const { runs } = await caller.listWalkForwards({ strategyId });
     expect(runs.map((r) => r.id)).toContain(run.id);
   }, 60_000);
+
+  it("refuses to load more bars than the per-job cap instead of holding them in memory", async () => {
+    if (!enabled) return console.log("  Skipping runner test: TEST_DATABASE_URL not set");
+    expect((await loadJobCandles(symbol, "1d", new Date(from), new Date(to), BARS)).length).toBe(BARS);
+    const overflow = await loadJobCandles(symbol, "1d", new Date(from), new Date(to), BARS - 1).then(() => undefined, (error: unknown) => error);
+    expect(overflow).toBeInstanceOf(JobCandleLimitError);
+  });
 });
