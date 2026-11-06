@@ -9,6 +9,8 @@ export interface PortfolioSnapshotSchedulerOptions {
   intervalMs?: number;
   onRun?: (result: EndOfDayRunResult) => void;
   onError?: (error: unknown) => void;
+  /** Ticks are skipped while this returns false (the database circuit is open). */
+  isDatabaseAvailable?: () => boolean;
 }
 
 /**
@@ -31,6 +33,7 @@ export class PortfolioSnapshotScheduler {
   /** Runs the job when the latest session has closed and is not yet done; returns its result or null. */
   async tick(now: Date = new Date()): Promise<EndOfDayRunResult | null> {
     if (this.inFlight) return null;
+    if (this.options.isDatabaseAvailable && !this.options.isDatabaseAvailable()) return null;
     const session = this.runner.sessionFor(now);
     if (!session.isFinal || this.completedSessionDate === session.date) return null;
 

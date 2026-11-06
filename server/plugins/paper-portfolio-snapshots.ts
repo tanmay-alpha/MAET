@@ -1,4 +1,5 @@
 import type { NitroAppPlugin } from "nitropack";
+import { isDatabaseAvailable } from "../data/drizzle/availability";
 import { getLogger } from "../infra/logger";
 import { createPaperPortfolioSnapshotService } from "../modules/paper-trading/portfolio-snapshots";
 import { PortfolioSnapshotScheduler } from "../modules/paper-trading/portfolio-snapshot-scheduler";
@@ -11,6 +12,7 @@ const paperPortfolioSnapshotsPlugin: NitroAppPlugin = (nitroApp) => {
     onRun: (result) => log.info({ result }, "paper portfolio end-of-day snapshot run"),
     onError: (error) =>
       log.error({ err: error instanceof Error ? error.message : String(error) }, "paper portfolio snapshot run failed"),
+    isDatabaseAvailable,
   });
   scheduler.start();
   nitroApp.hooks.hook("close", () => scheduler.stop());

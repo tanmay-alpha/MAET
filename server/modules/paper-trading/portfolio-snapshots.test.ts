@@ -184,4 +184,16 @@ describe("PortfolioSnapshotScheduler", () => {
     expect(await scheduler.tick()).toBeNull();
     expect(calls).toHaveLength(3);
   });
+
+  it("skips ticks while the database circuit is open and resumes once it closes", async () => {
+    const { runner, calls } = fakeRunner({ date: "2026-10-05", isFinal: true }, [ran(0)]);
+    let available = false;
+    const scheduler = new PortfolioSnapshotScheduler(runner, { isDatabaseAvailable: () => available });
+    expect(await scheduler.tick()).toBeNull();
+    expect(await scheduler.tick()).toBeNull();
+    expect(calls).toHaveLength(0);
+    available = true;
+    expect((await scheduler.tick())?.status).toBe("ran");
+    expect(calls).toHaveLength(1);
+  });
 });
