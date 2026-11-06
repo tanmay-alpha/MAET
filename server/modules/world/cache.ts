@@ -20,6 +20,8 @@ export function createSourceCache<T>(options: {
   source: WorldSource;
   ttlMs: number;
   cooldownMs: number;
+  /** A payload this old is no longer served, even though no newer one could be fetched. */
+  maxAgeMs: number;
   now: () => number;
   load: () => Promise<T[]>;
 }) {
@@ -42,12 +44,25 @@ export function createSourceCache<T>(options: {
     }
   }
 
-  /** Current payload without starting a refresh; `stale` means the latest attempt failed. */
+  /**
+   * Current payload without starting a refresh; `stale` means the latest attempt failed.
+   * `fetchedAt` dates the data returned, so it is null once an expired payload is withheld.
+   */
   function peek(): SourceResult<T> {
+    const source = options.source;
+    if (fetchedAt !== null && options.now() - fetchedAt >= options.maxAgeMs) {
+      const last = new Date(fetchedAt).toISOString().slice(0, 16).replace("T", " ");
+      const limit = `${options.maxAgeMs / 3_600_000} h`;
+      const reason = `last data from ${last} UTC is older than ${limit}`;
+      return {
+        data: [],
+        status: { source, fetchedAt: null, stale: true, error: error ? `${error}; ${reason}` : reason },
+      };
+    }
     return {
       data,
       status: {
-        source: options.source,
+        source,
         fetchedAt: fetchedAt === null ? null : new Date(fetchedAt).toISOString(),
         stale: error !== undefined,
         ...(error === undefined ? {} : { error }),

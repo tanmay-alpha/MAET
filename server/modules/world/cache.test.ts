@@ -10,6 +10,7 @@ describe("world lazy source cache", () => {
       source: "USGS",
       ttlMs: 100,
       cooldownMs: 50,
+      maxAgeMs: 1_000,
       now: () => now,
       load: () => {
         calls++;
@@ -38,6 +39,7 @@ describe("world lazy source cache", () => {
       source: "NASA EONET",
       ttlMs: 100,
       cooldownMs: 50,
+      maxAgeMs: 1_000,
       now: () => 0,
       load: async () => {
         throw new TypeError("fetch failed", { cause });
@@ -53,6 +55,7 @@ describe("world lazy source cache", () => {
       source: "GDELT",
       ttlMs: 100,
       cooldownMs: 50,
+      maxAgeMs: 1_000,
       now: () => now,
       load: async () => {
         calls++;
@@ -85,6 +88,7 @@ describe("world lazy source cache", () => {
       source: "NASA EONET",
       ttlMs: 100,
       cooldownMs: 50,
+      maxAgeMs: 1_000,
       now: () => 0,
       load: async () => {
         throw new Error("Invalid payload");
@@ -107,6 +111,7 @@ describe("world lazy source cache", () => {
       source: "GDELT",
       ttlMs: 100,
       cooldownMs: 50,
+      maxAgeMs: 1_000,
       now: () => 0,
       load: () => {
         calls++;
@@ -127,5 +132,47 @@ describe("world lazy source cache", () => {
       status: { source: "GDELT", fetchedAt: new Date(0).toISOString(), stale: false },
     });
     expect(calls).toBe(1);
+  });
+
+  it("stops serving the last good payload once it reaches the source's maximum age", async () => {
+    let now = 0;
+    let failing = false;
+    const cache = createSourceCache({
+      source: "NASA EONET",
+      ttlMs: 100,
+      cooldownMs: 50,
+      maxAgeMs: 1_000,
+      now: () => now,
+      load: async () => {
+        if (failing) throw new Error("upstream unavailable");
+        return [now];
+      },
+    });
+    await cache.read();
+    failing = true;
+    now = 999;
+    expect(await cache.read()).toEqual({
+      data: [0],
+      status: {
+        source: "NASA EONET",
+        fetchedAt: new Date(0).toISOString(),
+        stale: true,
+        error: "upstream unavailable",
+      },
+    });
+    now = 1_000;
+    const expired = cache.peek();
+    expect(expired.data).toEqual([]);
+    expect(expired.status).toMatchObject({ source: "NASA EONET", fetchedAt: null, stale: true });
+    expect(expired.status.error).toContain("upstream unavailable");
+    expect(expired.status.error).toContain("1970-01-01 00:00");
+    now = 1_048;
+    expect((await cache.read()).data).toEqual([]);
+    failing = false;
+    now = 1_049;
+    expect(await cache.read()).toEqual({
+      data: [1_049],
+      status: { source: "NASA EONET", fetchedAt: new Date(1_049).toISOString(), stale: false },
+    });
   });
 });

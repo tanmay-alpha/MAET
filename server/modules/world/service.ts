@@ -6,6 +6,7 @@ import type {
   WorldMacroResponse,
   WorldSource,
 } from "../../../shared/world/contracts";
+import { WORLD_FRESHNESS } from "../../../shared/world/freshness";
 import { normalizeEonet, normalizeGdelt } from "../../../shared/world/normalize";
 import {
   EONET_EVENTS_URL,
@@ -24,7 +25,7 @@ export const WORLD_URLS = {
   worldBank: "https://api.worldbank.org/v2/country/IN;US;CN;EMU;JP;GB/indicator/",
 };
 export const GDELT_QUERIES = GDELT_TOPICS.map(gdeltQuery);
-export const GDELT_INTERVAL_MS = 15 * 60_000;
+export const GDELT_INTERVAL_MS = WORLD_FRESHNESS.GDELT.ttlMs;
 
 function aggregateStatus(source: WorldSource, components: SourceStatus[]): SourceStatus {
   // Queries still waiting for their first attempt have neither data nor a failure to report.
@@ -63,14 +64,14 @@ export function createWorldService(
   const queue = createSpacedQueue(now, dependencies.sleep ?? sleep, GDELT_SPACING_MS);
   const usgs = createSourceCache({
     source: "USGS",
-    ttlMs: 60_000,
+    ...WORLD_FRESHNESS.USGS,
     cooldownMs: 60_000,
     now,
     load: async () => normalizeUsgs(await requestJson(fetcher, WORLD_URLS.usgs)),
   });
   const eonet = createSourceCache({
     source: "NASA EONET",
-    ttlMs: 5 * 60_000,
+    ...WORLD_FRESHNESS["NASA EONET"],
     cooldownMs: 60_000,
     now,
     load: async () => normalizeEonet(await requestJson(fetcher, WORLD_URLS.eonet), now()),
@@ -78,7 +79,7 @@ export function createWorldService(
   const news = GDELT_QUERIES.map((query) =>
     createSourceCache({
       source: "GDELT",
-      ttlMs: GDELT_INTERVAL_MS,
+      ...WORLD_FRESHNESS.GDELT,
       cooldownMs: GDELT_INTERVAL_MS,
       now,
       load: () =>
@@ -92,7 +93,7 @@ export function createWorldService(
   const macro = (Object.keys(WORLD_BANK_INDICATORS) as MacroPoint["indicator"][]).map((indicator) =>
     createSourceCache({
       source: "World Bank",
-      ttlMs: 24 * 60 * 60_000,
+      ...WORLD_FRESHNESS["World Bank"],
       cooldownMs: 5 * 60_000,
       now,
       load: async () =>

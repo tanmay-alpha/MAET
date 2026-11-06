@@ -210,4 +210,50 @@ describe("world service lazy adapters", () => {
       error: "Upstream HTTP 503",
     });
   });
+
+  it("drops natural events after six hours of failed refreshes and headlines after a day", async () => {
+    let now = epoch;
+    let failing = false;
+    const service = createWorldService({
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+      fetch: async (url) => {
+        if (failing) return new Response("", { status: 503 });
+        if (url.includes("usgs")) return Response.json(usgs);
+        return Response.json(url.includes("eonet") ? eonet : gdelt);
+      },
+    });
+    const fresh = await service.events();
+    await service.news();
+    await drainQueue();
+    expect((await service.news()).events).toHaveLength(1);
+    failing = true;
+
+    now = epoch + 6 * 60 * 60_000 - 1;
+    const stale = await service.events();
+    expect(stale.events).toEqual(fresh.events);
+    expect(stale.sources.every((status) => status.stale && status.fetchedAt !== null)).toBe(true);
+    now = epoch + 6 * 60 * 60_000;
+    const expired = await service.events();
+    expect(expired.events).toEqual([]);
+    for (const status of expired.sources) {
+      expect(status).toMatchObject({ fetchedAt: null, stale: true });
+      expect(status.error).toContain("Upstream HTTP 503");
+    }
+
+    now = epoch + 23 * 60 * 60_000;
+    await service.news();
+    await drainQueue();
+    const day = await service.news();
+    expect(day.events).toHaveLength(1);
+    expect(day.sources[0]).toMatchObject({ stale: true, fetchedAt: new Date(epoch).toISOString() });
+    now = epoch + 25 * 60 * 60_000;
+    await service.news();
+    await drainQueue();
+    const old = await service.news();
+    expect(old.events).toEqual([]);
+    expect(old.sources[0]).toMatchObject({ fetchedAt: null, stale: true });
+  });
 });
