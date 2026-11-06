@@ -87,7 +87,32 @@ export async function runShutdownSteps(steps: ShutdownStep[], options: ShutdownO
   return result;
 }
 
+/**
+ * Stop hooks for in-process scheduled jobs started by other Nitro plugins
+ * (e.g. the paper portfolio snapshot scheduler). They stop inside the
+ * graceful shutdown, before the workers and connections, instead of on their
+ * own `close` hooks, whose order relative to the database close is not fixed.
+ */
+const scheduledJobStops = new Map<string, () => Promise<void> | void>();
+
+/** Registers a job's stop hook; returns a function that removes it. */
+export function registerScheduledJob(name: string, stop: () => Promise<void> | void): () => void {
+  scheduledJobStops.set(name, stop);
+  return () => {
+    if (scheduledJobStops.get(name) === stop) scheduledJobStops.delete(name);
+  };
+}
+
+/** Stops every registered scheduled job concurrently; one failure does not skip the others. */
+export async function stopScheduledJobs(): Promise<void> {
+  const results = await Promise.allSettled([...scheduledJobStops.values()].map((stop) => Promise.resolve().then(stop)));
+  const failure = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failure) throw failure.reason;
+}
+
 export interface GracefulShutdownDeps {
+  /** Stops in-process scheduled jobs (awaiting any run in flight); defaults to `stopScheduledJobs`. */
+  stopScheduledJobs?: () => Promise<void>;
   /** Stops the matcher, outbox publisher, feed subscriptions and job runners. */
   stopWorkers: () => Promise<void>;
   closeRedis: () => Promise<void>;
@@ -104,6 +129,7 @@ export function createGracefulShutdown(deps: GracefulShutdownDeps): () => Promis
       deps.log.info({}, "graceful shutdown started");
       const result = await runShutdownSteps(
         [
+          { name: "scheduled-jobs", run: deps.stopScheduledJobs ?? stopScheduledJobs },
           { name: "workers", run: deps.stopWorkers },
           { name: "redis", run: deps.closeRedis },
           { name: "database", run: deps.closeDb },

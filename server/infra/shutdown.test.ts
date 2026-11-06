@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { createGracefulShutdown, runShutdownSteps, type ShutdownStep } from "./shutdown";
+import { createGracefulShutdown, registerScheduledJob, runShutdownSteps, stopScheduledJobs, type ShutdownStep } from "./shutdown";
 
 const silent = { info() {}, warn() {}, error() {} };
 
@@ -15,9 +15,14 @@ function recordingStep(name: string, calls: string[], run: () => Promise<void> |
 }
 
 describe("graceful shutdown", () => {
-  it("stops the workers before closing Redis and the database pool", async () => {
+  it("stops scheduled jobs, then the workers, before closing Redis and the database pool", async () => {
     const calls: string[] = [];
     const shutdown = createGracefulShutdown({
+      stopScheduledJobs: async () => {
+        calls.push("jobs:start");
+        await Promise.resolve();
+        calls.push("jobs:end");
+      },
       stopWorkers: async () => {
         calls.push("workers:start");
         await Promise.resolve();
@@ -35,8 +40,51 @@ describe("graceful shutdown", () => {
 
     const result = await shutdown();
 
-    expect(calls).toEqual(["workers:start", "workers:end", "redis", "database"]);
-    expect(result).toEqual({ completed: ["workers", "redis", "database"], failed: [], timedOut: [] });
+    expect(calls).toEqual(["jobs:start", "jobs:end", "workers:start", "workers:end", "redis", "database"]);
+    expect(result).toEqual({ completed: ["scheduled-jobs", "workers", "redis", "database"], failed: [], timedOut: [] });
+  });
+
+  it("waits for registered scheduled jobs (the portfolio snapshot scheduler) before stopping workers", async () => {
+    const calls: string[] = [];
+    const inFlightRun = Promise.withResolvers<void>();
+    const unregister = registerScheduledJob("test-scheduler", async () => {
+      calls.push("scheduler:start");
+      await inFlightRun.promise;
+      calls.push("scheduler:end");
+    });
+    const shutdown = createGracefulShutdown({
+      stopWorkers: async () => {
+        calls.push("workers");
+      },
+      closeRedis: async () => {},
+      closeDb: async () => {
+        calls.push("database");
+      },
+      log: silent,
+    });
+
+    const done = shutdown();
+    // The stop hook has started and is blocked on the in-flight run; workers must not have stopped.
+    for (let i = 0; i < 20 && !calls.includes("scheduler:start"); i++) await Promise.resolve();
+    expect(calls).toEqual(["scheduler:start"]);
+    inFlightRun.resolve();
+    await done;
+    unregister();
+    expect(calls).toEqual(["scheduler:start", "scheduler:end", "workers", "database"]);
+  });
+
+  it("stops every scheduled job even when one fails, then reports the failure", async () => {
+    let stopped = false;
+    const unregisterFailing = registerScheduledJob("test-failing", () => {
+      throw new Error("boom");
+    });
+    const unregisterOther = registerScheduledJob("test-other", () => {
+      stopped = true;
+    });
+    await expect(stopScheduledJobs()).rejects.toThrow("boom");
+    unregisterFailing();
+    unregisterOther();
+    expect(stopped).toBe(true);
   });
 
   it("runs only once when the close hook fires twice", async () => {
