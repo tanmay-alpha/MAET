@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { FileUp } from "lucide-react";
-import { parseCsv, type CsvRow } from "@shared/domain/investing/import/csv";
+import { MAX_IMPORT_BYTES, MAX_IMPORT_ROWS, parseCsv, type CsvRow } from "@shared/domain/investing/import/csv";
 import { detectFormat, FORMAT_LABELS, guessMapping, isMappingComplete, type BrokerFormat, type ColumnMapping } from "@shared/domain/investing/import/normalize";
 import { SAMPLE_TRADEBOOK_CSV, SAMPLE_TRADEBOOK_NAME } from "@shared/domain/investing/import/sample";
 import { readCsvFile } from "@/lib/import/read-csv-file";
@@ -10,6 +10,8 @@ export interface LoadedFile {
   sample: boolean;
   headers: string[];
   rows: CsvRow[];
+  /** How the bytes were read, shown when it is not plain comma-separated UTF-8. */
+  readAs?: string;
 }
 
 export interface FileChoice {
@@ -48,9 +50,9 @@ export function FileStep({ initial, onContinue }: { initial?: FileChoice; onCont
     setFile(undefined);
     setProgress(0);
     try {
-      const [header, ...rows] = await readCsvFile(selected, setProgress);
-      if (!header) throw new Error("The file is empty.");
-      accept({ name: selected.name, sample: false, headers: header.cells, rows });
+      const { headers, rows, encoding, delimiter } = await readCsvFile(selected, setProgress);
+      const readAs = encoding === "UTF-8" && delimiter === "," ? undefined : `${encoding}, ${delimiter === "\t" ? "tab" : "comma"}-separated`;
+      accept({ name: selected.name, sample: false, headers, rows, readAs });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -69,7 +71,7 @@ export function FileStep({ initial, onContinue }: { initial?: FileChoice; onCont
 
   return <section aria-labelledby="file-step-heading" className="border border-border bg-panel p-4 text-xs">
     <h2 id="file-step-heading" className="text-sm font-semibold">Choose a tradebook</h2>
-    <p className="mt-1 text-muted-foreground">Zerodha Console tradebook or Groww order history (CSV) are recognised from their headers; any other CSV can be mapped column by column.</p>
+    <p className="mt-1 text-muted-foreground">Zerodha Console tradebook or Groww order history (CSV) are recognised from their headers; any other CSV can be mapped column by column. Up to {MAX_IMPORT_BYTES / 1024 / 1024} MB or {MAX_IMPORT_ROWS.toLocaleString("en-IN")} rows.</p>
     <p className="mt-1 text-foreground">Your file is read in this browser tab only. Nothing is sent or stored.</p>
 
     <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -77,10 +79,8 @@ export function FileStep({ initial, onContinue }: { initial?: FileChoice; onCont
         className="flex items-center gap-1.5 rounded border border-primary bg-primary px-3 py-1.5 font-semibold text-primary-foreground disabled:opacity-50">
         <FileUp className="h-3.5 w-3.5" aria-hidden /> Choose CSV file
       </button>
-      <input ref={inputRef} type="file" accept=".csv,text/csv" aria-label="Tradebook CSV file" className="sr-only"
+      <input ref={inputRef} type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" aria-label="Tradebook CSV file" className="sr-only"
         onChange={(event) => { const selected = event.target.files?.[0]; event.target.value = ""; if (selected) void readFile(selected); }} />
-      <button type="button" onClick={loadSample} className="rounded border border-border px-3 py-1.5 hover:bg-accent">Load sample tradebook</button>
-      <span className="text-muted-foreground">The sample is invented data in Zerodha format.</span>
     </div>
 
     {progress !== undefined && <div className="mt-3" role="status">
@@ -93,7 +93,7 @@ export function FileStep({ initial, onContinue }: { initial?: FileChoice; onCont
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono">{file.name}</span>
         {file.sample && <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-400">Sample data</span>}
-        <span className="text-muted-foreground">{file.rows.length} data rows · {detected ? `detected ${FORMAT_LABELS[detected]}` : "format not recognised"}</span>
+        <span className="text-muted-foreground">{file.rows.length} data rows{file.readAs && ` · read as ${file.readAs}`} · {detected ? `detected ${FORMAT_LABELS[detected]}` : "format not recognised: map the columns below"}</span>
       </div>
       <label className="mt-2 flex items-center gap-2">Format
         <select aria-label="File format" value={format} onChange={(event) => setFormat(event.target.value as BrokerFormat)} className={selectClass}>

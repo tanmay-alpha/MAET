@@ -2,8 +2,42 @@
  * RFC 4180 CSV reader. Hand-written rather than a dependency: the repo has no
  * CSV library, broker exports need only the core grammar (quoted fields,
  * doubled quotes, CRLF), and an incremental push() lets the browser feed a
- * large file chunk by chunk without holding a second copy in memory.
+ * large file chunk by chunk without holding a second copy in memory. A tab
+ * delimiter covers Excel's "Unicode text" export.
  */
+
+/**
+ * Import limits. Measured in Bun on a generated Zerodha tradebook: 500,000
+ * rows (49 MB) took 1.4 s to parse and 2.7 s to analyse on one thread with
+ * ~350 MB of heap; 200,000 rows (20 MB) took 0.6 s and 1.0 s. Analysis runs on
+ * the page's thread, so the limits keep it near a second. A retail tradebook
+ * holds a few thousand rows a year.
+ */
+export const MAX_IMPORT_BYTES = 25 * 1024 * 1024;
+export const MAX_IMPORT_ROWS = 200_000;
+
+export type CsvDelimiter = "," | "\t";
+
+/**
+ * Picks the delimiter from the header record: tab when it has more tabs than
+ * commas. Semicolon-separated files (European Excel locales) are refused: their
+ * numbers use decimal commas, which the Indian-format amount parser would read
+ * as thousands separators.
+ */
+export function sniffDelimiter(text: string): CsvDelimiter {
+  const counts = { ",": 0, "\t": 0, ";": 0 };
+  let inQuotes = false;
+  for (const character of text) {
+    if (character === '"') inQuotes = !inQuotes;
+    else if (!inQuotes && (character === "\n" || character === "\r")) break;
+    else if (!inQuotes && character in counts) counts[character as keyof typeof counts] += 1;
+  }
+  if (counts["\t"] > counts[","]) return "\t";
+  if (counts[";"] > counts[","]) {
+    throw new Error("The file is semicolon-separated. Save it as comma-separated CSV: decimal commas cannot be told from thousands separators.");
+  }
+  return ",";
+}
 
 export interface CsvRow {
   /** 1-based physical line on which the record starts. */
@@ -13,6 +47,7 @@ export interface CsvRow {
 
 export class CsvStreamParser {
   private readonly rows: CsvRow[] = [];
+  private readonly delimiter: CsvDelimiter;
   private cells: string[] = [];
   private field = "";
   private inQuotes = false;
@@ -23,6 +58,15 @@ export class CsvStreamParser {
   private atStart = true;
   private line = 1;
   private recordLine = 1;
+
+  constructor({ delimiter = "," }: { delimiter?: CsvDelimiter } = {}) {
+    this.delimiter = delimiter;
+  }
+
+  /** Non-blank records completed so far, header included, so a reader can stop at a limit. */
+  get recordCount(): number {
+    return this.rows.length;
+  }
 
   push(chunk: string): void {
     for (let index = 0; index < chunk.length; index += 1) {
@@ -52,7 +96,7 @@ export class CsvStreamParser {
         if (character === "\n") continue;
       }
       if (character === '"' && this.field === "") this.inQuotes = true;
-      else if (character === ",") this.endField();
+      else if (character === this.delimiter) this.endField();
       else if (character === "\r" || character === "\n") {
         this.pendingCr = character === "\r";
         this.endRecord();

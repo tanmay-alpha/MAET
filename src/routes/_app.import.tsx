@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
-import { analyseImport } from "@shared/domain/investing/import/analyse";
+import { useEffect, useState } from "react";
+import { analyseImport, type ImportAnalysis } from "@shared/domain/investing/import/analyse";
 import { FileStep, type FileChoice } from "@/components/import/file-step";
 import { ReviewStep } from "@/components/import/review-step";
 import { ResultsStep } from "@/components/import/results-step";
@@ -20,10 +20,22 @@ const STEPS = ["File", "Review", "Results"] as const;
 function ImportPage() {
   const [choice, setChoice] = useState<FileChoice>();
   const [step, setStep] = useState<(typeof STEPS)[number]>("File");
-  const analysis = useMemo(
-    () => choice && analyseImport(choice.format, choice.file.headers, choice.file.rows, choice.mapping),
-    [choice],
-  );
+  const [result, setResult] = useState<{ choice: FileChoice; analysis: ImportAnalysis }>();
+  const analysis = result && result.choice === choice ? result.analysis : undefined;
+
+  // Analysis is synchronous (about a second at the row limit), so it starts only after the
+  // "Analysing" status has painted: the frame callback runs before paint, the timeout after it.
+  useEffect(() => {
+    if (!choice) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const frame = requestAnimationFrame(() => {
+      timer = setTimeout(() => setResult({ choice, analysis: analyseImport(choice.format, choice.file.headers, choice.file.rows, choice.mapping) }), 0);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
+  }, [choice]);
 
   return <div className="mx-auto max-w-7xl px-4 py-6">
     <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
@@ -36,10 +48,12 @@ function ImportPage() {
           className={step === name ? "font-semibold text-foreground" : "text-muted-foreground"}>{index + 1}. {name}</li>)}
       </ol>
     </div>
-    {step === "File" || !choice || !analysis
+    {step === "File" || !choice
       ? <FileStep initial={choice} onContinue={(next) => { setChoice(next); setStep("Review"); }} />
-      : step === "Review"
-        ? <ReviewStep analysis={analysis} headers={choice.file.headers} onBack={() => setStep("File")} onContinue={() => setStep("Results")} />
-        : <ResultsStep analysis={analysis} onBack={() => setStep("Review")} />}
+      : !analysis
+        ? <p role="status" className="border border-border bg-panel p-4 text-xs text-muted-foreground">Analysing {choice.file.rows.length.toLocaleString("en-IN")} rows…</p>
+        : step === "Review"
+          ? <ReviewStep analysis={analysis} headers={choice.file.headers} onBack={() => setStep("File")} onContinue={() => setStep("Results")} />
+          : <ResultsStep analysis={analysis} onBack={() => setStep("Review")} />}
   </div>;
 }
