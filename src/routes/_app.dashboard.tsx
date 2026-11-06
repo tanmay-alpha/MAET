@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { quoteFeedLabel } from "@/lib/quote-status";
 import { usePaperAccount } from "@/hooks/use-paper-account";
-import { INDICES } from "@/lib/market-catalog";
+import { useSignedIn } from "@/hooks/use-signed-in";
+import { GuestMarketDashboard } from "@/components/trading/guest-market-dashboard";
 import { QuickTradeModal } from "@/components/trading/quick-trade-modal";
 import { ResetAccountButton } from "@/components/trading/reset-account-button";
 import type { PaperPositionRow, PaperOrderRow } from "../../server/modules/paper-trading/contracts";
@@ -15,14 +16,7 @@ export const Route = createFileRoute("/_app/dashboard")({
   component: Dashboard,
 });
 
-const INDEX_KEYS: Record<string, string> = {
-  "NIFTY 50": "NIFTY50",
-  "BANK NIFTY": "BANKNIFTY",
-  SENSEX: "SENSEX",
-  "NIFTY IT": "NIFTYIT",
-  "NIFTY FMCG": "NIFTYFMCG",
-  "INDIA VIX": "INDIAVIX",
-};
+const INDEX_KEYS = ["NIFTY50", "BANKNIFTY", "SENSEX", "NIFTYIT", "NIFTYFMCG", "INDIAVIX"];
 
 function money(value: number): string {
   return `₹${value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -58,7 +52,8 @@ function StatCard({
 }
 
 function Dashboard() {
-  const { account, positions, orders, fills, resetAccount } = usePaperAccount();
+  const signedIn = useSignedIn();
+  const { account, positions, orders, resetAccount } = usePaperAccount();
   const [tradeModal, setTradeModal] = useState<{ isOpen: boolean; symbol: string; side: "BUY" | "SELL" }>({
     isOpen: false,
     symbol: "",
@@ -66,10 +61,12 @@ function Dashboard() {
   });
 
   const symbols = useMemo(
-    () => [...new Set([...positions.map((position) => position.symbol), ...Object.values(INDEX_KEYS)])],
+    () => [...new Set([...positions.map((position) => position.symbol), ...INDEX_KEYS])],
     [positions]
   );
   const { quoteMap, isError, delayed, marketPhase } = useMarketQuotes(symbols);
+
+  if (!signedIn) return <GuestMarketDashboard />;
 
   const cash = account ? Number(account.cashBalance) : 1000000;
   const initialCash = account ? Number(account.initialCash) : 1000000;
@@ -100,10 +97,10 @@ function Dashboard() {
           <h1 className="text-xl font-semibold">Paper trading dashboard</h1>
           <p className="text-xs text-muted-foreground">
             {quoteFeedLabel({ isError, delayed, marketPhase })}
-            {" · "}Backend authoritative state
+            {signedIn && " · Backend authoritative state"}
           </p>
         </div>
-        <div className="flex gap-2">
+        {signedIn && <div className="flex gap-2">
           <button
             type="button"
             onClick={() => setTradeModal({ isOpen: true, symbol: "", side: "BUY" })}
@@ -119,30 +116,9 @@ function Dashboard() {
           >
             Reset
           </ResetAccountButton>
-        </div>
+        </div>}
       </div>
 
-      {/* Index ticker row */}
-      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        {INDICES.map((item) => {
-          const key = INDEX_KEYS[item.symbol] ?? item.symbol;
-          const q = quoteMap.get(key);
-          const price = q?.price ?? 0;
-          const changePct = q?.changePct ?? 0;
-          const isUp = changePct >= 0;
-          return (
-            <div key={item.symbol} className="rounded border border-border bg-panel p-2.5">
-              <div className="text-[10px] text-muted-foreground">{item.symbol}</div>
-              <div className="font-mono text-sm font-semibold tabular tabular-nums">
-                ₹{price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </div>
-              <div className={`font-mono text-[10px] font-medium ${isUp ? "text-bull" : "text-bear"}`}>
-                {isUp ? "+" : ""}{changePct.toFixed(2)}%
-              </div>
-            </div>
-          );
-        })}
-      </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <StatCard

@@ -37,10 +37,9 @@ export function Watchlist({
       </div>
 
       {/* Watchlist Table Header */}
-      <div className="grid grid-cols-12 border-b border-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-        <div className="col-span-5">Symbol</div>
-        <div className="col-span-4 text-right">LTP</div>
-        <div className="col-span-3 text-right">Chg%</div>
+      <div className="flex items-center justify-between border-b border-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <div>Symbol</div>
+        <div>LTP / Chg%</div>
       </div>
 
       {/* Watchlist Items List */}
@@ -49,12 +48,13 @@ export function Watchlist({
           const quote = quotes.get(item.symbol);
           const price = quote?.price;
           const changePct = quote?.changePct;
-          const source = quote?.source ?? "db";
+          const source = quote?.source === "angelone" ? "Angel One" : quote?.source === "yahoo" ? "Yahoo" : quote?.source;
 
           return (
             <div
               key={item.symbol}
-              className={`group grid w-full grid-cols-12 items-center px-3 py-2 text-xs transition-colors hover:bg-accent ${
+              title={source ? `Quote source: ${source}` : "Quote unavailable"}
+              className={`group flex w-full items-center gap-3 px-3 py-2 text-xs transition-colors hover:bg-accent ${
                 active === item.symbol ? "bg-accent font-semibold" : ""
               }`}
             >
@@ -64,30 +64,27 @@ export function Watchlist({
                   setActiveSymbol(item.symbol);
                   onSelect(item);
                 }}
-                className="col-span-10 grid grid-cols-10 items-center text-left min-w-0"
+                className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
               >
-                <div className="col-span-6 min-w-0 pr-1">
+                <div className="min-w-0">
                   <div className="font-medium truncate flex items-center gap-1">
                     <span>{item.symbol}</span>
-                    <span className="text-[8px] uppercase text-muted-foreground opacity-75">{source.slice(0, 3)}</span>
                   </div>
                   <div className="truncate text-[10px] text-muted-foreground">{item.name}</div>
                 </div>
-                <div className="col-span-4 text-right font-mono tabular-nums text-foreground">
-                  {price !== undefined ? `₹${price.toFixed(2)}` : "—"}
+                <div className="flex shrink-0 flex-col items-end gap-1 font-mono tabular-nums">
+                  <span className="text-foreground">{price !== undefined ? `₹${price.toFixed(2)}` : "—"}</span>
+                  <span className={(changePct ?? 0) >= 0 ? "text-bull" : "text-bear"}>
+                    {changePct === undefined ? "—" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(1)}%`}
+                  </span>
                 </div>
               </button>
 
-              <div className="col-span-2 flex items-center justify-end">
-                <div className={`font-mono tabular-nums group-hover:hidden ${
-                  (changePct ?? 0) >= 0 ? "text-bull" : "text-bear"
-                }`}>
-                  {changePct === undefined ? "—" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(1)}%`}
-                </div>
+              <div className="flex w-4 shrink-0 items-center justify-end">
                 <button
                   type="button"
                   onClick={() => void removeItem(item.symbol)}
-                  className="hidden group-hover:flex p-1 text-muted-foreground hover:text-bear rounded"
+                  className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-bear focus:opacity-100 group-hover:opacity-100"
                   title="Remove from watchlist"
                 >
                   <Trash2 className="h-3 w-3" />
