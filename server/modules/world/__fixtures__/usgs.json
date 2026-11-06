@@ -1,0 +1,24 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson",
+    "generated": 1793995467000
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "us7000twhq",
+      "properties": {
+        "mag": 4.5,
+        "place": "101 km SSE of Palekastro, Greece",
+        "time": 1793978818080,
+        "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000twhq",
+        "title": "M 4.5 - 101 km SSE of Palekastro, Greece"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [26.4987, 34.3043, 40.657]
+      }
+    }
+  ]
+}

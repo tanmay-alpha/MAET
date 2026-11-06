@@ -33,6 +33,7 @@ import {
 const researchItems = [
   { title: "Screener", url: "/screener", icon: Table2 },
   { title: "Watchlists", url: "/watchlists", icon: ListFilter },
+  { title: "World Monitor", url: "/world", icon: Activity },
 ];
 
 const tradingItems = [

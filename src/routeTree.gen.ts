@@ -32,6 +32,7 @@ import { Route as AppTerminalRouteImport } from './routes/_app.terminal'
 import { Route as AppUniverseRouteImport } from './routes/_app.universe'
 import { Route as AppWatchlistsRouteImport } from './routes/_app.watchlists'
 import { Route as AppWorkspaceRouteImport } from './routes/_app.workspace'
+import { Route as AppWorldRouteImport } from './routes/_app.world'
 import { Route as AppAdminDataQualityRouteImport } from './routes/_app.admin.data-quality'
 import { Route as AppChartSymbolRouteImport } from './routes/_app.chart.$symbol'
 import { Route as AppOptionsUnderlyingRouteImport } from './routes/_app.options.$underlying'
@@ -159,6 +160,11 @@ const AppWorkspaceRoute = AppWorkspaceRouteImport.update({
   path: '/workspace',
   getParentRoute: () => AppRoute,
 } as any)
+const AppWorldRoute = AppWorldRouteImport.update({
+  id: '/world',
+  path: '/world',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAdminDataQualityRoute = AppAdminDataQualityRouteImport.update({
   id: '/admin/data-quality',
   path: '/admin/data-quality',
@@ -246,6 +252,7 @@ export interface FileRoutesByFullPath {
   '/universe': typeof AppUniverseRoute
   '/watchlists': typeof AppWatchlistsRoute
   '/workspace': typeof AppWorkspaceRoute
+  '/world': typeof AppWorldRoute
   '/admin/data-quality': typeof AppAdminDataQualityRoute
   '/chart/$symbol': typeof AppChartSymbolRoute
   '/options/$underlying': typeof AppOptionsUnderlyingRoute
@@ -282,6 +289,7 @@ export interface FileRoutesByTo {
   '/universe': typeof AppUniverseRoute
   '/watchlists': typeof AppWatchlistsRoute
   '/workspace': typeof AppWorkspaceRoute
+  '/world': typeof AppWorldRoute
   '/admin/data-quality': typeof AppAdminDataQualityRoute
   '/chart/$symbol': typeof AppChartSymbolRoute
   '/options/$underlying': typeof AppOptionsUnderlyingRoute
@@ -320,6 +328,7 @@ export interface FileRoutesById {
   '/_app/universe': typeof AppUniverseRoute
   '/_app/watchlists': typeof AppWatchlistsRoute
   '/_app/workspace': typeof AppWorkspaceRoute
+  '/_app/world': typeof AppWorldRoute
   '/_app/admin/data-quality': typeof AppAdminDataQualityRoute
   '/_app/chart/$symbol': typeof AppChartSymbolRoute
   '/_app/options/$underlying': typeof AppOptionsUnderlyingRoute
@@ -358,6 +367,7 @@ export interface FileRouteTypes {
     | '/universe'
     | '/watchlists'
     | '/workspace'
+    | '/world'
     | '/admin/data-quality'
     | '/chart/$symbol'
     | '/options/$underlying'
@@ -394,6 +404,7 @@ export interface FileRouteTypes {
     | '/universe'
     | '/watchlists'
     | '/workspace'
+    | '/world'
     | '/admin/data-quality'
     | '/chart/$symbol'
     | '/options/$underlying'
@@ -431,6 +442,7 @@ export interface FileRouteTypes {
     | '/_app/universe'
     | '/_app/watchlists'
     | '/_app/workspace'
+    | '/_app/world'
     | '/_app/admin/data-quality'
     | '/_app/chart/$symbol'
     | '/_app/options/$underlying'
@@ -617,6 +629,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspaceRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/world': {
+      id: '/_app/world'
+      path: '/world'
+      fullPath: '/world'
+      preLoaderRoute: typeof AppWorldRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/admin/data-quality': {
       id: '/_app/admin/data-quality'
       path: '/admin/data-quality'
@@ -726,6 +745,7 @@ interface AppRouteChildren {
   AppUniverseRoute: typeof AppUniverseRoute
   AppWatchlistsRoute: typeof AppWatchlistsRoute
   AppWorkspaceRoute: typeof AppWorkspaceRoute
+  AppWorldRoute: typeof AppWorldRoute
   AppAdminDataQualityRoute: typeof AppAdminDataQualityRoute
   AppChartSymbolRoute: typeof AppChartSymbolRoute
   AppOptionsUnderlyingRoute: typeof AppOptionsUnderlyingRoute
@@ -758,6 +778,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppUniverseRoute: AppUniverseRoute,
   AppWatchlistsRoute: AppWatchlistsRoute,
   AppWorkspaceRoute: AppWorkspaceRoute,
+  AppWorldRoute: AppWorldRoute,
   AppAdminDataQualityRoute: AppAdminDataQualityRoute,
   AppChartSymbolRoute: AppChartSymbolRoute,
   AppOptionsUnderlyingRoute: AppOptionsUnderlyingRoute,

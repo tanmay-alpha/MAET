@@ -56,6 +56,12 @@ describe("rate limit middleware", () => {
     expect((await request("/api/market/candles?symbol=TCS")).status).toBe(200);
   });
 
+  it("limits the public world endpoints, which can trigger upstream refreshes", async () => {
+    const request = buildApp({ now: 0 });
+    for (const path of ["/api/world/events", "/api/world/news", "/api/world/macro"]) expect((await request(path)).status).toBe(200);
+    expect((await request("/api/world/news")).status).toBe(429);
+  });
+
   it("exposes Retry-After to browsers on cross-origin 429s", async () => {
     const request = buildApp({ now: 0 });
     for (let i = 0; i < 3; i++) await request("/api/trpc/x", { origin: "http://localhost:3000" });

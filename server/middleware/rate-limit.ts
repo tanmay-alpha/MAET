@@ -43,7 +43,7 @@ export interface RateLimitStore {
   take(key: string, limit: BucketLimit, nowMs: number): Promise<TakeResult>;
 }
 
-const LIMITED_PREFIXES = ["/api/trpc/", "/api/market/", "/api/paper/"];
+const LIMITED_PREFIXES = ["/api/trpc/", "/api/market/", "/api/paper/", "/api/world/"];
 
 export function isRateLimitedPath(pathname: string): boolean {
   if (pathname.endsWith("/stream")) return false;
