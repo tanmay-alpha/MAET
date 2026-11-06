@@ -13,6 +13,7 @@ import type { Page, Request, Route } from "@playwright/test";
 import type { MarketCandle, MarketCompany } from "../../../src/lib/market-api";
 import { PaperOrderCommandSchema } from "../../../server/modules/paper-trading/contracts";
 import { CreateStrategyInputSchema } from "../../../shared/strategy/contracts";
+import { WORLD_EVENTS, WORLD_MACRO, WORLD_NEWS } from "./world-data";
 import {
   ACCESS_TOKEN,
   BASE_PRICES,
@@ -40,9 +41,11 @@ export interface RecordedRequest {
 
 type TrpcHandler = (input: unknown, request: Request) => unknown;
 
+export type TrpcErrorCode = "BAD_REQUEST" | "UNAUTHORIZED" | "NOT_FOUND" | "CONFLICT" | "INTERNAL_SERVER_ERROR";
+
 class TrpcError extends Error {
   constructor(
-    readonly code: "BAD_REQUEST" | "UNAUTHORIZED" | "NOT_FOUND" | "CONFLICT",
+    readonly code: TrpcErrorCode,
     message: string,
   ) {
     super(message);
@@ -54,12 +57,14 @@ const TRPC_ERROR_STATUS = {
   UNAUTHORIZED: 401,
   NOT_FOUND: 404,
   CONFLICT: 409,
+  INTERNAL_SERVER_ERROR: 500,
 } as const;
 const TRPC_ERROR_CODE = {
   BAD_REQUEST: -32600,
   UNAUTHORIZED: -32001,
   NOT_FOUND: -32004,
   CONFLICT: -32009,
+  INTERNAL_SERVER_ERROR: -32603,
 } as const;
 
 // Sort keys accepted by server/domain/screener/company-query.ts that the fixture rows carry.
@@ -101,9 +106,13 @@ export class MockApi {
   readonly orders: PaperOrderWire[] = [];
   /** The tick each market SSE connection sends after its snapshot. */
   tick = { symbol: "NIFTY50", price: BASE_PRICES.NIFTY50 + 12.35 };
+  worldEvents = structuredClone(WORLD_EVENTS);
+  worldNews = structuredClone(WORLD_NEWS);
+  worldMacro = structuredClone(WORLD_MACRO);
 
   private readonly queries = new Map<string, TrpcHandler>();
   private readonly mutations = new Map<string, TrpcHandler>();
+  private readonly failures = new Map<string, { code: TrpcErrorCode; message: string }>();
   private readonly quotesServed = Promise.withResolvers<void>();
 
   constructor(private readonly page: Page) {
@@ -146,6 +155,15 @@ export class MockApi {
     this.mutations.set(path, handler);
   }
 
+  /**
+   * Makes an authenticated call to `path` fail with `code` (e.g. INTERNAL_SERVER_ERROR for a
+   * database outage) until called again with null.
+   */
+  failProcedure(path: string, failure: { code: TrpcErrorCode; message: string } | null): void {
+    if (failure) this.failures.set(path, failure);
+    else this.failures.delete(path);
+  }
+
   /** Recorded tRPC calls, optionally for one procedure. */
   trpcCalls(path?: string): RecordedRequest[] {
     return this.requests.filter((request) => {
@@ -168,6 +186,9 @@ export class MockApi {
     const url = new URL(request.url());
     const path = url.pathname;
     try {
+      if (path === "/api/world/events") return await json(route, 200, this.worldEvents);
+      if (path === "/api/world/news") return await json(route, 200, this.worldNews);
+      if (path === "/api/world/macro") return await json(route, 200, this.worldMacro);
       if (path === "/api/market/quotes") return await this.quotes(route, url);
       if (path === "/api/market/stream") return await this.marketStream(route, url);
       if (path === "/api/market/companies") return await json(route, 200, this.companies(url));
@@ -364,6 +385,8 @@ export class MockApi {
       if (request.headers().authorization !== `Bearer ${ACCESS_TOKEN}`) {
         throw new TrpcError("UNAUTHORIZED", "UNAUTHORIZED");
       }
+      const failure = this.failures.get(path);
+      if (failure) throw new TrpcError(failure.code, failure.message);
       const rawInput = isMutation
         ? request.postDataJSON()
         : new URL(request.url()).searchParams.get("input");

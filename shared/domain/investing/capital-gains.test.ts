@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildCapitalGainsReport, matchFifoLots, type CapitalGainsReport, type Fill } from "./capital-gains";
+import { buildCapitalGainsReport, matchFifoLots, matchFifoPositions, twelveMonthAnniversary, type CapitalGainsReport, type Fill } from "./capital-gains";
 
 function fill(id: string, side: Fill["side"], quantity: number, price: number, date: string, extra: Partial<Fill> = {}): Fill {
   return { id, generation: 1, symbol: "ABC", exchange: "NSE", side, quantity, price, date, ...extra };
@@ -162,5 +162,28 @@ describe("buildCapitalGainsReport", () => {
     expect(report.baseTax).toBe(0);
     expect(report.cess).toBe(0);
     expect(report.exemptionUsed).toBe(0);
+  });
+});
+
+describe("matchFifoPositions", () => {
+  it("returns the partially consumed lot and untouched later lots as open, oldest first", () => {
+    const fills = [fill("a", "BUY", 10, 100, "2023-01-10"), fill("b", "BUY", 10, 120, "2023-06-10"), fill("s", "SELL", 15, 150, "2024-03-01"), fill("x", "BUY", 2, 50, "2024-01-01", { symbol: "XYZ" })];
+    const { matched, open } = matchFifoPositions(fills, 1);
+    expect(matched.map((lot) => [lot.entryFillId, lot.quantity])).toEqual([["a", 10], ["b", 5]]);
+    expect(open).toEqual([
+      { fillId: "b", symbol: "ABC", exchange: "NSE", side: "LONG", date: "2023-06-10", price: 120, quantity: 5 },
+      { fillId: "x", symbol: "XYZ", exchange: "NSE", side: "LONG", date: "2024-01-01", price: 50, quantity: 2 },
+    ]);
+  });
+
+  it("reports nothing open once every lot is closed", () => {
+    expect(matchFifoPositions([fill("a", "BUY", 3, 10, "2024-01-01"), fill("s", "SELL", 3, 12, "2024-01-02")], 1).open).toEqual([]);
+  });
+});
+
+describe("twelveMonthAnniversary", () => {
+  it("uses calendar months, so the anniversary spans 366 days across a leap day", () => {
+    expect(twelveMonthAnniversary("2023-03-01")).toBe("2024-03-01");
+    expect(twelveMonthAnniversary("2024-02-29")).toBe("2025-02-28");
   });
 });

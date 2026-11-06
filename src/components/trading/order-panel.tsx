@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
-import { useSignedIn } from "@/hooks/use-signed-in";
 import { SIGN_IN_REQUIRED_MESSAGE } from "@/components/common/sign-in-required";
+import { PaperAccountNotice } from "@/components/common/signed-out-notice";
 import { buildTicketOrder, type TicketOrderType } from "@/lib/order-ticket";
 import { AlertCircle, CheckCircle2, ShieldAlert } from "lucide-react";
 
@@ -14,8 +14,7 @@ export function OrderPanel({
   exchange: "NSE" | "BSE";
   price?: number;
 }) {
-  const { placeOrder, isTradingAvailable } = usePaperAccount();
-  const signedIn = useSignedIn();
+  const { status, placeOrder, isTradingAvailable, retry } = usePaperAccount();
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [qtyRaw, setQtyRaw] = useState<string>("10");
   const [limit, setLimit] = useState(price?.toFixed(2) ?? "");
@@ -127,11 +126,12 @@ export function OrderPanel({
         </div>
       </div>
 
-      {!signedIn && (
+      {status === "signed-out" && (
         <p role="status" className="mx-2 mt-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-400">
           {SIGN_IN_REQUIRED_MESSAGE}
         </p>
       )}
+      <PaperAccountNotice status={status} onRetry={retry} className="mx-2 mt-2" />
 
       {/* Side Toggle */}
       <div className="grid grid-cols-2 gap-1 p-2">

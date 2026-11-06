@@ -1,0 +1,11 @@
+{
+  "retrievedOn": "2026-11-07",
+  "trimming": "Successful real upstream JSON responses. USGS retains one feature and consumed properties; EONET retains one event; World Bank retains six country observations with pagination metadata. GDELT retains the complete single-article response. No values synthesized.",
+  "responses": {
+    "usgs.json": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson",
+    "eonet.json": "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=7&limit=5",
+    "gdelt.json": "https://api.gdeltproject.org/api/v2/doc/doc?query=%22interest%20rates%22%20sourcelang%3Aenglish&mode=artlist&format=json&maxrecords=1&timespan=3d",
+    "world-bank-gdp.json": "https://api.worldbank.org/v2/country/IN;US;CN;EMU;JP;GB/indicator/NY.GDP.MKTP.KD.ZG?format=json&per_page=100&mrnev=1",
+    "world-bank-cpi.json": "https://api.worldbank.org/v2/country/IN;US;CN;EMU;JP;GB/indicator/FP.CPI.TOTL.ZG?format=json&per_page=100&mrnev=1"
+  }
+}

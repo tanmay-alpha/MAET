@@ -99,9 +99,13 @@ for (const { path, notice } of SIGNED_OUT_PAGES) {
 
 test("signed out: /compare charts prices without requesting protected peer fundamentals", async ({ page, api }) => {
   await page.goto("/compare");
+  // The tab bar is server-rendered, so a click can land before React attaches its handler.
+  // Repeat it until the Valuation view (which carries the notice) is shown.
   await expect(async () => {
     await page.getByRole("button", { name: "Valuation", exact: true }).click();
-    await expect(page.getByText("Peer fundamentals require a signed-in account.")).toBeVisible({ timeout: 1_000 });
+    await expect(page.getByText("Peer fundamentals require a signed-in account.")).toBeVisible({
+      timeout: 1_000,
+    });
   }).toPass();
   await expect(page.getByRole("columnheader", { name: "Peer median" })).toHaveCount(0);
   expect(api.requests.some(({ url }) => url.pathname.includes("getPeerComparison"))).toBe(false);
