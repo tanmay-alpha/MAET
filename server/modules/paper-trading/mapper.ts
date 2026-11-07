@@ -22,20 +22,6 @@ export function parseFiniteDatabaseNumber(
   return parsed;
 }
 
-export function parseOptionalFiniteDatabaseNumber(
-  value: string | number | null | undefined,
-  field: string
-): number | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    throw new PaperPersistenceError(`Invalid numeric database value: ${field} = "${value}"`);
-  }
-  return parsed;
-}
-
 export function mapPaperAccountRow(row: PaperAccountRow): PaperAccountRow {
   parseFiniteDatabaseNumber(row.cashBalance, "cashBalance");
   parseFiniteDatabaseNumber(row.initialCash, "initialCash");

@@ -34,10 +34,14 @@ const definition: StrategyDefinition = {
   risk: { sizingMethod: "PERCENT_OF_EQUITY", sizeValue: 100, maximumOpenPositions: 1, allowPyramiding: false },
   execution: { fillPolicy: "NEXT_BAR_OPEN", intrabarPolicy: "CONSERVATIVE", feeModel: "VOLUME_AWARE", slippageBps: 5, initialCapital: 100_000 },
 };
-/** 25 x 20 = 500 combinations: long enough to interrupt part-way. */
+/**
+ * 10 x 10 x 5 = 500 combinations (the API's limits: at most 10 values per parameter, 500 in all):
+ * long enough to interrupt part-way.
+ */
 const largeGrid = [
-  { name: "fast", path: "entry.children.0.left.params.period", values: Array.from({ length: 25 }, (_, i) => i + 2) },
-  { name: "slow", path: "entry.children.0.right.params.period", values: Array.from({ length: 20 }, (_, i) => i + 30) },
+  { name: "fast", path: "entry.children.0.left.params.period", values: Array.from({ length: 10 }, (_, i) => i + 2) },
+  { name: "slow", path: "entry.children.0.right.params.period", values: Array.from({ length: 10 }, (_, i) => i + 30) },
+  { name: "exitFast", path: "exit.children.0.left.params.period", values: Array.from({ length: 5 }, (_, i) => i + 3) },
 ];
 const fastRunner = { kinds: undefined, pollIntervalMs: 50, heartbeatIntervalMs: 100 } as const;
 
@@ -200,7 +204,7 @@ describe("Strategy job runner (PostgreSQL)", () => {
       RETURNING id`;
     // A sweep whose worker died mid-run: updated_at is its heartbeat.
     const staleSweep = await insertSweep([largeGrid[0]], "RUNNING");
-    await sql`UPDATE public.strategy_parameter_sweeps SET updated_at = now() - interval '10 minutes', completed_count = 10 WHERE id = ${staleSweep}`;
+    await sql`UPDATE public.strategy_parameter_sweeps SET updated_at = now() - interval '10 minutes', completed_count = 5 WHERE id = ${staleSweep}`;
 
     const runner = createStrategyJobRunner({ ...fastRunner, kinds: ["backtest", "sweep"] });
     runner.start();
@@ -213,7 +217,7 @@ describe("Strategy job runner (PostgreSQL)", () => {
 
     expect((await backtestState(stale.id)).workerId).toBe(runner.workerId);
     expect(await backtestState(ancient.id)).toMatchObject({ status: "FAILED", errorCode: "ABANDONED" });
-    expect(await sweepState(staleSweep)).toEqual({ status: "COMPLETED", completedCount: 25, results: 25 });
+    expect(await sweepState(staleSweep)).toEqual({ status: "COMPLETED", completedCount: 10, results: 10 });
   }, 60_000);
 
   it("fails a job that runs past the time budget", async () => {

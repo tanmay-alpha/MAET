@@ -7,6 +7,7 @@ import {
   DEFAULT_SCREENER_SORT,
   type ScreenerSort,
 } from "./screener-presets";
+import { parseCompanyScreenerParams, percentInRange } from "../../server/domain/screener/company-query";
 
 /** An NSE-fallback row: identity only, no stored quote fields. */
 function company(symbol: string, stored: Partial<MarketCompany> = {}): MarketCompany {
@@ -67,6 +68,14 @@ describe("screener presets", () => {
     expect(activeScreenerPreset({ change_pct_min: "0.01" })).toBe("gainers");
     expect(activeScreenerPreset({ pb_max: "3", pe_max: "20" })).toBe("value");
     expect(activeScreenerPreset({ change_pct_min: "0.01", price_min: "1000" })).toBeNull();
+  });
+
+  it("High dividend asks the server for a 1% yield, in its percentage-point units", () => {
+    const { filters } = applyScreenerPreset("dividend", DEFAULT_SCREENER_SORT);
+    const { numbers } = parseCompanyScreenerParams(new URLSearchParams(filters));
+    // Stored yields are decimal fractions: 0.5% and 1.2%.
+    expect(percentInRange(0.005, numbers.dividend_yield_min, numbers.dividend_yield_max)).toBe(false);
+    expect(percentInRange(0.012, numbers.dividend_yield_min, numbers.dividend_yield_max)).toBe(true);
   });
 });
 

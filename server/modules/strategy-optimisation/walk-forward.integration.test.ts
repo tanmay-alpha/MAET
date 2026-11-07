@@ -103,4 +103,48 @@ describe("Walk-forward worker", () => {
     await sql`DELETE FROM public.strategy_walk_forward_runs WHERE id = ${runId}`;
     await sql`DELETE FROM public.candles WHERE symbol = ${symbol}`;
   });
+
+  it("fails a run whose strategy belongs to another user", async () => {
+    if (!process.env.TEST_DATABASE_URL) {
+      console.log("  Skipping walk-forward PostgreSQL test: TEST_DATABASE_URL not set");
+      return;
+    }
+    await applyMigrations();
+    const sql = getSqlClient();
+
+    const runnerId = "00000000-0000-0000-0000-0000000000f5";
+    const ownerId = "00000000-0000-0000-0000-0000000000f6";
+    const strategyId = "f6000000-0000-0000-0000-000000000001";
+    const runId = "f5000000-0000-0000-0000-000000000003";
+
+    await sql.unsafe(`
+      DELETE FROM public.strategy_walk_forward_runs WHERE id = '${runId}';
+      INSERT INTO auth.users (id) VALUES ('${runnerId}'), ('${ownerId}') ON CONFLICT DO NOTHING;
+      INSERT INTO public.users (id, email) VALUES ('${runnerId}', 'wf-runner@test.com'), ('${ownerId}', 'wf-owner@test.com') ON CONFLICT DO NOTHING;
+      INSERT INTO public.strategy_definitions (id, user_id, name, current_draft)
+        VALUES ('${strategyId}', '${ownerId}', 'Theirs', '{}') ON CONFLICT DO NOTHING;
+    `);
+    await sql`
+      INSERT INTO public.strategy_versions (strategy_id, user_id, version_number, definition, definition_hash, engine_version, indicator_version)
+      VALUES (${strategyId}, ${ownerId}, 1, '{}'::jsonb, 'wf-foreign-hash', '3.0.0', '1.0.0')
+      ON CONFLICT DO NOTHING
+    `;
+    // RUNNING, as the runner leaves a claimed row; a QUEUED row could be drained by another test.
+    await sql`
+      INSERT INTO public.strategy_walk_forward_runs
+        (id, user_id, strategy_id, mode, parameters, symbol, timeframe, from_date, to_date, training_days, validation_days, window_count, status)
+      VALUES (${runId}, ${runnerId}, ${strategyId}, 'ROLLING',
+        ${JSON.stringify([{ name: "fast", path: "entry.children.0.left.params.period", values: [3, 5] }])}::jsonb,
+        'WFTEST', '1d', '2023-01-01T00:00:00Z', '2023-12-31T00:00:00Z', 60, 20, 4, 'RUNNING')
+    `;
+
+    await runWalkForwardJob(runId, uninterruptedJobContext);
+
+    const [run] = await sql`SELECT status FROM public.strategy_walk_forward_runs WHERE id = ${runId}`;
+    expect(run.status).toBe("FAILED");
+    const [{ count }] = await sql`SELECT count(*)::int AS count FROM public.strategy_walk_forward_windows WHERE run_id = ${runId}`;
+    expect(count).toBe(0);
+
+    await sql`DELETE FROM public.strategy_walk_forward_runs WHERE id = ${runId}`;
+  });
 });

@@ -1,4 +1,5 @@
-import { eq, and, inArray, desc, lte, max, isNotNull, ne } from "drizzle-orm";
+import { eq, and, inArray, desc, lte, max, isNotNull, ne, sql, getTableColumns, type SQL } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { getDb } from "../../data/drizzle/client";
 import {
   paperAccounts,
@@ -9,7 +10,7 @@ import {
   paperOutboxEvents,
   users,
 } from "../../db/schema";
-import { PaperPersistenceError } from "./errors";
+import { PaperPersistenceError, PaperValidationError } from "./errors";
 import type {
   PaperAccountRow,
   NewPaperAccountRow,
@@ -43,6 +44,49 @@ import {
 
 /** Orders that can still fill; everything else is terminal. */
 const WORKING_ORDER_STATUSES = ["PENDING", "TRIGGER_PENDING", "TRIGGERED", "PARTIALLY_FILLED"] as const;
+
+const PAGE_CURSOR_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+const PAGE_CURSOR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Exact UTC text of a timestamptz column for page cursors. Postgres stores microseconds;
+ * a JS Date would truncate to milliseconds and make the keyset skip rows.
+ */
+function cursorTimestamp(column: AnyPgColumn): SQL<string> {
+  return sql<string>`to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+/**
+ * Keyset predicate for newest-first lists ordered by (timestamp DESC, id DESC). The id
+ * tie-breaks rows written in one transaction, which share a timestamp. Legacy
+ * timestamp-only cursors (ISO strings) still resolve with the old inclusive bound.
+ */
+function pageCursorCondition(cursor: string, timestampColumn: AnyPgColumn, idColumn: AnyPgColumn): SQL {
+  if (/^[A-Za-z0-9_-]+$/.test(cursor)) {
+    const [timestamp = "", id = "", ...rest] = Buffer.from(cursor, "base64url").toString("utf8").split("|");
+    if (rest.length === 0 && PAGE_CURSOR_TIMESTAMP.test(timestamp) && PAGE_CURSOR_ID.test(id)) {
+      return sql`(${timestampColumn}, ${idColumn}) < (${timestamp}::timestamptz, ${id}::uuid)`;
+    }
+  }
+  const legacy = new Date(cursor);
+  if (cursor.includes("T") && !Number.isNaN(legacy.getTime())) {
+    return lte(timestampColumn, legacy);
+  }
+  throw new PaperValidationError("Invalid pagination cursor");
+}
+
+/** Trims the probe row and derives the opaque cursor from the last row returned. */
+function toPage<T extends { id: string; cursorTs: string }>(
+  rows: T[],
+  limit: number
+): { rows: Omit<T, "cursorTs">[]; nextCursor: string | null } {
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  const nextCursor = rows.length > limit && last
+    ? Buffer.from(`${last.cursorTs}|${last.id}`, "utf8").toString("base64url")
+    : null;
+  return { rows: page.map(({ cursorTs: _cursorTs, ...row }) => row), nextCursor };
+}
 
 /**
  * Opens a generation-1 paper account funded with `initialCash` and records the matching
@@ -489,25 +533,20 @@ export class PostgresPaperReadRepository implements PaperTradingReadRepository {
     ];
 
     if (params.cursor) {
-      conditions.push(lte(paperOrders.placedAt, new Date(params.cursor)));
+      conditions.push(pageCursorCondition(params.cursor, paperOrders.placedAt, paperOrders.id));
     }
 
     const rows = await this.db
-      .select()
+      .select({ ...getTableColumns(paperOrders), cursorTs: cursorTimestamp(paperOrders.placedAt) })
       .from(paperOrders)
       .where(and(...conditions))
-      .orderBy(desc(paperOrders.placedAt))
+      .orderBy(desc(paperOrders.placedAt), desc(paperOrders.id))
       .limit(limit + 1);
 
-    let nextCursor: string | null = null;
-    if (rows.length > limit) {
-      const nextItem = rows.pop()!;
-      nextCursor = nextItem.placedAt.toISOString();
-    }
-
+    const page = toPage(rows, limit);
     return {
-      orders: rows.map(mapPaperOrderRow),
-      nextCursor,
+      orders: page.rows.map(mapPaperOrderRow),
+      nextCursor: page.nextCursor,
     };
   }
 
@@ -526,25 +565,20 @@ export class PostgresPaperReadRepository implements PaperTradingReadRepository {
     ];
 
     if (params.cursor) {
-      conditions.push(lte(paperFills.executedAt, new Date(params.cursor)));
+      conditions.push(pageCursorCondition(params.cursor, paperFills.executedAt, paperFills.id));
     }
 
     const rows = await this.db
-      .select()
+      .select({ ...getTableColumns(paperFills), cursorTs: cursorTimestamp(paperFills.executedAt) })
       .from(paperFills)
       .where(and(...conditions))
-      .orderBy(desc(paperFills.executedAt))
+      .orderBy(desc(paperFills.executedAt), desc(paperFills.id))
       .limit(limit + 1);
 
-    let nextCursor: string | null = null;
-    if (rows.length > limit) {
-      const nextItem = rows.pop()!;
-      nextCursor = nextItem.executedAt.toISOString();
-    }
-
+    const page = toPage(rows, limit);
     return {
-      fills: rows.map(mapPaperFillRow),
-      nextCursor,
+      fills: page.rows.map(mapPaperFillRow),
+      nextCursor: page.nextCursor,
     };
   }
 
@@ -563,25 +597,20 @@ export class PostgresPaperReadRepository implements PaperTradingReadRepository {
     ];
 
     if (params.cursor) {
-      conditions.push(lte(paperLedgerEntries.createdAt, new Date(params.cursor)));
+      conditions.push(pageCursorCondition(params.cursor, paperLedgerEntries.createdAt, paperLedgerEntries.id));
     }
 
     const rows = await this.db
-      .select()
+      .select({ ...getTableColumns(paperLedgerEntries), cursorTs: cursorTimestamp(paperLedgerEntries.createdAt) })
       .from(paperLedgerEntries)
       .where(and(...conditions))
-      .orderBy(desc(paperLedgerEntries.createdAt))
+      .orderBy(desc(paperLedgerEntries.createdAt), desc(paperLedgerEntries.id))
       .limit(limit + 1);
 
-    let nextCursor: string | null = null;
-    if (rows.length > limit) {
-      const nextItem = rows.pop()!;
-      nextCursor = nextItem.createdAt.toISOString();
-    }
-
+    const page = toPage(rows, limit);
     return {
-      entries: rows.map(mapPaperLedgerEntryRow),
-      nextCursor,
+      entries: page.rows.map(mapPaperLedgerEntryRow),
+      nextCursor: page.nextCursor,
     };
   }
 }

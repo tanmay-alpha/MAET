@@ -18,9 +18,19 @@ import { eq, and, desc } from "drizzle-orm";
 import { CreateSweepInputSchema, CreateWalkForwardInputSchema } from "../../../../shared/strategy/contracts";
 import { insertWithinActiveJobCap } from "../../../modules/strategy-jobs/repository";
 import { analyseSweepRobustness } from "../../../modules/strategy-optimisation/sweep-robustness";
-import type { SweepParameter } from "../../../domain/strategy/parameter-sweep";
+import { countCombinations, MAX_SWEEP_COMBINATIONS, type SweepParameter } from "../../../domain/strategy/parameter-sweep";
 
-const MAX_COMBINATIONS = 500;
+/** Rejects parameter grids larger than a sweep or walk-forward run may request; returns the grid size. */
+function assertCombinationLimit(parameters: SweepParameter[]): number {
+  const combinationCount = countCombinations(parameters);
+  if (combinationCount > MAX_SWEEP_COMBINATIONS) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Too many parameter combinations: ${combinationCount} (max ${MAX_SWEEP_COMBINATIONS}). Reduce the number of parameters or values.`,
+    });
+  }
+  return combinationCount;
+}
 
 export const strategyOptimisationRouter = createRouter({
   /** Create a parameter sweep (bounded grid search) */
@@ -35,14 +45,7 @@ export const strategyOptimisationRouter = createRouter({
         .limit(1);
       if (!strategy) throw new TRPCError({ code: "NOT_FOUND", message: "Strategy not found" });
 
-      // Validate combination count
-      const combinationCount = input.parameters.reduce((product, p) => product * p.values.length, 1);
-      if (combinationCount > MAX_COMBINATIONS) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Too many parameter combinations: ${combinationCount} (max ${MAX_COMBINATIONS}). Reduce the number of parameters or values.`,
-        });
-      }
+      const combinationCount = assertCombinationLimit(input.parameters);
 
       const [sweep] = await insertWithinActiveJobCap(ctx.userId!, "sweep", (tx) => tx
         .insert(strategyParameterSweeps)
@@ -126,6 +129,8 @@ export const strategyOptimisationRouter = createRouter({
         .where(and(eq(strategyDefinitions.id, input.strategyId), eq(strategyDefinitions.userId, ctx.userId!)))
         .limit(1);
       if (!strategy) throw new TRPCError({ code: "NOT_FOUND", message: "Strategy not found" });
+
+      assertCombinationLimit(input.parameters);
 
       // Validate minimum windows
       const totalDays = (new Date(input.to).getTime() - new Date(input.from).getTime()) / 86_400_000;

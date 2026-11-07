@@ -19,7 +19,9 @@ import { getLogger } from "./infra/logger";
 import { hydrateAngelOneCompanyTokens } from "./data/sources/nse-company-master";
 import { marketDataMultiplexer } from "./domain/market/data-multiplexer";
 
+import type { Tick } from "@shared/types";
 import { alertEvaluatorWorker } from "./workers/alert-evaluator";
+import type { QuoteSnapshot } from "./modules/alerts/evaluator";
 import { listActiveAlertSymbols } from "./modules/alerts/repository";
 import { startOutboxPublisherWorker, stopOutboxPublisherWorker } from "./workers/paper-outbox-publisher";
 import { PaperInterestSubscriptions } from "./modules/paper-trading/interest-subscriptions";
@@ -185,6 +187,29 @@ export async function reconcileAlertSubscriptions(fetchActiveSymbols = listActiv
   }
 }
 
+/**
+ * Runs per-tick alert evaluation without letting a rejection (e.g. a Postgres hiccup while
+ * loading alerts) escape the bus handler as an unhandled rejection.
+ */
+export async function evaluateTickAlerts(
+  tick: Tick,
+  processQuote: (quote: QuoteSnapshot) => Promise<unknown> = (quote) => alertEvaluatorWorker.processQuote(quote),
+): Promise<void> {
+  try {
+    await processQuote({
+      symbol: tick.symbol,
+      price: tick.price,
+      previousClose: tick.previousClose,
+      changePct: tick.changePct,
+      volume: tick.volume,
+      quoteTimestamp: new Date(tick.ts).getTime(),
+      source: tick.source,
+    });
+  } catch (error) {
+    log().error({ symbol: tick.symbol, err: errorMessage(error) }, "alert evaluation failed for tick");
+  }
+}
+
 export function startOrchestrator(): void {
   if (started) return;
   started = true;
@@ -218,15 +243,7 @@ export function startOrchestrator(): void {
     scheduleAngelLogin(delayMs);
   });
   quoteBusOff = bus.on("tick", (tick) => {
-    void alertEvaluatorWorker.processQuote({
-      symbol: tick.symbol,
-      price: tick.price,
-      previousClose: tick.previousClose,
-      changePct: tick.changePct,
-      volume: tick.volume,
-      quoteTimestamp: new Date(tick.ts).getTime(),
-      source: tick.source,
-    });
+    void evaluateTickAlerts(tick);
   });
   angelOne.start();
   void connectAngelOne();

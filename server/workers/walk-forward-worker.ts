@@ -12,7 +12,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "../data/drizzle/client";
 import { strategyWalkForwardRuns, strategyWalkForwardWindows, strategyVersions } from "../db/schema";
 import { runWalkForwardAnalysis, type WalkForwardAnalysisResult } from "../domain/strategy/walk-forward";
-import type { SweepParameter } from "../domain/strategy/parameter-sweep";
+import { parseStoredSweepParameters } from "../domain/strategy/parameter-sweep";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
 import { loadJobCandles } from "../modules/strategy-jobs/candles";
 import { downsample } from "../modules/strategy-jobs/downsample";
@@ -89,6 +89,8 @@ export async function runWalkForwardJob(runId: string, ctx: JobContext): Promise
       .orderBy(desc(strategyVersions.versionNumber))
       .limit(1);
     if (!version) throw new Error("Strategy has no saved version to walk forward");
+    if (version.userId !== run.userId) throw new Error("Strategy version does not belong to the run's owner");
+    const parameters = parseStoredSweepParameters(run.parameters);
 
     const candleData = await loadJobCandles(run.symbol, run.timeframe, run.fromDate, run.toDate);
     const result = await runWalkForwardAnalysis(
@@ -97,8 +99,7 @@ export async function runWalkForwardJob(runId: string, ctx: JobContext): Promise
         definition: version.definition as StrategyDefinition,
         symbol: run.symbol,
         candles: candleData,
-        // Validated against SweepParameterSchema when the run was created.
-        parameters: run.parameters as SweepParameter[],
+        parameters,
         timeframe: run.timeframe,
         ...walkForwardEngineConfig({
           mode: run.mode as WalkForwardRunSettings["mode"],

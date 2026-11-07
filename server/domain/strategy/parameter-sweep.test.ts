@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Candle } from "@shared/types";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
-import { applyParameters, generateCombinations, type SweepParameter } from "./parameter-sweep";
+import { applyParameters, generateCombinations, parseStoredSweepParameters, type SweepParameter } from "./parameter-sweep";
 import { SweepParameterSchema } from "../../../shared/strategy/schemas";
 import { runBacktestV3 } from "./runner-v3";
 
@@ -27,14 +27,33 @@ const parameters: SweepParameter[] = [
   { name: "fast", path: "entry.children.0.left.params.period", values: [3, 5, 8] },
   { name: "slow", path: "entry.children.0.right.params.period", values: [20, 30] },
 ];
+// Six schema-valid parameters of ten values each: 10^6 combinations.
+const huge: SweepParameter[] = Array.from({ length: 6 }, (_, i) => ({
+  name: `p${i}`,
+  path: "a.b",
+  values: Array.from({ length: 10 }, (_, v) => v),
+}));
 
 describe("parameter sweep", () => {
-  it("enumerates the cartesian product of each parameter's values, capped", () => {
+  it("enumerates the cartesian product of each parameter's values", () => {
     const combos = generateCombinations(parameters, 500);
     expect(combos).toHaveLength(6);
     expect(combos[0]).toEqual({ fast: 3, slow: 20 });
     expect(combos[5]).toEqual({ fast: 8, slow: 30 });
-    expect(generateCombinations(parameters, 4)).toHaveLength(4);
+    expect(generateCombinations(parameters, 6)).toHaveLength(6);
+  });
+
+  it("refuses a grid above the limit instead of building it", () => {
+    expect(() => generateCombinations(parameters, 5)).toThrow();
+    // Rejected from the count, without materialising the product.
+    expect(() => generateCombinations(huge, 500)).toThrow();
+  });
+
+  it("re-validates parameters read back from a stored job row", () => {
+    expect(parseStoredSweepParameters(parameters)).toEqual(parameters);
+    for (const stored of [huge, [], [{ name: "p", path: "__proto__.x", values: [1] }], [{ name: "p", path: "a", values: [] }], "x", null]) {
+      expect(() => parseStoredSweepParameters(stored)).toThrow();
+    }
   });
 
   it("writes each value at its path without mutating the base definition", () => {

@@ -26,13 +26,25 @@ export type PaperOutboxEventRow = typeof paperOutboxEvents.$inferSelect;
 export type NewPaperOutboxEventRow = typeof paperOutboxEvents.$inferInsert;
 
 import { z } from "zod";
+import { MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol";
+
+/** Longest accepted order symbol (other symbol columns are varchar(30)); the service also checks the symbol master. */
+export const MAX_PAPER_SYMBOL_LENGTH = 30;
+
+const PaperOrderSymbolSchema = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .min(1)
+  .max(MAX_PAPER_SYMBOL_LENGTH)
+  .regex(MARKET_SYMBOL_PATTERN, "Invalid symbol");
 
 export const PaperMarketOrderSchema = z
   .object({
     type: z.literal("MARKET"),
     clientOrderId: z.string().uuid(),
     idempotencyKey: z.string().min(1).max(128),
-    symbol: z.string().min(1).transform((s) => s.trim().toUpperCase()),
+    symbol: PaperOrderSymbolSchema,
     exchange: z.enum(["NSE", "BSE"]),
     side: z.enum(["BUY", "SELL"]),
     quantity: z.number().int().positive(),
@@ -46,7 +58,7 @@ export const PaperLimitOrderSchema = z
     type: z.literal("LIMIT"),
     clientOrderId: z.string().uuid(),
     idempotencyKey: z.string().min(1).max(128),
-    symbol: z.string().min(1).transform((s) => s.trim().toUpperCase()),
+    symbol: PaperOrderSymbolSchema,
     exchange: z.enum(["NSE", "BSE"]),
     side: z.enum(["BUY", "SELL"]),
     quantity: z.number().int().positive(),
@@ -61,7 +73,7 @@ export const PaperStopLossLimitOrderSchema = z
     type: z.literal("STOP_LOSS_LIMIT"),
     clientOrderId: z.string().uuid(),
     idempotencyKey: z.string().min(1).max(128),
-    symbol: z.string().min(1).transform((s) => s.trim().toUpperCase()),
+    symbol: PaperOrderSymbolSchema,
     exchange: z.enum(["NSE", "BSE"]),
     side: z.enum(["BUY", "SELL"]),
     quantity: z.number().int().positive(),

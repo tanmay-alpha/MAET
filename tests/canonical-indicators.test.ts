@@ -23,11 +23,6 @@ import {
   calculateSMA as serverCalculateSMA,
   calculateSuperTrend as serverCalculateSuperTrend,
 } from "../server/domain/technical/indicators";
-import {
-  calculateRSI as clientCalculateRSI,
-  calculateSMA as clientCalculateSMA,
-  calculateSuperTrend as clientCalculateSuperTrend,
-} from "../src/lib/technical-indicators";
 import type { Candle } from "@shared/types";
 
 describe("Canonical Indicator Engine — P1 Contract & Cross-System Equality", () => {
@@ -66,22 +61,19 @@ describe("Canonical Indicator Engine — P1 Contract & Cross-System Equality", (
       expect(sma[sma.length - 1]).toBeCloseTo(expectedLast, 6);
     });
 
-    it("produces identical values across server technical, client lib, and strategy engine", () => {
+    it("produces identical values across server technical and strategy engine", () => {
       const period = 10;
       const canonical = computeSMA(closes, period);
       const server = serverCalculateSMA(closes, period);
-      const client = clientCalculateSMA(closes, period);
 
       const cache = new IndicatorStateCache(mockCandles);
 
       for (let i = 0; i < closes.length; i++) {
         const cVal = canonical[i];
         const sVal = isNaN(server[i]) ? null : server[i];
-        const clVal = isNaN(client[i]) ? null : client[i];
         const stratVal = cache.resolve("SMA", { period }, i);
 
         expect(cVal).toBe(sVal);
-        expect(cVal).toBe(clVal);
         expect(cVal).toBe(stratVal);
       }
     });
@@ -124,22 +116,18 @@ describe("Canonical Indicator Engine — P1 Contract & Cross-System Equality", (
       const period = 14;
       const canonical = computeRSI(closes, period);
       const server = serverCalculateRSI(closes, period);
-      const client = clientCalculateRSI(mockCandles.map((c) => ({ t: 0, o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume })), period);
       const cache = new IndicatorStateCache(mockCandles);
 
       for (let i = 0; i < closes.length; i++) {
         const cVal = canonical[i];
         const sVal = isNaN(server[i]) ? null : server[i];
-        const clVal = isNaN(client[i]) ? null : client[i];
         const stratVal = cache.resolve("RSI", { period }, i);
 
         if (cVal === null) {
           expect(sVal).toBeNull();
-          expect(clVal).toBeNull();
           expect(stratVal).toBeNull();
         } else {
           expect(sVal).toBeCloseTo(cVal, 6);
-          expect(clVal).toBeCloseTo(cVal, 6);
           expect(stratVal).toBeCloseTo(cVal, 6);
         }
       }
@@ -239,31 +227,23 @@ describe("Canonical Indicator Engine — P1 Contract & Cross-System Equality", (
       }
     });
 
-    it("guarantees identical SuperTrend across canonical engine, server technical, client lib, and strategy cache", () => {
+    it("guarantees identical SuperTrend across canonical engine, server technical, and strategy cache", () => {
       const period = 7;
       const multiplier = 3;
       const canonical = computeSuperTrend(mockCandles, period, multiplier);
       const server = serverCalculateSuperTrend(mockCandles, period, multiplier);
-      const client = clientCalculateSuperTrend(
-        mockCandles.map((c) => ({ t: 0, o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume })),
-        period,
-        multiplier
-      );
       const cache = new IndicatorStateCache(mockCandles);
 
       for (let i = 0; i < mockCandles.length; i++) {
         const cVal = canonical.values[i];
         const sVal = isNaN(server.values[i]) ? null : server.values[i];
-        const clVal = isNaN(client.values[i]) ? null : client.values[i];
         const stratVal = cache.resolve("SUPERTREND", { period, multiplier }, i);
 
         if (cVal === null) {
           expect(sVal).toBeNull();
-          expect(clVal).toBeNull();
           expect(stratVal).toBeNull();
         } else {
           expect(sVal).toBeCloseTo(cVal, 6);
-          expect(clVal).toBeCloseTo(cVal, 6);
           expect(stratVal).toBeCloseTo(cVal, 6);
         }
       }

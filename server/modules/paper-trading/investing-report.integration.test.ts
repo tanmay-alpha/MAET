@@ -19,6 +19,8 @@ function trader(price: number) {
     database: getDb(), marketPhase: () => "OPEN",
     quoteLoader: async (exchange, symbol) => ({ exchange, symbol, price, volume: 100,
       ts: new Date().toISOString(), source: "angelone", quality: "live" }),
+    // Synthetic test symbols are not in the symbol master.
+    symbolExists: async () => true,
   });
 }
 const now = new Date();
@@ -82,6 +84,7 @@ describe("Read-only paper investing reports", () => {
         await createPaperTradingService({
           database: getDb(), marketPhase: () => "OPEN",
           quoteLoader: async (exchange, quoted) => ({ exchange, symbol: quoted, price, volume: 100, ts: iso, source: "angelone", quality: "live" }),
+          symbolExists: async () => true,
         }).placeOrder({ userId: id, command: { symbol,exchange:"NSE",side,type:"MARKET",qty:5 } });
       } finally {
         setSystemTime();

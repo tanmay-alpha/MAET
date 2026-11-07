@@ -327,6 +327,7 @@ There is no metrics exporter or tracing; observability is logs plus the health e
 - Paper tables: owner-only `SELECT` (`auth.uid() = user_id`), all writes revoked from `authenticated` and everything from `anon`; the outbox is service-role only (`0011_backend_paper_trading_consolidation.sql`).
 - Fills and ledger are append-only by trigger (SQLSTATE `55000`); the only escape hatch is the session setting `maet.allow_history_mutation = 'true'` (`0012`).
 - Alerts and backtest presets: owner policies; technical snapshots and universe membership: no client access (`0026_rls_hardening.sql`).
+- User-owned tables whose owner policies allowed writes (strategy lab tables, alerts, workspaces, chart workspaces, trade theses and the other tables from `0013`, `0015`, `0016` and `0026`): owner-only `SELECT`, writes revoked from `authenticated` and everything from `anon` (`0028_client_read_only_owner_tables.sql`), so per-user caps enforced by the API cannot be bypassed through PostgREST.
 
 The backend connects with whatever credentials its connection string carries (`server/data/drizzle/client.ts`); it does not `SET ROLE` or forward the user's JWT to Postgres. Whether that role bypasses RLS is a property of the deployed database, not of this repository, so API-level filtering is the primary control.
 

@@ -65,7 +65,6 @@ docs/smoke-test-checklist.md
 *prompt*.md
 *report*.md
 *placeholder*.md
-!docs/phase-0-financial-integrity-report.md
 # Performance tracing outputs
 trace.json
 *.heapsnapshot

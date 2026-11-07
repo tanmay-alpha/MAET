@@ -6,8 +6,18 @@ import { loadQuotes } from "../../../domain/market/quote-service";
 import { lookupSymbol } from "../../../domain/market/symbol";
 import { getConfig } from "../../../config";
 
-// FIX 2: SSRF protection — strict symbol and range validation
-const VALID_SYMBOL = /^[A-Z][A-Z0-9\-\\.]{0,19}$/;
+// FIX 2: SSRF protection — strict symbol and range validation.
+// Subset of MARKET_SYMBOL_PATTERN (covers M&M, BAJAJ-AUTO) that must start
+// alphanumeric and is capped at 20 characters.
+const VALID_SYMBOL = /^[A-Z0-9][A-Z0-9&.-]{0,19}$/;
+
+/** Symbol input for procedures that fetch from upstream providers or persist under the symbol. */
+export const marketSymbolSchema = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .regex(VALID_SYMBOL, "Symbols must be 1-20 uppercase alphanumeric characters with optional & . -");
+
 const VALID_RANGES = ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"] as const;
 
 export const marketRouter = createRouter({
@@ -72,7 +82,7 @@ export const marketRouter = createRouter({
   // Get historical candles for a symbol
   getCandles: protectedProcedure
     .input(z.object({
-      symbol: z.string(),
+      symbol: marketSymbolSchema,
       timeframe: z.string(),
       range: z.string(),
     }))
@@ -99,7 +109,7 @@ export const marketRouter = createRouter({
         };
 
         const interval = intervalMap[input.timeframe] || '1d';
-        const symbol = `${input.symbol}.NS`;
+        const symbol = encodeURIComponent(`${input.symbol}.NS`);
 
         const response = await fetch(
           `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${interval}&range=${input.range}`,

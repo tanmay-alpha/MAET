@@ -58,10 +58,6 @@ export function calculateBackoffMs(policy: RetryPolicy, attempt: number): number
   return Math.min(delay, policy.maxDelayMs);
 }
 
-export function isRetryable(policy: RetryPolicy, errorCode: string): boolean {
-  return policy.retryableErrorCodes.includes(errorCode);
-}
-
 export async function withRetry<T>(
   fn: () => Promise<T>,
   source: string,

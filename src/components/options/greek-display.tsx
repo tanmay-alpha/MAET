@@ -51,25 +51,3 @@ export function GreekDisplay({ greeks, compact = false }: GreekDisplayProps) {
     </div>
   );
 }
-
-interface PCRDisplayProps {
-  callOI: number;
-  putOI: number;
-}
-
-export function PCRDisplay({ callOI, putOI }: PCRDisplayProps) {
-  const pcr = putOI / Math.max(callOI, 1);
-  const pcrColor = pcr > 1 ? "text-bear" : pcr < 0.7 ? "text-bull" : "text-foreground";
-
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="text-muted-foreground">PCR:</span>
-      <span className={`font-mono tabular font-semibold ${pcrColor}`}>
-        {pcr.toFixed(2)}
-      </span>
-      <span className="text-muted-foreground">
-        ({pcr > 1 ? "Bearish" : pcr < 0.7 ? "Bullish" : "Neutral"})
-      </span>
-    </div>
-  );
-}

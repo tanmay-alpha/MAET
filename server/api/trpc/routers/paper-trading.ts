@@ -121,7 +121,7 @@ export function createPaperTradingRouter(
       }),
 
     cancelOrder: protectedProcedure
-      .input(z.object({ orderId: z.string() }))
+      .input(z.object({ orderId: z.string().uuid() }))
       .mutation(async ({ ctx, input }) => {
         const userId = ctx.userId;
         if (!userId) {
@@ -165,12 +165,16 @@ export function createPaperTradingRouter(
         if (!userId) {
           throw new TRPCError({ code: "UNAUTHORIZED" });
         }
-        return service.listOrders({
-          userId,
-          generation: input.generation,
-          limit: input.limit,
-          cursor: input.cursor,
-        });
+        try {
+          return await service.listOrders({
+            userId,
+            generation: input.generation,
+            limit: input.limit,
+            cursor: input.cursor,
+          });
+        } catch (error) {
+          throw toTrpcError(error);
+        }
       }),
 
     listFills: protectedProcedure
@@ -186,12 +190,16 @@ export function createPaperTradingRouter(
         if (!userId) {
           throw new TRPCError({ code: "UNAUTHORIZED" });
         }
-        return service.listFills({
-          userId,
-          generation: input.generation,
-          limit: input.limit,
-          cursor: input.cursor,
-        });
+        try {
+          return await service.listFills({
+            userId,
+            generation: input.generation,
+            limit: input.limit,
+            cursor: input.cursor,
+          });
+        } catch (error) {
+          throw toTrpcError(error);
+        }
       }),
 
     listLedger: protectedProcedure
@@ -207,12 +215,16 @@ export function createPaperTradingRouter(
         if (!userId) {
           throw new TRPCError({ code: "UNAUTHORIZED" });
         }
-        return service.listLedger({
-          userId,
-          generation: input.generation,
-          limit: input.limit,
-          cursor: input.cursor,
-        });
+        try {
+          return await service.listLedger({
+            userId,
+            generation: input.generation,
+            limit: input.limit,
+            cursor: input.cursor,
+          });
+        } catch (error) {
+          throw toTrpcError(error);
+        }
       }),
 
     /**

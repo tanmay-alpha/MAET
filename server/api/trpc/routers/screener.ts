@@ -67,6 +67,35 @@ const FIELD_MAP = {
 const CANDLE_QUERYABLE_FIELDS = ['volume', 'symbol', 'timeframe', 'source'] as const;
 type CandleQueryableField = typeof CANDLE_QUERYABLE_FIELDS[number];
 
+/**
+ * Rows satisfying every candle filter: the in-memory counterpart of the candle-only SQL
+ * conditions, applied to the latest candle of each symbol the technical screen matched.
+ */
+export function applyCandleFilters<T extends Record<CandleQueryableField, unknown>>(
+  rows: T[],
+  filters: Array<{ field: CandleQueryableField; operator: string; value: number | number[] }>,
+): T[] {
+  return rows.filter((row) =>
+    filters.every((f) => {
+      const v = Number(row[f.field]);
+      if (f.operator === "between") {
+        // Matches the SQL path, which adds no condition for a malformed range.
+        if (!Array.isArray(f.value) || f.value.length !== 2) return true;
+        return v >= f.value[0] && v <= f.value[1];
+      }
+      if (typeof f.value !== "number") return false;
+      switch (f.operator) {
+        case "gt": return v > f.value;
+        case "gte": return v >= f.value;
+        case "lt": return v < f.value;
+        case "lte": return v <= f.value;
+        case "eq": return v === f.value;
+        default: return false;
+      }
+    }),
+  );
+}
+
 // FIX 2: Removed hardcoded NSE_SYMBOLS whitelist (was 60 symbols).
 // The screener now queries the companies table for the full NSE universe.
 
@@ -92,7 +121,7 @@ async function getNSESymbols(): Promise<string[]> {
 // (server/domain/calculations/calculators/indicators). `value` is the SQL expression
 // filtered on; `columns` are the stored columns it reads.
 // Keys match ALLOWED_FILTER_FIELDS technical indicator entries.
-interface CalculationResultsFilterSource {
+export interface CalculationResultsFilterSource {
   indicatorName: string;
   columns: ("value" | "signal" | "hist")[];
   value: SQL;
@@ -148,6 +177,33 @@ const TECHNICAL_SNAPSHOT_COL_MAP: Record<string, any> = {
   adx_14: technicalSnapshots.adx14,
 };
 
+/** Symbols in `symbols` whose latest stored indicator value satisfies the filter. */
+export function calculationResultsFilterQuery(params: {
+  symbols: string[];
+  source: CalculationResultsFilterSource;
+  latestDate: unknown;
+  operator: string;
+  value: number;
+}): SQL {
+  const v = params.source.value;
+  const comparison =
+    params.operator === "gt" ? sql`AND ${v} > ${params.value}::numeric`
+    : params.operator === "gte" ? sql`AND ${v} >= ${params.value}::numeric`
+    : params.operator === "lt" ? sql`AND ${v} < ${params.value}::numeric`
+    : params.operator === "lte" ? sql`AND ${v} <= ${params.value}::numeric`
+    : params.operator === "eq" ? sql`AND ABS(${v} - ${params.value}::numeric) < 0.01`
+    : sql.empty();
+  return sql`
+    SELECT DISTINCT symbol
+    FROM calculation_results
+    WHERE ${inArray(sql`symbol`, params.symbols)}
+      AND indicator_name = ${params.source.indicatorName}
+      AND date = ${params.latestDate}::date
+      AND ${v} IS NOT NULL
+      ${comparison}
+  `;
+}
+
 async function runTechnicalScreen(params: {
   symbols: string[];
   filters: Array<{
@@ -179,11 +235,12 @@ async function runTechnicalScreen(params: {
       eq(technicalSnapshots.timeframe, "1d"),
     ];
 
-    let hasSupportedSnapshotFilter = false;
+    // Snapshots hold only some indicators: use them only when they cover every filter, otherwise
+    // the uncovered filters would be ignored. calculation_results covers all of them.
+    const snapshotCoversFilters = params.filters.every((f) => TECHNICAL_SNAPSHOT_COL_MAP[f.field]);
     for (const f of params.filters) {
       const col = TECHNICAL_SNAPSHOT_COL_MAP[f.field];
       if (!col) continue;
-      hasSupportedSnapshotFilter = true;
       if (f.operator === "gt") techConditions.push(gt(col, String(f.value)));
       else if (f.operator === "gte") techConditions.push(gte(col, String(f.value)));
       else if (f.operator === "lt") techConditions.push(lt(col, String(f.value)));
@@ -192,7 +249,7 @@ async function runTechnicalScreen(params: {
     }
 
     let matchingSymbols: string[] = [];
-    if (hasSupportedSnapshotFilter) {
+    if (snapshotCoversFilters) {
       const matchingTechRows = await db
         .select({ symbol: technicalSnapshots.symbol })
         .from(technicalSnapshots)
@@ -226,27 +283,20 @@ async function runTechnicalScreen(params: {
       const latestDateRow = await db.execute(sql`
         SELECT MAX(date) as max_date
         FROM calculation_results
-        WHERE symbol = ANY(${params.symbols}::text[])
+        WHERE ${inArray(sql`symbol`, params.symbols)}
       `);
       const latestDate = (latestDateRow as any[])[0]?.max_date;
       if (!latestDate) return [];
 
       matchingSymbols = params.symbols;
       for (const f of indicatorFilters) {
-        const v = f.source.value;
-        const symbolRows = await db.execute(sql`
-          SELECT DISTINCT symbol
-          FROM calculation_results
-          WHERE symbol = ANY(${params.symbols}::text[])
-            AND indicator_name = ${f.source.indicatorName}
-            AND date = ${latestDate}::date
-            AND ${v} IS NOT NULL
-            ${f.operator === "gt" ? sql`AND ${v} > ${f.value}::numeric` : ""}
-            ${f.operator === "gte" ? sql`AND ${v} >= ${f.value}::numeric` : ""}
-            ${f.operator === "lt" ? sql`AND ${v} < ${f.value}::numeric` : ""}
-            ${f.operator === "lte" ? sql`AND ${v} <= ${f.value}::numeric` : ""}
-            ${f.operator === "eq" ? sql`AND ABS(${v} - ${f.value}::numeric) < 0.01` : ""}
-        `);
+        const symbolRows = await db.execute(calculationResultsFilterQuery({
+          symbols: params.symbols,
+          source: f.source,
+          latestDate,
+          operator: f.operator,
+          value: f.value,
+        }));
 
         const filteredSymbols = (symbolRows as any[]).map((r) => r.symbol);
         matchingSymbols = matchingSymbols.filter((s) => filteredSymbols.includes(s));
@@ -260,7 +310,7 @@ async function runTechnicalScreen(params: {
     const candleRows = await db.execute(sql`
       SELECT DISTINCT ON (symbol) symbol, timeframe, ts, open, high, low, close, volume, source
       FROM candles
-      WHERE symbol = ANY(${matchingSymbols}::text[])
+      WHERE ${inArray(candles.symbol, matchingSymbols)}
       ORDER BY symbol, ts DESC
     `);
 
@@ -313,6 +363,9 @@ export const screenerRouter = createRouter({
         value: number;
       }> = [];
 
+      // Filters the technical screen cannot evaluate (fundamentals, malformed ranges)
+      const unevaluable: string[] = [];
+
       for (const filter of input.filters) {
         if (CANDLE_QUERYABLE_FIELDS.includes(filter.field as CandleQueryableField)) {
           candleFilters.push({
@@ -320,35 +373,49 @@ export const screenerRouter = createRouter({
             operator: filter.operator,
             value: filter.value,
           });
-        } else {
-          if (typeof filter.value === 'number') {
-            technicalFilters.push({
-              field: filter.field,
-              operator: filter.operator,
-              value: filter.value,
-            });
+        } else if (!CALCULATION_RESULTS_FILTERS[filter.field]) {
+          unevaluable.push(filter.field);
+        } else if (filter.operator === "between") {
+          // runTechnicalScreen compares scalars; a range is its two inclusive bounds.
+          if (Array.isArray(filter.value) && filter.value.length === 2) {
+            technicalFilters.push(
+              { field: filter.field, operator: "gte", value: filter.value[0] },
+              { field: filter.field, operator: "lte", value: filter.value[1] },
+            );
+          } else {
+            unevaluable.push(filter.field);
           }
+        } else if (typeof filter.value === "number") {
+          technicalFilters.push({
+            field: filter.field,
+            operator: filter.operator,
+            value: filter.value,
+          });
+        } else {
+          unevaluable.push(filter.field);
         }
       }
 
-      // If technical filters are present, delegate to the enhanced path
-      if (technicalFilters.length > 0) {
+      // Fail closed: returning rows that were never checked against a filter would ignore it.
+      if (unevaluable.length > 0) {
         warnings.push(
-          `${technicalFilters.length} technical/fundamental filter(s) require enhanced screening. ` +
-          `Results are limited to candle-only filters.`
+          `Filter(s) ${[...new Set(unevaluable)].join(", ")} cannot be evaluated by the screener; no symbols can be confirmed to match.`
         );
+        return { results: [], warnings };
+      }
+
+      if (technicalFilters.length > 0) {
         const nseSymbols = await getNSESymbols();
-        const enhancedResults = await runTechnicalScreen({
+        const technicalMatches = await runTechnicalScreen({
           symbols: nseSymbols,
           filters: technicalFilters,
           sortBy: input.sortBy,
           sortOrder: input.sortOrder,
           limit: input.limit,
         });
-        if (enhancedResults.length > 0) {
-          return { results: enhancedResults, warnings };
-        }
-        // Fall through to candle-only query and return what we can
+        // No candle-only fallback: it would drop the technical filters. Candle filters apply to
+        // each matched symbol's latest candle.
+        return { results: applyCandleFilters(technicalMatches, candleFilters), warnings };
       }
 
       // Build candle-only query

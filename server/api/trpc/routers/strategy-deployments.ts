@@ -15,7 +15,7 @@ import {
   strategyExecutionDecisions,
   strategyVersions,
 } from "../../../db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { CreateDeploymentInputSchema, UpdateRiskLimitsInputSchema, ConfirmProposalInputSchema } from "../../../../shared/strategy/contracts";
 import { DeploymentRiskLimitsSchema } from "../../../../shared/strategy/schemas";
 
@@ -100,14 +100,24 @@ export const strategyDeploymentsRouter = createRouter({
         .where(and(eq(strategyDeployments.id, input.deploymentId), eq(strategyDeployments.userId, ctx.userId!)))
         .limit(1);
       if (!dep) throw new TRPCError({ code: "NOT_FOUND", message: "Deployment not found" });
-      if (dep.status !== "DRAFT" && dep.status !== "PAUSED") {
+      const activatable = ["DRAFT", "PAUSED"];
+      if (!activatable.includes(dep.status)) {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Cannot activate a deployment with status ${dep.status}` });
       }
 
-      await db
+      // The status condition repeats the check atomically: a concurrent stop must not be undone.
+      const activated = await db
         .update(strategyDeployments)
         .set({ status: "ACTIVE", startedAt: dep.startedAt ?? new Date(), pausedAt: null, updatedAt: new Date() })
-        .where(eq(strategyDeployments.id, input.deploymentId));
+        .where(and(
+          eq(strategyDeployments.id, input.deploymentId),
+          eq(strategyDeployments.userId, ctx.userId!),
+          inArray(strategyDeployments.status, activatable),
+        ))
+        .returning({ id: strategyDeployments.id });
+      if (!activated.length) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Deployment status changed; it can no longer be activated" });
+      }
 
       return { activated: true };
     }),
@@ -116,10 +126,17 @@ export const strategyDeploymentsRouter = createRouter({
   pause: protectedProcedure
     .input(z.object({ deploymentId: z.string().uuid() }).strict())
     .mutation(async ({ ctx, input }) => {
-      await db
+      const owned = and(eq(strategyDeployments.id, input.deploymentId), eq(strategyDeployments.userId, ctx.userId!));
+      const paused = await db
         .update(strategyDeployments)
         .set({ status: "PAUSED", pausedAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(strategyDeployments.id, input.deploymentId), eq(strategyDeployments.userId, ctx.userId!)));
+        .where(and(owned, eq(strategyDeployments.status, "ACTIVE")))
+        .returning({ id: strategyDeployments.id });
+      if (!paused.length) {
+        const [dep] = await db.select({ status: strategyDeployments.status }).from(strategyDeployments).where(owned).limit(1);
+        if (!dep) throw new TRPCError({ code: "NOT_FOUND", message: "Deployment not found" });
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Cannot pause a deployment with status ${dep.status}` });
+      }
       return { paused: true };
     }),
 

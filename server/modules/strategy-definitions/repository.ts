@@ -7,8 +7,6 @@ import { db } from "../../data/drizzle/client";
 import {
   strategyDefinitions,
   strategyVersions,
-  strategyBacktestJobs,
-  strategyDeployments,
 } from "../../db/schema";
 import { eq, and, desc, count } from "drizzle-orm";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
@@ -178,24 +176,6 @@ export async function createVersion(
     })
     .returning();
   return row as unknown as StrategyVersionRow;
-}
-
-/**
- * Returns true if this version has been referenced by any job or deployment.
- * Versions that are referenced cannot be mutated.
- */
-export async function isVersionReferenced(versionId: string): Promise<boolean> {
-  const [jobResult] = await db
-    .select({ count: count() })
-    .from(strategyBacktestJobs)
-    .where(eq(strategyBacktestJobs.strategyVersionId, versionId));
-  if ((jobResult?.count ?? 0) > 0) return true;
-
-  const [deployResult] = await db
-    .select({ count: count() })
-    .from(strategyDeployments)
-    .where(eq(strategyDeployments.strategyVersionId, versionId));
-  return (deployResult?.count ?? 0) > 0;
 }
 
 export async function getVersionByHash(

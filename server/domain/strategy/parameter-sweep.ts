@@ -7,17 +7,47 @@
 
 import type { z } from "zod";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
+import { CreateSweepInputSchema } from "../../../shared/strategy/contracts";
 import { FORBIDDEN_SWEEP_PATH_SEGMENTS, type SweepParameterSchema } from "../../../shared/strategy/schemas";
 
 export type SweepParameter = z.infer<typeof SweepParameterSchema>;
 
-/** Cartesian product of every parameter's values (first parameter varies slowest), capped. */
+/** Largest parameter grid a sweep or walk-forward run may request. */
+export const MAX_SWEEP_COMBINATIONS = 500;
+
+/** Size of the cartesian product of every parameter's values. */
+export function countCombinations(parameters: readonly Pick<SweepParameter, "values">[]): number {
+  return parameters.reduce((product, parameter) => product * parameter.values.length, 1);
+}
+
+/**
+ * Cartesian product of every parameter's values (first parameter varies slowest). Throws, before
+ * building anything, when the product exceeds `maxCombinations`.
+ */
 export function generateCombinations(parameters: SweepParameter[], maxCombinations: number): Record<string, number>[] {
+  const count = countCombinations(parameters);
+  if (count > maxCombinations) {
+    throw new Error(`Too many parameter combinations: ${count} (max ${maxCombinations})`);
+  }
   let combinations: Record<string, number>[] = [{}];
   for (const parameter of parameters) {
     combinations = combinations.flatMap((combo) => parameter.values.map((value) => ({ ...combo, [parameter.name]: value })));
   }
-  return combinations.slice(0, maxCombinations);
+  return combinations;
+}
+
+/**
+ * Re-validates parameters read back from a job row against the API's create-time rules (shape and
+ * grid size); the row is not trusted to still hold what the API accepted.
+ */
+export function parseStoredSweepParameters(raw: unknown): SweepParameter[] {
+  const parsed = CreateSweepInputSchema.shape.parameters.safeParse(raw);
+  if (!parsed.success) throw new Error(`Invalid sweep parameters: ${parsed.error.message}`);
+  const count = countCombinations(parsed.data);
+  if (count > MAX_SWEEP_COMBINATIONS) {
+    throw new Error(`Too many parameter combinations: ${count} (max ${MAX_SWEEP_COMBINATIONS})`);
+  }
+  return parsed.data;
 }
 
 /**

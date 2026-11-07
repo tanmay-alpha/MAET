@@ -106,4 +106,46 @@ describe.skipIf(!databaseUrl)("research ownership checks (PostgreSQL)", () => {
       await callerA.saveLayout({ workspaceId: workspaceA.id, layoutType: "SINGLE", panes: [{ symbol: "INFY", indicators: [indicator] }] })
     ).toEqual({ success: true });
   });
+
+  it("saveLayout replaces the stored panes with exactly the submitted set", async () => {
+    const sql = getSqlClient();
+    const callerA = chartWorkspacesRouter.createCaller(ctx(userA));
+    const workspace = await callerA.create({ name: "A3" });
+    const storedPanes = () => sql<{ id: string; symbol: string }[]>`
+      SELECT id, symbol FROM public.chart_panes WHERE workspace_id = ${workspace.id} ORDER BY position
+    `;
+
+    const twoPanes = { workspaceId: workspace.id, layoutType: "VERTICAL_2" as const, panes: [{ symbol: "INFY" }, { symbol: "TCS" }] };
+    await callerA.saveLayout(twoPanes);
+    await callerA.saveLayout(twoPanes);
+    const saved = await storedPanes();
+    expect(saved.map((pane) => pane.symbol)).toEqual(["INFY", "TCS"]);
+
+    await callerA.saveLayout({ workspaceId: workspace.id, layoutType: "SINGLE", panes: [{ id: saved[1].id, symbol: "WIPRO" }] });
+    expect(await storedPanes()).toEqual([{ id: saved[1].id, symbol: "WIPRO" }]);
+
+    await expect(
+      callerA.saveLayout({ workspaceId: workspace.id, layoutType: "SINGLE", panes: [{ symbol: "INFY", paneKey: "k".repeat(31) }] })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      callerA.saveLayout({ workspaceId: workspace.id, layoutType: "SINGLE", panes: [{ id: "not-a-uuid-pane-id", symbol: "INFY" }] })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("maps chart workspace and thesis service failures to client error codes", async () => {
+    const sql = getSqlClient();
+    const callerB = chartWorkspacesRouter.createCaller(ctx(userB));
+    await expectNotFound(callerB.get({ id: crypto.randomUUID() }));
+
+    const [{ count }] = await sql<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM public.chart_workspaces WHERE user_id = ${userB}
+    `;
+    for (let i = count; i < 20; i++) await callerB.create({ name: `cap-${i}` });
+    await expect(callerB.create({ name: "over-cap" })).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+
+    const thesesB = tradeThesesRouter.createCaller(ctx(userB));
+    await expect(
+      thesesB.create({ symbol: "TCS", title: "t", setupType: "s", direction: "LONG", hypothesis: "h", stopPrice: 110, targetPrice: 100 })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
 });

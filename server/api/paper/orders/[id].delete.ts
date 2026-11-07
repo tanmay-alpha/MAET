@@ -1,4 +1,5 @@
-import { defineEventHandler, getRouterParam } from "h3";
+import { defineEventHandler, getRouterParam, createError } from "h3";
+import { z } from "zod";
 import { requireAuth } from "../../trpc/auth";
 import { createPaperTradingService } from "../../../modules/paper-trading/service";
 import { toPaperHttpError } from "../orders.post";
@@ -9,7 +10,16 @@ export default defineEventHandler(async (event) => {
     const orderId = getRouterParam(event, "id");
 
     if (!orderId) {
-      throw new Error("Missing order ID parameter");
+      throw createError({
+        statusCode: 400,
+        statusMessage: "Missing order ID parameter",
+      });
+    }
+    if (!z.string().uuid().safeParse(orderId).success) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: "Invalid order ID parameter",
+      });
     }
 
     const service = createPaperTradingService();

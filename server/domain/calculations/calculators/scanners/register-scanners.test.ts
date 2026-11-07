@@ -51,3 +51,31 @@ describe("momentum scanners — canonical indicator parity", () => {
     expect(expectedHits).toBeGreaterThan(0);
   });
 });
+
+describe("SCAN_BOLLINGER_SQUEEZE — 52-week bandwidth window", () => {
+  const scan = getCalculator("SCAN_BOLLINGER_SQUEEZE")!;
+  const series = (segments: Array<[length: number, amplitude: number]>) => {
+    const out: number[] = [];
+    for (const [length, amplitude] of segments) {
+      for (let k = 0; k < length; k++) out.push(500 + amplitude * Math.sin(out.length * 1.7));
+    }
+    return out;
+  };
+  const run = (values: number[]) =>
+    scan.calculate({ symbol: "TEST", closes: values, dates: values.map((_, i) => new Date(Date.UTC(2024, 0, 1 + i)).toISOString().split("T")[0]) });
+
+  it("does not fire on exactly 252 bars when earlier bandwidth was far tighter", () => {
+    expect(run(series([[232, 0.5], [20, 40]]))).toEqual([]);
+  });
+
+  it("fires on 252 bars when the current bandwidth is the tightest", () => {
+    expect(run(series([[232, 40], [20, 0.5]]))).toHaveLength(1);
+  });
+
+  it("compares against the whole last 252 bars, not only the tail beyond bar 252", () => {
+    // A tight stretch at bars 100-149 is inside the 52-week window of a 300-bar series.
+    expect(run(series([[100, 40], [50, 0.5], [130, 40], [20, 5]]))).toEqual([]);
+    // Without it the medium-volatility tail is the 52-week low.
+    expect(run(series([[280, 40], [20, 5]]))).toHaveLength(1);
+  });
+});

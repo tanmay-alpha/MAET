@@ -11,11 +11,13 @@
 import { sql } from "drizzle-orm";
 import { MAX_STREAM_SYMBOLS } from "@shared/types";
 import { getDb } from "../../data/drizzle/client";
+import { lookupSymbol } from "../../domain/market/symbol";
 import { DatabaseUnavailableError, withOptionalDatabase } from "../../data/drizzle/availability";
 
 export type PaperInterestKind = "ORDER" | "POSITION";
 
 export interface PaperInterestRow {
+  userId: string;
   exchange: string;
   symbol: string;
   kind: PaperInterestKind;
@@ -27,28 +29,28 @@ const STREAMED_EXCHANGES: Record<string, true> = { NSE: true };
 export const PAPER_INTEREST_REFRESH_MS = 60_000;
 
 /**
- * Distinct EXCHANGE:SYMBOL pairs with a working order or an open position in
- * the owning account's current generation. Working orders come first (oldest
- * first), then positions, so a capped subscription keeps fills flowing first.
+ * EXCHANGE:SYMBOL pairs per user with a working order or an open position in the
+ * owning account's current generation. Working orders come first (oldest first),
+ * then positions, so a capped subscription keeps fills flowing first.
  */
 export async function listPaperInterest(): Promise<PaperInterestRow[]> {
-  const rows = await getDb().execute<{ exchange: string; symbol: string; kind: PaperInterestKind }>(sql`
-    SELECT exchange, symbol, kind FROM (
-      SELECT o.exchange, o.symbol, 'ORDER' AS kind, 0 AS rank, MIN(o.placed_at) AS since
+  const rows = await getDb().execute<{ user_id: string; exchange: string; symbol: string; kind: PaperInterestKind }>(sql`
+    SELECT user_id, exchange, symbol, kind FROM (
+      SELECT o.user_id, o.exchange, o.symbol, 'ORDER' AS kind, 0 AS rank, MIN(o.placed_at) AS since
       FROM public.paper_orders o
       JOIN public.paper_accounts a ON a.user_id = o.user_id AND a.generation = o.generation
       WHERE o.status IN ('PENDING', 'TRIGGER_PENDING', 'TRIGGERED', 'PARTIALLY_FILLED')
-      GROUP BY o.exchange, o.symbol
+      GROUP BY o.user_id, o.exchange, o.symbol
       UNION ALL
-      SELECT p.exchange, p.symbol, 'POSITION' AS kind, 1 AS rank, MIN(p.created_at) AS since
+      SELECT p.user_id, p.exchange, p.symbol, 'POSITION' AS kind, 1 AS rank, MIN(p.created_at) AS since
       FROM public.paper_positions p
       JOIN public.paper_accounts a ON a.user_id = p.user_id AND a.generation = p.generation
       WHERE p.total_shares > 0
-      GROUP BY p.exchange, p.symbol
+      GROUP BY p.user_id, p.exchange, p.symbol
     ) interest
-    ORDER BY rank, since, exchange, symbol
+    ORDER BY rank, since, user_id, exchange, symbol
   `);
-  return rows.map((row) => ({ exchange: row.exchange, symbol: row.symbol, kind: row.kind }));
+  return rows.map((row) => ({ userId: row.user_id, exchange: row.exchange, symbol: row.symbol, kind: row.kind }));
 }
 
 export interface PaperInterestLog {
@@ -61,6 +63,8 @@ export interface PaperInterestSubscriptionsOptions {
   subscribe: (symbol: string) => void;
   unsubscribe: (symbol: string) => void;
   fetchInterest?: () => Promise<PaperInterestRow[]>;
+  /** Whether the live feed can stream a symbol: it needs the symbol's Angel One instrument token. */
+  hasFeedToken?: (symbol: string) => boolean;
   /** Most symbols this source may hold (the shared stream cap). */
   maxSymbols?: number;
   intervalMs?: number;
@@ -70,6 +74,7 @@ export interface PaperInterestSubscriptionsOptions {
 export class PaperInterestSubscriptions {
   private readonly owned = new Set<string>();
   private readonly fetchInterest: () => Promise<PaperInterestRow[]>;
+  private readonly hasFeedToken: (symbol: string) => boolean;
   private readonly maxSymbols: number;
   private readonly intervalMs: number;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -80,9 +85,12 @@ export class PaperInterestSubscriptions {
   private epoch = 0;
   private lastSkippedKey = "";
   private lastDroppedKey = "";
+  private lastUntokenedKey = "";
 
   constructor(private readonly options: PaperInterestSubscriptionsOptions) {
     this.fetchInterest = options.fetchInterest ?? listPaperInterest;
+    this.hasFeedToken =
+      options.hasFeedToken ?? ((symbol) => Boolean((lookupSymbol("NSE", symbol) ?? lookupSymbol("BSE", symbol))?.token));
     this.maxSymbols = options.maxSymbols ?? MAX_STREAM_SYMBOLS;
     this.intervalMs = options.intervalMs ?? PAPER_INTEREST_REFRESH_MS;
   }
@@ -167,10 +175,11 @@ export class PaperInterestSubscriptions {
   }
 
   private apply(rows: PaperInterestRow[]): void {
-    const wanted: string[] = [];
-    const seen = new Set<string>();
+    const wanted = new Set<string>();
+    const byUser = new Map<string, string[]>();
     const skipped = new Set<string>();
-    // Working orders first: without ticks they cannot fill at all.
+    const untokened = new Set<string>();
+    // Per user, working orders first: without ticks they cannot fill at all.
     const prioritised = [...rows.filter((row) => row.kind === "ORDER"), ...rows.filter((row) => row.kind !== "ORDER")];
     for (const row of prioritised) {
       const exchange = row.exchange.trim().toUpperCase();
@@ -179,9 +188,15 @@ export class PaperInterestSubscriptions {
         skipped.add(`${exchange}:${symbol}`);
         continue;
       }
-      if (seen.has(symbol)) continue;
-      seen.add(symbol);
-      wanted.push(symbol);
+      // Dropped before the cap: a symbol the feed cannot stream must not take a slot.
+      if (!this.hasFeedToken(symbol)) {
+        untokened.add(symbol);
+        continue;
+      }
+      wanted.add(symbol);
+      const queue = byUser.get(row.userId);
+      if (queue) queue.push(symbol);
+      else byUser.set(row.userId, [symbol]);
     }
 
     const skippedKey = [...skipped].sort().join(",");
@@ -193,26 +208,52 @@ export class PaperInterestSubscriptions {
     }
     this.lastSkippedKey = skippedKey;
 
-    const kept = wanted.slice(0, this.maxSymbols);
-    const dropped = wanted.slice(this.maxSymbols);
+    const untokenedKey = [...untokened].sort().join(",");
+    if (untokenedKey !== this.lastUntokenedKey && untokened.size > 0) {
+      this.options.log.warn(
+        { count: untokened.size, symbols: [...untokened].slice(0, 20) },
+        "paper orders/positions on symbols without an Angel One instrument token get no live ticks"
+      );
+    }
+    this.lastUntokenedKey = untokenedKey;
+
+    // Round-robin across users, so no single user can occupy every slot of the shared cap.
+    const kept = new Set<string>();
+    const queues = [...byUser.values()];
+    const cursors = queues.map(() => 0);
+    let progressed = true;
+    while (progressed && kept.size < this.maxSymbols) {
+      progressed = false;
+      for (let index = 0; index < queues.length && kept.size < this.maxSymbols; index++) {
+        const queue = queues[index];
+        let cursor = cursors[index];
+        while (cursor < queue.length && kept.has(queue[cursor])) cursor++;
+        if (cursor < queue.length) {
+          kept.add(queue[cursor]);
+          cursor++;
+          progressed = true;
+        }
+        cursors[index] = cursor;
+      }
+    }
+    const dropped = [...wanted].filter((symbol) => !kept.has(symbol));
     const droppedKey = dropped.join(",");
     if (droppedKey !== this.lastDroppedKey && dropped.length > 0) {
       this.options.log.warn(
-        { cap: this.maxSymbols, wanted: wanted.length, dropped: dropped.slice(0, 20) },
-        "paper interest exceeds the live-feed symbol cap; working orders kept ahead of positions"
+        { cap: this.maxSymbols, wanted: wanted.size, dropped: dropped.slice(0, 20) },
+        "paper interest exceeds the live-feed symbol cap; slots shared round-robin across users, working orders first"
       );
     }
     this.lastDroppedKey = droppedKey;
 
-    const next = new Set(kept);
-    for (const symbol of next) {
+    for (const symbol of kept) {
       if (!this.owned.has(symbol)) {
         this.options.subscribe(symbol);
         this.owned.add(symbol);
       }
     }
     for (const symbol of [...this.owned]) {
-      if (!next.has(symbol)) {
+      if (!kept.has(symbol)) {
         this.options.unsubscribe(symbol);
         this.owned.delete(symbol);
       }

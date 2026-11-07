@@ -59,57 +59,6 @@ export async function writePriceDailyBatch(rows: OHLCVRow[]): Promise<WriteResul
 }
 
 // ============================================================================
-// Calculation Results (indicator cache)
-// ============================================================================
-
-export interface IndicatorCacheRow {
-  symbol: string;
-  date: string; // YYYY-MM-DD
-  indicatorName: string;
-  indicatorValue: number | null;
-  indicatorSignal?: number | null;
-  indicatorHist?: number | null;
-  timeframe?: string;
-  parameters?: Record<string, unknown>;
-}
-
-export async function writeCalculationResultsBatch(rows: IndicatorCacheRow[]): Promise<WriteResult> {
-  if (rows.length === 0) return { inserted: 0, updated: 0, failed: 0, durationMs: 0 };
-  const start = Date.now();
-  let inserted = 0;
-  let failed = 0;
-
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
-    try {
-      const values = batch.map((r) =>
-        sql`(${r.symbol}, ${r.date}::date, ${r.indicatorName}, ${r.indicatorValue ?? null},
-             ${r.indicatorSignal ?? null}, ${r.indicatorHist ?? null},
-             ${r.timeframe ?? "1d"}, ${r.parameters ? JSON.stringify(r.parameters) : null}::jsonb, NOW())`
-      );
-      await db.execute(sql`
-        INSERT INTO calculation_results
-          (symbol, date, indicator_name, indicator_value, indicator_signal, indicator_hist, timeframe, parameters, calculated_at)
-        VALUES ${sql.join(values, sql`, `)}
-        ON CONFLICT (symbol, date, indicator_name, timeframe) DO UPDATE SET
-          indicator_value = EXCLUDED.indicator_value,
-          indicator_signal = EXCLUDED.indicator_signal,
-          indicator_hist = EXCLUDED.indicator_hist,
-          parameters = EXCLUDED.parameters,
-          calculated_at = NOW()
-      `);
-      inserted += batch.length;
-    } catch (err) {
-      logger.error({ err, batchStart: i }, "Supabase calculation_results batch write failed");
-      failed += batch.length;
-    }
-  }
-
-  return { inserted, updated: 0, failed, durationMs: Date.now() - start };
-}
-
-// ============================================================================
 // Ingestion Run Tracking
 // ============================================================================
 

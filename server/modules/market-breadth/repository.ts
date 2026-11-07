@@ -1,6 +1,11 @@
 import { db } from "../../data/drizzle/client";
 import { companies, quoteSnapshots, candles } from "../../db/schema";
-import { eq, desc, and, ne, inArray } from "drizzle-orm";
+import { eq, desc, and, ne, inArray, gte } from "drizzle-orm";
+
+/** Longest lookback the breadth metrics use (SMA 200). */
+const BREADTH_LOOKBACK_SESSIONS = 200;
+/** NSE trades ~250 sessions a year; 400 calendar days cover 200 sessions with room for holidays. */
+const BREADTH_LOOKBACK_CALENDAR_DAYS = 400;
 
 export interface VerifiedQuoteData {
   symbol: string;
@@ -144,7 +149,8 @@ export async function fetchMarketQuotesWithFundamentals(universe = "ALL_NSE"): P
     ? Number((companiesWithUsableQuote / eligibleCompanies).toFixed(4))
     : 0;
 
-  // 4. Batch fetch daily candles for usable symbols to calculate true 20d high/low and SMAs
+  // 4. Batch fetch recent daily candles for usable symbols to calculate true 20d high/low and SMAs
+  const candlesSince = new Date(Date.now() - BREADTH_LOOKBACK_CALENDAR_DAYS * 24 * 60 * 60 * 1000);
   const usableSymbols = usableCompanies.map((u) => u.company.symbol);
   const candleRows = usableSymbols.length > 0
     ? await db
@@ -159,7 +165,8 @@ export async function fetchMarketQuotesWithFundamentals(universe = "ALL_NSE"): P
         .where(
           and(
             inArray(candles.symbol, usableSymbols),
-            eq(candles.timeframe, "1d")
+            eq(candles.timeframe, "1d"),
+            gte(candles.ts, candlesSince)
           )
         )
         .orderBy(desc(candles.ts))
@@ -172,7 +179,7 @@ export async function fetchMarketQuotesWithFundamentals(universe = "ALL_NSE"): P
       arr = [];
       candlesBySymbol.set(c.symbol, arr);
     }
-    if (arr.length < 200) {
+    if (arr.length < BREADTH_LOOKBACK_SESSIONS) {
       arr.push({
         high: Number(c.high),
         low: Number(c.low),

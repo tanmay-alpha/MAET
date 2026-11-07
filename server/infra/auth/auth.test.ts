@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "bun:test";
 import { requireAuth, tryAuth, verifyJwt, __resetJwksCacheForTests } from "../../api/trpc/auth";
 import { resetConfigForTests } from "../../config";
-import type { H3Event } from "h3";
+import { createApp, toWebHandler, type H3Event } from "h3";
+import { generateKeyPair, SignJWT } from "jose";
+import trpcHandler from "../../api/trpc/[trpc]";
 
 // env must be set before any module that calls getConfig() is imported.
 // We import lazily inside the suite to ensure beforeAll runs first.
@@ -272,5 +274,71 @@ describe("verifyJwt — authorization trust boundary & claims", () => {
 
     const result = await verifyJwt(token);
     expect(result).toBeNull();
+  });
+});
+
+describe("auth backend outage — not mistaken for an invalid token", () => {
+  let token: string;
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeAll(async () => {
+    const { privateKey } = await generateKeyPair("RS256");
+    token = await new SignJWT({})
+      .setProtectedHeader({ alg: "RS256", kid: "outage-kid" })
+      .setSubject("user-123")
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(privateKey);
+  });
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    __resetJwksCacheForTests();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    __resetJwksCacheForTests();
+  });
+
+  function mockJwks(respond: () => Promise<Response>) {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/auth/v1/.well-known/jwks.json")) return respond();
+      return originalFetch(input);
+    }) as typeof fetch;
+  }
+
+  it("requireAuth and tryAuth reject with 503 when the JWKS endpoint is unreachable", async () => {
+    mockJwks(async () => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(requireAuth(makeEvent(`Bearer ${token}`))).rejects.toMatchObject({ statusCode: 503 });
+    __resetJwksCacheForTests();
+    await expect(tryAuth(makeEvent(`Bearer ${token}`))).rejects.toMatchObject({ statusCode: 503 });
+  });
+
+  it("treats a non-200 JWKS response as an outage, not an invalid token", async () => {
+    mockJwks(async () => new Response("upstream error", { status: 502 }));
+    await expect(requireAuth(makeEvent(`Bearer ${token}`))).rejects.toMatchObject({ statusCode: 503 });
+    __resetJwksCacheForTests();
+    await expect(tryAuth(makeEvent(`Bearer ${token}`))).rejects.toMatchObject({ statusCode: 503 });
+  });
+
+  it("tRPC answers SERVICE_UNAVAILABLE (503) during an outage, but UNAUTHORIZED for an invalid token", async () => {
+    mockJwks(async () => {
+      throw new TypeError("fetch failed");
+    });
+    const handle = toWebHandler(createApp().use(trpcHandler));
+    const call = (authorization: string) =>
+      handle(new Request("http://localhost/api/trpc/market.getMarketClock", { headers: { authorization } }));
+
+    const outage = await call(`Bearer ${token}`);
+    expect(outage.status).toBe(503);
+    expect(await outage.json()).toMatchObject({ error: { data: { code: "SERVICE_UNAVAILABLE" } } });
+
+    const invalid = await call("Bearer not-a-real-token");
+    expect(invalid.status).toBe(401);
+    expect(await invalid.json()).toMatchObject({ error: { data: { code: "UNAUTHORIZED" } } });
   });
 });

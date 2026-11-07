@@ -22,6 +22,7 @@ interface StoredSummary {
   totalReturn: string;
   maxDrawdown: string;
   tradeCount: number;
+  costDragPercent?: string;
 }
 
 export interface SweepRobustness {
@@ -52,6 +53,8 @@ export function sweepStabilityPoints(results: readonly StoredSweepResult[]): Swe
       totalReturn: Number(summary.totalReturn),
       maxDrawdown: Number(summary.maxDrawdown),
       tradeCount: summary.tradeCount,
+      // Absent on rows written before the sweep job stored cost drag.
+      costDragPercent: summary.costDragPercent == null ? undefined : Number(summary.costDragPercent),
     }];
   });
 }

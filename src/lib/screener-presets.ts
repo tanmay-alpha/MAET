@@ -33,7 +33,8 @@ export const SCREENER_PRESETS: readonly ScreenerPreset[] = [
   { id: "small", label: "Small cap", title: "Market-cap rank 251 and below", filters: { bucket_in: "small" }, requires: ["marketCap"] },
   { id: "value", label: "Deep value", title: "P/E below 20 and P/B below 3", filters: { pe_max: "20", pb_max: "3" }, requires: ["pe", "pb"] },
   { id: "roe", label: "High ROE", title: "Return on equity above 15%", filters: { roe_min: "15" }, requires: ["roe"] },
-  { id: "dividend", label: "High dividend", title: "Dividend yield above 1%", filters: { dividend_yield_min: "0.01" }, requires: ["dividendYield"] },
+  // Percentage points, like every other percent filter: the server divides bounds by 100.
+  { id: "dividend", label: "High dividend", title: "Dividend yield above 1%", filters: { dividend_yield_min: "1" }, requires: ["dividendYield"] },
 ];
 
 function activeEntries(filters: ScreenerFilters): Array<[string, string]> {

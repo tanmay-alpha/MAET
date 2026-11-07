@@ -75,14 +75,43 @@ export async function verifyJwt(token: string): Promise<AuthContext | null> {
       role,
     };
   } catch (err) {
+    // JWKS fetch/timeout/malformed-JWKS failures are infrastructure errors,
+    // not bad tokens — let the caller surface 503 instead of 401.
+    if (isAuthBackendUnavailable(err)) throw err;
     if (err instanceof joseErrors.JWTExpired) return null;
     if (err instanceof joseErrors.JWSSignatureVerificationFailed) return null;
     if (err instanceof joseErrors.JWTClaimValidationFailed) return null;
     if (err instanceof joseErrors.JWTInvalid) return null;
     if (err instanceof joseErrors.JOSEError) return null;
-    // Network / JWKS fetch failure — let the caller decide whether to 503.
     throw err;
   }
+}
+
+// jose codes raised while fetching the JWKS (not while verifying the token):
+// generic JOSEError is only thrown for non-200 / non-JSON JWKS responses.
+const JWKS_BACKEND_ERROR_CODES: Record<string, true> = {
+  ERR_JOSE_GENERIC: true,
+  ERR_JWKS_TIMEOUT: true,
+  ERR_JWKS_INVALID: true,
+};
+
+/** True when verification failed because the Supabase JWKS endpoint is unreachable or broken. */
+function isAuthBackendUnavailable(err: unknown): boolean {
+  if (err instanceof joseErrors.JOSEError) return JWKS_BACKEND_ERROR_CODES[err.code] === true;
+  return (
+    err instanceof Error &&
+    (err.message.includes("fetch failed") ||
+      err.message.includes("ENOTFOUND") ||
+      err.message.includes("ECONNREFUSED"))
+  );
+}
+
+function authBackendUnavailable(): Error {
+  return createError({
+    statusCode: 503,
+    statusMessage: "Auth backend unreachable",
+    data: { code: "AUTH_BACKEND_UNAVAILABLE" },
+  });
 }
 
 function unauthorized(reason: AuthErrorCode): Error {
@@ -116,17 +145,8 @@ export async function requireAuth(event: H3Event): Promise<AuthContext> {
     if (err instanceof joseErrors.JWKSNoMatchingKey) {
       throw unauthorized("INVALID_TOKEN");
     }
-    if (
-      err instanceof Error &&
-      (err.message.includes("fetch failed") ||
-        err.message.includes("ENOTFOUND") ||
-        err.message.includes("ECONNREFUSED"))
-    ) {
-      throw createError({
-        statusCode: 503,
-        statusMessage: "Auth backend unreachable",
-        data: { code: "AUTH_BACKEND_UNAVAILABLE" },
-      });
+    if (isAuthBackendUnavailable(err)) {
+      throw authBackendUnavailable();
     }
     throw err;
   }
@@ -152,7 +172,9 @@ export async function requireAdmin(event: H3Event): Promise<AuthContext> {
 /**
  * Attach an auth context to an h3 event. Useful for routes that want to
  * populate `event.context.userId` without throwing when auth fails (e.g.
- * public routes that adapt behavior for logged-in users).
+ * public routes that adapt behavior for logged-in users). Returns null for a
+ * missing/malformed/invalid/expired token; an unreachable auth backend still
+ * throws a 503 so callers don't mistake an outage for "logged out".
  */
 export async function tryAuth(event: H3Event): Promise<AuthContext | null> {
   const header = getRequestHeader(event, "authorization");
@@ -161,8 +183,9 @@ export async function tryAuth(event: H3Event): Promise<AuthContext | null> {
   if (!match) return null;
   try {
     return await verifyJwt(match[1].trim());
-  } catch {
-    return null;
+  } catch (err) {
+    if (isAuthBackendUnavailable(err)) throw authBackendUnavailable();
+    throw err;
   }
 }
 

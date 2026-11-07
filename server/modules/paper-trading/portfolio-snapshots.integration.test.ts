@@ -47,6 +47,8 @@ function tradingService(price: number) {
       source: "angelone",
       quality: "live",
     }),
+    // Synthetic test symbols are not in the symbol master.
+    symbolExists: async () => true,
   });
 }
 

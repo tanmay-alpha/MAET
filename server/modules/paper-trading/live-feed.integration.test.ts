@@ -14,6 +14,7 @@ import {
 } from "../../orchestrator";
 import { OrderMatcherWorker } from "../../workers/order-matcher";
 import { processOutboxBatch, type OutboxPublisher } from "../../workers/paper-outbox-publisher";
+import { registerMarketSymbols } from "../../domain/market/symbol";
 import { listPaperInterest } from "./interest-subscriptions";
 import { createPaperTradingService } from "./service";
 
@@ -42,6 +43,8 @@ function serviceQuoting(price: number) {
     database: getDb(),
     marketPhase: () => "OPEN",
     quoteLoader: async (exchange, symbol) => ({ ...tick(symbol, price), exchange }),
+    // Synthetic test symbols are not in the symbol master.
+    symbolExists: async () => true,
   });
 }
 
@@ -96,6 +99,10 @@ describe("paper live feed", () => {
   it("subscribes a resting LIMIT order's symbol without viewers, fills it from a bus tick and publishes its events", async () => {
     const userId = await createTestUser();
     const symbol = `LIVE${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    // The live feed only subscribes symbols with an Angel One instrument token.
+    registerMarketSymbols([
+      { exchange: "NSE", symbol, name: symbol, token: `9${Date.now()}`, yahooTicker: `${symbol}.NS`, isActive: true },
+    ]);
 
     const placedSignal = nextInterestChange("order_placed");
     const placed = await serviceQuoting(105).placeOrder({
@@ -215,8 +222,8 @@ describe("paper live feed", () => {
 
     const ours = (await listPaperInterest()).filter((row) => [held, resting, cancelled].includes(row.symbol));
     expect(ours).toEqual([
-      { exchange: "BSE", symbol: resting, kind: "ORDER" },
-      { exchange: "NSE", symbol: held, kind: "POSITION" },
+      { userId, exchange: "BSE", symbol: resting, kind: "ORDER" },
+      { userId, exchange: "NSE", symbol: held, kind: "POSITION" },
     ]);
 
     // After a reset the previous generation's position no longer needs ticks.

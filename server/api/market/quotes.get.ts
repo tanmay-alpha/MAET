@@ -37,7 +37,7 @@ export default defineEventHandler(async (event) => {
   const symbols = parseSymbols(query.symbols);
   // refresh=1 skips the quote cache and spends broker/Yahoo quota, so only
   // signed-in callers get it; anonymous callers are served from cache.
-  const force = query.refresh === "1" && (await tryAuth(event)) !== null;
+  const force = query.refresh === "1" && (await tryAuth(event).catch(() => null)) !== null;
   const result = await loadQuotes(symbols, force);
 
   setResponseHeader(event, "cache-control", "public, max-age=5, s-maxage=10, stale-while-revalidate=30");

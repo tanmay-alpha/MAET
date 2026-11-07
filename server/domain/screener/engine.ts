@@ -20,10 +20,19 @@ function getNumeric(ctx: EvalCtx, c: { field: string; period?: number }): number
       return ctx.fundamentals?.marketCap;
     case "dividend_yield":
       return ctx.fundamentals?.dividendYield;
+    case "price":
+      return ctx.tick.price;
+    case "volume":
+      return ctx.tick.volume;
     case "rsi": {
       const period = c.period ?? 14;
       const closes = (ctx.candles1m ?? []).map((x) => x.close);
       return rsi(closes, period);
+    }
+    case "macd": {
+      const line = computeMACD((ctx.candles1m ?? []).map((x) => x.close)).macd;
+      const latest = line[line.length - 1];
+      return latest ?? undefined;
     }
     default:
       return undefined;
@@ -35,7 +44,7 @@ function getString(ctx: EvalCtx, c: { field: string }): string | undefined {
   return undefined;
 }
 
-import { computeRSI } from "@shared/indicators";
+import { computeMACD, computeRSI } from "@shared/indicators";
 
 function rsi(closes: number[], period: number): number | undefined {
   if (closes.length <= period) return undefined;

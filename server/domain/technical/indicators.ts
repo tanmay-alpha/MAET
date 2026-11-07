@@ -3,8 +3,6 @@
  * Server-side computation of 20+ technical indicators for trading and screening
  */
 
-import type { Candle } from "@shared/types";
-
 // ============================================================================
 // Types
 // ============================================================================
@@ -17,83 +15,17 @@ export interface OHLCV {
   volume: number;
 }
 
-export interface SMAResult { values: number[] }
-export interface EMAResult { values: number[] }
-export interface RSIResult { values: number[] }
-
-export interface MACDResult {
-  macd: number[];
-  signal: number[];
-  histogram: number[];
-}
-
-export interface BollingerBandsResult {
-  upper: number[];
-  middle: number[];
-  lower: number[];
-}
-
-export interface ATRResult { values: number[] }
 export interface StochasticResult { k: number[]; d: number[] }
 export interface ADXResult { adx: number[]; plusDI: number[]; minusDI: number[] }
-export interface CCIResult { values: number[] }
-export interface WilliamsRResult { values: number[] }
-export interface OBVResult { values: number[] }
-export interface VWAPResult { values: number[] }
-export interface MomentumResult { values: number[] }
-export interface ROCResult { values: number[] }
-export interface MFIResult { values: number[] }
-export interface PivotPointsResult {
-  pivot: number[];
-  r1: number[];
-  r2: number[];
-  r3: number[];
-  s1: number[];
-  s2: number[];
-  s3: number[];
-}
-export interface AroonResult { aroonUp: number[]; aroonDown: number[]; oscillator: number[] }
-export interface IchimokuResult {
-  tenkan: number[];  // Conversion Line
-  kijun: number[];   // Base Line
-  senkouA: number[];  // Leading Span A
-  senkouB: number[];  // Leading Span B
-}
 export interface SuperTrendResult {
   values: number[];
   direction: number[]; // 1 = bullish, -1 = bearish
 }
 
-export interface AllIndicators {
-  sma: SMAResult;
-  ema: EMAResult;
-  rsi: RSIResult;
-  macd: MACDResult;
-  bollinger: BollingerBandsResult;
-  atr: ATRResult;
-  stochastic: StochasticResult;
-  adx: ADXResult;
-  cci: CCIResult;
-  williamsR: WilliamsRResult;
-  obv: OBVResult;
-  vwap: VWAPResult;
-  momentum: MomentumResult;
-  roc: ROCResult;
-  mfi: MFIResult;
-  pivotPoints: PivotPointsResult;
-  aroon: AroonResult;
-  ichimoku: IchimokuResult;
-  superTrend: SuperTrendResult;
-}
-
 // ============================================================================
 import {
   computeSMA as canonicalSMA,
-  computeEMA as canonicalEMA,
   computeRSI as canonicalRSI,
-  computeMACD as canonicalMACD,
-  computeBollingerBands as canonicalBollinger,
-  computeATR as canonicalATR,
   computeADX as canonicalADX,
   computeStochastic as canonicalStochastic,
   computeROC as canonicalROC,
@@ -115,86 +47,9 @@ export function calculateSMA(data: number[], period: number): number[] {
   return canonicalSMA(data, period).map((v) => (v === null ? NaN : v));
 }
 
-/**
- * Exponential Moving Average (EMA)
- * @param data - Array of price values
- * @param period - Number of periods (typically 12, 26)
- */
-export function calculateEMA(data: number[], period: number): number[] {
-  return canonicalEMA(data, period).map((v) => (v === null ? NaN : v));
-}
-
-/**
- * Weighted Moving Average (WMA)
- * @param data - Array of price values
- * @param period - Number of periods
- */
-export function calculateWMA(data: number[], period: number): number[] {
-  const result: number[] = [];
-  const weightSum = (period * (period + 1)) / 2;
-
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      result.push(NaN);
-      continue;
-    }
-
-    let weightedSum = 0;
-    for (let j = 0; j < period; j++) {
-      weightedSum += data[i - j] * (period - j);
-    }
-    result.push(weightedSum / weightSum);
-  }
-  return result;
-}
-
-/**
- * Hull Moving Average (HMA)
- * @param data - Array of price values
- * @param period - Number of periods
- */
-export function calculateHMA(data: number[], period: number): number[] {
-  const halfLength = Math.floor(period / 2);
-  const sqrtLength = Math.floor(Math.sqrt(period));
-
-  const wma1 = calculateWMA(data, halfLength);
-  const wma2 = calculateWMA(data, period);
-
-  const diff: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    if (isNaN(wma1[i]) || isNaN(wma2[i])) {
-      diff.push(NaN);
-    } else {
-      diff.push(2 * wma1[i] - wma2[i]);
-    }
-  }
-
-  return calculateWMA(diff, sqrtLength);
-}
-
 // ============================================================================
 // Trend Indicators (delegated to canonical indicator engine)
 // ============================================================================
-
-/**
- * MACD (Moving Average Convergence Divergence)
- */
-export function calculateMACD(
-  candles: OHLCV[] | number[],
-  fastPeriod: number = 12,
-  slowPeriod: number = 26,
-  signalPeriod: number = 9
-): MACDResult {
-  const closes = Array.isArray(candles) && typeof candles[0] === "number"
-    ? (candles as number[])
-    : (candles as OHLCV[]).map((c) => c.close);
-  const res = canonicalMACD(closes, fastPeriod, slowPeriod, signalPeriod);
-  return {
-    macd: res.macd.map((v) => (v === null ? NaN : v)),
-    signal: res.signal.map((v) => (v === null ? NaN : v)),
-    histogram: res.histogram.map((v) => (v === null ? NaN : v)),
-  };
-}
 
 /**
  * RSI (Relative Strength Index) - Canonical Wilder's Smoothing
@@ -238,190 +93,15 @@ export function calculateStochastic(
 }
 
 /**
- * Williams %R
- */
-export function calculateWilliamsR(candles: OHLCV[], period: number = 14): number[] {
-  const result: number[] = [];
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i < period - 1) {
-      result.push(NaN);
-      continue;
-    }
-
-    let highestHigh = -Infinity;
-    let lowestLow = Infinity;
-
-    for (let j = i - period + 1; j <= i; j++) {
-      highestHigh = Math.max(highestHigh, candles[j].high);
-      lowestLow = Math.min(lowestLow, candles[j].low);
-    }
-
-    const range = highestHigh - lowestLow;
-    if (range === 0) {
-      result.push(-50);
-    } else {
-      result.push(((highestHigh - candles[i].close) / range) * -100);
-    }
-  }
-
-  return result;
-}
-
-/**
- * Momentum
- */
-export function calculateMomentum(candles: OHLCV[], period: number = 10): number[] {
-  const result: number[] = [];
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i < period) {
-      result.push(NaN);
-      continue;
-    }
-    result.push(candles[i].close - candles[i - period].close);
-  }
-
-  return result;
-}
-
-/**
  * Rate of Change (ROC) (delegated to canonical engine)
  */
 export function calculateROC(candles: OHLCV[], period: number = 10): number[] {
   return canonicalROC(candles, period).map((v) => (v === null ? NaN : v));
 }
 
-/**
- * CCI (Commodity Channel Index)
- */
-export function calculateCCI(candles: OHLCV[], period: number = 20): number[] {
-  const result: number[] = [];
-  const typicalPrices: number[] = candles.map(c => (c.high + c.low + c.close) / 3);
-  const smaTP = calculateSMA(typicalPrices, period);
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i < period - 1) {
-      result.push(NaN);
-      continue;
-    }
-
-    const meanDeviation = calculateMeanDeviation(typicalPrices, smaTP, i, period);
-    if (meanDeviation === 0) {
-      result.push(0);
-    } else {
-      result.push((typicalPrices[i] - smaTP[i]) / (0.015 * meanDeviation));
-    }
-  }
-
-  return result;
-}
-
-function calculateMeanDeviation(data: number[], sma: number[], index: number, period: number): number {
-  if (index < period - 1 || isNaN(sma[index])) return 0;
-
-  let sum = 0;
-  for (let j = index - period + 1; j <= index; j++) {
-    sum += Math.abs(data[j] - sma[index]);
-  }
-  return sum / period;
-}
-
-/**
- * MFI (Money Flow Index)
- */
-export function calculateMFI(candles: OHLCV[], period: number = 14): number[] {
-  const result: number[] = [];
-  const typicalPrices: number[] = candles.map(c => (c.high + c.low + c.close) / 3);
-  const rawMoneyFlow: number[] = typicalPrices.map((tp, i) => tp * candles[i].volume);
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i < period) {
-      result.push(NaN);
-      continue;
-    }
-
-    let positiveFlow = 0;
-    let negativeFlow = 0;
-
-    for (let j = i - period + 1; j <= i; j++) {
-      const tpChange = typicalPrices[j] - typicalPrices[j - 1];
-      if (tpChange > 0) {
-        positiveFlow += rawMoneyFlow[j];
-      } else {
-        negativeFlow += rawMoneyFlow[j];
-      }
-    }
-
-    if (negativeFlow === 0) {
-      result.push(100);
-    } else {
-      const moneyRatio = positiveFlow / negativeFlow;
-      result.push(100 - (100 / (1 + moneyRatio)));
-    }
-  }
-
-  return result;
-}
-
 // ============================================================================
 // Volatility Indicators
 // ============================================================================
-
-/**
- * Bollinger Bands
- */
-export function calculateBollingerBands(
-  candles: OHLCV[] | number[],
-  period: number = 20,
-  stdDev: number = 2
-): BollingerBandsResult {
-  const closes = Array.isArray(candles) && typeof candles[0] === "number"
-    ? (candles as number[])
-    : (candles as OHLCV[]).map((c) => c.close);
-  const res = canonicalBollinger(closes, period, stdDev);
-  return {
-    upper: res.upper.map((v) => (v === null ? NaN : v)),
-    middle: res.middle.map((v) => (v === null ? NaN : v)),
-    lower: res.lower.map((v) => (v === null ? NaN : v)),
-  };
-}
-
-/**
- * ATR (Average True Range)
- */
-export function calculateATR(candles: OHLCV[], period: number = 14): number[] {
-  return canonicalATR(candles, period).map((v) => (v === null ? NaN : v));
-}
-
-/**
- * Keltner Channels
- */
-export function calculateKeltnerChannels(
-  candles: OHLCV[],
-  emaPeriod: number = 20,
-  atrPeriod: number = 10,
-  multiplier: number = 2
-): { upper: number[]; middle: number[]; lower: number[] } {
-  const closes = candles.map(c => c.close);
-  const ema = calculateEMA(closes, emaPeriod);
-  const atr = calculateATR(candles, atrPeriod);
-
-  const upper: number[] = [];
-  const lower: number[] = [];
-
-  for (let i = 0; i < closes.length; i++) {
-    if (isNaN(ema[i]) || isNaN(atr[i])) {
-      upper.push(NaN);
-      lower.push(NaN);
-    } else {
-      upper.push(ema[i] + multiplier * atr[i]);
-      lower.push(ema[i] - multiplier * atr[i]);
-    }
-  }
-
-  return { upper, middle: ema, lower };
-}
 
 /**
  * Donchian Channels (delegated to canonical engine)
@@ -443,153 +123,15 @@ export function calculateDonchianChannels(
 // ============================================================================
 
 /**
- * OBV (On-Balance Volume)
- */
-export function calculateOBV(candles: OHLCV[]): number[] {
-  const result: number[] = [0];
-
-  for (let i = 1; i < candles.length; i++) {
-    if (candles[i].close > candles[i - 1].close) {
-      result.push(result[i - 1] + candles[i].volume);
-    } else if (candles[i].close < candles[i - 1].close) {
-      result.push(result[i - 1] - candles[i].volume);
-    } else {
-      result.push(result[i - 1]);
-    }
-  }
-
-  return result;
-}
-
-/**
  * VWAP (Volume Weighted Average Price) (delegated to canonical engine)
  */
 export function calculateVWAP(candles: OHLCV[]): number[] {
   return canonicalVWAP(candles).map((v) => (v === null ? NaN : v));
 }
 
-/**
- * Accumulation/Distribution Line
- */
-export function calculateADLine(candles: OHLCV[]): number[] {
-  const result: number[] = [0];
-
-  for (let i = 1; i < candles.length; i++) {
-    const high = candles[i].high;
-    const low = candles[i].low;
-    const close = candles[i].close;
-    const prevClose = candles[i - 1].close;
-
-    const range = high - low;
-    if (range === 0) {
-      result.push(result[i - 1]);
-    } else {
-      const mfm = ((close - low) - (high - close)) / range;
-      const mfv = mfm * candles[i].volume;
-      result.push(result[i - 1] + mfv);
-    }
-  }
-
-  return result;
-}
-
-/**
- * Chaikin Oscillator
- */
-export function calculateChaikinOscillator(
-  candles: OHLCV[],
-  fastPeriod: number = 3,
-  slowPeriod: number = 10
-): number[] {
-  const adLine = calculateADLine(candles);
-  const fastEMA = calculateEMA(adLine, fastPeriod);
-  const slowEMA = calculateEMA(adLine, slowPeriod);
-
-  return fastEMA.map((fast, i) => {
-    if (isNaN(fast) || isNaN(slowEMA[i])) return NaN;
-    return fast - slowEMA[i];
-  });
-}
-
 // ============================================================================
 // Trend & Pattern Indicators
 // ============================================================================
-
-/**
- * Pivot Points (Standard)
- */
-export function calculatePivotPoints(candles: OHLCV[]): PivotPointsResult {
-  const pivot: number[] = [];
-  const r1: number[] = [];
-  const r2: number[] = [];
-  const r3: number[] = [];
-  const s1: number[] = [];
-  const s2: number[] = [];
-  const s3: number[] = [];
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i === 0) {
-      pivot.push(NaN);
-      r1.push(NaN);
-      r2.push(NaN);
-      r3.push(NaN);
-      s1.push(NaN);
-      s2.push(NaN);
-      s3.push(NaN);
-      continue;
-    }
-
-    const high = candles[i - 1].high;
-    const low = candles[i - 1].low;
-    const close = candles[i - 1].close;
-
-    const pp = (high + low + close) / 3;
-    pivot.push(pp);
-    r1.push(2 * pp - low);
-    s1.push(2 * pp - high);
-    r2.push(pp + (high - low));
-    s2.push(pp - (high - low));
-    r3.push(high + 2 * (pp - low));
-    s3.push(low - 2 * (high - pp));
-  }
-
-  return { pivot, r1, r2, r3, s1, s2, s3 };
-}
-
-/**
- * Aroon Indicator
- */
-export function calculateAroon(candles: OHLCV[], period: number = 25): AroonResult {
-  const aroonUp: number[] = [];
-  const aroonDown: number[] = [];
-  const oscillator: number[] = [];
-
-  for (let i = 0; i < candles.length; i++) {
-    if (i < period) {
-      aroonUp.push(NaN);
-      aroonDown.push(NaN);
-      oscillator.push(NaN);
-      continue;
-    }
-
-    let highestIdx = i;
-    let lowestIdx = i;
-
-    for (let j = i - period + 1; j <= i; j++) {
-      if (candles[j].high > candles[highestIdx].high) highestIdx = j;
-      if (candles[j].low < candles[lowestIdx].low) lowestIdx = j;
-    }
-
-    const up = ((period - (i - highestIdx)) / period) * 100;
-    const down = ((period - (i - lowestIdx)) / period) * 100;
-
-    aroonUp.push(up);
-    aroonDown.push(down);
-    oscillator.push(up - down);
-  }
-
-  return { aroonUp, aroonDown, oscillator };
-}
 
 /**
  * SuperTrend Indicator (delegated to canonical engine)
@@ -603,122 +145,5 @@ export function calculateSuperTrend(
   return {
     values: result.values.map((v) => (v === null ? NaN : v)),
     direction: result.direction.map((d) => (d === null ? 0 : d)),
-  };
-}
-
-/**
- * Ichimoku Cloud
- */
-export function calculateIchimoku(
-  candles: OHLCV[],
-  tenkanPeriod: number = 9,
-  kijunPeriod: number = 26,
-  senkouBPeriod: number = 52,
-  senkouOffset: number = 26
-): IchimokuResult {
-  const tenkan: number[] = [];
-  const kijun: number[] = [];
-  const senkouA: number[] = [];
-  const senkouB: number[] = [];
-
-  for (let i = 0; i < candles.length; i++) {
-    // Tenkan-sen (Conversion Line)
-    if (i < tenkanPeriod - 1) {
-      tenkan.push(NaN);
-    } else {
-      let highest = -Infinity;
-      let lowest = Infinity;
-      for (let j = i - tenkanPeriod + 1; j <= i; j++) {
-        highest = Math.max(highest, candles[j].high);
-        lowest = Math.min(lowest, candles[j].low);
-      }
-      tenkan.push((highest + lowest) / 2);
-    }
-
-    // Kijun-sen (Base Line)
-    if (i < kijunPeriod - 1) {
-      kijun.push(NaN);
-    } else {
-      let highest = -Infinity;
-      let lowest = Infinity;
-      for (let j = i - kijunPeriod + 1; j <= i; j++) {
-        highest = Math.max(highest, candles[j].high);
-        lowest = Math.min(lowest, candles[j].low);
-      }
-      kijun.push((highest + lowest) / 2);
-    }
-
-    // Senkou Span A (Leading Span A)
-    if (i < kijunPeriod - 1 || isNaN(tenkan[i]) || isNaN(kijun[i])) {
-      senkouA.push(NaN);
-    } else {
-      senkouA.push((tenkan[i] + kijun[i]) / 2);
-    }
-
-    // Senkou Span B (Leading Span B)
-    if (i < senkouBPeriod - 1) {
-      senkouB.push(NaN);
-    } else {
-      let highest = -Infinity;
-      let lowest = Infinity;
-      for (let j = i - senkouBPeriod + 1; j <= i; j++) {
-        highest = Math.max(highest, candles[j].high);
-        lowest = Math.min(lowest, candles[j].low);
-      }
-      senkouB.push((highest + lowest) / 2);
-    }
-  }
-
-  return { tenkan, kijun, senkouA, senkouB };
-}
-
-// ============================================================================
-// Awesome Oscillator
-// ============================================================================
-
-/**
- * Awesome Oscillator
- */
-export function calculateAwesomeOscillator(candles: OHLCV[], period1: number = 5, period2: number = 34): number[] {
-  const medianPrice: number[] = candles.map(c => (c.high + c.low) / 2);
-  const sma1 = calculateSMA(medianPrice, period1);
-  const sma2 = calculateSMA(medianPrice, period2);
-
-  return sma1.map((s1, i) => {
-    if (isNaN(s1) || isNaN(sma2[i])) return NaN;
-    return s1 - sma2[i];
-  });
-}
-
-// ============================================================================
-// All Indicators Calculator
-// ============================================================================
-
-/**
- * Calculate all technical indicators for a set of candles
- */
-export function calculateAllIndicators(candles: OHLCV[]): AllIndicators {
-  const closes = candles.map(c => c.close);
-
-  return {
-    sma: { values: calculateSMA(closes, 20) },
-    ema: { values: calculateEMA(closes, 20) },
-    rsi: { values: calculateRSI(candles, 14) },
-    macd: calculateMACD(candles),
-    bollinger: calculateBollingerBands(candles),
-    atr: { values: calculateATR(candles, 14) },
-    stochastic: calculateStochastic(candles),
-    adx: calculateADX(candles),
-    cci: { values: calculateCCI(candles) },
-    williamsR: { values: calculateWilliamsR(candles) },
-    obv: { values: calculateOBV(candles) },
-    vwap: { values: calculateVWAP(candles) },
-    momentum: { values: calculateMomentum(candles) },
-    roc: { values: calculateROC(candles) },
-    mfi: { values: calculateMFI(candles) },
-    pivotPoints: calculatePivotPoints(candles),
-    aroon: calculateAroon(candles),
-    ichimoku: calculateIchimoku(candles),
-    superTrend: calculateSuperTrend(candles),
   };
 }

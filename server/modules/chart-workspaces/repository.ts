@@ -1,6 +1,6 @@
 import { db } from "../../data/drizzle/client";
 import { chartWorkspaces, chartPanes, chartDrawings } from "../../db/schema";
-import { eq, and, desc, asc } from "drizzle-orm";
+import { eq, and, desc, asc, notInArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 export class ChartWorkspaceRepository {
@@ -69,51 +69,63 @@ export class ChartWorkspaceRepository {
   }
 
   async saveLayout(userId: string, workspaceId: string, layoutType: string, panes: any[]) {
-    const updated = await db
-      .update(chartWorkspaces)
-      .set({
-        layoutType,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(chartWorkspaces.id, workspaceId), eq(chartWorkspaces.userId, userId)))
-      .returning({ id: chartWorkspaces.id });
-    // Without this, a foreign workspaceId would still get panes inserted under it.
-    if (updated.length === 0) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
-    }
+    await db.transaction(async (tx) => {
+      const updated = await tx
+        .update(chartWorkspaces)
+        .set({
+          layoutType,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(chartWorkspaces.id, workspaceId), eq(chartWorkspaces.userId, userId)))
+        .returning({ id: chartWorkspaces.id });
+      // Without this, a foreign workspaceId would still get panes inserted under it.
+      if (updated.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
+      }
 
-    // Upsert panes
-    for (let i = 0; i < Math.min(panes.length, 4); i++) {
-      const pane = panes[i];
-      if (pane.id && pane.id.length > 10) {
-        await db
-          .update(chartPanes)
-          .set({
+      // The stored panes become exactly the submitted ones: drop every pane of
+      // this workspace the request no longer references, then update/insert.
+      const submitted = panes.slice(0, 4);
+      const keptIds: string[] = submitted.flatMap((pane) => (pane.id ? [pane.id] : []));
+      const scope = and(eq(chartPanes.workspaceId, workspaceId), eq(chartPanes.userId, userId));
+      await tx
+        .delete(chartPanes)
+        .where(keptIds.length > 0 ? and(scope, notInArray(chartPanes.id, keptIds)) : scope);
+
+      for (let i = 0; i < submitted.length; i++) {
+        const pane = submitted[i];
+        if (pane.id) {
+          const matched = await tx
+            .update(chartPanes)
+            .set({
+              symbol: pane.symbol,
+              exchange: pane.exchange || "NSE",
+              timeframe: pane.timeframe || "5m",
+              chartType: pane.chartType || "CANDLE",
+              position: i,
+              settings: { indicators: pane.indicators || [] },
+              updatedAt: new Date(),
+            })
+            .where(and(eq(chartPanes.id, pane.id), scope))
+            .returning({ id: chartPanes.id });
+          if (matched.length === 0) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Pane not found" });
+          }
+        } else {
+          await tx.insert(chartPanes).values({
+            workspaceId,
+            userId,
+            paneKey: pane.paneKey || `pane-${i + 1}`,
             symbol: pane.symbol,
             exchange: pane.exchange || "NSE",
             timeframe: pane.timeframe || "5m",
             chartType: pane.chartType || "CANDLE",
             position: i,
             settings: { indicators: pane.indicators || [] },
-            updatedAt: new Date(),
-          })
-          .where(
-            and(eq(chartPanes.id, pane.id), eq(chartPanes.workspaceId, workspaceId), eq(chartPanes.userId, userId))
-          );
-      } else {
-        await db.insert(chartPanes).values({
-          workspaceId,
-          userId,
-          paneKey: pane.paneKey || `pane-${i + 1}`,
-          symbol: pane.symbol,
-          exchange: pane.exchange || "NSE",
-          timeframe: pane.timeframe || "5m",
-          chartType: pane.chartType || "CANDLE",
-          position: i,
-          settings: { indicators: pane.indicators || [] },
-        });
+          });
+        }
       }
-    }
+    });
   }
 
   async deleteWorkspace(userId: string, workspaceId: string) {

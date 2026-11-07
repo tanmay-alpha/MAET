@@ -39,6 +39,8 @@ describe("Paper trading margin-call liquidation", () => {
       database: getDb(),
       marketPhase: () => "OPEN",
       quoteLoader: async () => liveTick(symbol, 1000),
+      // Synthetic test symbols are not in the symbol master.
+      symbolExists: async () => true,
     });
     await service.getState({ userId });
     await getDb().update(paperAccounts).set({ cashBalance: "30000.0000" }).where(eq(paperAccounts.userId, userId));
@@ -97,6 +99,7 @@ describe("Paper trading margin-call liquidation", () => {
       database: getDb(),
       marketPhase: () => "OPEN",
       quoteLoader: async () => liveTick(symbol, 1000),
+      symbolExists: async () => true,
     });
     await service.getState({ userId });
     await getDb().update(paperAccounts).set({ cashBalance: "30000.0000" }).where(eq(paperAccounts.userId, userId));
@@ -108,7 +111,7 @@ describe("Paper trading margin-call liquidation", () => {
       .where(eq(paperAccounts.userId, userId));
 
     // The open position is part of the paper interest set, so the live feed subscribes it.
-    expect(await listPaperInterest()).toContainEqual({ exchange: "NSE", symbol, kind: "POSITION" });
+    expect(await listPaperInterest()).toContainEqual({ userId, exchange: "NSE", symbol, kind: "POSITION" });
 
     // A fresh monitor (restart, outside market hours) has no ticks and does nothing yet.
     const monitor = new PaperRiskMonitor();

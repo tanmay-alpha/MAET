@@ -8,9 +8,20 @@ import { reportTrpcError } from "./core";
 export default defineEventHandler(async (event) => {
   // Reuse the auth context the rate-limit middleware already resolved (when it
   // ran); otherwise verify here. Unauthenticated calls are allowed:
-  // protectedProcedure enforces auth per procedure.
-  const authCtx: AuthContext | null =
-    event.context.auth !== undefined ? event.context.auth : await tryAuth(event).catch(() => null);
+  // protectedProcedure enforces auth per procedure. If the token cannot be
+  // verified (auth backend outage), public procedures run anonymously and
+  // protected ones fail with SERVICE_UNAVAILABLE instead of UNAUTHORIZED.
+  let authCtx: AuthContext | null = null;
+  let authUnavailable = false;
+  if (event.context.auth !== undefined) {
+    authCtx = event.context.auth;
+  } else {
+    try {
+      authCtx = await tryAuth(event);
+    } catch {
+      authUnavailable = true;
+    }
+  }
 
   try {
     const webReq = toWebRequest(event) as unknown as Request;
@@ -21,7 +32,12 @@ export default defineEventHandler(async (event) => {
       endpoint: "/api/trpc",
       req: timedReq,
       router: appRouter,
-      createContext: () => ({ userId: authCtx?.userId, email: authCtx?.email ?? null, role: authCtx?.role ?? "user" }),
+      createContext: () => ({
+        userId: authCtx?.userId,
+        email: authCtx?.email ?? null,
+        role: authCtx?.role ?? "user",
+        authUnavailable,
+      }),
       // The frontend never batches; refusing batches blocks request amplification.
       allowBatching: false,
       onError: reportTrpcError,

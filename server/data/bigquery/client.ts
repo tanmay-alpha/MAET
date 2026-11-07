@@ -112,18 +112,3 @@ export async function queryBigQuery<T = Record<string, any>>(sql: string): Promi
     throw err;
   }
 }
-
-/**
- * Test connectivity by listing datasets in the configured project.
- */
-export async function testBigQueryConnection(): Promise<boolean> {
-  try {
-    const bq = getBigQuery();
-    const [datasets] = await bq.getDatasets();
-    console.log(`[BigQuery] Connected. Found ${datasets.length} dataset(s) in project.`);
-    return datasets.length >= 0;
-  } catch (error: any) {
-    console.error("[BigQuery] Connection test failed:", error?.message ?? error);
-    return false;
-  }
-}
