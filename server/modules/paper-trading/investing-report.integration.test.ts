@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, setSystemTime } from "bun:test";
 import { eq } from "drizzle-orm";
 import { getDb, getSqlClient } from "../../data/drizzle/client";
 import { paperAccounts, paperFills, paperLedgerEntries, paperPortfolioSnapshots } from "../../db/schema";
@@ -71,6 +71,39 @@ describe("Read-only paper investing reports", () => {
     expect(await getDb().select().from(paperLedgerEntries).where(eq(paperLedgerEntries.userId,id))).toEqual(ledgerBefore);
     expect(await getDb().select().from(paperPortfolioSnapshots).where(eq(paperPortfolioSnapshots.userId,id))).toHaveLength(0);
     expect((await reports(null,new Date(now.getTime()+86_400_000)).getReport(id,{financialYearStart})).stalePrices).toBe(true);
+  });
+  it("dates fills and the default FY in IST, so 00:15 IST on 1 Apr is the new FY", async () => {
+    const id = await user();
+    const symbol = `IST${crypto.randomUUID().slice(0,8).toUpperCase()}`;
+    // The quote freshness check reads the system clock, so the fill instants fake it too.
+    async function fillAt(iso: string, side: "BUY" | "SELL", price: number) {
+      setSystemTime(new Date(iso));
+      try {
+        await createPaperTradingService({
+          database: getDb(), marketPhase: () => "OPEN",
+          quoteLoader: async (exchange, quoted) => ({ exchange, symbol: quoted, price, volume: 100, ts: iso, source: "angelone", quality: "live" }),
+        }).placeOrder({ userId: id, command: { symbol,exchange:"NSE",side,type:"MARKET",qty:5 } });
+      } finally {
+        setSystemTime();
+      }
+    }
+    await fillAt("2024-12-02T05:00:00.000Z", "BUY", 1000);
+    // 18:45 UTC on 31 Mar is 00:15 IST on 1 Apr 2025: FY2025-26, never FY2024-25.
+    await fillAt("2025-03-31T18:45:00.000Z", "SELL", 1100);
+    const service = reports(null, new Date("2025-03-31T19:00:00.000Z"));
+    const current = await service.getReport(id);
+    expect(current.today).toBe("2025-04-01");
+    expect(current.tax.financialYearStart).toBe(2025);
+    expect(current.closedLots.map((lot) => [lot.entryDate, lot.exitDate, lot.kind])).toEqual([["2024-12-02", "2025-04-01", "delivery"]]);
+    const sell = (await getDb().select().from(paperFills).where(eq(paperFills.userId,id))).find(f => f.side === "SELL")!;
+    const buy = (await getDb().select().from(paperFills).where(eq(paperFills.userId,id))).find(f => f.side === "BUY")!;
+    expect(current.tax.grossStcg).toBeCloseTo(5 * (Number(sell.fillPrice) - Number(buy.fillPrice)), 4);
+    // Two dated flows, 120 IST days apart (2 Dec → 1 Apr), annualised on ACT/365.
+    const growth = Number(sell.fillPrice) / Number(buy.fillPrice);
+    expect(current.closedLots[0]!.xirr).toBeCloseTo(growth ** (365 / 120) - 1, 10);
+    const previous = await service.getReport(id, { financialYearStart: 2024 });
+    expect(previous.tax.matchedLots).toEqual([]);
+    expect(previous.tax.grossStcg).toBe(0);
   });
   it("isolates another user and discards previous-generation fills after a reset", async () => {
     const id = await user();
