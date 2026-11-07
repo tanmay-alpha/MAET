@@ -146,13 +146,20 @@ export function mapFillsToTradeMarkers(fills: any[] = [], symbol?: string): Trad
  * Moves each marker onto the bar that contains it: the latest bar starting at
  * or before the trade. Lightweight Charts would put an off-bar time on the next
  * bar instead (a 09:22 fill on the 09:25 bar, a daily fill on the next day).
- * Markers before the first bar are dropped. `barTimesSec` are ascending UTC
- * seconds; marker times may be ms or s and come back as their bar's seconds.
+ * Markers before the first bar, or after the last bar's period (a session the
+ * bars do not include yet), are dropped rather than drawn on another bar.
+ * `barTimesSec` are ascending UTC seconds; marker times may be ms or s and come
+ * back as their bar's seconds.
  */
 export function snapTradeMarkersToBars(markers: TradeMarkerData[], barTimesSec: number[]): TradeMarkerData[] {
+  if (barTimesSec.length === 0) return [];
+  // The last bar lasts as long as a typical bar (median gap); a lone bar, a day.
+  const gaps = barTimesSec.slice(1).map((t, i) => t - barTimesSec[i]).sort((a, b) => a - b);
+  const lastBarEnd = barTimesSec[barTimesSec.length - 1] + (gaps.length > 0 ? gaps[Math.floor(gaps.length / 2)] : 86_400);
   const snapped: TradeMarkerData[] = [];
   for (const marker of markers) {
     const sec = marker.time > 1e11 ? Math.floor(marker.time / 1000) : marker.time;
+    if (sec >= lastBarEnd) continue;
     // Binary search for the last bar starting at or before `sec`.
     let lo = 0;
     let hi = barTimesSec.length;
