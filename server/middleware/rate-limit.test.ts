@@ -113,6 +113,27 @@ describe("rate limit middleware", () => {
     expect((await anonymous.json()).auth).toBeNull();
   });
 
+  it("leaves event.context.auth unresolved when token verification fails, so the route can report the outage", async () => {
+    const app = createApp();
+    app.use(
+      createRateLimitMiddleware({
+        config,
+        store: new MemoryRateLimitStore(),
+        now: () => 0,
+        authenticate: async () => {
+          throw new Error("auth backend unreachable");
+        },
+      })
+    );
+    app.use(eventHandler((event) => ({ resolved: event.context.auth !== undefined })));
+    const handler = toWebHandler(app);
+    const response = await handler(
+      new Request("http://localhost/api/trpc/x", { headers: { authorization: "Bearer a", "cf-connecting-ip": "5.5.5.5" } })
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).resolved).toBe(false);
+  });
+
   it("never limits health checks, SSE streams or unrelated routes", async () => {
     const request = buildApp({ now: 0 });
     for (let i = 0; i < 10; i++) {

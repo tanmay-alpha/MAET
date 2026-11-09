@@ -311,8 +311,8 @@ export async function listPersistedOptionExpiries(
   const rows = await db
     .select({
       expiryDate: optionContracts.expiryDate,
-      contractCount: sql<number>`count(${optionContracts.id})::int`,
-      latestQuoteAt: sql<Date | null>`max(${optionQuoteSnapshots.exchangeFeedAt})`,
+      contractCount: sql<number>`count(distinct ${optionContracts.id})::int`,
+      latestQuoteAt: sql<Date | null>`max(${optionQuoteSnapshots.exchangeFeedAt})`.mapWith(optionQuoteSnapshots.exchangeFeedAt),
     })
     .from(optionContracts)
     .leftJoin(optionQuoteSnapshots, eq(optionQuoteSnapshots.contractId, optionContracts.id))

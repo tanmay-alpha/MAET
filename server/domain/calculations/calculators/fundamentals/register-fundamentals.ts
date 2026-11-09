@@ -502,5 +502,3 @@ registerCalculator({
     return [{ symbol: input.symbol, indicatorName: "PIOTROSKI_F_SCORE", date, value: score, components }];
   },
 });
-
-export const FUNDAMENTAL_CALCULATOR_COUNT = 21;

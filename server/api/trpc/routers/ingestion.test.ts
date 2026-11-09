@@ -28,3 +28,15 @@ describe("ingestion options-chain trigger authorization", () => {
     })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
+
+describe("ingestion status authorization", () => {
+  test("rejects non-admin callers", async () => {
+    const caller = ingestionRouter.createCaller({
+      userId: "authenticated-user",
+      email: null,
+      role: "user",
+    });
+
+    await expect(caller.getStatus()).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});

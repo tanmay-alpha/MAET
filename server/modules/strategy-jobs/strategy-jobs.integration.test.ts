@@ -266,4 +266,88 @@ describe("Strategy Jobs — Job Queue Logic", () => {
       await sql`DELETE FROM auth.users WHERE id = ${user}`;
     }
   });
+
+  it("11. DB integration: sweeps and walk-forward runs reject oversize parameter grids", async () => {
+    if (!process.env.TEST_DATABASE_URL) {
+      console.log("  Skipping DB grid limit test: TEST_DATABASE_URL not set");
+      return;
+    }
+    const { strategyOptimisationRouter } = await import("../../api/trpc/routers/strategy-optimisation");
+    const { getSqlClient } = await import("../../data/drizzle/client");
+    const sql = getSqlClient();
+    const user = crypto.randomUUID();
+    const strategyId = crypto.randomUUID();
+    // Settle directly instead of expect(promise).rejects, which can stall postgres.js under Bun 1.3.
+    const settle = async (operation: Promise<unknown>) => {
+      try {
+        await operation;
+        return "ok";
+      } catch (error) {
+        return error instanceof TRPCError ? error.code : String(error);
+      }
+    };
+
+    try {
+      await sql`INSERT INTO auth.users (id) VALUES (${user}) ON CONFLICT DO NOTHING`;
+      await sql`INSERT INTO public.users (id, email) VALUES (${user}, ${`jobs-grid-${user}@example.com`})`;
+      await sql`
+        INSERT INTO public.strategy_definitions (id, user_id, name, current_draft)
+        VALUES (${strategyId}, ${user}, 'Grid Strat', '{"name":"Grid"}')
+      `;
+
+      const caller = strategyOptimisationRouter.createCaller({ userId: user, email: "grid@example.com", role: "user" });
+      const window = { strategyId, timeframe: "1d", from: "2022-01-01T00:00:00.000Z", to: "2023-12-31T00:00:00.000Z" };
+      // 10 x 10 x 6 = 600 combinations, above the 500 limit.
+      const parameters = [10, 10, 6].map((count, i) => ({ name: `p${i}`, path: "a.b", values: Array.from({ length: count }, (_, v) => v + 1) }));
+      const walkForward = { ...window, parameters, symbol: "TCS", mode: "ROLLING" as const, trainingWindowDays: 30, validationWindowDays: 14, minimumWindows: 2 };
+
+      expect(await settle(caller.createSweep({ ...window, parameters, symbolOrUniverse: "TCS" }))).toBe("BAD_REQUEST");
+      expect(await settle(caller.createWalkForward(walkForward))).toBe("BAD_REQUEST");
+      const [{ count }] = await sql`SELECT count(*)::int AS count FROM public.strategy_walk_forward_runs WHERE user_id = ${user}`;
+      expect(count).toBe(0);
+
+      expect(await settle(caller.createWalkForward({ ...walkForward, parameters: parameters.slice(0, 2) }))).toBe("ok");
+    } finally {
+      await sql`DELETE FROM public.users WHERE id = ${user}`;
+      await sql`DELETE FROM auth.users WHERE id = ${user}`;
+    }
+  });
+
+  it("12. DB integration: listJobs filters by strategy version", async () => {
+    if (!process.env.TEST_DATABASE_URL) {
+      console.log("  Skipping DB listJobs test: TEST_DATABASE_URL not set");
+      return;
+    }
+    const { createJob } = await import("./repository");
+    const { strategyBacktestsRouter } = await import("../../api/trpc/routers/strategy-backtests");
+    const { getSqlClient } = await import("../../data/drizzle/client");
+    const sql = getSqlClient();
+    const user = crypto.randomUUID();
+    const strategyId = crypto.randomUUID();
+    const [versionA, versionB] = [crypto.randomUUID(), crypto.randomUUID()];
+
+    try {
+      await sql`INSERT INTO auth.users (id) VALUES (${user}) ON CONFLICT DO NOTHING`;
+      await sql`INSERT INTO public.users (id, email) VALUES (${user}, ${`jobs-list-${user}@example.com`})`;
+      await sql`
+        INSERT INTO public.strategy_definitions (id, user_id, name, current_draft)
+        VALUES (${strategyId}, ${user}, 'List Strat', '{"name":"List"}')
+      `;
+      await sql`
+        INSERT INTO public.strategy_versions (id, strategy_id, user_id, version_number, definition, definition_hash, engine_version, indicator_version)
+        VALUES (${versionA}, ${strategyId}, ${user}, 1, '{"name":"v1"}', 'hash_list_1', '3.0.0', '1.0.0'),
+               (${versionB}, ${strategyId}, ${user}, 2, '{"name":"v2"}', 'hash_list_2', '3.0.0', '1.0.0')
+      `;
+      const jobA = await createJob(user, versionA, "TEST", "1d", new Date("2023-01-01"), new Date("2023-12-31"));
+      const jobB = await createJob(user, versionB, "TEST", "1d", new Date("2023-01-01"), new Date("2023-12-31"));
+
+      const caller = strategyBacktestsRouter.createCaller({ userId: user, email: "list@example.com", role: "user" });
+      expect((await caller.listJobs({ strategyVersionId: versionA, limit: 20 })).jobs.map((job) => job.id)).toEqual([jobA.id]);
+      expect((await caller.listJobs({ strategyVersionId: versionB, limit: 20 })).jobs.map((job) => job.id)).toEqual([jobB.id]);
+      expect(new Set((await caller.listJobs()).jobs.map((job) => job.id))).toEqual(new Set([jobA.id, jobB.id]));
+    } finally {
+      await sql`DELETE FROM public.users WHERE id = ${user}`;
+      await sql`DELETE FROM auth.users WHERE id = ${user}`;
+    }
+  });
 });

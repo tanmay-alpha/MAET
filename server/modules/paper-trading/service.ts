@@ -1,8 +1,12 @@
+import { and, count, eq, inArray } from "drizzle-orm";
 import { loadExecutionQuote } from "./execution-quote";
 import { computePhase, type MarketPhase } from "../../domain/market/clock";
 import { withSerializablePaperTransaction } from "./transaction-retry";
 import { bus } from "../../infra/bus";
 import { getConfig } from "../../config";
+import { paperOrders } from "../../db/schema";
+import { lookupSymbol, MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol";
+import { hydrateAngelOneCompanyTokens } from "../../data/sources/nse-company-master";
 import {
   PaperValidationError,
   PaperAccountLockedError,
@@ -25,6 +29,7 @@ import type {
   PaperOrderCommand,
   PaperTradingState,
 } from "./contracts";
+import { MAX_PAPER_SYMBOL_LENGTH } from "./contracts";
 import type { PaperDatabase, PaperTradingReadRepository, PaperTradingWriteRepository } from "./repository";
 import { createPostgresPaperReadRepository } from "./postgres-repository";
 import { applyFill, paperExecutionPolicy, type AppliedFill } from "./fill-writer";
@@ -39,6 +44,8 @@ export interface PaperTradingServiceDependencies {
   marketPhase?: (now: Date) => MarketPhase;
   now?: () => Date;
   createId?: () => string;
+  /** Whether a symbol is a listed equity (default: the market symbol master, see isListedSymbol). */
+  symbolExists?: (symbol: string) => Promise<boolean>;
 }
 
 export interface PlaceOrderResult {
@@ -56,6 +63,40 @@ const CANCELLABLE_ORDER_STATUSES: Partial<Record<PaperOrderRow["status"], true>>
   TRIGGERED: true,
   PARTIALLY_FILLED: true,
 };
+const WORKING_ORDER_STATUSES = Object.keys(CANCELLABLE_ORDER_STATUSES) as PaperOrderRow["status"][];
+
+/**
+ * Most working orders one user may have at once. Each working symbol takes a live-feed slot
+ * (the feed streams at most MAX_STREAM_SYMBOLS), and a resting order reserves no cash.
+ */
+export const MAX_WORKING_ORDERS_PER_USER = 100;
+
+/** After a failed symbol-master load, misses are rejected without re-downloading for this long. */
+const SYMBOL_MASTER_RETRY_MS = 60_000;
+let symbolMasterFailedAt: number | undefined;
+
+/**
+ * Paper orders are limited to the market symbol master: the bundled NIFTY 50 and, once
+ * hydrated, every NSE equity in Angel One's instrument master. Those are the symbols the
+ * live feed can stream (it needs the instrument token) and the quote path prices through
+ * Angel One; BSE orders use the same listed symbol. A miss waits for the master, which may
+ * still be loading at startup or failed earlier and is retried (at most once per
+ * SYMBOL_MASTER_RETRY_MS, so unknown symbols cannot trigger repeated large downloads).
+ */
+async function isListedSymbol(symbol: string): Promise<boolean> {
+  if (lookupSymbol("NSE", symbol) ?? lookupSymbol("BSE", symbol)) return true;
+  if (symbolMasterFailedAt !== undefined && Date.now() - symbolMasterFailedAt < SYMBOL_MASTER_RETRY_MS) {
+    return false;
+  }
+  try {
+    await hydrateAngelOneCompanyTokens();
+    symbolMasterFailedAt = undefined;
+  } catch {
+    symbolMasterFailedAt = Date.now();
+    return false;
+  }
+  return (lookupSymbol("NSE", symbol) ?? lookupSymbol("BSE", symbol)) !== undefined;
+}
 
 /** The persisted terms of an order; an idempotency key may only be replayed with identical terms. */
 interface OrderTerms {
@@ -113,6 +154,10 @@ function parseOrderTerms(command: PaperOrderCommand): OrderTerms {
   if (command.type !== "MARKET" && (!command.limitPrice || command.limitPrice <= 0)) {
     throw new PaperValidationError(`${command.type} order requires a positive limitPrice`);
   }
+  const symbol = command.symbol.trim().toUpperCase();
+  if (symbol.length > MAX_PAPER_SYMBOL_LENGTH || !MARKET_SYMBOL_PATTERN.test(symbol)) {
+    throw new PaperValidationError("Invalid order symbol");
+  }
 
   const isStopLimit = command.type === "STOP_LOSS_LIMIT";
   const stopPrice = command.stopPrice ?? command.stopLossPrice;
@@ -121,7 +166,7 @@ function parseOrderTerms(command: PaperOrderCommand): OrderTerms {
   }
 
   return {
-    symbol: command.symbol.trim().toUpperCase(),
+    symbol,
     exchange: exchange.data,
     side: command.side,
     type: command.type,
@@ -140,12 +185,14 @@ export class PaperTradingService {
   private readonly readRepo: PaperTradingReadRepository;
   private readonly now: () => Date;
   private readonly createId: () => string;
+  private readonly symbolExists: (symbol: string) => Promise<boolean>;
 
   constructor(deps: PaperTradingServiceDependencies = {}) {
     this.quoteLoader = deps.quoteLoader || loadExecutionQuote;
     this.marketPhase = deps.marketPhase || ((now) => computePhase(now, getConfig().nseHolidays));
     this.now = deps.now || (() => new Date());
     this.createId = deps.createId || (() => crypto.randomUUID());
+    this.symbolExists = deps.symbolExists || isListedSymbol;
     this.readRepo = createPostgresPaperReadRepository(deps.database);
   }
 
@@ -165,6 +212,9 @@ export class PaperTradingService {
       throw new PaperValidationError("userId is required");
     }
     const terms = parseOrderTerms(command);
+    if (!(await this.symbolExists(terms.symbol))) {
+      throw new PaperValidationError(`Unknown symbol: ${terms.symbol}`);
+    }
     const keys = {
       idempotencyKey: command.idempotencyKey || null,
       clientOrderId: command.clientOrderId || null,
@@ -377,6 +427,23 @@ export class PaperTradingService {
         if (replay) {
           return replay;
         }
+      }
+
+      // Counted under the account lock, so concurrent placements cannot overshoot the cap.
+      const [working] = await repos.write.tx
+        .select({ count: count() })
+        .from(paperOrders)
+        .where(
+          and(
+            eq(paperOrders.userId, userId),
+            eq(paperOrders.generation, accountRow.generation),
+            inArray(paperOrders.status, WORKING_ORDER_STATUSES)
+          )
+        );
+      if ((working?.count ?? 0) >= MAX_WORKING_ORDERS_PER_USER) {
+        throw new PaperValidationError(
+          `At most ${MAX_WORKING_ORDERS_PER_USER} working orders are allowed; cancel an order first`
+        );
       }
 
       const orderId = this.createId();

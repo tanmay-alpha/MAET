@@ -38,3 +38,36 @@ describe("market.getQuotes", () => {
     expect(quotes.every((quote: { lastUpdated: string; isStale: boolean }) => quote.lastUpdated === expectedTime && !quote.isStale)).toBe(true);
   });
 });
+
+describe("market symbol validation", () => {
+  const caller = appRouter.createCaller({ userId: "user-1", email: null });
+  const INVALID = ["TCS.NS?a=1", "../x", "A\\..\\x", ".NS", "A".repeat(100)];
+
+  it("rejects invalid symbols before any upstream fetch", async () => {
+    let fetched = 0;
+    globalThis.fetch = (async () => {
+      fetched++;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    for (const symbol of INVALID) {
+      await expect(caller.market.getCandles({ symbol, timeframe: "1d", range: "1mo" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      await expect(caller.analysis.getTechnicalAnalysis({ symbol })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    expect(fetched).toBe(0);
+  });
+
+  it("keeps the symbol inside a single path segment of the candles request", async () => {
+    const urls: URL[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(new URL(String(input)));
+      return Response.json({ chart: { result: [] } });
+    }) as typeof fetch;
+
+    await caller.market.getCandles({ symbol: "M&M", timeframe: "1d", range: "1mo" });
+
+    expect(urls).toHaveLength(1);
+    expect(decodeURIComponent(urls[0].pathname.split("/").pop() ?? "")).toBe("M&M.NS");
+    expect([...urls[0].searchParams.keys()].sort()).toEqual(["interval", "range"]);
+  });
+});

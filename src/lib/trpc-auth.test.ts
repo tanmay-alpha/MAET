@@ -3,7 +3,7 @@ import { trpc, AuthenticationError, retryUnlessUnauthenticated } from "./trpc";
 
 describe("Authenticated tRPC Client", () => {
   const originalFetch = globalThis.fetch;
-  const originalLocalStorage = globalThis.localStorage;
+  const originalWindow = globalThis.window;
 
   beforeEach(() => {
     // Mock window and localStorage
@@ -30,6 +30,7 @@ describe("Authenticated tRPC Client", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
   });
 
   test("sends public procedures without an Authorization header when signed out", async () => {

@@ -7,7 +7,7 @@ import { resetConfigForTests } from "../../config";
 import { computeIndianEquityCharges } from "@shared/domain/costs/indian-equity-charges";
 import type { MarketPhase } from "../../domain/market/clock";
 import type { Tick } from "@shared/types";
-import { createPaperTradingService } from "./service";
+import { createPaperTradingService, MAX_WORKING_ORDERS_PER_USER } from "./service";
 import { paperTradingTickProcessor } from "./tick-processor";
 import { PaperRiskMonitor } from "./risk-monitor";
 import { PaperIdempotencyConflictError, PaperValidationError } from "./errors";
@@ -50,6 +50,8 @@ function makeService(options: {
     marketPhase: () => options.phase ?? "OPEN",
     quoteLoader: async (exchange: "NSE" | "BSE", symbol: string) =>
       tick(symbol, options.prices?.[symbol] ?? 1000, 100, { exchange, ...options.quote }),
+    // Synthetic test symbols are not in the symbol master.
+    symbolExists: async () => true,
   });
 }
 
@@ -571,6 +573,49 @@ describe("Paper trading engine integrity", () => {
       );
       expect(error).toBeInstanceOf(PaperValidationError);
       expect(await getDb().select().from(paperOrders).where(eq(paperOrders.userId, userId))).toHaveLength(0);
+    });
+
+    it("rejects an order on a symbol the symbol master does not list, and writes nothing", async () => {
+      const userId = await createTestUser();
+      await withProvidersDown(async () => {
+        const error = await rejectionOf(
+          defaultWiredService().placeOrder({
+            userId,
+            command: { symbol: uniqueSymbol("NOPE"), exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 100, qty: 1 },
+          })
+        );
+        expect(error).toBeInstanceOf(PaperValidationError);
+      });
+      expect(await getDb().select().from(paperOrders).where(eq(paperOrders.userId, userId))).toHaveLength(0);
+    });
+
+    it("caps the working orders a user may hold at once", async () => {
+      const symbol = uniqueSymbol("CAP");
+      const userId = await createTestUser();
+      const service = makeService();
+      const limitBuy = { symbol, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 1, qty: 1 } as const;
+      const first = await service.placeOrder({ userId, command: limitBuy });
+      await getDb().insert(paperOrders).values(
+        Array.from({ length: MAX_WORKING_ORDERS_PER_USER - 1 }, () => ({
+          id: crypto.randomUUID(),
+          userId,
+          generation: first.order.generation,
+          symbol,
+          exchange: "NSE",
+          side: "BUY" as const,
+          type: "LIMIT" as const,
+          status: "PENDING" as const,
+          qty: 1,
+          limitPrice: "1",
+        }))
+      );
+
+      const error = await rejectionOf(service.placeOrder({ userId, command: limitBuy }));
+      expect(error).toBeInstanceOf(PaperValidationError);
+
+      await service.cancelOrder({ userId, orderId: first.order.id });
+      const placed = await service.placeOrder({ userId, command: limitBuy });
+      expect(placed.order.status).toBe("PENDING");
     });
 
     it("#2: bracket exits never close past the position (partial TP, then SL)", async () => {

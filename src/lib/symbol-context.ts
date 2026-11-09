@@ -52,14 +52,3 @@ export function parseSymbolContext(raw: Record<string, unknown>): SymbolContext 
     strategyId,
   };
 }
-
-export function buildTerminalUrl(context: SymbolContext): string {
-  const params = new URLSearchParams();
-  params.set("symbol", context.symbol);
-  params.set("exchange", context.exchange);
-  if (context.companyId) params.set("companyId", context.companyId);
-  if (context.sourceContext) params.set("sourceContext", context.sourceContext);
-  if (context.screenerRunId) params.set("screenerRunId", context.screenerRunId);
-
-  return `/terminal?${params.toString()}`;
-}

@@ -204,9 +204,11 @@ export function createRateLimitMiddleware(options: RateLimitMiddlewareOptions = 
     let result = await store.take(`ip:${getClientIp(event)}`, config.ip, nowMs);
     if (result.ok) {
       // Resolved once here and shared through event.context so the tRPC
-      // handler can skip a second JWT verification.
+      // handler can skip a second JWT verification. If verification itself
+      // fails (auth backend outage), leave it unset so the route re-verifies
+      // and reports the outage; this request is then limited by IP only.
       event.context.auth = getRequestHeader(event, "authorization")
-        ? await authenticate(event).catch(() => null)
+        ? await authenticate(event).catch(() => undefined)
         : null;
       const userId = event.context.auth?.userId;
       if (userId) result = await store.take(`user:${userId}`, config.user, nowMs);

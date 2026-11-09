@@ -60,6 +60,8 @@ describe("Paper Trading Concurrency Test Suite", () => {
         source: "angelone",
         quality: "live",
       }),
+      // Synthetic test symbols are not in the symbol master.
+      symbolExists: async () => true,
     });
   }
 

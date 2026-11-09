@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { chartWorkspaceRepository } from "./repository";
 
 export class ChartWorkspaceService {
@@ -8,7 +9,7 @@ export class ChartWorkspaceService {
   async getWorkspaceDetails(userId: string, workspaceId: string) {
     const ws = await chartWorkspaceRepository.getWorkspaceById(userId, workspaceId);
     if (!ws) {
-      throw new Error("Workspace not found or unauthorized.");
+      throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
     }
     return ws;
   }
@@ -16,14 +17,14 @@ export class ChartWorkspaceService {
   async createWorkspace(userId: string, name: string, layoutType: string = "SINGLE") {
     const existing = await chartWorkspaceRepository.listWorkspaces(userId);
     if (existing.length >= 20) {
-      throw new Error("Maximum workspace limit of 20 reached.");
+      throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Maximum workspace limit of 20 reached." });
     }
     return chartWorkspaceRepository.createWorkspace(userId, { name, layoutType });
   }
 
   async saveLayout(userId: string, workspaceId: string, layoutType: string, panes: any[]) {
     if (panes.length > 4) {
-      throw new Error("Maximum 4 panes allowed per layout.");
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Maximum 4 panes allowed per layout." });
     }
     return chartWorkspaceRepository.saveLayout(userId, workspaceId, layoutType, panes);
   }

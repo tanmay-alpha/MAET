@@ -12,6 +12,7 @@ import {
   PaperPersistenceError,
 } from "./errors";
 import {
+  MAX_PAPER_SYMBOL_LENGTH,
   PaperOrderCommandSchema,
 } from "./contracts";
 import { toPaperHttpError } from "../../api/paper/orders.post";
@@ -97,6 +98,24 @@ describe("Strict Shared Command Schema", () => {
     };
     const res = PaperOrderCommandSchema.safeParse(withUnknown);
     expect(res.success).toBe(false);
+  });
+
+  test("command normalises the symbol and rejects overlong or malformed symbols", () => {
+    const base = {
+      type: "LIMIT",
+      clientOrderId: validUuid,
+      idempotencyKey: "idem-key-1",
+      exchange: "NSE",
+      side: "BUY",
+      quantity: 10,
+      limitPrice: 100,
+    };
+    const normalised = PaperOrderCommandSchema.safeParse({ ...base, symbol: " bajaj-auto " });
+    expect(normalised.success && normalised.data.symbol).toBe("BAJAJ-AUTO");
+
+    for (const symbol of ["X".repeat(MAX_PAPER_SYMBOL_LENGTH + 1), "REL IANCE", "<script>", "   "]) {
+      expect(PaperOrderCommandSchema.safeParse({ ...base, symbol }).success).toBe(false);
+    }
   });
 
   test("REST command rejects missing exchange", () => {

@@ -21,7 +21,7 @@
 import type { Candle } from "@shared/types";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 import { runBacktestV3, type V3BacktestRunResult } from "./runner-v3";
-import { applyParameters, generateCombinations, type SweepParameter } from "./parameter-sweep";
+import { applyParameters, generateCombinations, MAX_SWEEP_COMBINATIONS, type SweepParameter } from "./parameter-sweep";
 import type { EquityPoint } from "../backtest/risk-metrics";
 
 // ============================================================
@@ -117,6 +117,7 @@ export interface WalkForwardAnalysisResult {
 /** Validation Sharpe below this rejects the window's parameters as overfit. */
 const VALIDATION_SHARPE_FLOOR = -1.0;
 const DEFAULT_WARMUP_BARS = 250;
+/** Combinations optimised per window: the first ones of the (at most MAX_SWEEP_COMBINATIONS) grid. */
 const MAX_COMBINATIONS = 100;
 
 // ============================================================
@@ -240,7 +241,9 @@ export async function runWalkForwardAnalysis(
   const startDate = new Date(sortedMs[0]);
   const endDate = new Date(sortedMs[sortedMs.length - 1]);
   const windows = generate3PhaseWalkForwardWindows(startDate, endDate, windowType, numWindows, trainRatio, valRatio);
-  const combinations = generateCombinations(parameters, MAX_COMBINATIONS);
+  // Grids above MAX_SWEEP_COMBINATIONS throw; of an accepted grid only the first MAX_COMBINATIONS
+  // are optimised (the run dialog tells the user so).
+  const combinations = generateCombinations(parameters, MAX_SWEEP_COMBINATIONS).slice(0, MAX_COMBINATIONS);
   // Invalid parameter paths throw here, before any window runs.
   const candidates = combinations.map((combo) => ({ combo, definition: applyParameters(definition, parameters, combo) }));
 

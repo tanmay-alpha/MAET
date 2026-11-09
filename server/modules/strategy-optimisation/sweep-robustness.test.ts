@@ -34,4 +34,15 @@ describe("sweep robustness", () => {
     expect(analysis.bestParams).toEqual({ fast: 3, slow: 0 });
     expect(paramX).toBeUndefined();
   });
+
+  it("carries the stored cost drag into the robustness score", () => {
+    const parameters = [{ name: "fast", path: "a", values: [3, 5] }];
+    const highCost = (fast: number, sharpe: number): StoredSweepResult => {
+      const base = result(fast, 0, sharpe);
+      return { ...base, resultSummary: { ...(base.resultSummary as object), costDragPercent: "30.0000" } };
+    };
+    const { analysis } = analyseSweepRobustness(parameters, [highCost(3, 1), highCost(5, 0.9)]);
+    expect(analysis.flags).toContain("HIGH_COST_DRAG");
+    expect(analysis.robustnessScore.costDragScore).toBe(40);
+  });
 });

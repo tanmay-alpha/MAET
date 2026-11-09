@@ -7,6 +7,7 @@ import {
   getSubscriptionRefCount,
   getAlertSubscriptionSymbols,
   resetSubscriptionRefsForTesting,
+  evaluateTickAlerts,
 } from "../orchestrator";
 
 describe("Alert Subscriptions & Feed Reconciliation Suite", () => {
@@ -86,5 +87,28 @@ describe("Alert Subscriptions & Feed Reconciliation Suite", () => {
     // Browser closes
     releaseBrowser();
     expect(getSubscriptionRefCount("HDFCBANK")).toBe(0);
+  });
+
+  it("7. A failing alert evaluation on a tick is caught instead of rejecting", async () => {
+    const seen: string[] = [];
+    const failing = async (quote: { symbol: string }) => {
+      seen.push(quote.symbol);
+      throw new Error("connection terminated unexpectedly");
+    };
+    await expect(
+      evaluateTickAlerts(
+        {
+          exchange: "NSE",
+          symbol: "RELIANCE",
+          price: 2500,
+          volume: 10,
+          ts: new Date().toISOString(),
+          source: "angelone",
+          quality: "live",
+        },
+        failing,
+      ),
+    ).resolves.toBeUndefined();
+    expect(seen).toEqual(["RELIANCE"]);
   });
 });

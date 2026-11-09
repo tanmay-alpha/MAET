@@ -16,6 +16,9 @@ const watchlistSymbolSchema = z.string().trim().min(1).max(20).transform((symbol
 const watchlistNoteSchema = z.string().transform((note) => note.trim()).pipe(z.string().max(512)).nullable()
   .transform((note) => note || null);
 const savedScreenerNameSchema = z.string().trim().min(1).max(80);
+const savedScreenerCriteriaSchema = z
+  .record(z.unknown())
+  .refine((criteria) => JSON.stringify(criteria).length <= 32_768, "Screener criteria too large");
 
 function inaccessible(resource: "Watchlist" | "Watchlist item" | "Saved screener"): never {
   throw new TRPCError({ code: "NOT_FOUND", message: `${resource} not found or access denied` });
@@ -213,9 +216,7 @@ export const workspaceRouter = createRouter({
   saveScreener: protectedProcedure
     .input(z.object({
       name: savedScreenerNameSchema,
-      criteria: z
-        .record(z.unknown())
-        .refine((criteria) => JSON.stringify(criteria).length <= 32_768, "Screener criteria too large"),
+      criteria: savedScreenerCriteriaSchema,
       description: z.string().max(2_000).optional(),
     }).strict())
     .mutation(async ({ ctx, input }) => {
@@ -229,7 +230,7 @@ export const workspaceRouter = createRouter({
     .input(z.object({
       screenerId: z.string().uuid(),
       name: savedScreenerNameSchema.optional(),
-      criteria: z.record(z.unknown()).optional(),
+      criteria: savedScreenerCriteriaSchema.optional(),
     }).strict())
     .mutation(async ({ ctx, input }) => {
       const { screenerId, ...updates } = input;

@@ -93,6 +93,20 @@ export function evaluateRiskGate(
   return { passed: true };
 }
 
+const TIMEFRAME_MS: Record<Candle["tf"], number> = {
+  "1m": 60_000,
+  "5m": 5 * 60_000,
+  "15m": 15 * 60_000,
+  "1h": 3_600_000,
+  "1d": 86_400_000,
+  "1wk": 7 * 86_400_000,
+};
+
+/** Age of a completed bar's data, measured from the bar's close (open `ts` + timeframe), not its open. */
+export function barDataFreshnessMs(bar: Pick<Candle, "ts" | "tf">, nowMs: number): number {
+  return nowMs - (new Date(bar.ts).getTime() + TIMEFRAME_MS[bar.tf]);
+}
+
 export function computeSignalFingerprint(
   deploymentId: string,
   versionId: string,
@@ -268,7 +282,7 @@ export async function evaluateDeploymentForBar(
 
     const cashBalance = account ? Number(account.cashBalance) : 0;
     const activePositionsCount = positions.length;
-    const dataFreshnessMs = Date.now() - new Date(bar.ts).getTime();
+    const dataFreshnessMs = barDataFreshnessMs(bar, Date.now());
 
     // Evaluate risk gate with real state
     const riskRes = evaluateRiskGate(deployment, { type: signalType, symbol }, cashBalance, activePositionsCount, dataFreshnessMs);

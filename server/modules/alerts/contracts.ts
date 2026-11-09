@@ -112,8 +112,6 @@ export const CreateAlertInputSchema = z.object({
   enabled: z.boolean().default(true),
 });
 export type CreateAlertInput = z.infer<typeof CreateAlertInputSchema>;
-export const AlertDefinitionInputSchema = CreateAlertInputSchema;
-export type AlertDefinitionInput = CreateAlertInput;
 
 export interface AlertView {
   id: string;

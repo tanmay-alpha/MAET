@@ -137,7 +137,6 @@ This folder is the website users interact with. It is built mainly with React, T
 | `src/lib/auth-token.ts` | Retrieves and refreshes the browser's Supabase access token; `hasStoredSession` reports whether a session exists. |
 | `src/hooks/use-signed-in.ts` | `useSignedIn()` gates signed-in-only queries (paper account, alerts, watchlists, workspace, market breadth) so logged-out visitors don't send requests that would fail with 401. |
 | `src/lib/paper-sse-client.ts` | Receives paper-trading updates from `GET /api/paper/stream`: named SSE events (`CONNECTED`, `heartbeat`, and the outbox event types) defined in `shared/domain/paper-trading/stream-events.ts`, which the server uses too. Falls back to polling while the stream is unavailable (503). |
-| `src/lib/technical-indicators.ts`, `src/lib/financial-metrics.ts` | Frontend-side helper calculations and formatting for displayed analysis. |
 | `src/store/` | Small browser-only state. For example, a selected terminal symbol belongs here, not in the durable database. |
 | `src/styles.css` | Global Tailwind CSS setup, theme variables, typography, colours, and animations. |
 | `src/routeTree.gen.ts` | Generated route information. Do not normally edit this file by hand. |
@@ -172,7 +171,7 @@ This folder contains the web server, APIs, provider integrations, business rules
 | `server/workers/` | Background tasks. Started inside the web server: Angel One WebSocket processing, candle aggregation, alert evaluation, paper-order matching and margin monitoring, and the daily processor. Run as separate processes (`bun run worker:*`): backtest, sweep, walk-forward and strategy-evaluator workers. There is no Yahoo polling worker; Yahoo is called on demand as a fallback. |
 | `server/workers/ingestion-engine/` | A more structured ingestion pipeline with normalisation, validation, retry/dead-letter handling, Supabase writes, and optional BigQuery output. |
 | `server/db/schema.ts` | TypeScript description of database tables for Drizzle ORM. |
-| `server/db/migrations/` | Numbered SQL migrations (0001–0027) for PostgreSQL, applied by `server/scripts/apply-migrations.ts` (each file and its tracking row in one transaction). Most add tables or columns, but some also drop indexes, replace policies and revoke privileges (for example `0010`, `0011`), so read them in order. `0017_options_market_data.sql` adds the options-data tables. |
+| `server/db/migrations/` | Numbered SQL migrations (0001–0028) for PostgreSQL, applied by `server/scripts/apply-migrations.ts` (each file and its tracking row in one transaction). Most add tables or columns, but some also drop indexes, replace policies and revoke privileges (for example `0010`, `0011`, `0028`), so read them in order. `0017_options_market_data.sql` adds the options-data tables. |
 | `server/db/seeds/` | Reference-data loads, such as `market_baseline_metrics.sql` (run with `server/scripts/populate-baselines.ts`). |
 | `server/infra/` | Shared technical services: the internal event bus, encryption, health status, logging, client-IP detection and database diagnostics. There is no metrics module. |
 | `server/middleware/` | Request-wide behavior: CORS rules, token-bucket rate limiting and a request body size limit. |

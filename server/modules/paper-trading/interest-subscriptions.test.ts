@@ -4,7 +4,10 @@ import { PaperInterestSubscriptions, type PaperInterestRow } from "./interest-su
 
 const silent = { info() {}, warn() {}, debug() {} };
 
-function harness(initial: PaperInterestRow[], options: { maxSymbols?: number } = {}) {
+function harness(
+  initial: PaperInterestRow[],
+  options: { maxSymbols?: number; hasFeedToken?: (symbol: string) => boolean } = {}
+) {
   let rows = initial;
   let fetches = 0;
   const refs = new Map<string, number>();
@@ -21,6 +24,7 @@ function harness(initial: PaperInterestRow[], options: { maxSymbols?: number } =
       else refs.set(symbol, count);
     },
     maxSymbols: options.maxSymbols,
+    hasFeedToken: options.hasFeedToken ?? (() => true),
     log: { ...silent, warn: (_fields: unknown, message: string) => warnings.push(message) },
   });
   return {
@@ -34,8 +38,18 @@ function harness(initial: PaperInterestRow[], options: { maxSymbols?: number } =
   };
 }
 
-const order = (symbol: string, exchange = "NSE"): PaperInterestRow => ({ exchange, symbol, kind: "ORDER" });
-const position = (symbol: string, exchange = "NSE"): PaperInterestRow => ({ exchange, symbol, kind: "POSITION" });
+const order = (symbol: string, exchange = "NSE", userId = "user-1"): PaperInterestRow => ({
+  userId,
+  exchange,
+  symbol,
+  kind: "ORDER",
+});
+const position = (symbol: string, exchange = "NSE", userId = "user-1"): PaperInterestRow => ({
+  userId,
+  exchange,
+  symbol,
+  kind: "POSITION",
+});
 
 afterEach(() => {
   resetDatabaseBreakerForTests();
@@ -76,6 +90,44 @@ describe("PaperInterestSubscriptions", () => {
 
     expect([...refs.keys()].sort()).toEqual(["O1", "O2", "P1"]);
     expect(warnings.some((message) => /cap/.test(message))).toBe(true);
+  });
+
+  it("drops symbols the feed cannot stream before applying the symbol cap", async () => {
+    const { interest, refs, warnings } = harness(
+      [order("FAKE1"), order("FAKE2"), order("REAL1"), position("REAL2")],
+      { maxSymbols: 2, hasFeedToken: (symbol) => !symbol.startsWith("FAKE") }
+    );
+    await interest.reconcile();
+
+    expect([...refs.keys()].sort()).toEqual(["REAL1", "REAL2"]);
+    expect(warnings.some((message) => /token/.test(message))).toBe(true);
+    expect(warnings.some((message) => /cap/.test(message))).toBe(false);
+  });
+
+  it("shares the symbol cap across users so one user cannot take every slot", async () => {
+    const hog = ["H1", "H2", "H3", "H4", "H5"].map((symbol) => order(symbol, "NSE", "hog"));
+    const { interest, refs } = harness(
+      [...hog, position("B1", "NSE", "user-b"), order("C1", "NSE", "user-c")],
+      { maxSymbols: 4 }
+    );
+    await interest.reconcile();
+
+    expect(refs.has("B1")).toBe(true);
+    expect(refs.has("C1")).toBe(true);
+    expect(refs.size).toBe(4);
+  });
+
+  it("drops symbols without an Angel One instrument token by default", async () => {
+    const refs = new Map<string, number>();
+    const interest = new PaperInterestSubscriptions({
+      fetchInterest: async () => [order("NOTALISTEDSYMBOL"), order("RELIANCE")],
+      subscribe: (symbol) => refs.set(symbol, 1),
+      unsubscribe: (symbol) => refs.delete(symbol),
+      log: silent,
+    });
+    await interest.reconcile();
+
+    expect([...refs.keys()]).toEqual(["RELIANCE"]);
   });
 
   it("does not query the database while the circuit breaker is open and keeps the current set", async () => {

@@ -88,22 +88,6 @@ export class PaperPersistenceError extends PaperTradingError {
 }
 
 /**
- * Extract human-readable error message safely from unknown thrown errors.
- */
-export function getPaperTradingErrorMessage(error: unknown): string {
-  if (error instanceof PaperTradingError) {
-    return error.message;
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  return "An unexpected paper trading error occurred.";
-}
-
-/**
  * Check if a thrown error represents a PostgreSQL retryable serialization/deadlock failure (40001 or 40P01).
  */
 export function isRetryableDatabaseError(error: unknown): boolean {

@@ -18,10 +18,10 @@ export class TradeThesisService {
   async createThesis(userId: string, input: CreateThesisInput) {
     if (input.stopPrice && input.targetPrice) {
       if (input.direction === "LONG" && input.stopPrice >= input.targetPrice) {
-        throw new Error("For LONG setup, stop price must be less than target price.");
+        throw new TRPCError({ code: "BAD_REQUEST", message: "For LONG setup, stop price must be less than target price." });
       }
       if (input.direction === "SHORT" && input.stopPrice <= input.targetPrice) {
-        throw new Error("For SHORT setup, stop price must be greater than target price.");
+        throw new TRPCError({ code: "BAD_REQUEST", message: "For SHORT setup, stop price must be greater than target price." });
       }
     }
     return tradeThesisRepository.createThesis(userId, input);

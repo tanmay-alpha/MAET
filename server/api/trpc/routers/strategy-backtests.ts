@@ -91,15 +91,16 @@ export const strategyBacktestsRouter = createRouter({
       limit: z.number().int().min(1).max(50).default(20),
     }).optional())
     .query(async ({ ctx, input }) => {
-      const query = db
+      const jobs = await db
         .select()
         .from(strategyBacktestJobs)
-        .where(eq(strategyBacktestJobs.userId, ctx.userId!))
+        .where(and(
+          eq(strategyBacktestJobs.userId, ctx.userId!),
+          input?.strategyVersionId ? eq(strategyBacktestJobs.strategyVersionId, input.strategyVersionId) : undefined,
+        ))
         .orderBy(desc(strategyBacktestJobs.requestedAt))
         .limit(input?.limit ?? 20);
-
-      const rows = await query;
-      return { jobs: rows };
+      return { jobs };
     }),
 
   /** Get trade-level records for a completed job */

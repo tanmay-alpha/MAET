@@ -1,5 +1,7 @@
 import { afterAll, describe, expect, it, mock } from "bun:test";
 import { TRPCError } from "@trpc/server";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
 import * as drizzleClientModule from "../../../data/drizzle/client";
 
 interface MockQueryBuilder {
@@ -70,7 +72,7 @@ describe("backtestV2Router TRPC tests", () => {
 
   const baseInput = {
     symbol: "INFY",
-    timeframe: "1d",
+    timeframe: "1d" as const,
     strategy: {
       type: "SMA_CROSS" as const,
       fastPeriod: 5,
@@ -218,5 +220,39 @@ describe("backtestV2Router TRPC tests", () => {
     mockSelections.push([]);
     await caller.listRuns();
     expect(lastCapturedLimit).toBe(20);
+  });
+
+  it("8. Rejects oversize indicator periods and too many combined rules with BAD_REQUEST", async () => {
+    const oversize = [
+      { ...baseInput, strategy: { ...baseInput.strategy, slowPeriod: 100_000 } },
+      { ...baseInput, strategy: { type: "DONCHIAN_BREAKOUT" as const, donchianPeriod: 100_000 } },
+      {
+        ...baseInput,
+        strategy: {
+          ...baseInput.strategy,
+          combinedRules: Array.from({ length: 500 }, () => ({ indicator: "RSI", op: ">", value: 50 })),
+        },
+      },
+    ];
+    for (const input of oversize) {
+      const err = await caller.run(input).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(TRPCError);
+      expect((err as TRPCError).code).toBe("BAD_REQUEST");
+    }
+  });
+
+  it("9. Rejects unknown timeframes with BAD_REQUEST", async () => {
+    const err = await caller.run({ ...baseInput, timeframe: "1d'; --" as "1d" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TRPCError);
+    expect((err as TRPCError).code).toBe("BAD_REQUEST");
+  });
+
+  it("10. compareRuns binds each run id individually, scoped to the caller", async () => {
+    const runIds = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];
+    mockSelections.push([]);
+    await caller.compareRuns({ runIds });
+    const query = new PgDialect().sqlToQuery(lastCapturedWhere[0] as SQL);
+    expect(query.params).toEqual(["test-user-1", ...runIds]);
+    expect(query.sql).not.toContain("::uuid[]");
   });
 });

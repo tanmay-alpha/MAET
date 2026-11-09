@@ -132,6 +132,46 @@ function valueAccount(
   };
 }
 
+/**
+ * Win/loss statistics over closing fills. Opening and increasing fills book no
+ * realised P&L (the engine records 0 for them), so a round trip counts once —
+ * by the fill that realised it.
+ */
+export function tradeStatsFromFills(fills: readonly Pick<PaperFillRow, "realizedPnl">[]): TradeStats {
+  const tradePnlList = fills
+    .map((f) => Number(f.realizedPnl))
+    .filter((pnl) => Number.isFinite(pnl) && pnl !== 0);
+  const winningTrades = tradePnlList.filter((p) => p > 0);
+  const losingTrades = tradePnlList.filter((p) => p < 0);
+  const totalTrades = tradePnlList.length;
+  const winRate = totalTrades > 0 ? (winningTrades.length / totalTrades) * 100 : 0;
+  const avgWin = winningTrades.length > 0
+    ? winningTrades.reduce((a, b) => a + b, 0) / winningTrades.length
+    : 0;
+  const avgLoss = losingTrades.length > 0
+    ? losingTrades.reduce((a, b) => a + b, 0) / losingTrades.length
+    : 0;
+  const largestWin = winningTrades.length > 0 ? Math.max(...winningTrades) : 0;
+  const largestLoss = losingTrades.length > 0 ? Math.min(...losingTrades) : 0;
+
+  const totalWins = winningTrades.reduce((a, b) => a + b, 0);
+  const totalLosses = Math.abs(losingTrades.reduce((a, b) => a + b, 0));
+  const profitFactor = totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0;
+
+  return {
+    totalTrades,
+    winningTrades: winningTrades.length,
+    losingTrades: losingTrades.length,
+    winRate,
+    avgWin,
+    avgLoss,
+    largestWin,
+    largestLoss,
+    profitFactor,
+    avgHoldingDays: 0,
+  };
+}
+
 export function usePortfolioAnalytics(): PortfolioAnalytics {
   const { account, positions, orders, fills } = usePaperAccount();
   const { query: performanceQuery, signedIn } = usePortfolioPerformance();
@@ -147,36 +187,7 @@ export function usePortfolioAnalytics(): PortfolioAnalytics {
     // Valuation needs the server's account: there is no default balance to value against.
     const metrics = account ? valueAccount(account, positions, quoteMap) : null;
 
-    const tradePnlList: number[] = fills.map((f: PaperFillRow) => Number(f.realizedPnl));
-    const winningTrades = tradePnlList.filter((p) => p > 0);
-    const losingTrades = tradePnlList.filter((p) => p < 0);
-    const totalTrades = tradePnlList.length;
-    const winRate = totalTrades > 0 ? (winningTrades.length / totalTrades) * 100 : 0;
-    const avgWin = winningTrades.length > 0
-      ? winningTrades.reduce((a, b) => a + b, 0) / winningTrades.length
-      : 0;
-    const avgLoss = losingTrades.length > 0
-      ? losingTrades.reduce((a, b) => a + b, 0) / losingTrades.length
-      : 0;
-    const largestWin = winningTrades.length > 0 ? Math.max(...winningTrades) : 0;
-    const largestLoss = losingTrades.length > 0 ? Math.min(...losingTrades) : 0;
-
-    const totalWins = winningTrades.reduce((a, b) => a + b, 0);
-    const totalLosses = Math.abs(losingTrades.reduce((a, b) => a + b, 0));
-    const profitFactor = totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0;
-
-    const trades: TradeStats = {
-      totalTrades,
-      winningTrades: winningTrades.length,
-      losingTrades: losingTrades.length,
-      winRate,
-      avgWin,
-      avgLoss,
-      largestWin,
-      largestLoss,
-      profitFactor,
-      avgHoldingDays: 0,
-    };
+    const trades = tradeStatsFromFills(fills);
 
     const hasData = orders.length > 0 || positions.length > 0 || fills.length > 0;
 

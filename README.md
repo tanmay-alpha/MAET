@@ -91,7 +91,7 @@ flowchart TB
     TRPC --> Frontend
 ```
 
-The calculation engine (`server/domain/calculations/engine/CalculationEngine.ts`) has no scheduled caller yet; quotes are served from the in-process cache, not Redis. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the request flows.
+Quotes are served from the in-process cache, not Redis. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the request flows.
 
 ---
 
@@ -156,7 +156,6 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 
 ### Calculation Engine
 - Registry of 70 calculators: 24 technical indicators, 23 fundamental metrics, 14 scanners and 9 portfolio metrics (`server/domain/calculations/calculators/`).
-- Batch runner that processes symbols in parallel chunks of 50 (`server/domain/calculations/engine/batch-runner.ts`).
 - Canonical indicator implementations live in `shared/indicators/canonical.ts`; `tests/canonical-indicators.test.ts` checks them against the strategy engine's indicator cache. Bars inside an indicator's warm-up window have `null` values, not `0`.
 
 ### Charts

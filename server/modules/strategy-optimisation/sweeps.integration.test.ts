@@ -79,4 +79,60 @@ describe("Strategy parameter sweep worker", () => {
     await sql`DELETE FROM public.strategy_parameter_sweeps WHERE id = ${sweepId}`;
     await sql`DELETE FROM public.candles WHERE symbol = ${symbol}`;
   });
+
+  it("fails sweeps whose strategy belongs to another user or whose stored grid is oversize", async () => {
+    if (!process.env.TEST_DATABASE_URL) {
+      console.log("  Skipping sweep PostgreSQL test: TEST_DATABASE_URL not set");
+      return;
+    }
+    await applyMigrations();
+    const sql = getSqlClient();
+
+    const ownerId = "00000000-0000-0000-0000-0000000000f3";
+    const otherId = "00000000-0000-0000-0000-0000000000f4";
+    const ownerStrategyId = "f3000000-0000-0000-0000-000000000001";
+    const otherStrategyId = "f4000000-0000-0000-0000-000000000001";
+    const foreignSweepId = "f3000000-0000-0000-0000-000000000003";
+    const oversizeSweepId = "f3000000-0000-0000-0000-000000000004";
+    const definition = JSON.stringify({ name: "x", entry: { children: [{ left: { params: { period: 5 } } }] } });
+
+    await sql.unsafe(`
+      DELETE FROM public.strategy_parameter_sweeps WHERE id IN ('${foreignSweepId}', '${oversizeSweepId}');
+      INSERT INTO auth.users (id) VALUES ('${ownerId}'), ('${otherId}') ON CONFLICT DO NOTHING;
+      INSERT INTO public.users (id, email) VALUES ('${ownerId}', 'sweep-owner@test.com'), ('${otherId}', 'sweep-other@test.com') ON CONFLICT DO NOTHING;
+      INSERT INTO public.strategy_definitions (id, user_id, name, current_draft)
+        VALUES ('${ownerStrategyId}', '${ownerId}', 'Mine', '{}'), ('${otherStrategyId}', '${otherId}', 'Theirs', '{}') ON CONFLICT DO NOTHING;
+    `);
+    for (const [strategyId, userId] of [[ownerStrategyId, ownerId], [otherStrategyId, otherId]]) {
+      await sql`
+        INSERT INTO public.strategy_versions (strategy_id, user_id, version_number, definition, definition_hash, engine_version, indicator_version)
+        VALUES (${strategyId}, ${userId}, 1, ${definition}::jsonb, ${`hash-${strategyId}`}, '3.0.0', '1.0.0')
+        ON CONFLICT DO NOTHING
+      `;
+    }
+
+    const path = "entry.children.0.left.params.period";
+    const small = [{ name: "fast", path, values: [3, 5] }];
+    // Six parameters of ten values each: valid per parameter, 10^6 combinations in total.
+    const oversize = Array.from({ length: 6 }, (_, i) => ({ name: `p${i}`, path, values: Array.from({ length: 10 }, (_, v) => v + 1) }));
+    const insertSweep = (id: string, strategyId: string, parameters: unknown) => sql`
+      INSERT INTO public.strategy_parameter_sweeps
+        (id, user_id, strategy_id, parameters, combination_count, symbol_or_universe, timeframe, from_date, to_date, status)
+      VALUES (${id}, ${ownerId}, ${strategyId}, ${JSON.stringify(parameters)}::jsonb, 2, 'SWTEST', '1d',
+        '2023-01-01T00:00:00Z', '2023-12-31T00:00:00Z', 'RUNNING')
+    `;
+    await insertSweep(foreignSweepId, otherStrategyId, small);
+    await insertSweep(oversizeSweepId, ownerStrategyId, oversize);
+
+    await runSweepJob(foreignSweepId, uninterruptedJobContext);
+    await runSweepJob(oversizeSweepId, uninterruptedJobContext);
+
+    const rows = await sql`
+      SELECT s.id, s.status, count(r.id)::int AS results
+      FROM public.strategy_parameter_sweeps s LEFT JOIN public.strategy_sweep_results r ON r.sweep_id = s.id
+      WHERE s.id IN (${foreignSweepId}, ${oversizeSweepId}) GROUP BY s.id, s.status`;
+    expect(rows.map((r) => [r.status, r.results])).toEqual([["FAILED", 0], ["FAILED", 0]]);
+
+    await sql`DELETE FROM public.strategy_parameter_sweeps WHERE id IN (${foreignSweepId}, ${oversizeSweepId})`;
+  });
 });

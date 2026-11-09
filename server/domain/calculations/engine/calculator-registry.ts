@@ -70,25 +70,8 @@ export function getCalculator(name: string): CalculatorEntry | undefined {
   return getRegistry().get(name);
 }
 
-export function getAllCalculators(): CalculatorEntry[] {
-  return Array.from(getRegistry().values());
-}
-
 export function getCalculatorsByCategory(category: CalculatorCategory): CalculatorEntry[] {
   return Array.from(getRegistry().values()).filter((e) => e.meta.category === category);
-}
-
-export function getCalculatorsByFrequency(frequency: CalculatorFrequency): CalculatorEntry[] {
-  return Array.from(getRegistry().values()).filter((e) => e.meta.frequency === frequency);
-}
-
-export function getRegistryStats(): Record<string, number> {
-  const reg = getRegistry();
-  const stats: Record<string, number> = { total: reg.size };
-  for (const entry of reg.values()) {
-    stats[entry.meta.category] = (stats[entry.meta.category] ?? 0) + 1;
-  }
-  return stats;
 }
 
 // ============================================================================

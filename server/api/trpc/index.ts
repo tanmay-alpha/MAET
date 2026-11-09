@@ -1,7 +1,6 @@
 import { createRouter } from "./core";
 import { marketRouter } from "./routers/market";
 import { screenerRouter } from "./routers/screener";
-import { portfolioRouter } from "./routers/portfolio";
 import { companiesRouter } from "./routers/companies";
 import { analysisRouter } from "./routers/analysis";
 import { ingestionRouter } from "./routers/ingestion";
@@ -25,7 +24,6 @@ import { optionsRouter } from "./routers/options";
 export const appRouter = createRouter({
   market: marketRouter,
   screener: screenerRouter,
-  portfolio: portfolioRouter,
   companies: companiesRouter,
   analysis: analysisRouter,
   ingestion: ingestionRouter,
@@ -48,7 +46,6 @@ export const appRouter = createRouter({
   options: optionsRouter,
 });
 
-export const router = appRouter;
 export type AppRouter = typeof appRouter;
 export { publicProcedure, protectedProcedure } from "./core";
 export type { Context } from "./core";

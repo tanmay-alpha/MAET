@@ -111,8 +111,8 @@ export function tokenize(input: string): Token[] {
     }
     if (matched) continue;
 
-    // Number with optional percent
-    const pctRe = /^[\d,]+(?:\.\d+)?\s*%/;
+    // Number with optional sign and percent (e.g. "-10%")
+    const pctRe = /^[-+]?[\d,]+(?:\.\d+)?\s*%/;
     const pctMatch = text.slice(pos).match(pctRe);
     if (pctMatch) {
       const val = pctMatch[0].trim();
@@ -121,8 +121,8 @@ export function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Plain number
-    const numRe = /^[\d,]+(?:\.\d+)?/;
+    // Plain number with optional sign
+    const numRe = /^[-+]?[\d,]+(?:\.\d+)?/;
     const numMatch = text.slice(pos).match(numRe);
     if (numMatch) {
       const val = numMatch[0];

@@ -7,10 +7,6 @@ const workspaceSource = readFileSync(
   join(import.meta.dir, "../../api/trpc/routers/workspace.ts"),
   "utf8",
 );
-const portfolioSource = readFileSync(
-  join(import.meta.dir, "../../api/trpc/routers/portfolio.ts"),
-  "utf8",
-);
 
 describe("Cloud Workspace Tenant Isolation Test Suite", () => {
   it("exposes only the canonical watchlist API boundary", () => {
@@ -23,7 +19,18 @@ describe("Cloud Workspace Tenant Isolation Test Suite", () => {
     expect(caller.updateWatchlistItemNote).toBeFunction();
     expect(workspaceSource).toContain("onConflictDoNothing");
     expect(workspaceSource).not.toContain("matchCount: 0");
-    expect(portfolioSource).not.toMatch(/\b(getWatchlist|addToWatchlist|removeFromWatchlist)\b/u);
+  });
+
+  it("caps saved screener criteria size on update as on save", async () => {
+    const caller = workspaceRouter.createCaller({
+      userId: crypto.randomUUID(),
+      email: "workspace-contract@example.com",
+      role: "user",
+    });
+    await expect(caller.updateScreener({
+      screenerId: crypto.randomUUID(),
+      criteria: { blob: "x".repeat(40_000) },
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("enforces tenant ownership through real router and PostgreSQL operations", async () => {

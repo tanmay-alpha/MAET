@@ -74,10 +74,9 @@ describe("Migration 0026 RLS hardening", () => {
         WHERE schemaname = 'public' AND tablename IN ('alerts', 'backtest_presets')
         ORDER BY tablename, policyname
       `;
+      // 0028 later drops the *_owner_modify policies: clients only read these tables.
       expect(policies.map((p) => `${p.tablename}.${p.policyname}`)).toEqual([
-        "alerts.alerts_owner_modify",
         "alerts.alerts_owner_select",
-        "backtest_presets.backtest_presets_owner_modify",
         "backtest_presets.backtest_presets_owner_select",
       ]);
 

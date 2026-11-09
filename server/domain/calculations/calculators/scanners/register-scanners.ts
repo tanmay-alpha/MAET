@@ -323,8 +323,10 @@ registerCalculator({
     }
 
     const currentBW = bandWidth(closes.slice(n - 20));
+    // Bandwidths ending at each of the last 252 bars (52 weeks, including the current one);
+    // the first 19 bars cannot end a 20-bar window, so a short series starts at bar 19.
     const bwHistory: number[] = [];
-    for (let i = 252; i <= n; i++) {
+    for (let i = Math.max(20, n - 251); i <= n; i++) {
       bwHistory.push(bandWidth(closes.slice(i - 20, i)));
     }
     const minBW = Math.min(...bwHistory);
@@ -390,5 +392,3 @@ registerCalculator({
     return [];
   },
 });
-
-export const SCANNER_CALCULATOR_COUNT = 13;

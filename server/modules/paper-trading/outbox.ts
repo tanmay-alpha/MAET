@@ -31,10 +31,6 @@ export function buildOrderAcceptedEvent(input: EventBuilderInput): NewPaperOutbo
   return buildEvent("PAPER_ORDER_ACCEPTED", input);
 }
 
-export function buildOrderTriggeredEvent(input: EventBuilderInput): NewPaperOutboxEventRow {
-  return buildEvent("PAPER_ORDER_TRIGGERED", input);
-}
-
 export function buildOrderPartiallyFilledEvent(input: EventBuilderInput): NewPaperOutboxEventRow {
   return buildEvent("PAPER_ORDER_PARTIALLY_FILLED", input);
 }

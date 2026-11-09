@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import { calculateMarketBreadth, getHeatmapCells } from "./service";
+import { fetchMarketQuotesWithFundamentals } from "./repository";
 import { db } from "../../data/drizzle/client";
 import { companies, quoteSnapshots, candles } from "../../db/schema";
 import { inArray } from "drizzle-orm";
@@ -113,11 +114,15 @@ const FIXTURE_QUOTES = [
   },
 ];
 
+// Daily candles end yesterday (UTC): the breadth query only reads the recent SMA200 window.
+const now = new Date();
+const CANDLE_ANCHOR = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1);
+const daysAgo = (days: number) => new Date(CANDLE_ANCHOR - days * 24 * 60 * 60 * 1000);
+
 // Generate 25 daily candles for TEST_MB_ADV1
 const FIXTURE_CANDLES: any[] = [];
 for (let i = 0; i < 25; i++) {
-  const date = new Date("2026-07-30T00:00:00Z");
-  date.setDate(date.getDate() - i);
+  const date = daysAgo(i);
   FIXTURE_CANDLES.push({
     symbol: "TEST_MB_ADV1",
     timeframe: "1d",
@@ -133,8 +138,7 @@ for (let i = 0; i < 25; i++) {
 
 // Generate 10 daily candles for TEST_MB_DEC1 (< 20 bars: insufficient history)
 for (let i = 0; i < 10; i++) {
-  const date = new Date("2026-07-30T00:00:00Z");
-  date.setDate(date.getDate() - i);
+  const date = daysAgo(i);
   FIXTURE_CANDLES.push({
     symbol: "TEST_MB_DEC1",
     timeframe: "1d",
@@ -144,6 +148,21 @@ for (let i = 0; i < 10; i++) {
     close: "300.00",
     volume: 10000,
     ts: date,
+    source: "test",
+  });
+}
+
+// Old TEST_MB_DEC1 candles, outside the lookback window: they must not count as history.
+for (let i = 0; i < 25; i++) {
+  FIXTURE_CANDLES.push({
+    symbol: "TEST_MB_DEC1",
+    timeframe: "1d",
+    open: "300.00",
+    high: "310.00",
+    low: "290.00",
+    close: "300.00",
+    volume: 10000,
+    ts: daysAgo(500 + i),
     source: "test",
   });
 }
@@ -300,5 +319,17 @@ describe("Market Breadth & Heatmap Integrity Suite", () => {
     expect(tech.count).toBeGreaterThanOrEqual(2);
     expect(typeof tech.avgChange).toBe("number");
     expect(typeof tech.weight).toBe("number");
+  });
+
+  it("17. Daily candles older than the SMA200 lookback window are not read", async () => {
+    const { data } = await fetchMarketQuotesWithFundamentals("ALL_NSE");
+    const adv1 = data.find((row) => row.symbol === "TEST_MB_ADV1");
+    const dec1 = data.find((row) => row.symbol === "TEST_MB_DEC1");
+    // Recent history is unchanged; the 25 stale bars do not lift TEST_MB_DEC1 past 20 sessions.
+    expect(adv1?.sma20).toBe(100);
+    expect(adv1?.high20d).toBe(108);
+    expect(dec1).toBeDefined();
+    expect(dec1?.sma20).toBeUndefined();
+    expect(dec1?.high20d).toBeUndefined();
   });
 });

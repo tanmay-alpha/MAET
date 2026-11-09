@@ -66,6 +66,10 @@ A user MARKET order is inserted as `PENDING` and filled in the same transaction.
 
 ## 4. Gates before execution
 
+### 4.0 Symbol and working-order limits (all orders)
+
+`placeOrder` (`service.ts`) rejects with `PaperValidationError` before any other gate when the symbol (trimmed, upper-cased, at most 30 characters, `MARKET_SYMBOL_PATTERN`) is not in the market symbol master: the bundled NIFTY 50 plus, once `hydrateAngelOneCompanyTokens` has loaded, every NSE equity in Angel One's instrument master. A miss waits for that load; after a failed load, misses are rejected without retrying for 60 s. LIMIT and STOP_LOSS_LIMIT orders are also rejected once the user has `MAX_WORKING_ORDERS_PER_USER` (100) working orders in the current generation, counted under the account lock. The live-feed interest list (`interest-subscriptions.ts`) drops symbols without an Angel One token before applying the 150-symbol cap and shares that cap round-robin across users.
+
 ### 4.1 Market hours (MARKET orders)
 
 `placeMarketOrder` refuses unless `computePhase(now, holidays) === "OPEN"` (`server/domain/market/clock.ts`): IST weekday, not an NSE holiday (bundled `shared/symbols/nse-holidays.json` unioned with `NSE_HOLIDAYS_JSON`, `server/config.ts`), between 09:15 and the 15:30 minute inclusive. The idempotent-replay check runs *before* this gate, so a retried request still gets its original result after the close.

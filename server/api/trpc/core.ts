@@ -6,6 +6,8 @@ export type Context = {
   userId?: string;
   email: string | null;
   role: "user" | "admin";
+  /** The request carried a token that could not be verified because the auth backend is unreachable. */
+  authUnavailable?: boolean;
 };
 
 export const INTERNAL_ERROR_MESSAGE = "Internal server error";
@@ -73,6 +75,10 @@ export function reportTrpcError(
 
 const isAuthed = t.middleware(({ ctx, next }) => {
   if (!ctx.userId) {
+    // An auth outage must not look like "logged out" to the client.
+    if (ctx.authUnavailable) {
+      throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: "Auth backend unreachable" });
+    }
     throw new TRPCError({ code: "UNAUTHORIZED", message: "Authentication required" });
   }
 

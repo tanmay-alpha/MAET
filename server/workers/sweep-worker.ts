@@ -13,13 +13,17 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "../data/drizzle/client";
 import { strategyParameterSweeps, strategySweepResults, strategyVersions } from "../db/schema";
 import { runBacktestV3 } from "../domain/strategy/runner-v3";
-import { applyParameters, generateCombinations, type SweepParameter } from "../domain/strategy/parameter-sweep";
+import {
+  applyParameters,
+  generateCombinations,
+  MAX_SWEEP_COMBINATIONS,
+  parseStoredSweepParameters,
+} from "../domain/strategy/parameter-sweep";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
 import { loadJobCandles } from "../modules/strategy-jobs/candles";
 import { JobInterruptedError, type JobContext } from "../modules/strategy-jobs/job-context";
 import { failSweep } from "../modules/strategy-optimisation/repository";
 
-const MAX_COMBINATIONS = 500;
 const PROGRESS_EVERY = 10;
 
 const finite = (value: number, digits: number) => (Number.isFinite(value) ? value : 0).toFixed(digits);
@@ -36,11 +40,11 @@ export async function runSweepJob(sweepId: string, ctx: JobContext): Promise<voi
       .orderBy(desc(strategyVersions.versionNumber))
       .limit(1);
     if (!version) throw new Error("Strategy has no saved version to sweep");
+    if (version.userId !== sweep.userId) throw new Error("Strategy version does not belong to the sweep's owner");
 
-    // Validated against SweepParameterSchema ({ name, path, values }) when the sweep was created.
-    const parameters = sweep.parameters as SweepParameter[];
+    const parameters = parseStoredSweepParameters(sweep.parameters);
     const baseDef = version.definition as StrategyDefinition;
-    const combinations = generateCombinations(parameters, MAX_COMBINATIONS);
+    const combinations = generateCombinations(parameters, MAX_SWEEP_COMBINATIONS);
     // Invalid parameter paths throw here, before any backtest runs.
     const definitions = combinations.map((combo) => applyParameters(baseDef, parameters, combo));
 
@@ -70,6 +74,7 @@ export async function runSweepJob(sweepId: string, ctx: JobContext): Promise<voi
           winRate: finite(m.winRate, 6),
           profitFactor: m.profitFactor == null ? null : m.profitFactor.toFixed(4),
           tradeCount: backtest.tradeCount,
+          costDragPercent: finite(backtest.costDragPercent ?? 0, 4),
         },
       });
 

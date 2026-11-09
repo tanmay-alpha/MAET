@@ -62,4 +62,19 @@ describe("evaluate", () => {
       ),
     ).toBe(true);
   });
+
+  it("price and volume come from the tick", () => {
+    expect(evaluate({ field: "price", op: "gt", value: 99 }, { tick })).toBe(true);
+    expect(evaluate({ field: "price", op: "gt", value: 100 }, { tick })).toBe(false);
+    expect(evaluate({ field: "volume", op: "between", value: [1, 5] }, { tick })).toBe(true);
+  });
+
+  it("macd is the latest MACD line of the candle closes", () => {
+    const rising = Array.from({ length: 40 }, (_, i) => ({ close: 100 + i }));
+    const falling = Array.from({ length: 40 }, (_, i) => ({ close: 200 - i }));
+    expect(evaluate({ field: "macd", op: "gt", value: 0 }, { tick, candles1m: rising })).toBe(true);
+    expect(evaluate({ field: "macd", op: "lt", value: 0 }, { tick, candles1m: falling })).toBe(true);
+    // Too few closes for the slow EMA: no value, so no match.
+    expect(evaluate({ field: "macd", op: "gt", value: -1e9 }, { tick, candles1m: rising.slice(0, 10) })).toBe(false);
+  });
 });

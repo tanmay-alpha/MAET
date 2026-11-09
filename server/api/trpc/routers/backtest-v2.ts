@@ -3,13 +3,17 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
 import { backtestRuns, backtestPresets, candles } from "../../../db/schema";
-import { eq, and, desc, asc, gte, lte, sql } from "drizzle-orm";
+import { eq, and, desc, asc, gte, lte, inArray } from "drizzle-orm";
 import { runBacktestV3, InsufficientHistoryV3Error } from "../../../domain/strategy/runner-v3";
 import { presetToV3Definition } from "../../../domain/backtest/preset-to-v3-adapter";
 import { StrategyTypeSchema } from "../../../modules/backtest/contracts";
-import type { Candle } from "@shared/types";
+import { CandleSchema, type Candle } from "@shared/types";
 
 export const MAX_BACKTEST_CANDLES = parseInt(process.env.MAX_BACKTEST_CANDLES || "50000", 10);
+// Backtests run synchronously in the request; indicator cost scales with candles × period.
+const MAX_INDICATOR_PERIOD = 500;
+const MAX_COMBINED_RULES = 10;
+const PeriodSchema = z.number().int().positive().max(MAX_INDICATOR_PERIOD).optional();
 
 const StrictRiskSchema = z.object({
   initialCapital: z.number().positive().default(100000),
@@ -24,27 +28,27 @@ const StrictRiskSchema = z.object({
 
 const StrictStrategySchema = z.object({
   type: StrategyTypeSchema,
-  fastPeriod: z.number().int().positive().optional(),
-  slowPeriod: z.number().int().positive().optional(),
-  signalPeriod: z.number().int().positive().optional(),
-  rsiPeriod: z.number().int().positive().optional(),
+  fastPeriod: PeriodSchema,
+  slowPeriod: PeriodSchema,
+  signalPeriod: PeriodSchema,
+  rsiPeriod: PeriodSchema,
   rsiOversold: z.number().min(0).max(100).optional(),
   rsiOverbought: z.number().min(0).max(100).optional(),
-  donchianPeriod: z.number().int().positive().optional(),
-  bollingerPeriod: z.number().int().positive().optional(),
+  donchianPeriod: PeriodSchema,
+  bollingerPeriod: PeriodSchema,
   bollingerStdDev: z.number().positive().optional(),
   combinedRules: z.array(z.object({
     indicator: z.string(),
     op: z.string(),
     value: z.number(),
-  })).optional(),
+  })).max(MAX_COMBINED_RULES).optional(),
 });
 
 export const backtestV2Router = createRouter({
   run: protectedProcedure
     .input(z.object({
       symbol: z.string().min(1),
-      timeframe: z.string().default("1d"),
+      timeframe: CandleSchema.shape.tf.default("1d"),
       from: z.string().optional(),
       to: z.string().optional(),
       strategy: StrictStrategySchema,
@@ -270,7 +274,7 @@ export const backtestV2Router = createRouter({
       const rows = await db
         .select()
         .from(backtestRuns)
-        .where(and(eq(backtestRuns.userId, ctx.userId!), sql`${backtestRuns.id} = ANY(${input.runIds}::uuid[])`));
+        .where(and(eq(backtestRuns.userId, ctx.userId!), inArray(backtestRuns.id, input.runIds)));
       return { runs: rows };
     }),
 

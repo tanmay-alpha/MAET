@@ -5,6 +5,7 @@
 
 import { registerCalculator } from "../../engine/calculator-registry";
 import type { CalculatorInput, CalculatorOutput } from "../../engine/calculator-registry";
+import { downsideDeviation } from "../../../backtest/risk-metrics";
 
 function portfolioOutput(
   symbol: string,
@@ -75,11 +76,7 @@ registerCalculator({
 
     const excess = returns.map((r) => r - riskFreeDaily);
     const meanExcess = excess.reduce((a, b) => a + b, 0) / excess.length;
-    const downside = excess.filter((r) => r < 0);
-    const downsideVariance = downside.length > 0
-      ? downside.reduce((s, r) => s + r * r, 0) / downside.length
-      : 0;
-    const downsideStd = Math.sqrt(downsideVariance);
+    const downsideStd = downsideDeviation(returns, riskFreeDaily);
 
     const sortino = downsideStd > 0 ? (meanExcess / downsideStd) * Math.sqrt(252) : null;
     const lastDate = input.dates?.[input.dates.length - 1] ?? "";
@@ -303,5 +300,3 @@ registerCalculator({
     return portfolioOutput(input.symbol, "WIN_RATE_20D", winRate, lastDate);
   },
 });
-
-export const PORTFOLIO_CALCULATOR_COUNT = 9;

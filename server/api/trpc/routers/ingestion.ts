@@ -3,7 +3,7 @@
  * FIX 3: Replaced void fire-and-forget with try/catch, concurrency limit, and proper error reporting.
  */
 
-import { adminProcedure, createRouter, protectedProcedure } from "../core";
+import { adminProcedure, createRouter } from "../core";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db } from "../../../data/drizzle/client";
@@ -60,7 +60,7 @@ export const ingestionRouter = createRouter({
   /**
    * Get overall ingestion system status
    */
-  getStatus: protectedProcedure.query(async () => {
+  getStatus: adminProcedure.query(async () => {
     const [dlqStats, latestRuns] = await Promise.all([
       getDLQStats(),
       db

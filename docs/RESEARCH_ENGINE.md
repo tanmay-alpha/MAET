@@ -184,7 +184,7 @@ Rights issues and symbol changes are typed but not applied. A 2:1 split therefor
 | VWAP | first bar with volume | resets each IST calendar day |
 | ROC, Stochastic, average volume, rolling extremes, SuperTrend | per window | |
 
-`buildCanonicalSnapshot` builds the snapshot used by `server/modules/technical-snapshots/service.ts`. Consumers: the strategy `IndicatorStateCache` (which delegates SMA, EMA, RSI, MACD, Bollinger, ATR, VWAP and SuperTrend to canonical and keeps its own OBV and Donchian), the calculation registry, the screener, `server/domain/technical/indicators-extended.ts`, and the frontend chart (`src/components/trading/lightweight-chart.tsx`, `src/lib/technical-indicators.ts`). `tests/canonical-indicators.test.ts` checks canonical values against the strategy cache.
+`buildCanonicalSnapshot` builds the snapshot used by `server/modules/technical-snapshots/service.ts`. Consumers: the strategy `IndicatorStateCache` (which delegates SMA, EMA, RSI, MACD, Bollinger, ATR, VWAP and SuperTrend to canonical and keeps its own OBV and Donchian), the calculation registry, the screener, `server/domain/technical/indicators-extended.ts`, and the frontend chart (`src/components/trading/lightweight-chart.tsx`). `tests/canonical-indicators.test.ts` checks canonical values against the strategy cache.
 
 One adapter quirk: the Donchian preset compares the close with a channel that includes the current bar (`preset-to-v3-adapter.ts`, `indicator-state.ts`).
 
@@ -193,7 +193,7 @@ One adapter quirk: the Donchian preset compares the close with a channel that in
 | Module | Status | Evidence |
 |---|---|---|
 | `ExecutionModel` (spread models, square-root impact, participation cap) | Only called by the portfolio engine; runner-v3 charges slippage as a flat bps debit. | `server/domain/strategy/execution-model.ts`, imports in `portfolio-engine.ts` only |
-| Portfolio engine | No endpoint or worker calls it; the frontend imports only its types. | `server/domain/strategy/portfolio-engine.ts`, `src/components/strategy/portfolio-analytics-view.tsx` |
+| Portfolio engine | No endpoint, worker or frontend code calls it; only its tests do. | `server/domain/strategy/portfolio-engine.ts` |
 | Point-in-time fundamentals and universe membership | Only tests call them. | `server/domain/fundamentals/point-in-time.ts`, `point-in-time.test.ts`, `p2-research-invariants.test.ts` |
 | Corporate actions in backtests | Supported by the runner, never supplied by callers; no corporate-action ingestion. | §7 |
 | Look-ahead detector | Only tests call it. (Robustness scoring is returned by `strategyOptimisation.getSweep`.) | `look-ahead-detector.ts` |

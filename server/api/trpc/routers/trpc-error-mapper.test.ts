@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { toTrpcError } from "./paper-trading";
+import { createPaperTradingRouter, toTrpcError } from "./paper-trading";
+import type { PaperTradingService } from "../../../modules/paper-trading/service";
 import {
   PaperValidationError,
   PaperAuthenticationError,
@@ -55,5 +56,21 @@ describe("tRPC Error Mapping", () => {
     const err = toTrpcError(new Error("FATAL DB ERROR: select * from users where internal_secret = 123"));
     expect(err.code).toBe("INTERNAL_SERVER_ERROR");
     expect(err.message).toBe("Paper trading request failed");
+  });
+});
+
+describe("cancelOrder input", () => {
+  test("rejects a malformed order id with BAD_REQUEST before reaching the service", async () => {
+    let calls = 0;
+    // Only cancelOrder is reachable from this test; the rest of the service is unused.
+    const service = {
+      cancelOrder: async () => {
+        calls++;
+      },
+    } as unknown as PaperTradingService;
+    const caller = createPaperTradingRouter(service).createCaller({ userId: "user-1", email: null, role: "user" });
+
+    await expect(caller.cancelOrder({ orderId: "not-a-uuid" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(calls).toBe(0);
   });
 });

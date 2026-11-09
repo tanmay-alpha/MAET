@@ -19,25 +19,6 @@ export const OHLCVRowSchema = z.object({
   source_tag: z.string().min(1),
 });
 
-export const CompanyRowSchema = z.object({
-  symbol: z.string().min(1).max(30),
-  name: z.string().min(1),
-  isin: z.string().regex(/^[A-Z]{2}[A-Z0-9]{10}$/).optional().nullable(),
-  exchange: z.enum(["NSE", "BSE"]),
-  series: z.string().default("EQ"),
-});
-
-export const FinancialStatementRowSchema = z.object({
-  companyId: z.string().min(1),
-  periodDate: z.string().datetime({ offset: true }),
-  periodType: z.enum(["quarterly", "annual"]),
-  source: z.string().min(1),
-  revenue: z.number().finite().nullable().optional(),
-  netIncome: z.number().finite().nullable().optional(),
-  totalAssets: z.number().finite().nullable().optional(),
-  totalLiabilities: z.number().finite().nullable().optional(),
-});
-
 export const FundamentalsRowSchema = z.object({
   companyId: z.string().min(1),
   periodDate: z.string().datetime({ offset: true }),
@@ -49,8 +30,6 @@ export const FundamentalsRowSchema = z.object({
 });
 
 export type OHLCVRow = z.infer<typeof OHLCVRowSchema>;
-export type CompanyRow = z.infer<typeof CompanyRowSchema>;
-export type FinancialStatementRow = z.infer<typeof FinancialStatementRowSchema>;
 export type FundamentalsRow = z.infer<typeof FundamentalsRowSchema>;
 
 export interface ValidationResult<T> {
@@ -60,14 +39,6 @@ export interface ValidationResult<T> {
 
 export function validateOHLCVBatch(rows: unknown[]): ValidationResult<OHLCVRow> {
   return validateBatch(rows, OHLCVRowSchema);
-}
-
-export function validateCompanyBatch(rows: unknown[]): ValidationResult<CompanyRow> {
-  return validateBatch(rows, CompanyRowSchema as any);
-}
-
-export function validateFinancialsBatch(rows: unknown[]): ValidationResult<FinancialStatementRow> {
-  return validateBatch(rows, FinancialStatementRowSchema);
 }
 
 function validateBatch<T>(rows: unknown[], schema: z.ZodType<T>): ValidationResult<T> {
@@ -147,44 +118,4 @@ export function validateOHLCVRanges(rows: OHLCVRow[]): {
   }
 
   return { valid, violations };
-}
-
-// ============================================================================
-// Cross Validators
-// ============================================================================
-
-export interface CrossViolation {
-  symbol?: string;
-  type: string;
-  message: string;
-}
-
-export function validateDateContinuity(
-  rows: OHLCVRow[],
-  maxGapDays = 7
-): CrossViolation[] {
-  const violations: CrossViolation[] = [];
-  const bySymbol = new Map<string, Date[]>();
-
-  for (const row of rows) {
-    const dates = bySymbol.get(row.symbol) ?? [];
-    dates.push(new Date(row.date));
-    bySymbol.set(row.symbol, dates);
-  }
-
-  for (const [symbol, dates] of bySymbol.entries()) {
-    dates.sort((a, b) => a.getTime() - b.getTime());
-    for (let i = 1; i < dates.length; i++) {
-      const gapDays = (dates[i].getTime() - dates[i - 1].getTime()) / (1000 * 60 * 60 * 24);
-      if (gapDays > maxGapDays) {
-        violations.push({
-          symbol,
-          type: "DATE_GAP",
-          message: `Gap of ${Math.round(gapDays)} days between ${dates[i - 1].toISOString().split("T")[0]} and ${dates[i].toISOString().split("T")[0]}`,
-        });
-      }
-    }
-  }
-
-  return violations;
 }

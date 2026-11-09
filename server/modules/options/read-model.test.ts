@@ -4,8 +4,10 @@ import {
   createLatestOptionChainResponse,
   normalizePersistedOptionExpiryDate,
   normalizePersistedOptionUnderlying,
+  listPersistedOptionExpiries,
   sortPersistedOptionExpiries,
 } from "./read-model";
+import { getSqlClient } from "../../data/drizzle/client";
 
 const callWithoutQuote: OptionChainContractView = {
   contractId: "call-contract",
@@ -108,5 +110,39 @@ describe("persisted option-chain read model", () => {
       { expiryDate: "2026-08-28", contractCount: 82, latestQuoteAt: "2026-08-27T09:30:00.000Z" },
       { expiryDate: "2026-09-04", contractCount: 80, latestQuoteAt: null },
     ]);
+  });
+
+  it("counts each contract once per expiry however many quote snapshots it has", async () => {
+    if (!process.env.TEST_DATABASE_URL) {
+      console.log("  Skipping persisted expiry count test: TEST_DATABASE_URL not set");
+      return;
+    }
+    const sql = getSqlClient();
+    const underlying = `T${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`.toUpperCase();
+    const [call, put] = [crypto.randomUUID(), crypto.randomUUID()];
+    try {
+      await sql`
+        INSERT INTO public.option_contracts (id, provider, exchange, token, trading_symbol, underlying, expiry_date, strike_price, option_type, lot_size, instrument_type, is_active)
+        VALUES (${call}, 'angelone', 'NFO', ${`${underlying}-1`}, ${`${underlying}CE`}, ${underlying}, '2026-08-28', 24500, 'CE', 75, 'OPTIDX', true),
+               (${put}, 'angelone', 'NFO', ${`${underlying}-2`}, ${`${underlying}PE`}, ${underlying}, '2026-08-28', 24500, 'PE', 75, 'OPTIDX', true)
+      `;
+      await sql`
+        INSERT INTO public.option_quote_snapshots (contract_id, ltp, exchange_feed_at, source)
+        VALUES (${call}, 100, '2026-08-27T09:15:00Z', 'test'),
+               (${call}, 101, '2026-08-27T09:16:00Z', 'test'),
+               (${call}, 102, '2026-08-27T09:17:00Z', 'test'),
+               (${put}, 90, '2026-08-27T09:15:00Z', 'test')
+      `;
+      expect(await listPersistedOptionExpiries({ underlying })).toEqual([
+        { expiryDate: "2026-08-28", contractCount: 2, latestQuoteAt: "2026-08-27T09:17:00.000Z" },
+      ]);
+    } finally {
+      // Snapshots are append-only; skip the trigger for this cleanup transaction only.
+      await sql.begin(async (tx) => {
+        await tx`SET LOCAL session_replication_role = replica`;
+        await tx`DELETE FROM public.option_quote_snapshots WHERE contract_id IN (${call}, ${put})`;
+        await tx`DELETE FROM public.option_contracts WHERE id IN (${call}, ${put})`;
+      });
+    }
   });
 });

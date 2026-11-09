@@ -48,8 +48,8 @@ export const chartWorkspacesRouter = router({
         layoutType: z.enum(["SINGLE", "VERTICAL_2", "HORIZONTAL_2", "GRID_4"]),
         panes: z.array(
           z.object({
-            id: z.string().max(64).optional(),
-            paneKey: z.string().max(40).optional(),
+            id: z.string().uuid().optional(),
+            paneKey: z.string().max(30).optional(),
             symbol: z.string().min(1).max(30),
             exchange: z.string().max(10).default("NSE"),
             timeframe: z.string().max(10).default("5m"),

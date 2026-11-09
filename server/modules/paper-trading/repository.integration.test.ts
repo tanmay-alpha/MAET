@@ -3,6 +3,7 @@ import { getSqlClient, getDb } from "../../data/drizzle/client";
 import { paperAccounts, paperFills, paperLedgerEntries, paperOrders, paperPositions } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import { createPaperTradingService } from "./service";
+import { PaperValidationError } from "./errors";
 import { applyMigrations } from "../../scripts/apply-migrations";
 
 describe("Paper Trading Integration Test Suite (Database & Repository Contracts)", () => {
@@ -152,5 +153,95 @@ describe("Paper Trading Integration Test Suite (Database & Repository Contracts)
       SELECT policyname FROM pg_policies WHERE tablename = 'paper_ledger_entries'
     `;
     expect(ledgerPolicy.length).toBeGreaterThan(0);
+  });
+
+  it("7. Paginates orders, fills and ledger without duplicates or skips when rows share a timestamp", async () => {
+    const sql = getSqlClient();
+    const service = mockService();
+    const testUserId = crypto.randomUUID();
+    await createTestUser(testUserId);
+
+    // Seven rows share one microsecond timestamp (one transaction), two are later within the
+    // same millisecond, one is older: a ms-precision or timestamp-only cursor repeats or skips rows.
+    const timestamps = [
+      ...Array.from({ length: 7 }, () => "2026-01-02T03:04:05.123456Z"),
+      "2026-01-02T03:04:05.123789Z",
+      "2026-01-02T03:04:05.123789Z",
+      "2026-01-02T03:04:04.000000Z",
+    ];
+    for (const [index, ts] of timestamps.entries()) {
+      const [order] = await sql`
+        INSERT INTO public.paper_orders (user_id, symbol, side, type, qty, placed_at)
+        VALUES (${testUserId}, 'RELIANCE', 'BUY', 'MARKET', 1, ${ts}::timestamptz)
+        RETURNING id
+      `;
+      await sql`
+        INSERT INTO public.paper_fills (
+          order_id, user_id, symbol, side, quantity, reference_price, fill_price,
+          quote_source, quote_quality, quote_timestamp, quote_fingerprint,
+          execution_reason, execution_sequence, executed_at
+        ) VALUES (
+          ${order!.id}, ${testUserId}, 'RELIANCE', 'BUY', 1, 2500, 2500,
+          'angelone', 'live', ${ts}::timestamptz, ${`fp-${index}`},
+          'MARKET', 1, ${ts}::timestamptz
+        )
+      `;
+      await sql`
+        INSERT INTO public.paper_ledger_entries (
+          user_id, entry_type, amount, balance_after, source_type, source_id, created_at
+        ) VALUES (
+          ${testUserId}, 'FEE', -1, 1000000, 'TEST', ${`src-${index}`}, ${ts}::timestamptz
+        )
+      `;
+    }
+
+    async function collect(
+      list: (cursor: string | undefined) => Promise<{ ids: string[]; nextCursor: string | null }>
+    ): Promise<string[]> {
+      const ids: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 10; page++) {
+        const result = await list(cursor);
+        ids.push(...result.ids);
+        if (!result.nextCursor) return ids;
+        cursor = result.nextCursor;
+      }
+      throw new Error("pagination did not terminate");
+    }
+
+    const orderIds = await collect(async (cursor) => {
+      const page = await service.listOrders({ userId: testUserId, generation: 1, limit: 3, cursor });
+      return { ids: page.orders.map((row) => row.id), nextCursor: page.nextCursor };
+    });
+    const fillIds = await collect(async (cursor) => {
+      const page = await service.listFills({ userId: testUserId, generation: 1, limit: 3, cursor });
+      return { ids: page.fills.map((row) => row.id), nextCursor: page.nextCursor };
+    });
+    const ledgerIds = await collect(async (cursor) => {
+      const page = await service.listLedger({ userId: testUserId, generation: 1, limit: 3, cursor });
+      return { ids: page.entries.map((row) => row.id), nextCursor: page.nextCursor };
+    });
+
+    const expectedOrders = await sql`
+      SELECT id FROM public.paper_orders WHERE user_id = ${testUserId} ORDER BY placed_at DESC, id DESC
+    `;
+    const expectedFills = await sql`
+      SELECT id FROM public.paper_fills WHERE user_id = ${testUserId} ORDER BY executed_at DESC, id DESC
+    `;
+    const expectedLedger = await sql`
+      SELECT id FROM public.paper_ledger_entries WHERE user_id = ${testUserId} ORDER BY created_at DESC, id DESC
+    `;
+    expect(orderIds).toEqual(expectedOrders.map((row) => row.id));
+    expect(fillIds).toEqual(expectedFills.map((row) => row.id));
+    expect(ledgerIds).toEqual(expectedLedger.map((row) => row.id));
+    expect(new Set(orderIds).size).toBe(timestamps.length);
+    expect(new Set(fillIds).size).toBe(timestamps.length);
+    expect(new Set(ledgerIds).size).toBe(timestamps.length);
+
+    // Legacy timestamp-only cursors still resolve; garbage is a validation error.
+    const legacy = await service.listOrders({ userId: testUserId, generation: 1, cursor: "2026-01-02T03:04:04.500Z" });
+    expect(legacy.orders).toHaveLength(1);
+    await expect(service.listOrders({ userId: testUserId, generation: 1, cursor: "not a cursor" }))
+      .rejects.toBeInstanceOf(PaperValidationError);
   });
 });

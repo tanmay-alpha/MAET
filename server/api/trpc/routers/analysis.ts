@@ -9,13 +9,14 @@ import type { Candle } from "@shared/types";
 import { getStockScorecard } from "../../../modules/analysis/scorecard-service";
 import { getPeerComparison } from "../../../modules/peers/service";
 import { PeerComparisonRequestSchema } from "../../../modules/peers/contracts";
+import { marketSymbolSchema } from "./market";
 
 // Fallback helper to fetch candles from Yahoo Finance
 async function fetchYahooCandles(symbol: string): Promise<Candle[]> {
   try {
     const nsSymbol = symbol.toUpperCase().endsWith(".NS") ? symbol.toUpperCase() : `${symbol.toUpperCase()}.NS`;
     const response = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${nsSymbol}?interval=1d&range=1y`,
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(nsSymbol)}?interval=1d&range=1y`,
       {
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; MAET/1.0)',
@@ -33,7 +34,6 @@ async function fetchYahooCandles(symbol: string): Promise<Candle[]> {
 
     const timestamps = result.timestamp || [];
     const indicators = result.indicators?.quote?.[0] || {};
-    const adjClose = result.indicators?.adjclose?.[0]?.adjclose || [];
 
     const fetchedCandles: Candle[] = [];
 
@@ -41,7 +41,9 @@ async function fetchYahooCandles(symbol: string): Promise<Candle[]> {
       const openVal = indicators.open?.[i];
       const highVal = indicators.high?.[i];
       const lowVal = indicators.low?.[i];
-      const closeVal = adjClose[i] || indicators.close?.[i];
+      // Unadjusted close keeps stored candles consistent with the unadjusted
+      // open/high/low (close always within [low, high]).
+      const closeVal = indicators.close?.[i];
       const volVal = indicators.volume?.[i];
 
       if (
@@ -97,7 +99,7 @@ export const analysisRouter = createRouter({
   // Get advanced technical analysis containing 100+ indicators
   getTechnicalAnalysis: protectedProcedure
     .input(z.object({
-      symbol: z.string().min(1),
+      symbol: marketSymbolSchema,
     }))
     .query(async ({ input }) => {
       const symbol = input.symbol.toUpperCase();

@@ -201,7 +201,6 @@ export const StrategyDefinitionSchema = z.object({
 // ============================================================
 
 export const DeploymentModeSchema = z.enum(["OFF", "ALERT_ONLY", "MANUAL_CONFIRM", "AUTO_PAPER"]);
-export const DeploymentStatusSchema = z.enum(["DRAFT", "ACTIVE", "PAUSED", "STOPPED", "ERROR"]);
 
 export const DeploymentRiskLimitsSchema = z.object({
   maximumOpenPositions: z.number().int().min(1).max(MAX_OPEN_POSITIONS).optional(),
@@ -215,10 +214,6 @@ export const DeploymentRiskLimitsSchema = z.object({
 // ============================================================
 // Job / backtest run schemas
 // ============================================================
-
-export const BacktestJobStatusSchema = z.enum([
-  "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED",
-]);
 
 /** Path segments that reach object machinery (prototype pollution) or an array's length. */
 export const FORBIDDEN_SWEEP_PATH_SEGMENTS: readonly string[] = ["__proto__", "constructor", "prototype", "length"];
@@ -235,14 +230,3 @@ export const SweepParameterSchema = z.object({
 });
 
 export const WalkForwardModeSchema = z.enum(["ANCHORED", "ROLLING"]);
-
-export const SignalEventTypeSchema = z.enum([
-  "ENTRY_LONG", "ENTRY_SHORT", "EXIT_LONG", "EXIT_SHORT", "STOP_HIT", "TARGET_HIT",
-]);
-
-export const ExecutionDecisionSchema = z.enum([
-  "ORDER_CREATED", "PROPOSAL_CREATED", "ALERT_ONLY",
-  "REJECTED_RISK", "REJECTED_DATA", "REJECTED_ACCOUNT",
-  "REJECTED_DUPLICATE", "REJECTED_MARKET_STATE",
-  "DEPLOYMENT_PAUSED",
-]);
