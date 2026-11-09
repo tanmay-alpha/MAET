@@ -41,31 +41,33 @@ export class ChartWorkspaceRepository {
     };
   }
 
+  /** Workspace and its default pane commit together; a workspace never exists without a pane. */
   async createWorkspace(userId: string, input: { name: string; layoutType?: string; activeSymbol?: string }) {
-    const [created] = await db
-      .insert(chartWorkspaces)
-      .values({
+    return db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(chartWorkspaces)
+        .values({
+          userId,
+          name: input.name,
+          layoutType: input.layoutType || "SINGLE",
+          activeSymbol: input.activeSymbol || "RELIANCE",
+          activeExchange: "NSE",
+        })
+        .returning();
+
+      await tx.insert(chartPanes).values({
+        workspaceId: created.id,
         userId,
-        name: input.name,
-        layoutType: input.layoutType || "SINGLE",
-        activeSymbol: input.activeSymbol || "RELIANCE",
-        activeExchange: "NSE",
-      })
-      .returning();
+        paneKey: "pane-1",
+        symbol: created.activeSymbol,
+        exchange: "NSE",
+        timeframe: "5m",
+        chartType: "CANDLE",
+        position: 0,
+      });
 
-    // Default pane
-    await db.insert(chartPanes).values({
-      workspaceId: created.id,
-      userId,
-      paneKey: "pane-1",
-      symbol: created.activeSymbol,
-      exchange: "NSE",
-      timeframe: "5m",
-      chartType: "CANDLE",
-      position: 0,
+      return created;
     });
-
-    return created;
   }
 
   async saveLayout(userId: string, workspaceId: string, layoutType: string, panes: any[]) {
