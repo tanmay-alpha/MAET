@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { Tick } from "@shared/types";
-import { createExecutionQuoteLoader } from "./execution-quote";
+import { createExecutionQuoteLoader, createLiveMarkSource } from "./execution-quote";
 
 function tick(overrides: Partial<Tick> = {}): Tick {
   return {
@@ -58,5 +58,20 @@ describe("execution quote loader", () => {
     const { load, fallbackCalls } = loaderWith(tick({ source: "yahoo", quality: "delayed" }));
     await load("NSE", "RELIANCE");
     expect(fallbackCalls).toEqual(["RELIANCE"]);
+  });
+});
+
+describe("live mark source for the margin check", () => {
+  it("marks at a fresh live tick on the position's exchange", () => {
+    expect(createLiveMarkSource(() => tick({ price: 800 }))("NSE", "RELIANCE")).toBe(800);
+  });
+
+  it("has no mark for a missing, stale, delayed or other-exchange tick", () => {
+    const stale = tick({ ts: new Date(Date.now() - 60_000).toISOString() });
+    const delayed = tick({ source: "yahoo", quality: "delayed" });
+    for (const latest of [undefined, stale, delayed]) {
+      expect(createLiveMarkSource(() => latest)("NSE", "RELIANCE")).toBeUndefined();
+    }
+    expect(createLiveMarkSource(() => tick())("BSE", "RELIANCE")).toBeUndefined();
   });
 });

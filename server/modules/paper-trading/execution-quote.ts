@@ -1,7 +1,7 @@
 import { loadQuote } from "../../domain/market/quote-service";
 import { quoteStore } from "../../domain/market/quote-store";
 import { evaluateExecutionQuote, type Tick } from "@shared/types/market";
-import { paperExecutionPolicy } from "./fill-writer";
+import { paperExecutionPolicy, type MarkPriceSource } from "./fill-writer";
 
 export type ExecutionQuoteLoader = (exchange: "NSE" | "BSE", symbol: string) => Promise<unknown>;
 
@@ -36,3 +36,20 @@ export const loadExecutionQuote = createExecutionQuoteLoader({
   latestTick: (symbol) => quoteStore.get(symbol),
   fallback: (symbol) => loadQuote(symbol),
 });
+
+/**
+ * Mark for a held position: the latest streamed tick's price while that tick is on the
+ * position's exchange and still executable under the paper quote policy. A stale, delayed or
+ * foreign-exchange tick is no mark, so the margin check falls back to the conservative
+ * last-known-loss valuation.
+ */
+export function createLiveMarkSource(latestTick: (symbol: string) => Tick | undefined): MarkPriceSource {
+  return (exchange, symbol) => {
+    const tick = latestTick(symbol);
+    return tick && tick.exchange === exchange && evaluateExecutionQuote(tick, symbol, paperExecutionPolicy()).executable
+      ? tick.price
+      : undefined;
+  };
+}
+
+export const liveMarkPrice = createLiveMarkSource((symbol) => quoteStore.get(symbol));

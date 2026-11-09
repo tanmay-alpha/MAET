@@ -60,6 +60,29 @@ export function calculateAccountMargins(
   };
 }
 
+/**
+ * Unrealised P&L a margin decision may count for one position. The traded symbol is
+ * marked at the fill quote and any other position at its current mark. A position with no
+ * current mark keeps the loss it showed at its last known price but gets no credit for a
+ * gain: that price can be arbitrarily old, so it may hide a loss taken since and must never
+ * add buying power.
+ */
+export function marginUnrealisedPnl(
+  position: PaperPosition,
+  tradedSymbol: string,
+  quotePrice: number,
+  marks: ReadonlyMap<string, number> | undefined
+): number {
+  if (isSameSymbol(position.symbol, tradedSymbol)) {
+    return calculateMarkedUnrealisedPnl(position, quotePrice);
+  }
+  const mark = marks?.get(position.symbol);
+  if (mark !== undefined && Number.isFinite(mark) && mark > 0) {
+    return calculateMarkedUnrealisedPnl(position, mark);
+  }
+  return Math.min(0, position.unrealisedPnl);
+}
+
 export function calculateProjectedMarginAfterFill(input: {
   account: PaperAccount;
   symbol: string;
@@ -69,6 +92,8 @@ export function calculateProjectedMarginAfterFill(input: {
   fees: number;
   projectedPositions: PaperPosition[];
   leverage?: number;
+  /** Current mark price per position symbol other than the traded one (see marginUnrealisedPnl). */
+  marks?: ReadonlyMap<string, number>;
 }): ProjectedMarginResult {
   const leverage = input.leverage ?? DEFAULT_PAPER_LEVERAGE;
   if (!Number.isFinite(input.fillPrice) || input.fillPrice <= 0) {
@@ -83,12 +108,12 @@ export function calculateProjectedMarginAfterFill(input: {
 
   let totalMarkedUnrealisedPnlBefore = 0;
   for (const position of input.account.positions) {
-    totalMarkedUnrealisedPnlBefore += isSameSymbol(
-      position.symbol,
-      input.symbol
-    )
-      ? calculateMarkedUnrealisedPnl(position, input.quote.price)
-      : position.unrealisedPnl;
+    totalMarkedUnrealisedPnlBefore += marginUnrealisedPnl(
+      position,
+      input.symbol,
+      input.quote.price,
+      input.marks
+    );
   }
 
   const equityBefore =
@@ -100,12 +125,12 @@ export function calculateProjectedMarginAfterFill(input: {
 
   let projectedTotalUnrealisedPnl = 0;
   for (const position of input.projectedPositions) {
-    projectedTotalUnrealisedPnl += isSameSymbol(
-      position.symbol,
-      input.symbol
-    )
-      ? calculateMarkedUnrealisedPnl(position, input.quote.price)
-      : position.unrealisedPnl;
+    projectedTotalUnrealisedPnl += marginUnrealisedPnl(
+      position,
+      input.symbol,
+      input.quote.price,
+      input.marks
+    );
   }
 
   const equityAfter =

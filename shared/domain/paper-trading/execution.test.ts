@@ -122,6 +122,18 @@ function expectExecutionError(
   }
 }
 
+/** mulberry32: a small deterministic PRNG so sweeps are reproducible. */
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
 describe("authoritative paper execution boundary", () => {
   it("rejects synthetic quotes on a direct call", () => {
     const paperOrder = order();
@@ -463,6 +475,93 @@ describe("projected execution margin", () => {
     expect(result.account.cash).toBe(
       1_000_000 - result.fill.fees
     );
+  });
+
+  it("fills a partial close of an under-margined position (risk-reducing fills skip the margin check)", () => {
+    // Cash 18,000 against 20,000 allocated: the account is already below its margin.
+    const sell = order({ side: "SELL", quantity: 5 });
+    const result = executePaperFill(
+      request(sell, liveQuote(1000), account(sell, [position(100, 1000)], 18_000))
+    );
+    expect(result.account.positions[0].quantity).toBe(95);
+    expect(result.account.allocatedMargin).toBe(19_000);
+    expect(result.account.cash).toBe(18_000 + result.fill.realisedPnl - result.fill.fees);
+
+    // The same holds for buying back part of a short, and for a stop-loss exit that realises a loss.
+    const cover = order({ side: "BUY", quantity: 5 });
+    const covered = executePaperFill(
+      request(cover, liveQuote(1100), account(cover, [position(-100, 1000)], 1_000))
+    );
+    expect(covered.account.positions[0].quantity).toBe(-95);
+    expect(covered.fill.realisedPnl).toBeLessThan(0);
+  });
+
+  it("still checks fills that open exposure on an under-margined account", () => {
+    const add = order({ side: "BUY", quantity: 1 });
+    expectExecutionError(
+      () => executePaperFill(request(add, liveQuote(1000), account(add, [position(100, 1000)], 18_000))),
+      "INSUFFICIENT_MARGIN"
+    );
+    // Reversing through flat opens a 200-share short needing 40,000 of margin.
+    const flip = order({ side: "SELL", quantity: 300 });
+    expectExecutionError(
+      () => executePaperFill(request(flip, liveQuote(1000), account(flip, [position(100, 1000)], 18_000))),
+      "INSUFFICIENT_MARGIN"
+    );
+  });
+
+  it("never rejects a pure reduction for margin, however under-margined the account (seeded sweep)", () => {
+    const random = seededRandom(0x5eed_0001);
+    for (let trial = 0; trial < 300; trial++) {
+      const held = 1 + Math.floor(random() * 500);
+      const isLong = random() < 0.5;
+      const entry = 50 + random() * 2_000;
+      const mark = entry * (0.5 + random());
+      const cash = random() * (held * entry) * 0.2 - held * entry * 0.1;
+      const reduce = 1 + Math.floor(random() * held);
+      const exit = order({ side: isLong ? "SELL" : "BUY", quantity: reduce });
+      const result = executePaperFill(
+        request(exit, liveQuote(mark), account(exit, [position(isLong ? held : -held, entry)], cash))
+      );
+      const remaining = result.account.positions[0]?.quantity ?? 0;
+      expect(Math.abs(remaining)).toBe(held - reduce);
+      expect(result.account.allocatedMargin).toBeLessThan((held * entry) / 5);
+    }
+  });
+});
+
+describe("margin marks other positions at current prices", () => {
+  // Long TCS 100 @ 1000 last filled at 1000 (stored unrealised P&L 0); cash 100,000.
+  function heldElsewhere(storedUnrealisedPnl = 0): PaperPosition {
+    return { ...position(100, 1000, storedUnrealisedPnl), symbol: "TCS" };
+  }
+  // 350 RELIANCE @ ~1000 needs ~70,000 of margin on top of TCS's 20,000.
+  const buy = () => order({ side: "BUY", quantity: 350 });
+
+  it("counts the live loss of another position instead of its stale stored P&L", () => {
+    const paperOrder = buy();
+    const held = account(paperOrder, [heldElsewhere()], 100_000);
+    // At the stored mark equity is 100,000 and the order fits.
+    expect(() => executePaperFill({ ...request(paperOrder, liveQuote(1000), held), marks: new Map([["TCS", 1000]]) })).not.toThrow();
+    // TCS now trades at 800: equity is 80,000 and the order no longer fits.
+    expectExecutionError(
+      () => executePaperFill({ ...request(paperOrder, liveQuote(1000), held), marks: new Map([["TCS", 800]]) }),
+      "INSUFFICIENT_MARGIN"
+    );
+  });
+
+  it("credits a live gain but never a stored gain without a current mark", () => {
+    const paperOrder = order({ side: "BUY", quantity: 450 });
+    // 450 needs 90,000 + 20,000 = 110,000 of equity.
+    const held = account(paperOrder, [heldElsewhere(20_000)], 100_000);
+    expect(() => executePaperFill({ ...request(paperOrder, liveQuote(1000), held), marks: new Map([["TCS", 1200]]) })).not.toThrow();
+    expectExecutionError(() => executePaperFill(request(paperOrder, liveQuote(1000), held)), "INSUFFICIENT_MARGIN");
+  });
+
+  it("keeps a stored loss for a position without a current mark", () => {
+    const paperOrder = buy();
+    const held = account(paperOrder, [heldElsewhere(-20_000)], 100_000);
+    expectExecutionError(() => executePaperFill(request(paperOrder, liveQuote(1000), held)), "INSUFFICIENT_MARGIN");
   });
 });
 

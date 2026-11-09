@@ -34,7 +34,7 @@ The client sends an `idempotencyKey` (required by `PaperOrderCommandSchema`). Un
 
 ### 6. How does a resting LIMIT order get filled?
 
-Every executable tick on the in-process bus goes to `PaperTradingTickProcessor.processTick`. It triggers stops (`price <= stop` for SELL, `>= stop` for BUY), checks LIMIT marketability, and fills at most `max(1, floor(10% of the volume traded since the previous tick))` per tick, so large orders fill gradually. The fill price is the tick price plus tiered slippage, capped at the limit. A business rejection such as insufficient margin leaves the order working. Files: `server/workers/order-matcher.ts`, `tick-processor.ts`, `volume-tracker.ts`, `shared/domain/paper-trading/execution.ts`.
+Every executable tick on the in-process bus goes to `PaperTradingTickProcessor.processTick`. It triggers stops (`price <= stop` for SELL, `>= stop` for BUY), checks LIMIT marketability, and fills at most `max(1, floor(10% of the volume traded since the previous tick))` per tick, so large orders fill gradually; a tick on which nothing traded (or an instrument's first tick, which has no baseline) fills nothing. The fill price is the tick price plus tiered slippage, capped at the limit. A business rejection such as insufficient margin leaves the order working. Files: `server/workers/order-matcher.ts`, `tick-processor.ts`, `volume-tracker.ts`, `shared/domain/paper-trading/execution.ts`.
 
 ### 7. How do brackets and OCO work?
 
@@ -42,7 +42,7 @@ Take-profit and stop-loss exits are created on the entry's first fill, sized to 
 
 ### 8. How does margin and liquidation work?
 
-Leverage is 5: allocated margin is $\sum |q|\bar p / 5$ and maintenance margin is 80% of that. A fill is refused if projected allocated margin would exceed projected equity (cash plus unrealised P&L). Every 2 s the risk monitor passes the latest executable prices to the SQL function `calculate_live_margin`, which returns accounts whose equity is below maintenance. The liquidation service re-checks under the account lock, sets `LIQUIDATION_PENDING`, cancels working orders and closes every position that has an executable quote; once flat the account is `LIQUIDATED`. If prices recover first, it releases the account. Files: `shared/domain/paper-trading/margin.ts`, `risk-monitor.ts`, `liquidation-service.ts`, migration `0023`.
+Leverage is 5: allocated margin is $\sum |q|\bar p / 5$ and maintenance margin is 80% of that. A fill is refused if projected allocated margin would exceed projected equity (cash plus unrealised P&L, with every position at its live mark; a position without one counts its last known loss but no gain). A fill that only reduces a position and frees margin is never refused, so stops and exits still work on an under-margined account. Every 2 s the risk monitor passes the latest executable prices to the SQL function `calculate_live_margin`, which returns accounts whose equity is below maintenance. The liquidation service re-checks under the account lock, sets `LIQUIDATION_PENDING`, cancels working orders and closes every position that has an executable quote; once flat the account is `LIQUIDATED`. If prices recover first, it releases the account. Files: `shared/domain/paper-trading/margin.ts`, `risk-monitor.ts`, `liquidation-service.ts`, migration `0023`.
 
 ### 9. How do you keep the books consistent?
 
