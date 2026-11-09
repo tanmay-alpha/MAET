@@ -7,6 +7,10 @@
 # leaving maet-pi.vercel.app on an older commit. Production always builds; a
 # preview builds only when an input of the frontend bundle changed.
 #
+# Wired through the Vercel project setting "Ignored Build Step"
+# (commandForIgnoringBuildStep = "bash scripts/vercel-ignore-build.sh"), not a
+# vercel.json: a vercel.json in the project root directory (src/) changed how
+# Vercel packaged the SSR function and every page answered 500.
 # Runs with the project root directory (src/) as cwd. Any git failure (for
 # example a previous SHA missing from the shallow clone) falls through to a build.
 set -u
