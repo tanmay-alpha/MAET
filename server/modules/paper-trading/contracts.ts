@@ -26,7 +26,7 @@ export type PaperOutboxEventRow = typeof paperOutboxEvents.$inferSelect;
 export type NewPaperOutboxEventRow = typeof paperOutboxEvents.$inferInsert;
 
 import { z } from "zod";
-import { MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol";
+import { MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol-pattern";
 
 /** Longest accepted order symbol (other symbol columns are varchar(30)); the service also checks the symbol master. */
 export const MAX_PAPER_SYMBOL_LENGTH = 30;
