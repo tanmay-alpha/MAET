@@ -296,7 +296,7 @@ The account `generation` implements reset: every query filters by it, and a rese
 
 ## 5. Deployment and CI
 
-- **Backend.** `render.yaml`: build `cd .. && bun install && cd server && bun run build`, start `node .output/server/index.mjs`, Node 20, health check `/api/health`; build filter covers `server/**`, `shared/**`, `package.json`, `bun.lock`, `render.yaml`, `tsconfig.json`.
+- **Backend.** `render.yaml`: build `cd .. && bun install && cd server && bun run build`, start `node .output/server/index.mjs`, Node 22 (CI boots the built bundle on Node 22), liveness `/api/health`; build filter covers `server/**`, `shared/**`, `package.json`, `bun.lock`, `render.yaml`, `tsconfig.json`.
 - **Frontend.** `vercel.json` with `bun run build`; security headers (`X-Frame-Options: DENY`, `nosniff`, CSP `frame-ancestors 'none'`) are set in `src/vite.config.ts`.
 - **CI** (`.github/workflows/ci.yml`, Bun 1.3.14, frozen lockfile): `validate` runs typecheck, lint, `check:test-wiring` and `test:unit`; `paper-trading-integration`, `paper-trading-concurrency` and `advanced-features` each run against a `postgres:16` service with `NODE_ENV=test`, `BUN_TEST=1`; frontend and backend builds depend on all four. The paper integration suites migrate their database themselves (`applyMigrations` imported in `server/modules/paper-trading/engine-integrity.integration.test.ts`); `test:advanced` starts with `test:db-migrate` (`package.json`).
 - **Deploy verification.** `.github/workflows/deploy-render.yml` does not deploy; after a push it builds the backend and polls production `/api/health` for up to 15 minutes until it reports the pushed commit SHA with `status: "ok"`.
