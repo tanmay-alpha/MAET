@@ -1,0 +1,47 @@
+name: Verify Vercel Production
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vercel-production
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify maet-pi.vercel.app serves this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # Vercel builds production from its Git integration; this job only proves the
+      # production alias ends up serving this exact commit. Every response carries
+      # `x-maet-build: <commit sha>` (src/vite.config.ts), so a rate-limited,
+      # failed or unpromoted build shows up as a stale revision instead of a green check.
+      - name: Wait for the production alias to serve this commit
+        shell: bash
+        run: |
+          expected_sha="$GITHUB_SHA"
+          url="https://maet-pi.vercel.app/"
+          deadline=$((SECONDS + 900))
+          observed=""
+          while (( SECONDS < deadline )); do
+            headers="$(curl --silent --show-error --head --max-time 15 "$url" || true)"
+            status="$(printf '%s\n' "$headers" | awk 'toupper($1) ~ /^HTTP/ {code=$2} END {print code}')"
+            observed="$(printf '%s\n' "$headers" | tr -d '\r' | awk -F': ' 'tolower($1) == "x-maet-build" {print $2}' | tail -n 1)"
+            if [[ "$status" == "200" && "$observed" == "$expected_sha" ]]; then
+              echo "Vercel production verified: revision=${expected_sha:0:7}"
+              exit 0
+            fi
+            echo "Production alias not on this commit yet: HTTP ${status:-none} build=${observed:-none}"
+            sleep 15
+          done
+          echo "Vercel production verification timed out"
+          echo "expected_sha=$expected_sha"
+          echo "last_observed_build=${observed:-unavailable}"
+          exit 1
