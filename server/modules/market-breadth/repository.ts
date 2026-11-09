@@ -1,6 +1,6 @@
 import { db } from "../../data/drizzle/client";
 import { companies, quoteSnapshots, candles } from "../../db/schema";
-import { eq, desc, and, ne, inArray, gte } from "drizzle-orm";
+import { eq, desc, and, ne, inArray, sql } from "drizzle-orm";
 
 /** Longest lookback the breadth metrics use (SMA 200). */
 const BREADTH_LOOKBACK_SESSIONS = 200;
@@ -149,44 +149,41 @@ export async function fetchMarketQuotesWithFundamentals(universe = "ALL_NSE"): P
     ? Number((companiesWithUsableQuote / eligibleCompanies).toFixed(4))
     : 0;
 
-  // 4. Batch fetch recent daily candles for usable symbols to calculate true 20d high/low and SMAs
+  // 4. Trailing 20d high/low and 20/50/200-session SMAs, aggregated in Postgres: one row per
+  // symbol instead of up to ~250 candles per symbol across the whole universe in process memory.
   const candlesSince = new Date(Date.now() - BREADTH_LOOKBACK_CALENDAR_DAYS * 24 * 60 * 60 * 1000);
   const usableSymbols = usableCompanies.map((u) => u.company.symbol);
-  const candleRows = usableSymbols.length > 0
-    ? await db
-        .select({
-          symbol: candles.symbol,
-          high: candles.high,
-          low: candles.low,
-          close: candles.close,
-          ts: candles.ts,
-        })
-        .from(candles)
-        .where(
-          and(
-            inArray(candles.symbol, usableSymbols),
-            eq(candles.timeframe, "1d"),
-            gte(candles.ts, candlesSince)
-          )
+  const statRows = usableSymbols.length > 0
+    ? await db.execute<{
+        symbol: string;
+        sessions: number;
+        high20: string | null;
+        low20: string | null;
+        sma20: string | null;
+        sma50: string | null;
+        sma200: string | null;
+      }>(sql`
+        WITH ranked AS (
+          SELECT ${candles.symbol} AS symbol, ${candles.high} AS high, ${candles.low} AS low, ${candles.close} AS close,
+                 row_number() OVER (PARTITION BY ${candles.symbol} ORDER BY ${candles.ts} DESC) AS rn
+          FROM ${candles}
+          WHERE ${inArray(candles.symbol, usableSymbols)}
+            AND ${candles.timeframe} = '1d'
+            AND ${candles.ts} >= ${candlesSince.toISOString()}::timestamptz
         )
-        .orderBy(desc(candles.ts))
+        SELECT symbol,
+               count(*)::int AS sessions,
+               max(high) FILTER (WHERE rn <= 20) AS high20,
+               min(low) FILTER (WHERE rn <= 20) AS low20,
+               avg(close) FILTER (WHERE rn <= 20) AS sma20,
+               avg(close) FILTER (WHERE rn <= 50) AS sma50,
+               avg(close) FILTER (WHERE rn <= 200) AS sma200
+        FROM ranked
+        WHERE rn <= ${BREADTH_LOOKBACK_SESSIONS}
+        GROUP BY symbol
+      `)
     : [];
-
-  const candlesBySymbol = new Map<string, Array<{ high: number; low: number; close: number }>>();
-  for (const c of candleRows) {
-    let arr = candlesBySymbol.get(c.symbol);
-    if (!arr) {
-      arr = [];
-      candlesBySymbol.set(c.symbol, arr);
-    }
-    if (arr.length < BREADTH_LOOKBACK_SESSIONS) {
-      arr.push({
-        high: Number(c.high),
-        low: Number(c.low),
-        close: Number(c.close),
-      });
-    }
-  }
+  const statsBySymbol = new Map(Array.from(statRows, (row) => [row.symbol, row]));
 
   let eligible20dSessions = 0;
   let sma20Eligible = 0;
@@ -196,32 +193,31 @@ export async function fetchMarketQuotesWithFundamentals(universe = "ALL_NSE"): P
   const verifiedList: VerifiedQuoteData[] = [];
 
   for (const { company, quote } of usableCompanies) {
-    const symCandles = candlesBySymbol.get(company.symbol) ?? [];
+    const stats = statsBySymbol.get(company.symbol);
+    const sessions = stats?.sessions ?? 0;
     let high20d: number | undefined;
     let low20d: number | undefined;
     let sma20: number | undefined;
     let sma50: number | undefined;
     let sma200: number | undefined;
 
-    // True trailing 20 daily sessions
-    if (symCandles.length >= 20) {
+    // A statistic needs its full window of trailing daily sessions.
+    if (stats && sessions >= 20) {
       eligible20dSessions++;
-      const first20 = symCandles.slice(0, 20);
-      high20d = Math.max(...first20.map((c) => c.high));
-      low20d = Math.min(...first20.map((c) => c.low));
-
       sma20Eligible++;
-      sma20 = first20.reduce((sum, c) => sum + c.close, 0) / 20;
+      high20d = Number(stats.high20);
+      low20d = Number(stats.low20);
+      sma20 = Number(stats.sma20);
     }
 
-    if (symCandles.length >= 50) {
+    if (stats && sessions >= 50) {
       sma50Eligible++;
-      sma50 = symCandles.slice(0, 50).reduce((sum, c) => sum + c.close, 0) / 50;
+      sma50 = Number(stats.sma50);
     }
 
-    if (symCandles.length >= 200) {
+    if (stats && sessions >= 200) {
       sma200Eligible++;
-      sma200 = symCandles.slice(0, 200).reduce((sum, c) => sum + c.close, 0) / 200;
+      sma200 = Number(stats.sma200);
     }
 
     const mCap = company.marketCap ? Number(company.marketCap) : undefined;
