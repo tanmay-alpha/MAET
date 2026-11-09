@@ -23,10 +23,13 @@ const nitroPreset = process.env.MAET_NITRO_PRESET ?? "vercel";
 
 // Framing and MIME-sniffing protections only work as HTTP headers (a <meta> tag is
 // ignored), and Vercel ignores vercel.json `headers` for Build Output API deployments.
-const SECURITY_HEADERS = {
+// `x-maet-build` names the commit a deployment was built from, so release checks can
+// prove which revision an alias serves instead of trusting the dashboard.
+const RESPONSE_HEADERS = {
   "x-frame-options": "DENY",
   "x-content-type-options": "nosniff",
   "content-security-policy": "frame-ancestors 'none'",
+  "x-maet-build": process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.GIT_SHA ?? "local",
 };
 
 export default defineConfig({
@@ -80,8 +83,8 @@ export default defineConfig({
       // keep pages from reaching the SSR function. On Vercel, declare the route with
       // `continue`; other presets (the node-server preview) apply the route rule at runtime.
       ...(nitroPreset === "vercel"
-        ? { vercel: { config: { routes: [{ src: "/(.*)", headers: SECURITY_HEADERS, continue: true }] } } }
-        : { routeRules: { "/**": { headers: SECURITY_HEADERS } } }),
+        ? { vercel: { config: { routes: [{ src: "/(.*)", headers: RESPONSE_HEADERS, continue: true }] } } }
+        : { routeRules: { "/**": { headers: RESPONSE_HEADERS } } }),
     } as any),
     {
       name: "force-virtual-client-entry-and-aliases",

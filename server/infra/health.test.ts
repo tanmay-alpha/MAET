@@ -1,10 +1,11 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { createApp, toWebHandler, type EventHandler } from "h3";
 import healthRoute, { createHealthRoute } from "../api/health.get";
+import { createReadyRoute } from "../api/ready.get";
 import { closeDb, resetDb } from "../data/drizzle/client";
 import { DatabaseCircuitBreaker, resetDatabaseBreakerForTests } from "../data/drizzle/availability";
 import { closeRedis } from "../data/redis/client";
-import { createHealthChecker } from "./health";
+import { createHealthChecker, type HealthChecker } from "./health";
 
 function fetchHealth(handler: EventHandler) {
   const app = createApp();
@@ -150,5 +151,37 @@ describe("GET /api/health", () => {
 
     expect(body.checks.database).toBe(false);
     expect(breaker.state()).toBe("closed");
+  });
+});
+
+describe("GET /api/ready", () => {
+  const fetchReady = (checker: HealthChecker) => {
+    const app = createApp();
+    app.use("/api/ready", createReadyRoute(checker));
+    return toWebHandler(app)(new Request("http://localhost/api/ready"));
+  };
+
+  it("answers 503 and names the failing dependency while liveness stays 200", async () => {
+    const failing = async () => {
+      throw new Error("tenant/user not found");
+    };
+    const checker = createHealthChecker({ probes: { database: failing, redis: healthy } });
+
+    const ready = await fetchReady(checker);
+    expect(ready.status).toBe(503);
+    expect((await ready.json()).checks.database).toBe(false);
+    expect((await fetchHealth(createHealthRoute(checker))).status).toBe(200);
+  });
+
+  it("treats an unreachable Redis as not ready", async () => {
+    const checker = createHealthChecker({ probes: { database: healthy, redis: () => Promise.reject(new Error("ENOTFOUND")) } });
+    expect((await fetchReady(checker)).status).toBe(503);
+  });
+
+  it("answers 200 when every dependency is reachable", async () => {
+    const checker = createHealthChecker({ probes: { database: healthy, redis: healthy } });
+    const res = await fetchReady(checker);
+    expect(res.status).toBe(200);
+    expect((await res.json()).status).toBe("ok");
   });
 });
