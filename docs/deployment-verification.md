@@ -28,7 +28,7 @@ Manual/full: `bun run scripts/smoke-deploy.ts --sha <commit>` checks both tiers 
 
 ## Vercel preview quota
 
-Vercel project setting **Ignored Build Step** = `bash scripts/vercel-ignore-build.sh` (set via the Vercel API on 2026-11-10).
+Vercel project setting **Ignored Build Step** = `if [ -f scripts/vercel-ignore-build.sh ]; then bash scripts/vercel-ignore-build.sh; else exit 1; fi` (set via the Vercel API on 2026-11-10). Vercel treats any exit code other than 0/1 as a failed deployment, so a branch created before the script existed (exit 127) failed its preview until the guard was added.
 Production always builds; previews build only if `src/`, `shared/`, `package.json`, `bun.lock` or `tsconfig.json`
 changed since the branch's previous deployment. A `src/vercel.json` was tried first and broke SSR packaging
 (every page 500, `ERR_PACKAGE_IMPORT_NOT_DEFINED #tanstack-router-entry`); it was removed before merge.
@@ -63,7 +63,9 @@ free-tier resources and is an owner action. After the owner provisions them:
 | 2026-11-09 18:46 | `/api/health` on `49dcad5`: degraded, database=false, redis=false, circuit open | `curl` |
 | 2026-11-09 18:46 | `PostgresError (ENOTFOUND) tenant/user postgres.ztpbfmpfgmgmsitshzma not found` every 10 s | Render logs API |
 | 2026-11-06 → 11-09 | `getaddrinfo ENOTFOUND immense-swift-134371.upstash.io` | Render logs API |
-| 2026-11-06 22:40, 23:13, 23:18 | `TypeError: Promise.withResolvers is not a function` | Render logs API |
+| 2026-11-06 22:40, 23:13, 23:18; 2026-11-09 19:12, 19:14 | `TypeError: Promise.withResolvers is not a function` on Node 20 (traced to `timerDeadline` during graceful shutdown) | Render logs API |
+| 2026-11-09 19:12:45 | Build for `dcfdda8`: `Using Node.js version 22.23.4` | Render logs API |
+| 2026-11-09 19:18 | `/api/ready` on `dcfdda8`: HTTP 503, database=false, redis=false (OPS-1); `maet-pi.vercel.app` `x-maet-build: dcfdda8…`; `Verify Vercel Production` succeeded for `dcfdda8` | `curl`, GitHub Actions |
 | 2026-11-06 | Vercel status on `f535d0a`: `Deployment rate limited — retry in 24 hours` | GitHub commit statuses |
 | 2026-11-09 18:47 | `maet-pi.vercel.app` → `dpl_6vDkwVL6…`, commit `49dcad5` (synced) | Vercel API |
 | 2026-11-09 19:07 | Preview with `src/vercel.json` → HTTP 500 on `/`; fixed preview `b33f1e5` → 200, `x-maet-build: b33f1e5…` | `vercel curl`, runtime logs |
