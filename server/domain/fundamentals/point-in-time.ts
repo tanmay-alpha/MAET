@@ -37,8 +37,13 @@ export interface PointInTimeFundamental {
   symbol: string;
   periodEnd: string | Date;
   periodType: "quarterly" | "annual";
-  filingDate: string | Date;
-  availableFrom: string | Date;
+  /** Public filing date; null when the source did not record it. Informational only. */
+  filingDate: string | Date | null;
+  /**
+   * When the statement became public; the only field visibility is decided on. null, missing or
+   * unparseable means the availability is unknown and the row is never visible.
+   */
+  availableFrom: string | Date | null;
   ingestedAt?: string | Date;
   revision: number;
   metrics: PointInTimeFundamentalMetrics;
@@ -64,7 +69,9 @@ export interface UniverseAuditResult {
 /**
  * Retrieves the point-in-time state of fundamentals as of timestamp T.
  * Strict Invariants:
- * 1. Only statements with availableFrom <= asOf are visible.
+ * 1. Only statements with a known availableFrom <= asOf are visible. A row whose availableFrom is
+ *    null, missing or unparseable is never visible: `new Date(null)` is the 1970 epoch, which would
+ *    otherwise make it visible from the start of any backtest. No lag from periodEnd is assumed.
  * 2. For restatements / multiple revisions of the same period, only the latest revision
  *    satisfying availableFrom <= asOf is used.
  * 3. Returns a map keyed by symbol (or companyId) containing only valid point-in-time values.
@@ -76,8 +83,8 @@ export function getPointInTimeFundamentals(
   const asOfMs = new Date(asOf).getTime();
   const resultMap = new Map<string, PointInTimeFundamental>();
 
-  // Filter only records that were available on or before asOf timestamp
-  const visible = records.filter((r) => new Date(r.availableFrom).getTime() <= asOfMs);
+  // Filter only records with a known availability on or before asOf
+  const visible = records.filter((r) => availableFromMs(r) <= asOfMs);
 
   // Group by symbol + periodEnd + periodType to find the latest valid revision for each period
   const periodMap = new Map<string, PointInTimeFundamental>();
@@ -92,8 +99,7 @@ export function getPointInTimeFundamentals(
       // Pick higher revision, or if same revision pick latest availableFrom
       if (
         r.revision > existing.revision ||
-        (r.revision === existing.revision &&
-          new Date(r.availableFrom).getTime() > new Date(existing.availableFrom).getTime())
+        (r.revision === existing.revision && availableFromMs(r) > availableFromMs(existing))
       ) {
         periodMap.set(periodKey, r);
       }
@@ -115,6 +121,11 @@ export function getPointInTimeFundamentals(
   }
 
   return resultMap;
+}
+
+/** availableFrom in epoch ms; NaN (compares false with everything) when unknown. */
+function availableFromMs(record: PointInTimeFundamental): number {
+  return record.availableFrom == null ? NaN : new Date(record.availableFrom).getTime();
 }
 
 /**
