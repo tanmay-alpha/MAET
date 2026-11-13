@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { ExecutionQuote } from "../../types/market";
 import { reconcilePosition } from "./reconcile-position";
-import { calculateProjectedMarginAfterFill } from "./margin";
+import { calculateMarkedUnrealisedPnl, calculateProjectedMarginAfterFill } from "./margin";
 import type {
   PaperAccount,
   PaperPosition,
@@ -190,5 +190,16 @@ describe("projected post-trade margin", () => {
     expect(result.equityAfter).toBe(99_988);
     expect(result.allocatedMarginAfter).toBe(2002);
     expect(result.freeMarginAfter).toBe(97_986);
+  });
+});
+
+describe("signed-position mark-to-market P&L", () => {
+  it("mirrors long and short results rather than reversing short profit", () => {
+    const long = { quantity: 10, averagePrice: 100 };
+    const short = { quantity: -10, averagePrice: 100 };
+    expect(calculateMarkedUnrealisedPnl(long, 120)).toBe(200);
+    expect(calculateMarkedUnrealisedPnl(short, 120)).toBe(-200);
+    expect(calculateMarkedUnrealisedPnl(long, 80)).toBe(-200);
+    expect(calculateMarkedUnrealisedPnl(short, 80)).toBe(200);
   });
 });
