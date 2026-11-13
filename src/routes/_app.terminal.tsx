@@ -99,7 +99,11 @@ function Terminal() {
       const q = quoteMap.get(pos.symbol);
       const avgPrice = Number(pos.averageEntryPrice);
       const ltp = q?.price ?? avgPrice;
-      const pnl = pos.totalShares * (ltp - avgPrice);
+      // Position quantities can be positive even for SHORT rows. Match the signed
+      // calculation already used by the position table and domain margin engine.
+      const isShort = pos.side === "SHORT" || Number(pos.totalShares) < 0;
+      const quantity = (isShort ? -1 : 1) * Math.abs(Number(pos.totalShares));
+      const pnl = calculateMarkedUnrealisedPnl({ quantity, averagePrice: avgPrice }, ltp);
       unrealized += pnl;
     });
 
