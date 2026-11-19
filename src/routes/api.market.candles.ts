@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { loadMarketCandles } from "@server/domain/market/candle-service";
+import { isMarketSymbol } from "@server/domain/market/symbol-pattern";
 import type { Candle } from "@shared/types";
 
 const TIMEFRAMES: Candle["tf"][] = ["1m", "5m", "15m", "1h", "1d", "1wk"];
@@ -25,7 +26,7 @@ export const Route = createFileRoute("/api/market/candles")({
         const timeframe = (params.get("tf") ?? "1d") as Candle["tf"];
         let range = params.get("range") ?? "1mo";
 
-        if (!/^[A-Z0-9&.^-]+$/.test(symbol)) {
+        if (!isMarketSymbol(symbol)) {
           return Response.json({ message: "Invalid symbol" }, { status: 400 });
         }
         if (!TIMEFRAMES.includes(timeframe)) {
@@ -61,10 +62,9 @@ export const Route = createFileRoute("/api/market/candles")({
             }
           );
         } catch (error) {
-          return Response.json(
-            { message: error instanceof Error ? error.message : "Candle service unavailable" },
-            { status: 502 }
-          );
+          // Provider and database errors carry hostnames and upstream text: log, never return them.
+          console.error("[api/market/candles] candle load failed:", error);
+          return Response.json({ message: "Market history temporarily unavailable" }, { status: 503 });
         }
       },
     },
