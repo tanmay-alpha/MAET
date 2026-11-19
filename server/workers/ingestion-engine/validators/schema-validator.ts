@@ -1,16 +1,16 @@
 /**
- * Validators — Schema, Range, and Cross validation for ingestion data
+ * Validators — schema and range checks for ingested daily bars.
+ *
+ * A bar reaches `candles` only when it is structurally valid and internally
+ * consistent; everything else is rejected and counted, never repaired.
  */
 
 import { z } from "zod";
 
-// ============================================================================
-// Schema Validators (Zod-based per source)
-// ============================================================================
-
 export const OHLCVRowSchema = z.object({
   symbol: z.string().min(1).max(30),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** Provider bar timestamp, stored verbatim as `candles.ts`. */
+  ts: z.string().datetime({ offset: true }),
   open: z.number().finite(),
   high: z.number().finite(),
   low: z.number().finite(),
@@ -19,103 +19,64 @@ export const OHLCVRowSchema = z.object({
   source_tag: z.string().min(1),
 });
 
-export const FundamentalsRowSchema = z.object({
-  companyId: z.string().min(1),
-  periodDate: z.string().datetime({ offset: true }),
-  source: z.string().min(1),
-  peRatio: z.number().finite().nullable().optional(),
-  pbRatio: z.number().finite().nullable().optional(),
-  roe: z.number().finite().nullable().optional(),
-  marketCap: z.number().finite().min(0).nullable().optional(),
-});
-
 export type OHLCVRow = z.infer<typeof OHLCVRowSchema>;
-export type FundamentalsRow = z.infer<typeof FundamentalsRowSchema>;
 
-export interface ValidationResult<T> {
-  valid: T[];
-  invalid: Array<{ row: unknown; errors: string[] }>;
+export interface BarRejection {
+  row: unknown;
+  reasons: string[];
 }
 
-export function validateOHLCVBatch(rows: unknown[]): ValidationResult<OHLCVRow> {
-  return validateBatch(rows, OHLCVRowSchema);
-}
-
-function validateBatch<T>(rows: unknown[], schema: z.ZodType<T>): ValidationResult<T> {
-  const valid: T[] = [];
-  const invalid: Array<{ row: unknown; errors: string[] }> = [];
-
-  for (const row of rows) {
-    const result = schema.safeParse(row);
-    if (result.success) {
-      valid.push(result.data);
-    } else {
-      invalid.push({
-        row,
-        errors: result.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`),
-      });
-    }
-  }
-
-  return { valid, invalid };
-}
-
-// ============================================================================
-// Range Validators
-// ============================================================================
-
-export interface RangeViolation {
-  symbol: string;
-  field: string;
-  value: number;
-  reason: string;
-}
-
-export function validateOHLCVRanges(rows: OHLCVRow[]): {
+export interface BarValidationResult {
   valid: OHLCVRow[];
-  violations: RangeViolation[];
-} {
-  const valid: OHLCVRow[] = [];
-  const violations: RangeViolation[] = [];
+  rejected: BarRejection[];
+}
 
-  const now = new Date();
-  const minDate = new Date("1990-01-01");
+const MIN_BAR_TIME = Date.parse("1990-01-01T00:00:00Z");
+/** Sanity ceiling: the highest-priced NSE equity trades far below this. */
+const MAX_PRICE_INR = 1_000_000;
+
+/** Reasons a schema-valid bar is not a real trading bar; empty when it is. */
+export function barRangeViolations(row: OHLCVRow, now: Date): string[] {
+  const reasons: string[] = [];
+  for (const field of ["open", "high", "low", "close"] as const) {
+    if (row[field] <= 0) reasons.push(`${field} must be positive`);
+  }
+  if (row.high < row.low) reasons.push("high must be >= low");
+  if (row.open < row.low || row.open > row.high) reasons.push("open must lie within [low, high]");
+  if (row.close < row.low || row.close > row.high) reasons.push("close must lie within [low, high]");
+  if (row.high > MAX_PRICE_INR) reasons.push(`high exceeds ${MAX_PRICE_INR} INR`);
+  const time = Date.parse(row.ts);
+  if (time < MIN_BAR_TIME || time > now.getTime()) reasons.push("ts out of valid range");
+  return reasons;
+}
+
+/**
+ * Split raw rows into bars safe to upsert and rejected bars with reasons.
+ * A second bar for an already accepted (symbol, ts) is rejected: one upsert
+ * statement cannot touch the same `candles` key twice, and the provider
+ * should never send two bars for one session.
+ */
+export function validateDailyBars(rows: unknown[], now = new Date()): BarValidationResult {
+  const valid: OHLCVRow[] = [];
+  const rejected: BarRejection[] = [];
+  const seen = new Set<string>();
 
   for (const row of rows) {
-    const rowViolations: RangeViolation[] = [];
-
-    // Price must be positive
-    for (const field of ["open", "high", "low", "close"] as const) {
-      if (row[field] <= 0) {
-        rowViolations.push({ symbol: row.symbol, field, value: row[field], reason: "price must be positive" });
-      }
+    const parsed = OHLCVRowSchema.safeParse(row);
+    if (!parsed.success) {
+      rejected.push({ row, reasons: parsed.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`) });
+      continue;
     }
-
-    // OHLC consistency
-    if (row.high < row.open || row.high < row.close || row.high < row.low) {
-      rowViolations.push({ symbol: row.symbol, field: "high", value: row.high, reason: "high must be >= open/close/low" });
+    const reasons = barRangeViolations(parsed.data, now);
+    const key = `${parsed.data.symbol}|${Date.parse(parsed.data.ts)}`;
+    if (reasons.length === 0 && seen.has(key)) reasons.push("duplicate bar for symbol and ts");
+    if (reasons.length > 0) {
+      rejected.push({ row, reasons });
+      continue;
     }
-    if (row.low > row.open || row.low > row.close || row.low > row.high) {
-      rowViolations.push({ symbol: row.symbol, field: "low", value: row.low, reason: "low must be <= open/close/high" });
-    }
-
-    // Date in valid range
-    const date = new Date(row.date);
-    if (date < minDate || date > now) {
-      rowViolations.push({ symbol: row.symbol, field: "date", value: date.getTime(), reason: "date out of valid range" });
-    }
-
-    // Price sanity: reject if > 1,000,000 INR (MRF is ~150k, no stock goes higher)
-    if (row.close > 1_000_000) {
-      rowViolations.push({ symbol: row.symbol, field: "close", value: row.close, reason: "close price exceeds 1,000,000 INR" });
-    }
-
-    if (rowViolations.length === 0) {
-      valid.push(row);
-    } else {
-      violations.push(...rowViolations);
-    }
+    seen.add(key);
+    valid.push(parsed.data);
   }
 
-  return { valid, violations };
+  return { valid, rejected };
 }

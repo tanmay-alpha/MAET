@@ -1,9 +1,9 @@
 /**
- * Write Coordinator — Fan-out: one validated record → Supabase + BigQuery in parallel
+ * Write Coordinator — Fan-out: one validated record → Postgres `candles` + BigQuery in parallel
  */
 
 import { getLogger } from "../../../infra/logger";
-import { writePriceDailyBatch } from "./supabase-writer";
+import { writeCandlesBatch } from "./supabase-writer";
 import { writeMarketTicksBQ } from "./bigquery-writer";
 import { pushToDLQ } from "../queue/dead-letter-queue";
 import type { OHLCVRow } from "../validators/schema-validator";
@@ -17,7 +17,7 @@ export interface CoordinatorResult {
 }
 
 /**
- * Fan-out validated OHLCV rows to both Supabase and BigQuery simultaneously.
+ * Fan-out validated OHLCV rows to Postgres `candles` and BigQuery simultaneously.
  * Failures in one store do not block the other.
  */
 export async function coordinateOHLCVWrite(
@@ -37,7 +37,7 @@ export async function coordinateOHLCVWrite(
 
   const start = Date.now();
   const [sbResult, bqResult] = await Promise.allSettled([
-    writePriceDailyBatch(rows),
+    writeCandlesBatch(rows, timeframe),
     writeMarketTicksBQ(rows, timeframe),
   ]);
 

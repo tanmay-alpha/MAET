@@ -25,7 +25,7 @@ export async function writeMarketTicksBQ(rows: OHLCVRow[], timeframe = "1d"): Pr
 
   const bqRows = rows.map((r) => ({
     symbol: r.symbol,
-    timestamp: new Date(`${r.date}T03:45:00Z`).toISOString(), // 09:15 IST
+    timestamp: r.ts,
     timeframe,
     open: r.open,
     high: r.high,
