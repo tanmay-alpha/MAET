@@ -16,6 +16,7 @@ import { Route as AppBacktestRouteImport } from './routes/_app.backtest'
 import { Route as AppChartGridRouteImport } from './routes/_app.chart-grid'
 import { Route as AppCompareRouteImport } from './routes/_app.compare'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
+import { Route as AppDataQualityRouteImport } from './routes/_app.data-quality'
 import { Route as AppFuturesRouteImport } from './routes/_app.futures'
 import { Route as AppHeatmapRouteImport } from './routes/_app.heatmap'
 import { Route as AppImportRouteImport } from './routes/_app.import'
@@ -82,6 +83,11 @@ const AppCompareRoute = AppCompareRouteImport.update({
 const AppDashboardRoute = AppDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDataQualityRoute = AppDataQualityRouteImport.update({
+  id: '/data-quality',
+  path: '/data-quality',
   getParentRoute: () => AppRoute,
 } as any)
 const AppFuturesRoute = AppFuturesRouteImport.update({
@@ -262,6 +268,7 @@ export interface FileRoutesByFullPath {
   '/chart-grid': typeof AppChartGridRoute
   '/compare': typeof AppCompareRoute
   '/dashboard': typeof AppDashboardRoute
+  '/data-quality': typeof AppDataQualityRoute
   '/futures': typeof AppFuturesRoute
   '/heatmap': typeof AppHeatmapRoute
   '/import': typeof AppImportRoute
@@ -303,6 +310,7 @@ export interface FileRoutesByTo {
   '/chart-grid': typeof AppChartGridRoute
   '/compare': typeof AppCompareRoute
   '/dashboard': typeof AppDashboardRoute
+  '/data-quality': typeof AppDataQualityRoute
   '/futures': typeof AppFuturesRoute
   '/heatmap': typeof AppHeatmapRoute
   '/import': typeof AppImportRoute
@@ -346,6 +354,7 @@ export interface FileRoutesById {
   '/_app/chart-grid': typeof AppChartGridRoute
   '/_app/compare': typeof AppCompareRoute
   '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/data-quality': typeof AppDataQualityRoute
   '/_app/futures': typeof AppFuturesRoute
   '/_app/heatmap': typeof AppHeatmapRoute
   '/_app/import': typeof AppImportRoute
@@ -389,6 +398,7 @@ export interface FileRouteTypes {
     | '/chart-grid'
     | '/compare'
     | '/dashboard'
+    | '/data-quality'
     | '/futures'
     | '/heatmap'
     | '/import'
@@ -430,6 +440,7 @@ export interface FileRouteTypes {
     | '/chart-grid'
     | '/compare'
     | '/dashboard'
+    | '/data-quality'
     | '/futures'
     | '/heatmap'
     | '/import'
@@ -472,6 +483,7 @@ export interface FileRouteTypes {
     | '/_app/chart-grid'
     | '/_app/compare'
     | '/_app/dashboard'
+    | '/_app/data-quality'
     | '/_app/futures'
     | '/_app/heatmap'
     | '/_app/import'
@@ -566,6 +578,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof AppDashboardRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/data-quality': {
+      id: '/_app/data-quality'
+      path: '/data-quality'
+      fullPath: '/data-quality'
+      preLoaderRoute: typeof AppDataQualityRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/futures': {
@@ -808,6 +827,7 @@ interface AppRouteChildren {
   AppChartGridRoute: typeof AppChartGridRoute
   AppCompareRoute: typeof AppCompareRoute
   AppDashboardRoute: typeof AppDashboardRoute
+  AppDataQualityRoute: typeof AppDataQualityRoute
   AppFuturesRoute: typeof AppFuturesRoute
   AppHeatmapRoute: typeof AppHeatmapRoute
   AppImportRoute: typeof AppImportRoute
@@ -844,6 +864,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppChartGridRoute: AppChartGridRoute,
   AppCompareRoute: AppCompareRoute,
   AppDashboardRoute: AppDashboardRoute,
+  AppDataQualityRoute: AppDataQualityRoute,
   AppFuturesRoute: AppFuturesRoute,
   AppHeatmapRoute: AppHeatmapRoute,
   AppImportRoute: AppImportRoute,
