@@ -274,14 +274,18 @@ interface PaperPositionSnapshot {
   lastQuotePrice: string | null;
 }
 
-interface AutoPaperState {
+export interface AutoPaperState {
   cash: number;
   positions: PaperPositionSnapshot[];
   equity: DeploymentEquityState;
 }
 
 /** Loads the user's current-generation paper account, its open positions, and its equity marks. */
-async function loadAutoPaperState(userId: string, bar: Candle, now: Date): Promise<AutoPaperState> {
+export async function loadPaperState(
+  userId: string,
+  mark: { symbol: string; price: number } | null,
+  now: Date,
+): Promise<AutoPaperState> {
   const [account] = await db
     .select()
     .from(paperAccounts)
@@ -310,12 +314,12 @@ async function loadAutoPaperState(userId: string, bar: Candle, now: Date): Promi
 
   const cash = Number(account.cashBalance);
   const initialCash = Number(account.initialCash);
-  // Equity = cash + unrealised P&L (paper positions are margined), marked at the bar for its symbol.
+  // Equity = cash + unrealised P&L (paper positions are margined), marked at `mark` for its symbol.
   const unrealised = positions.reduce((sum, p) => {
-    const mark = p.symbol === bar.symbol ? bar.close : Number(p.lastQuotePrice ?? p.averageEntryPrice);
+    const price = p.symbol === mark?.symbol ? mark.price : Number(p.lastQuotePrice ?? p.averageEntryPrice);
     return sum + calculateMarkedUnrealisedPnl(
       { quantity: signedPositionQuantity(p), averagePrice: Number(p.averageEntryPrice) },
-      mark,
+      price,
     );
   }, 0);
   const equity = cash + unrealised;
@@ -344,6 +348,36 @@ async function loadAutoPaperState(userId: string, bar: Candle, now: Date): Promi
       peakEquity: Math.max(initialCash, equity, peak?.equity == null ? 0 : Number(peak.equity)),
     },
   };
+}
+
+/**
+ * Side and size of the paper order a signal trades: entries are sized like runner-v3 in the
+ * strategy's direction; exits close the held position in full.
+ */
+function planPaperOrder(
+  signalType: "ENTRY" | "EXIT",
+  definition: StrategyDefinition,
+  limits: DeploymentRiskLimits,
+  state: AutoPaperState,
+  heldPosition: PaperPositionSnapshot | null,
+  bar: Candle,
+  cache: IndicatorStateCache,
+  signalIdx: number,
+): { side: "BUY" | "SELL"; quantity: number } | { rejectReason: string } {
+  if (signalType === "EXIT") {
+    // Paper-trading modes signal EXIT only while positioned.
+    if (!heldPosition) return { rejectReason: "NO_OPEN_POSITION" };
+    return { side: heldPosition.side === "SHORT" ? "BUY" : "SELL", quantity: heldPosition.totalShares };
+  }
+  const sizing = sizeAutoPaperEntry(
+    definition,
+    limits,
+    state.equity.equity,
+    bar.close,
+    cache.resolve("ATR", { period: 14 }, signalIdx) ?? undefined,
+  );
+  if (!sizing.quantity) return { rejectReason: sizing.rejectReason ?? "POSITION_SIZE_ZERO" };
+  return { side: entrySide(definition.direction), quantity: sizing.quantity };
 }
 
 export interface EvaluateDeploymentOptions {
@@ -388,9 +422,9 @@ export async function evaluateDeploymentForBar(
   const entryMatched = evaluateRuleGroup(entryGroup, cache, signalIdx).matched;
   const exitMatched = evaluateRuleGroup(exitGroup, cache, signalIdx).matched;
 
-  // AUTO_PAPER trades like runner-v3: flat → entry rules, positioned → exit rules. No pyramiding, so a
-  // held entry condition never re-fires while the position is open, and an exit while flat is moot.
-  const paperState = mode === "AUTO_PAPER" ? await loadAutoPaperState(userId, bar, now) : null;
+  // Paper-trading modes trade like runner-v3: flat → entry rules, positioned → exit rules. No pyramiding,
+  // so a held entry condition never re-fires while the position is open, and an exit while flat is moot.
+  const paperState = mode === "AUTO_PAPER" || mode === "MANUAL_CONFIRM" ? await loadPaperState(userId, { symbol, price: bar.close }, now) : null;
   const heldPosition = paperState?.positions.find((p) => p.symbol === symbol) ?? null;
 
   let signalType: "ENTRY" | "EXIT" | null = null;
@@ -470,17 +504,22 @@ export async function evaluateDeploymentForBar(
       symbol,
       payload: { deploymentId, signalId: signalEvent.id, price: bar.close },
     });
-  } else if (mode === "MANUAL_CONFIRM") {
-    // Insert proposed execution decision awaiting user confirmation with complete payload
+  } else if (mode === "MANUAL_CONFIRM" && paperState) {
+    // The proposal carries the same side and size AUTO_PAPER would trade; confirmation re-runs the gate.
+    const plan = planPaperOrder(signalType, definition, deployment.riskLimits ?? {}, paperState, heldPosition, bar, cache, signalIdx);
+    if ("rejectReason" in plan) {
+      return { signalEvent, decision: await recordDecision({ decision: "REJECTED", reasonCode: plan.rejectReason }) };
+    }
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     decision = await recordDecision({
       decision: "PROPOSED",
       proposedOrder: {
         symbol,
         exchange: "NSE",
-        side: signalType === "ENTRY" ? "BUY" : "SELL",
+        signalType,
+        side: plan.side,
         type: "MARKET",
-        quantity: 1,
+        quantity: plan.quantity,
         strategyVersionId: versionId,
         signalId: signalEvent.id,
         quoteMetadata: { price: bar.close, ts: bar.ts },
@@ -509,30 +548,16 @@ export async function evaluateDeploymentForBar(
       return { signalEvent, decision: await recordDecision({ decision: "REJECTED", reasonCode: riskRes.rejectReason }) };
     }
 
-    let side: "BUY" | "SELL";
-    let quantity: number;
-    if (signalType === "ENTRY") {
-      const sizing = sizeAutoPaperEntry(
-        definition,
-        deployment.riskLimits ?? {},
-        paperState.equity.equity,
-        bar.close,
-        cache.resolve("ATR", { period: 14 }, signalIdx) ?? undefined,
-      );
-      if (!sizing.quantity) {
-        return { signalEvent, decision: await recordDecision({ decision: "REJECTED", reasonCode: sizing.rejectReason }) };
-      }
-      side = entrySide(definition.direction);
-      quantity = sizing.quantity;
-    } else {
-      // heldPosition is set: EXIT is only signalled while positioned.
-      side = heldPosition!.side === "SHORT" ? "BUY" : "SELL";
-      quantity = heldPosition!.totalShares;
+    const plan = planPaperOrder(signalType, definition, deployment.riskLimits ?? {}, paperState, heldPosition, bar, cache, signalIdx);
+    if ("rejectReason" in plan) {
+      return { signalEvent, decision: await recordDecision({ decision: "REJECTED", reasonCode: plan.rejectReason }) };
     }
+    const { side, quantity } = plan;
 
     const proposedOrder = {
       symbol,
       exchange: "NSE",
+      signalType,
       side,
       type: "MARKET",
       quantity,
