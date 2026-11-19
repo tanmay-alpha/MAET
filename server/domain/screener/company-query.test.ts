@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { matchesCompanyScreenerRow, parseCompanyScreenerParams, percentInRange } from "./company-query";
+import {
+  matchesCompanyScreenerRow,
+  parseCompanyScreenerParams,
+  percentInRange,
+  screenCompanyScreenerRows,
+  type CompanyScreenerRow,
+} from "./company-query";
 
 describe("company screener query parser", () => {
   it("accepts full-universe search, pagination, filters, buckets and safe sorting", () => {
@@ -143,6 +149,53 @@ describe("matchesCompanyScreenerRow with technical and breakout filters", () => 
     const overboughtParams = parseCompanyScreenerParams(new URLSearchParams({ rsi_overbought: "true" }));
     expect(matchesCompanyScreenerRow(baseRow, overboughtParams)).toBeFalse();
     expect(matchesCompanyScreenerRow({ ...baseRow, rsi14: 75 }, overboughtParams)).toBeTrue();
+  });
+});
+
+describe("screenCompanyScreenerRows missing-data accounting", () => {
+  const row = (symbol: string, fields: Partial<CompanyScreenerRow>): CompanyScreenerRow => ({
+    symbol, name: symbol, exchange: "NSE", series: "EQ", isin: `IN${symbol}`, marketCapBucket: "large", source: "database", ...fields,
+  });
+  const rows = [
+    row("CHEAP", { pe: 12, roe: 0.2, sector: "Energy" }),
+    row("PRICEY", { pe: 45, roe: 0.25, sector: "Energy" }),
+    row("NOPE", { roe: 0.3, sector: "Energy" }),
+    row("NOROE", { pe: 8, sector: "Energy" }),
+    row("NEITHER", { sector: "Energy" }),
+    row("NOPE_LOWROE", { roe: 0.05, sector: "Energy" }),
+    row("ZEROPE", { pe: 0, roe: 0.2, sector: "Energy" }),
+  ];
+
+  it("never treats a missing metric as 0 and counts rows left out only for missing data", () => {
+    const input = parseCompanyScreenerParams(new URLSearchParams({ pe_max: "20", roe_min: "15" }));
+    const { matches, excludedForMissingData } = screenCompanyScreenerRows(rows, input);
+    // A real 0 is a value and matches; a missing P/E does not.
+    expect(matches.map((match) => match.symbol)).toEqual(["CHEAP", "ZEROPE"]);
+    // PRICEY fails on its data and NOPE_LOWROE fails ROE, so neither is a missing-data exclusion.
+    expect(excludedForMissingData).toEqual({ total: 3, byField: { pe: 2, roe: 2 } });
+  });
+
+  it("reports nothing when no filter touches a missing metric", () => {
+    const input = parseCompanyScreenerParams(new URLSearchParams({ sector_in: "energy" }));
+    const { matches, excludedForMissingData } = screenCompanyScreenerRows(rows, input);
+    expect(matches).toHaveLength(rows.length);
+    expect(excludedForMissingData).toEqual({ total: 0, byField: {} });
+  });
+
+  it("attributes an unknown cap bucket and missing technical inputs to their metrics", () => {
+    const input = parseCompanyScreenerParams(new URLSearchParams({ bucket_in: "large", golden_cross: "true", high_breakout: "true" }));
+    const { matches, excludedForMissingData } = screenCompanyScreenerRows([
+      row("FULL", { sma50: 110, sma200: 100, price: 120, fiftyTwoWeekHigh: 118 }),
+      row("UNRANKED", { marketCapBucket: "unknown", sma50: 110, sma200: 100, price: 120, fiftyTwoWeekHigh: 118 }),
+      row("NOHISTORY", { price: 120 }),
+      row("DEATHCROSS", { sma200: 110, sma50: 100, price: 120 }),
+    ], input);
+    expect(matches.map((match) => match.symbol)).toEqual(["FULL"]);
+    // DEATHCROSS fails the cross on its data, though it also lacks the 52-week high.
+    expect(excludedForMissingData).toEqual({
+      total: 2,
+      byField: { marketCap: 1, sma50: 1, sma200: 1, fiftyTwoWeekHigh: 1 },
+    });
   });
 });
 

@@ -4,15 +4,22 @@ import {
   Bookmark, BookmarkPlus, Check, ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, RefreshCw, Search, SlidersHorizontal, Trash2, X,
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from "react";
+import { SignedOutNotice } from "@/components/common/signed-out-notice";
+import { MetricCell, MissingValue, ProvenanceLine } from "@/components/screener/metric-cell";
 import { ScreenerRow, type QuoteMap, type ScreenerColumn } from "@/components/screener/screener-row";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { useResearchWorkspace } from "@/hooks/use-research-workspace";
+import { useSignedIn } from "@/hooks/use-signed-in";
 import type { WorkspaceSavedScreener } from "@/lib/trpc";
 import { fetchMarketCompanies, type MarketCompany, type ScreenerQuery } from "@/lib/market-api";
 import {
-  activeScreenerPreset, applyScreenerPreset, arrangeLivePage, DEFAULT_SCREENER_SORT, LIVE_QUOTE_FILTER_KEYS, SCREENER_PRESETS,
+  activeScreenerPreset, applyScreenerPreset, arrangeLivePage, DEFAULT_SCREENER_SORT, LIVE_QUOTE_FILTER_KEYS, liveMissingExclusions, SCREENER_PRESETS,
 } from "@/lib/screener-presets";
 import { quoteSourceLabel } from "@/lib/quote-source";
+import {
+  describeMissingExclusions, fundamentalsProvenance, isAvailableMetric, mergeMissingExclusions, priceProvenance,
+  uniformProvenance, UNIT_LABEL, type MetricUnit,
+} from "@/lib/screener-format";
 
 export const Route = createFileRoute("/_app/screener")({
   head: () => ({ meta: [{ title: "Stock Screener — MAET" }] }),
@@ -192,45 +199,60 @@ function loadLegacySavedViews(): LegacySavedView[] {
   }
 }
 
-function numberValue(value: number | undefined, options?: Intl.NumberFormatOptions): string {
-  return value === undefined ? "—" : value.toLocaleString("en-IN", options ?? { maximumFractionDigits: 2 });
-}
-
-function money(value: number | undefined): string {
-  if (value === undefined) return "—";
-  if (Math.abs(value) >= 10_000_000) return `₹${(value / 10_000_000).toLocaleString("en-IN", { maximumFractionDigits: 2 })} Cr`;
-  return `₹${numberValue(value)}`;
-}
-
-function percent(value: number | undefined): string {
-  if (value === undefined || !Number.isFinite(value)) return "—";
-  return `${(value * 100).toFixed(2)}%`;
-}
-
-function Missing({ reason }: { reason: string }) {
-  return <span className="cursor-help select-none text-muted-foreground" title={reason}>—</span>;
-}
-
-function DataCell({ value, reason, mode = "number" }: { value?: number; reason: string; mode?: "number" | "money" | "percent" }) {
-  if (value === undefined) return <Missing reason={reason} />;
-  return <span>{mode === "money" ? money(value) : mode === "percent" ? percent(value) : numberValue(value)}</span>;
-}
-
 function quoteFor(company: MarketCompany, quotes: QuoteMap) {
   return quotes.get(company.symbol);
 }
 
-function reasonFor(company: MarketCompany, field: string, fallback: string): string {
-  if (company.staleFundamentals) return `${fallback}. The latest stored fundamentals snapshot is stale.`;
-  return fallback;
+function reasonFor(company: MarketCompany, reason: string): string {
+  if (company.staleFundamentals) return `${reason}. The latest stored fundamentals snapshot is stale.`;
+  return reason;
+}
+
+/** Percent distance of the displayed price from a reference level, or undefined when either is missing. */
+function distanceFrom(price: number | null | undefined, reference: number | null | undefined): number | undefined {
+  if (!isAvailableMetric(price) || !isAvailableMetric(reference) || reference <= 0) return undefined;
+  return (price / reference - 1) * 100;
+}
+
+type MetricOptions = {
+  sortBy?: string;
+  offline?: true;
+  signed?: boolean;
+  tone?: "sign" | ((value: number) => string);
+  /** Prefixes the missing-data reason with the stale-snapshot note for fundamentals. */
+  fundamental?: boolean;
+};
+
+function metricColumn(
+  id: string,
+  label: string,
+  unit: MetricUnit,
+  value: (company: MarketCompany, quotes: QuoteMap) => number | null | undefined,
+  reason: string,
+  options: MetricOptions = {},
+): ScreenerColumn {
+  const { sortBy, offline, signed, tone, fundamental } = options;
+  return {
+    id,
+    label,
+    unit,
+    align: "right",
+    sortBy,
+    offline,
+    render: (c, q) => (
+      <MetricCell value={value(c, q)} unit={unit} reason={fundamental ? reasonFor(c, reason) : reason} signed={signed} tone={tone} />
+    ),
+  };
 }
 
 function buildColumns(view: ViewId): ScreenerColumn[] {
-  const price: ScreenerColumn = { id: "price", label: "Price", align: "right", sortBy: "price", offline: true, render: (c, q) => <DataCell value={quoteFor(c, q)?.price ?? c.price} reason="Price unavailable: no persisted or reachable quote snapshot" mode="money" /> };
-  const change: ScreenerColumn = { id: "changePct", label: "Chg %", align: "right", sortBy: "change_pct", offline: true, render: (c, q) => { const value = quoteFor(c, q)?.changePct ?? c.changePct; return value === undefined ? <Missing reason="Change unavailable: previous close was not supplied by the verified quote source" /> : <span className={value >= 0 ? "text-bull" : "text-bear"}>{value >= 0 ? "+" : ""}{value.toFixed(2)}%</span>; } };
-  const volume: ScreenerColumn = { id: "volume", label: "Volume", align: "right", sortBy: "volume", offline: true, render: (c, q) => <DataCell value={quoteFor(c, q)?.volume ?? c.volume} reason="Volume unavailable from the latest verified quote snapshot" /> };
-  const marketCap: ScreenerColumn = { id: "marketCap", label: "Market cap", align: "right", sortBy: "market_cap", render: (c) => <DataCell value={c.marketCap} reason="Market cap unavailable: no verified stored fundamentals value" mode="money" /> };
-  const relVolume: ScreenerColumn = { id: "relVolume", label: "Rel volume", align: "right", sortBy: "rel_volume", render: (c) => <DataCell value={c.relVolume} reason="Relative volume unavailable: 20-day average volume not yet computed" /> };
+  const displayedPrice = (c: MarketCompany, q: QuoteMap) => quoteFor(c, q)?.price ?? c.price;
+  const price = metricColumn("price", "Price", "inr", displayedPrice, "Price unavailable: no persisted or reachable quote snapshot", { sortBy: "price", offline: true });
+  const change = metricColumn("changePct", "Chg", "percentPoints", (c, q) => quoteFor(c, q)?.changePct ?? c.changePct, "Change unavailable: previous close was not supplied by the verified quote source", { sortBy: "change_pct", offline: true, signed: true, tone: "sign" });
+  const volume = metricColumn("volume", "Volume", "shares", (c, q) => quoteFor(c, q)?.volume ?? c.volume, "Volume unavailable from the latest verified quote snapshot", { sortBy: "volume", offline: true });
+  const marketCap = metricColumn("marketCap", "Market cap", "inrCr", (c) => c.marketCap, "Market cap unavailable: no verified stored fundamentals value", { sortBy: "market_cap", fundamental: true });
+  const relVolume = metricColumn("relVolume", "Rel volume", "multiple", (c) => c.relVolume, "Relative volume unavailable: 20-day average volume not yet computed", { sortBy: "rel_volume" });
+  const book = metricColumn("book", "Book / share", "inr", (c) => c.bookValuePerShare, "Book value per share unavailable", { fundamental: true });
   // ScreenerRow renders these two itself.
   const base: ScreenerColumn[] = [
     { id: "rank", label: "#", offline: true, cellClass: "hidden sm:table-cell", render: () => null },
@@ -238,129 +260,68 @@ function buildColumns(view: ViewId): ScreenerColumn[] {
   ];
   const columns: Record<ViewId, ScreenerColumn[]> = {
     overview: [...base, price, change, volume, marketCap,
-      { id: "sector", label: "Sector", sortBy: "sector", render: (c) => c.sector ?? <Missing reason="Sector unavailable from the verified NSE/company snapshot" /> },
-      { id: "isin", label: "ISIN", offline: true, render: (c) => c.isin || <Missing reason="ISIN missing from the NSE company master" /> },
+      { id: "sector", label: "Sector", sortBy: "sector", render: (c) => c.sector ?? <MissingValue reason="Sector unavailable from the verified NSE/company snapshot" /> },
+      { id: "isin", label: "ISIN", offline: true, render: (c) => c.isin || <MissingValue reason="ISIN missing from the NSE company master" /> },
     ],
     performance: [...base, price, change, volume, relVolume,
-      { id: "high52", label: "52W high", align: "right", render: (c) => <DataCell value={c.fiftyTwoWeekHigh} reason="52-week high unavailable: insufficient stored daily history" mode="money" /> },
-      { id: "high52Distance", label: "% from high", align: "right", render: (c, q) => { const p = quoteFor(c, q)?.price ?? c.price; return p === undefined || !c.fiftyTwoWeekHigh ? <Missing reason="52-week high distance unavailable: price or stored 52-week high missing" /> : <span>{(((p / c.fiftyTwoWeekHigh) - 1) * 100).toFixed(2)}%</span>; } },
-      { id: "low52", label: "52W low", align: "right", render: (c) => <DataCell value={c.fiftyTwoWeekLow} reason="52-week low unavailable: insufficient stored daily history" mode="money" /> },
-      { id: "low52Distance", label: "% from low", align: "right", render: (c, q) => { const p = quoteFor(c, q)?.price ?? c.price; return p === undefined || !c.fiftyTwoWeekLow ? <Missing reason="52-week low distance unavailable: price or stored 52-week low missing" /> : <span>{(((p / c.fiftyTwoWeekLow) - 1) * 100).toFixed(2)}%</span>; } },
+      metricColumn("high52", "52W high", "inr", (c) => c.fiftyTwoWeekHigh, "52-week high unavailable: insufficient stored daily history"),
+      metricColumn("high52Distance", "From high", "percentPoints", (c, q) => distanceFrom(displayedPrice(c, q), c.fiftyTwoWeekHigh), "52-week high distance unavailable: price or stored 52-week high missing", { signed: true }),
+      metricColumn("low52", "52W low", "inr", (c) => c.fiftyTwoWeekLow, "52-week low unavailable: insufficient stored daily history"),
+      metricColumn("low52Distance", "From low", "percentPoints", (c, q) => distanceFrom(displayedPrice(c, q), c.fiftyTwoWeekLow), "52-week low distance unavailable: price or stored 52-week low missing", { signed: true }),
     ],
     technicals: [
       ...base,
       price,
-      {
-        id: "rsi",
-        label: "RSI (14)",
-        align: "right",
+      metricColumn("rsi", "RSI (14)", "index", (c) => c.rsi14, "RSI(14) unavailable: awaiting daily snapshot calculation", {
         sortBy: "rsi",
-        render: (c) => {
-          if (c.rsi14 === undefined) return <Missing reason="RSI(14) unavailable: awaiting daily snapshot calculation" />;
-          const rsi = c.rsi14;
-          const colorClass = rsi <= 30 ? "text-bull font-semibold" : rsi >= 70 ? "text-amber-400 font-semibold" : "text-foreground";
-          return <span className={colorClass}>{rsi.toFixed(1)}</span>;
-        },
-      },
-      {
-        id: "sma20",
-        label: "SMA 20",
-        align: "right",
-        sortBy: "sma20",
-        render: (c) => <DataCell value={c.sma20} reason="20 SMA unavailable" mode="money" />,
-      },
-      {
-        id: "sma50",
-        label: "SMA 50",
-        align: "right",
-        sortBy: "sma50",
-        render: (c) => <DataCell value={c.sma50} reason="50 SMA unavailable" mode="money" />,
-      },
-      {
-        id: "sma200",
-        label: "SMA 200",
-        align: "right",
-        sortBy: "sma200",
-        render: (c) => <DataCell value={c.sma200} reason="200 SMA unavailable" mode="money" />,
-      },
-      {
-        id: "distanceSma200",
-        label: "% from 200 SMA",
-        align: "right",
-        sortBy: "distance_sma200",
-        render: (c) => {
-          if (c.distanceFromSma200Pct === undefined) return <Missing reason="Distance from 200 SMA unavailable" />;
-          const val = c.distanceFromSma200Pct;
-          return <span className={val >= 0 ? "text-bull" : "text-bear"}>{val >= 0 ? "+" : ""}{val.toFixed(2)}%</span>;
-        },
-      },
-      {
-        id: "distance52wHigh",
-        label: "% from 52W High",
-        align: "right",
-        sortBy: "distance_52w_high",
-        render: (c) => {
-          if (c.distanceFrom52WeekHighPct === undefined) return <Missing reason="Distance from 52W High unavailable" />;
-          const val = c.distanceFrom52WeekHighPct;
-          return <span className={val >= 0 ? "text-bull" : "text-bear"}>{val >= 0 ? "+" : ""}{val.toFixed(2)}%</span>;
-        },
-      },
-      {
-        id: "macdHist",
-        label: "MACD Hist",
-        align: "right",
-        render: (c) => {
-          if (c.macdHistogram === undefined) return <Missing reason="MACD histogram unavailable" />;
-          const val = c.macdHistogram;
-          return <span className={val >= 0 ? "text-bull" : "text-bear"}>{val >= 0 ? "+" : ""}{val.toFixed(2)}</span>;
-        },
-      },
-      {
-        id: "atr",
-        label: "ATR (14)",
-        align: "right",
-        sortBy: "atr",
-        render: (c) => <DataCell value={c.atr14} reason="ATR unavailable" mode="money" />,
-      },
+        tone: (rsi) => rsi <= 30 ? "text-bull font-semibold" : rsi >= 70 ? "text-amber-400 font-semibold" : "text-foreground",
+      }),
+      metricColumn("sma20", "SMA 20", "inr", (c) => c.sma20, "20 SMA unavailable", { sortBy: "sma20" }),
+      metricColumn("sma50", "SMA 50", "inr", (c) => c.sma50, "50 SMA unavailable", { sortBy: "sma50" }),
+      metricColumn("sma200", "SMA 200", "inr", (c) => c.sma200, "200 SMA unavailable", { sortBy: "sma200" }),
+      metricColumn("distanceSma200", "From 200 SMA", "percentPoints", (c) => c.distanceFromSma200Pct, "Distance from 200 SMA unavailable", { sortBy: "distance_sma200", signed: true, tone: "sign" }),
+      metricColumn("distance52wHigh", "From 52W high", "percentPoints", (c) => c.distanceFrom52WeekHighPct, "Distance from 52W High unavailable", { sortBy: "distance_52w_high", signed: true, tone: "sign" }),
+      metricColumn("macdHist", "MACD hist", "inr", (c) => c.macdHistogram, "MACD histogram unavailable", { signed: true, tone: "sign" }),
+      metricColumn("atr", "ATR (14)", "inr", (c) => c.atr14, "ATR unavailable", { sortBy: "atr" }),
       relVolume,
       {
         id: "trend",
         label: "52W state",
         render: (c, q) => {
-          const p = quoteFor(c, q)?.price ?? c.price;
-          if (p === undefined || c.fiftyTwoWeekHigh === undefined) return <Missing reason="Breakout state unavailable: price or 52-week range missing" />;
+          const p = displayedPrice(c, q);
+          if (!isAvailableMetric(p) || !isAvailableMetric(c.fiftyTwoWeekHigh)) return <MissingValue reason="Breakout state unavailable: price or 52-week range missing" />;
           return p >= c.fiftyTwoWeekHigh ? <span className="text-bull font-semibold">Breakout</span> : <span className="text-muted-foreground">Inside range</span>;
         },
       },
     ],
     valuation: [...base, price, marketCap,
-      { id: "pe", label: "P/E", align: "right", sortBy: "pe", render: (c) => <DataCell value={c.pe} reason={reasonFor(c, "pe", "P/E unavailable: missing verified positive EPS")} /> },
-      { id: "forwardPe", label: "Forward P/E", align: "right", render: (c) => <DataCell value={c.forwardPe} reason="Forward P/E unavailable from verified stored estimates" /> },
-      { id: "pb", label: "P/B", align: "right", sortBy: "pb", render: (c) => <DataCell value={c.pb} reason="P/B unavailable: verified book value was not stored" /> },
-      { id: "eps", label: "EPS TTM", align: "right", render: (c) => <DataCell value={c.eps} reason="EPS unavailable: no verified TTM earnings snapshot" mode="money" /> },
-      { id: "book", label: "Book / share", align: "right", render: (c) => <DataCell value={c.bookValuePerShare} reason="Book value per share unavailable" mode="money" /> },
+      metricColumn("pe", "P/E", "multiple", (c) => c.pe, "P/E unavailable: missing verified positive EPS", { sortBy: "pe", fundamental: true }),
+      metricColumn("forwardPe", "Forward P/E", "multiple", (c) => c.forwardPe, "Forward P/E unavailable from verified stored estimates", { fundamental: true }),
+      metricColumn("pb", "P/B", "multiple", (c) => c.pb, "P/B unavailable: verified book value was not stored", { sortBy: "pb", fundamental: true }),
+      metricColumn("eps", "EPS TTM", "inr", (c) => c.eps, "EPS unavailable: no verified TTM earnings snapshot", { fundamental: true }),
+      book,
     ],
     profitability: [...base,
-      { id: "roe", label: "ROE", align: "right", sortBy: "roe", render: (c) => <DataCell value={c.roe} reason="ROE unavailable: verified net income and equity were not stored" mode="percent" /> },
-      { id: "roce", label: "ROCE", align: "right", sortBy: "roce", render: (c) => <DataCell value={c.roce} reason="ROCE unavailable: capital employed could not be derived" mode="percent" /> },
-      { id: "roa", label: "ROA", align: "right", render: (c) => <DataCell value={c.roa} reason="ROA unavailable: net income or total assets missing" mode="percent" /> },
-      { id: "opMargin", label: "Operating margin", align: "right", render: (c) => <DataCell value={c.operatingMargin} reason="Operating margin unavailable: operating income or revenue missing" mode="percent" /> },
-      { id: "netMargin", label: "Net margin", align: "right", render: (c) => <DataCell value={c.netMargin} reason="Net margin unavailable: net income or revenue missing" mode="percent" /> },
+      metricColumn("roe", "ROE", "percent", (c) => c.roe, "ROE unavailable: verified net income and equity were not stored", { sortBy: "roe", fundamental: true }),
+      metricColumn("roce", "ROCE", "percent", (c) => c.roce, "ROCE unavailable: capital employed could not be derived", { sortBy: "roce", fundamental: true }),
+      metricColumn("roa", "ROA", "percent", (c) => c.roa, "ROA unavailable: net income or total assets missing", { fundamental: true }),
+      metricColumn("opMargin", "Operating margin", "percent", (c) => c.operatingMargin, "Operating margin unavailable: operating income or revenue missing", { fundamental: true }),
+      metricColumn("netMargin", "Net margin", "percent", (c) => c.netMargin, "Net margin unavailable: net income or revenue missing", { fundamental: true }),
     ],
     financials: [...base,
-      { id: "revenue", label: "Revenue", align: "right", render: (c) => <DataCell value={c.revenue} reason="Revenue unavailable from stored normalized statements" mode="money" /> },
-      { id: "netIncome", label: "Net income", align: "right", render: (c) => <DataCell value={c.netIncome} reason="Net income unavailable from stored normalized statements" mode="money" /> },
-      { id: "salesGrowth", label: "Sales growth", align: "right", sortBy: "sales_growth", render: (c) => <DataCell value={c.salesGrowth} reason="Sales growth unavailable: comparable reporting periods missing" mode="percent" /> },
-      { id: "profitGrowth", label: "Profit growth", align: "right", sortBy: "profit_growth", render: (c) => <DataCell value={c.profitGrowth} reason="Profit growth unavailable: comparable reporting periods missing" mode="percent" /> },
+      metricColumn("revenue", "Revenue", "inrCr", (c) => c.revenue, "Revenue unavailable from stored normalized statements", { fundamental: true }),
+      metricColumn("netIncome", "Net income", "inrCr", (c) => c.netIncome, "Net income unavailable from stored normalized statements", { fundamental: true }),
+      metricColumn("salesGrowth", "Sales growth", "percent", (c) => c.salesGrowth, "Sales growth unavailable: comparable reporting periods missing", { sortBy: "sales_growth", signed: true, fundamental: true }),
+      metricColumn("profitGrowth", "Profit growth", "percent", (c) => c.profitGrowth, "Profit growth unavailable: comparable reporting periods missing", { sortBy: "profit_growth", signed: true, fundamental: true }),
     ],
     balance: [...base, marketCap,
-      { id: "de", label: "Debt / equity", align: "right", sortBy: "debt_to_equity", render: (c) => <DataCell value={c.debtToEquity} reason="Debt/equity unavailable: debt or equity missing" /> },
-      { id: "currentRatio", label: "Current ratio", align: "right", sortBy: "current_ratio", render: (c) => <DataCell value={c.currentRatio} reason="Current ratio unavailable: current assets or liabilities missing" /> },
-      { id: "book", label: "Book / share", align: "right", render: (c) => <DataCell value={c.bookValuePerShare} reason="Book value per share unavailable" mode="money" /> },
+      metricColumn("de", "Debt / equity", "multiple", (c) => c.debtToEquity, "Debt/equity unavailable: debt or equity missing", { sortBy: "debt_to_equity", fundamental: true }),
+      metricColumn("currentRatio", "Current ratio", "multiple", (c) => c.currentRatio, "Current ratio unavailable: current assets or liabilities missing", { sortBy: "current_ratio", fundamental: true }),
+      book,
     ],
     dividends: [...base, price,
-      { id: "dividendYield", label: "Dividend yield", align: "right", sortBy: "dividend_yield", render: (c) => <DataCell value={c.dividendYield} reason="Dividend yield unavailable from verified stored fundamentals" mode="percent" /> },
-      { id: "payout", label: "Payout ratio", align: "right", render: () => <Missing reason="Payout ratio is not available in the latest stored screener snapshot" /> },
+      metricColumn("dividendYield", "Dividend yield", "percent", (c) => c.dividendYield, "Dividend yield unavailable from verified stored fundamentals", { sortBy: "dividend_yield", fundamental: true }),
+      metricColumn("payout", "Payout ratio", "percent", () => undefined, "Payout ratio is not available in the latest stored screener snapshot"),
     ],
   };
   return columns[view];
@@ -375,6 +336,8 @@ function Screener() {
     updateScreener,
     deleteScreener,
   } = useResearchWorkspace();
+  // Saved screens live in the account; signed out, the panel says so instead of failing with a 401.
+  const signedIn = useSignedIn();
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [page, setPage] = useState(1);
@@ -446,7 +409,32 @@ function Screener() {
     () => buildColumns(activeView).filter((column) => !offline || column.offline),
     [activeView, offline],
   );
-  const columns = allColumns.filter((column) => !hiddenColumns.includes(column.id));
+  const selectedColumns = allColumns.filter((column) => !hiddenColumns.includes(column.id));
+  // Source and as-of time of each row's price and fundamentals: one header line when every row
+  // shares it as displayed, otherwise a per-row column. Price staleness is judged at render time.
+  const now = Date.now();
+  const sharedPrice = uniformProvenance(
+    visibleCompanies.map((company) => priceProvenance(company, quotes.quoteMap.get(company.symbol), now)),
+    "price",
+  );
+  const sharedFundamentals = uniformProvenance(visibleCompanies.map(fundamentalsProvenance), "fundamentals");
+  const columns: ScreenerColumn[] = sharedPrice.uniform && sharedFundamentals.uniform
+    ? selectedColumns
+    : [...selectedColumns, {
+        id: "provenance",
+        label: "Source · as of",
+        render: (company, quoteMap) => (
+          <span className="font-sans text-[11px]">
+            {!sharedPrice.uniform && <ProvenanceLine kind="price" provenance={priceProvenance(company, quoteMap.get(company.symbol), now)} />}
+            {!sharedFundamentals.uniform && <ProvenanceLine kind="fundamentals" provenance={fundamentalsProvenance(company)} />}
+          </span>
+        ),
+      }];
+  const missingExclusionText = describeMissingExclusions(mergeMissingExclusions(
+    companiesQuery.data?.excludedForMissingData ?? { total: 0, byField: {} },
+    // The NSE fallback cannot evaluate quote filters; this page applies them to its live quotes.
+    offline ? liveMissingExclusions(companies, quotes.quoteMap, filters) : { total: 0, byField: {} },
+  ));
   const availability = companiesQuery.data?.fieldAvailability ?? {};
   const hasFilter = Object.values(filters).some((value) => value.trim());
   const hasQuoteFilter = Object.entries(filters).some(([key, value]) => value.trim() && LIVE_QUOTE_FILTER_KEYS.has(key));
@@ -616,6 +604,11 @@ function Screener() {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <h1 className="text-lg font-semibold tracking-tight sm:text-xl">Stock Screener</h1>
           <span className="font-mono text-xs tabular-nums text-muted-foreground">{resultCount}</span>
+          {missingExclusionText && (
+            <span className="text-[11px] text-amber-300" title="Rows without a value for a filtered metric are left out; a missing value is never treated as 0.">
+              {missingExclusionText}
+            </span>
+          )}
           {activeSavedView && (
             <span className="max-w-[12rem] truncate rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
               {activeSavedView.definition.name}
@@ -626,9 +619,9 @@ function Screener() {
             <button
               type="button"
               onClick={() => void saveCurrent()}
-              disabled={!activeSavedScreenerId || savedAction !== null}
+              disabled={!signedIn || !activeSavedScreenerId || savedAction !== null}
               aria-label="Save"
-              title="Save changes to the active saved view"
+              title={signedIn ? "Save changes to the active saved view" : "Sign in to save screens"}
               className={`${toolbarButton} border-border hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40`}
             >
               <Check className="h-3.5 w-3.5" /><span className="hidden sm:inline">Save</span>
@@ -640,15 +633,26 @@ function Screener() {
                 setShowSaveAsNew(true);
                 setSavedNameDraft("");
               }}
-              disabled={savedAction !== null}
+              disabled={!signedIn || savedAction !== null}
+              title={signedIn ? undefined : "Sign in to save screens"}
               aria-label="Save as new"
-              className={`${toolbarButton} border-border hover:bg-accent disabled:opacity-40`}
+              className={`${toolbarButton} border-border hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40`}
             >
               <BookmarkPlus className="h-3.5 w-3.5" /><span className="hidden sm:inline">Save as new</span>
             </button>
             <button type="button" onClick={() => void companiesQuery.refetch()} className="rounded border border-border p-1.5 text-muted-foreground hover:bg-accent" aria-label="Refresh screener"><RefreshCw className={`h-3.5 w-3.5 ${companiesQuery.isFetching ? "animate-spin" : ""}`} /></button>
           </div>
         </div>
+        {visibleCompanies.length > 0 && (
+          <p className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px]" aria-label="Data source and as-of time">
+            {sharedPrice.uniform
+              ? <ProvenanceLine kind="price" provenance={sharedPrice.provenance} />
+              : <span className="text-muted-foreground">Price: source and as-of time vary by row</span>}
+            {sharedFundamentals.uniform
+              ? <ProvenanceLine kind="fundamentals" provenance={sharedFundamentals.provenance} />
+              : <span className="text-muted-foreground">Fundamentals: source and as-of time vary by row</span>}
+          </p>
+        )}
         {offline && (
           <p className="mt-1 text-[11px] leading-snug text-amber-300/90">
             Database offline: NSE company list with live quotes only. Fundamentals and the other views return when it reconnects{hasQuoteFilter ? "; price, change and volume filters apply to this page" : ""}.
@@ -712,7 +716,7 @@ function Screener() {
               Saved screeners
               <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">Account backed</span>
             </div>
-            {legacySavedViews.length > 0 && (
+            {signedIn && legacySavedViews.length > 0 && (
               <button
                 type="button"
                 onClick={() => void importLegacySavedViews()}
@@ -737,7 +741,7 @@ function Screener() {
             </div>
           )}
 
-          {showSaveAsNew && (
+          {signedIn && showSaveAsNew && (
             <form onSubmit={saveAsNew} className="mt-3 flex flex-col gap-2 rounded border border-border bg-background p-3 sm:flex-row">
               <input
                 value={savedNameDraft}
@@ -756,7 +760,9 @@ function Screener() {
             </form>
           )}
 
-          {savedScreenersError ? (
+          {!signedIn ? (
+            <div className="mt-3"><SignedOutNotice feature="Saved screens" /></div>
+          ) : savedScreenersError ? (
             <p className="mt-3 text-xs text-bear">
               Saved views unavailable: {savedScreenersError instanceof Error ? savedScreenersError.message : "account storage could not be reached"}
             </p>
@@ -864,6 +870,7 @@ function Screener() {
                 <th key={column.id} className={`whitespace-nowrap border-b border-border px-3 py-2 font-medium text-muted-foreground ${column.align === "right" ? "text-right" : "text-left"} ${column.cellClass ?? ""}`}>
                   <button type="button" disabled={!column.sortBy} onClick={() => changeSort(column)} className="inline-flex items-center gap-1 disabled:cursor-default">
                     {column.label}
+                    {column.unit && <>{" "}<span className="font-normal opacity-70">({UNIT_LABEL[column.unit]})</span></>}
                     {column.sortBy && <ChevronDown className={`h-3 w-3 ${sortBy === column.sortBy ? "text-primary" : "opacity-30"} ${sortBy === column.sortBy && sortDir === "asc" ? "rotate-180" : ""}`} />}
                   </button>
                 </th>
