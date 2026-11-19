@@ -292,7 +292,8 @@ The account `generation` implements reset: every query filters by it, and a rese
 | `strategy_parameter_sweeps`, `strategy_sweep_results`, `strategy_walk_forward_runs`, `strategy_walk_forward_windows` | Optimisation jobs. |
 | `strategy_deployments`, `strategy_signal_events`, `strategy_execution_decisions` | Deployed strategies and their signals (unique `(deployment_id, fingerprint)`). |
 | `option_contracts`, `option_quote_snapshots`, `option_greek_snapshots` | Options data (`0017_options_market_data.sql`). |
-| `ingestion_runs`, `dead_letter_queue`, `source_audit`, `anomaly_flags` | Ingestion bookkeeping and data-quality audit. |
+| `ingestion_runs`, `dead_letter_queue` | Ingestion bookkeeping; the admin reliability section of `/admin/data-quality` reads them (`server/modules/data-quality/`). |
+| `source_audit`, `anomaly_flags` | Audit tables from `0004_quality_audit_tables.sql` with no writer configured: nothing inserts rows, so no page reads them. Market-data quality (`/data-quality`) is computed from `candles`, `quote_snapshots`, `fundamentals` and `corporate_actions` instead. |
 
 ## 5. Deployment and CI
 
