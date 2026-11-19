@@ -188,7 +188,7 @@ sequenceDiagram
     M->>M: evaluateExecutionQuote, drop delayed, stale, synthetic or older than 15 s
     M->>R: updateQuote(tick)
     M->>TP: processTick(tick)
-    TP->>TP: liquidityCap = max(1, floor(0.1 x volume traded since previous tick))
+    TP->>TP: liquidityCap = max(1, floor(0.1 x volume traded since previous tick)), 0 when nothing traded
     TP->>DB: SELECT working orders for exchange and symbol by placed_at, no locks
     loop each candidate, own SERIALIZABLE transaction
         TP->>DB: account FOR UPDATE, skip unless ACTIVE and unlocked

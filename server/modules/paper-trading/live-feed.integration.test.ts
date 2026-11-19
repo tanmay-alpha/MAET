@@ -18,12 +18,12 @@ import { registerMarketSymbols } from "../../domain/market/symbol";
 import { listPaperInterest } from "./interest-subscriptions";
 import { createPaperTradingService } from "./service";
 
-function tick(symbol: string, price: number): Tick {
+function tick(symbol: string, price: number, volume = 1000): Tick {
   return {
     exchange: "NSE",
     symbol,
     price,
-    volume: 1000,
+    volume,
     ts: new Date().toISOString(),
     source: "angelone",
     quality: "live",
@@ -122,7 +122,9 @@ describe("paper live feed", () => {
     matcher.start();
     try {
       const filledSignal = nextInterestChange("order_filled");
-      bus.emit("tick", tick(symbol, 99));
+      // Volume is cumulative: the first tick only sets the baseline, the next one trades.
+      bus.emit("tick", tick(symbol, 101, 1000));
+      bus.emit("tick", tick(symbol, 99, 1010));
       await filledSignal;
     } finally {
       matcher.stop();
