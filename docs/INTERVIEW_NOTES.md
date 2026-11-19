@@ -74,7 +74,7 @@ Each window is training → validation → test with exact calendar-day spans: t
 
 ### 16. Do you handle splits, bonuses and dividends?
 
-The adjustment code does: backward adjustment strictly before the ex-date, applied oldest first. A split $a{:}b$ scales prices by $b/a$; a bonus by $b/(a+b)$; a dividend (total-return series only) by $(c - D)/c$ (`server/domain/data/corporate-actions.ts`). To be honest: no production backtest path supplies corporate actions yet, and no corporate-action ingestion exists, so backtests run on stored Yahoo candles.
+The adjustment code does: backward adjustment strictly before the ex-date, applied oldest first. A split $a{:}b$ scales prices by $b/a$; a bonus by $b/(a+b)$; a dividend (total-return series only) by $(c - D)/c$ (`server/domain/data/corporate-actions.ts`). Production ingests Yahoo dividends and splits for the Nifty 50 into `corporate_actions` every evening, but backtests deliberately do not apply them: a fixture test across Reliance's October 2024 bonus shows Yahoo's stored candles are already split-adjusted, so applying the split again would invent a +100% gap. Instead each backtest warns, listing the corporate actions inside its window. Dividends are not in the returns, so these are price-return backtests.
 
 ### 17. How are the APIs secured?
 
@@ -273,6 +273,6 @@ These are the constraints I checked while designing the data paths. They shape w
 2. Auto-release or force-close stuck `LIQUIDATION_PENDING` accounts on a timer, and re-evaluate them from the last known close outside market hours.
 3. Add a product field (CNC/MIS) to paper orders, charge intraday rates for MIS, and square off MIS positions at 15:20.
 4. Run the research workers as a separate Render worker (or a queue), and move `backtestV2.run` onto the job queue.
-5. Wire corporate actions and point-in-time fundamentals into backtests, and replace the flat bps slippage with the existing `ExecutionModel`.
+5. Wire point-in-time fundamentals into backtests, offer a total-return series (dividends) once candle split basis is checked per symbol, and replace the flat bps slippage with the existing `ExecutionModel`.
 6. Add a property-based test that $\sum \text{ledger} = \text{cash}$ after random sequences of fills, cancels and resets.
 7. Add a BSE live source (the Angel One token budget across paper interest, alerts and market streams exists; BSE symbols still get no ticks).

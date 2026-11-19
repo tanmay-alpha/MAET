@@ -32,6 +32,7 @@ import { INDICATOR_ENGINE_VERSION } from "../../../shared/indicators/canonical";
 
 import {
   adjustCandles,
+  unappliedCorporateActionsWarning,
   type CorporateAction,
   type PriceAdjustmentSeries,
 } from "../data/corporate-actions";
@@ -50,6 +51,12 @@ export interface V3BacktestRunRequest {
   timeframe?: string;
   corporateActions?: CorporateAction[];
   priceSeries?: PriceAdjustmentSeries;
+  /**
+   * Corporate actions on record that are NOT applied to `candles` (stored Yahoo candles are
+   * already split-adjusted by the provider; see docs/RESEARCH_ENGINE.md §7). Those with an IST
+   * ex-date inside the run window are listed in `warnings`.
+   */
+  unappliedCorporateActions?: CorporateAction[];
   /**
    * Bars before this timestamp only warm up indicators: no signals act on them and they are not
    * part of the equity curve or metrics. Default: trade from the second bar.
@@ -230,6 +237,12 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     throw new Error(`tradeFrom ${new Date(tradeFromMs).toISOString()} is after the last candle`);
   }
   const startBar = sorted[firstTradeBar - 1];
+  const corporateActionWarning = unappliedCorporateActionsWarning(
+    request.unappliedCorporateActions ?? [],
+    startBar.ts,
+    sorted[sorted.length - 1].ts,
+  );
+  if (corporateActionWarning) warnings.push(corporateActionWarning);
 
   const equityCurve: EquityPoint[] = [{ timestamp: new Date(startBar.ts).getTime(), equity }];
 

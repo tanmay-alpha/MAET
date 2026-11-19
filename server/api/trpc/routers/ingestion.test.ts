@@ -29,6 +29,18 @@ describe("ingestion options-chain trigger authorization", () => {
   });
 });
 
+describe("ingestion corporate-actions trigger authorization", () => {
+  test("requires the canonical admin role", async () => {
+    const caller = ingestionRouter.createCaller({ userId: "authenticated-user", email: null, role: "user" });
+    await expect(caller.triggerCorporateActions()).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  test("validates the symbol list", async () => {
+    const caller = ingestionRouter.createCaller({ userId: "admin-user", email: null, role: "admin" });
+    await expect(caller.triggerCorporateActions({ symbols: [] })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
 describe("ingestion status authorization", () => {
   test("rejects non-admin callers", async () => {
     const caller = ingestionRouter.createCaller({
