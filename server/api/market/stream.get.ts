@@ -3,7 +3,7 @@ import { getClientIp } from "../../infra/client-ip";
 import { bus } from "../../infra/bus";
 import { buildQuotesPayload, loadQuotes } from "../../domain/market/quote-service";
 import { toMarketQuote } from "../../domain/market/quote-quality";
-import { INDEX_SYMBOLS, lookupSymbol, MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol";
+import { isCataloguedMarketSymbol, MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol";
 import { subscribeMarketSymbols } from "../../orchestrator";
 import { MAX_STREAM_SYMBOLS, type Tick } from "@shared/types";
 
@@ -18,17 +18,6 @@ const connectionsByIp = new Map<string, number>();
 
 export function getActiveStreamConnections(): number {
   return activeConnections;
-}
-
-const INDEX_NAMES = new Set(INDEX_SYMBOLS.map((index) => index.symbol));
-
-/**
- * Indices and symbols in the market symbol master (the bundled NIFTY 50 plus, once the
- * Angel One instrument master has loaded, every NSE equity). Only these can stream: an
- * anonymous client must not put arbitrary strings into the feed registry or the snapshot.
- */
-function isCatalogued(symbol: string): boolean {
-  return INDEX_NAMES.has(symbol) || lookupSymbol("NSE", symbol) !== undefined || lookupSymbol("BSE", symbol) !== undefined;
 }
 
 export default defineEventHandler(async (event) => {
@@ -46,9 +35,11 @@ export default defineEventHandler(async (event) => {
   if (requested.some((symbol) => !MARKET_SYMBOL_PATTERN.test(symbol))) {
     throw createError({ statusCode: 400, statusMessage: "Invalid symbol" });
   }
-  // Unknown symbols are dropped rather than failing the stream: the browser streams the
-  // union of every mounted component, and its REST poll still covers anything dropped.
-  const symbols = requested.filter(isCatalogued);
+  // Only catalogued symbols stream: an anonymous client must not put arbitrary strings into
+  // the feed registry or the snapshot. Unknown symbols are dropped rather than failing the
+  // stream: the browser streams the union of every mounted component, and its REST poll
+  // still covers anything dropped.
+  const symbols = requested.filter(isCataloguedMarketSymbol);
   if (symbols.length === 0) {
     throw createError({ statusCode: 400, statusMessage: "No known symbols" });
   }
@@ -56,8 +47,7 @@ export default defineEventHandler(async (event) => {
   if (activeConnections >= MAX_CONNECTIONS) {
     throw createError({ statusCode: 503, statusMessage: "Market stream capacity reached" });
   }
-  // Same client identity as the API rate limiter: Cloudflare's connecting IP when
-  // present, otherwise the leftmost X-Forwarded-For hop (spoofable; the global cap still holds).
+  // Same client identity as the API rate limiter (see server/infra/client-ip.ts).
   const ip = getClientIp(event);
   const ipConnections = connectionsByIp.get(ip) ?? 0;
   if (ipConnections >= MAX_MARKET_STREAMS_PER_IP) {

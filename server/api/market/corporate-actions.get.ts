@@ -1,13 +1,18 @@
 import { createError, defineEventHandler, getQuery, setResponseHeader } from "h3";
 import { AppError } from "@shared/types";
 import { loadCorporateActions } from "../../domain/market/corporate-action-service";
-import { MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol";
+import { isCataloguedMarketSymbol } from "../../domain/market/symbol";
+import { isMarketSymbol } from "../../domain/market/symbol-pattern";
 import { getLogger } from "../../infra/logger";
 
 export default defineEventHandler(async (event) => {
   const symbol = String(getQuery(event).symbol ?? "").trim().toUpperCase();
-  if (!symbol || !MARKET_SYMBOL_PATTERN.test(symbol)) {
+  if (!isMarketSymbol(symbol)) {
     throw createError({ statusCode: 400, statusMessage: "Invalid symbol" });
+  }
+  // Anonymous callers must not make the server look up arbitrary tickers on Yahoo.
+  if (!isCataloguedMarketSymbol(symbol)) {
+    throw createError({ statusCode: 400, statusMessage: "Unknown symbol" });
   }
 
   try {

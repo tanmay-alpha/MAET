@@ -33,7 +33,7 @@ const handler = streamHandler as unknown as (event: unknown) => Promise<unknown>
 
 function fakeStreamEvent(symbols: string, ip = "198.51.100.1") {
   const req = Object.assign(new EventEmitter(), {
-    headers: { "x-forwarded-for": ip } as Record<string, string>,
+    headers: { "cf-connecting-ip": ip } as Record<string, string>,
     socket: {},
   });
   const res = Object.assign(new EventEmitter(), {

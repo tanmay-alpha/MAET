@@ -41,6 +41,18 @@ export function lookupSymbolByToken(token: string): Quote | undefined {
   return byToken.get(token);
 }
 
+const INDEX_NAMES = new Set(INDEX_SYMBOLS.map((index) => index.symbol));
+
+/**
+ * Indices and symbols in the market symbol master (the bundled NIFTY 50 plus, once the
+ * Angel One instrument master has loaded, every NSE equity). Public endpoints that reach
+ * Yahoo accept only these, so an anonymous client cannot make the server fetch arbitrary
+ * tickers.
+ */
+export function isCataloguedMarketSymbol(symbol: string): boolean {
+  return INDEX_NAMES.has(symbol) || lookupSymbol("NSE", symbol) !== undefined || lookupSymbol("BSE", symbol) !== undefined;
+}
+
 export function yahooTicker(quote: Quote): string {
   const configured = quote.yahooTicker?.trim();
   if (configured?.startsWith("^") || configured?.endsWith(".NS") || configured?.endsWith(".BO")) {
