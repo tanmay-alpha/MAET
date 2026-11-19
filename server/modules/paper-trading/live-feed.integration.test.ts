@@ -17,6 +17,8 @@ import { processOutboxBatch, type OutboxPublisher } from "../../workers/paper-ou
 import { registerMarketSymbols } from "../../domain/market/symbol";
 import { listPaperInterest } from "./interest-subscriptions";
 import { createPaperTradingService } from "./service";
+import { workingOrderSymbols } from "./working-order-symbols";
+import { paperTradingTickProcessor } from "./tick-processor";
 
 function tick(symbol: string, price: number, volume = 1000): Tick {
   return {
@@ -82,6 +84,27 @@ function nextInterestChange(reason: PaperInterestChanged["reason"]): Promise<voi
     resolve();
   });
   return promise;
+}
+
+/**
+ * Emits a tick and waits for the matcher work it started: OrderMatcherWorker runs processTick
+ * fire-and-forget, so the call is wrapped to capture its promise. A tick the matcher skipped
+ * starts no work and returns at once.
+ */
+async function emitTickAndSettle(next: Tick): Promise<void> {
+  const pending: Promise<unknown>[] = [];
+  const processTick = paperTradingTickProcessor.processTick;
+  paperTradingTickProcessor.processTick = (forwarded) => {
+    const work = processTick.call(paperTradingTickProcessor, forwarded);
+    pending.push(work);
+    return work;
+  };
+  try {
+    bus.emit("tick", next);
+  } finally {
+    paperTradingTickProcessor.processTick = processTick;
+  }
+  await Promise.all(pending);
 }
 
 describe("paper live feed", () => {
@@ -234,5 +257,43 @@ describe("paper live feed", () => {
     await resetSignal;
     const afterReset = (await listPaperInterest()).filter((row) => [held, resting].includes(row.symbol));
     expect(afterReset).toEqual([]);
+  });
+
+  it("matches the first tick after a stop order commits, even before the paper-interest read sees it", async () => {
+    const userId = await createTestUser();
+    const symbol = `LIVS${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    registerMarketSymbols([
+      { exchange: "NSE", symbol, name: symbol, token: `8${Date.now()}`, yahooTicker: `${symbol}.NS`, isActive: true },
+    ]);
+    const service = serviceQuoting(105);
+    await service.placeOrder({ userId, command: { symbol, exchange: "NSE", side: "BUY", type: "MARKET", qty: 2 } });
+
+    // The symbol streams for the open position, and the last read found no working order on it.
+    await reconcilePaperInterestSubscriptions();
+    expect(getSubscriptionRefCount(symbol)).toBe(1);
+
+    // The stop commits; the refresh it requests has not completed (here: never runs).
+    const stop = await service.placeOrder({
+      userId,
+      command: { symbol, exchange: "NSE", side: "SELL", type: "STOP_LOSS_LIMIT", stopPrice: 100, limitPrice: 95, qty: 2 },
+    });
+    expect(stop.order.status).toBe("TRIGGER_PENDING");
+
+    const matcher = new OrderMatcherWorker({ hasWorkingOrders: (exchange, s) => workingOrderSymbols.has(exchange, s) });
+    matcher.start();
+    const status = async () =>
+      (await getDb().select({ status: paperOrders.status }).from(paperOrders).where(eq(paperOrders.id, stop.order.id)))[0]!.status;
+    try {
+      // The very next tick crosses the stop. It is the symbol's first tick (no volume baseline),
+      // so it triggers the stop but fills nothing...
+      await emitTickAndSettle(tick(symbol, 99, 1000));
+      expect(await status()).toBe("TRIGGERED");
+      // ...and when the price recovers above the stop, the triggered stop-limit (limit 95) still
+      // executes: 10 shares traded, 10% participation, one share fills.
+      await emitTickAndSettle(tick(symbol, 104, 1010));
+      expect(await status()).toBe("PARTIALLY_FILLED");
+    } finally {
+      matcher.stop();
+    }
   });
 });
