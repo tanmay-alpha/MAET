@@ -70,7 +70,7 @@ export const MAX_STREAM_SYMBOLS = 150;
 /** Body of GET /api/market/quotes and of the SSE `snapshot` event. */
 export type QuotesPayload = {
   asOf: string;
-  source: "angelone" | "yahoo";
+  source: "angelone" | "yahoo" | "simulated";
   /** True when any quote in `quotes` is delayed. */
   delayed: boolean;
   marketPhase: MarketPhase;

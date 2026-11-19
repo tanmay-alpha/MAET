@@ -36,6 +36,7 @@ type SidebarContextProps = {
   setOpenMobile: (open: boolean) => void;
   isMobile: boolean;
   toggleSidebar: () => void;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
 };
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null);
@@ -71,6 +72,7 @@ const SidebarProvider = React.forwardRef<
   ) => {
     const isMobile = useIsMobile(SIDEBAR_DOCKED_MIN_WIDTH);
     const [openMobile, setOpenMobile] = React.useState(false);
+    const triggerRef = React.useRef<HTMLButtonElement>(null);
 
     // This is the internal state of the sidebar.
     // We use openProp and setOpenProp for control from outside the component.
@@ -122,6 +124,7 @@ const SidebarProvider = React.forwardRef<
         openMobile,
         setOpenMobile,
         toggleSidebar,
+        triggerRef,
       }),
       [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar],
     );
@@ -172,7 +175,7 @@ const Sidebar = React.forwardRef<
     },
     ref,
   ) => {
-    const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
+    const { isMobile, state, openMobile, setOpenMobile, triggerRef } = useSidebar();
 
     if (collapsible === "none") {
       return (
@@ -196,6 +199,11 @@ const Sidebar = React.forwardRef<
             data-sidebar="sidebar"
             data-mobile="true"
             className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
+            onCloseAutoFocus={(event) => {
+              // This controlled sheet has a trigger outside the Dialog tree.
+              event.preventDefault();
+              triggerRef.current?.focus();
+            }}
             style={
               {
                 "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
@@ -264,11 +272,16 @@ const SidebarTrigger = React.forwardRef<
   React.ElementRef<typeof Button>,
   React.ComponentProps<typeof Button>
 >(({ className, onClick, ...props }, ref) => {
-  const { toggleSidebar } = useSidebar();
+  const { toggleSidebar, triggerRef } = useSidebar();
+  const setTriggerRef = React.useCallback((node: HTMLButtonElement | null) => {
+    triggerRef.current = node;
+    if (typeof ref === "function") return ref(node);
+    if (ref) ref.current = node;
+  }, [ref, triggerRef]);
 
   return (
     <Button
-      ref={ref}
+      ref={setTriggerRef}
       data-sidebar="trigger"
       variant="ghost"
       size="icon"

@@ -64,7 +64,7 @@
     "enrich:nifty500": "bun run server/scripts/enrich-nifty500.ts",
     "test:migration-0029": "bun test server/db/migrations/0029-upgrade.integration.test.ts",
     "test:research-reports": "bun test server/modules/research-reports/research-reports.postgres.integration.test.ts",
-    "test:demo": "bun test server/modules/demo/seed.integration.test.ts",
+    "test:demo": "bun test server/modules/demo/seed.integration.test.ts server/modules/demo/journey.integration.test.ts",
     "seed:demo": "bun --no-env-file run server/scripts/seed-demo.ts"
   },
   "dependencies": {

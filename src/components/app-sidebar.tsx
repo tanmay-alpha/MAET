@@ -193,14 +193,16 @@ export function AppSidebar() {
         {/* EXPERIMENTAL */}
         <SidebarGroup className="mt-auto">
           <SidebarGroupLabel
+            asChild
             className="cursor-pointer flex items-center justify-between text-xs text-muted-foreground/70 hover:text-muted-foreground"
-            onClick={() => setShowExperimental((prev) => !prev)}
           >
-            <span>Experimental</span>
-            <ChevronDown className={`h-3 w-3 transition-transform ${showExperimental ? "rotate-180" : ""}`} />
+            <button type="button" aria-expanded={showExperimental} aria-controls="experimental-navigation" onClick={() => setShowExperimental((prev) => !prev)}>
+              <span>Experimental</span>
+              <ChevronDown className={`h-3 w-3 transition-transform ${showExperimental ? "rotate-180" : ""}`} />
+            </button>
           </SidebarGroupLabel>
           {showExperimental && (
-            <SidebarGroupContent>
+            <SidebarGroupContent id="experimental-navigation">
               <SidebarMenu>
                 {experimentalItems.map((item) => (
                   <SidebarMenuItem key={item.url}>

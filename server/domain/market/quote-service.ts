@@ -6,6 +6,7 @@ import { quoteStore } from "./quote-store";
 import { lookupSymbol, resolveMarketSymbol } from "./symbol";
 import { getAngelOneMarketQuotes, type AngelOneMarketQuote } from "../../data/sources/angelone/client";
 import { configuredHolidays, currentMarketPhase, sessionQuality, toMarketQuote } from "./quote-quality";
+import { loadDemoQuotes } from "../../modules/demo/quotes";
 
 /** Upper bound on distinct symbols kept in the in-process quote cache. */
 export const MAX_CACHED_QUOTES = 1_000;
@@ -70,9 +71,10 @@ function freshStreamTick(symbol: string, now: Date, ttl: number): Tick | undefin
 async function resolveQuotes(symbols: string[], force: boolean): Promise<PromiseSettledResult<Tick>[]> {
   const now = new Date();
   const ttl = getCacheTtl();
-  const streamed = new Map<string, Tick>();
+  const streamed = await loadDemoQuotes(symbols);
   if (!force) {
     for (const symbol of symbols) {
+      if (streamed.has(symbol)) continue;
       const tick = freshStreamTick(symbol, now, ttl);
       if (tick) streamed.set(symbol, tick);
     }
@@ -217,7 +219,9 @@ export function buildQuotesPayload(
 ): QuotesPayload {
   return {
     asOf: now.toISOString(),
-    source: result.quotes.some((quote) => quote.source === "angelone") ? "angelone" : "yahoo",
+    source: result.quotes.length > 0 && result.quotes.every((quote) => quote.source === "simulated")
+      ? "simulated"
+      : result.quotes.some((quote) => quote.source === "angelone") ? "angelone" : "yahoo",
     delayed: result.quotes.some((quote) => quote.delayed),
     marketPhase: currentMarketPhase(now, holidays),
     quotes: result.quotes,
