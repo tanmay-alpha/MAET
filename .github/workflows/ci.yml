@@ -234,3 +234,31 @@ jobs:
 
       - name: Build Backend Server
         run: bun run --cwd server build
+
+      # Render runs the bundle with Node, not Bun, so APIs Bun has and the
+      # production Node lacks (Promise.withResolvers on Node 20) pass every Bun
+      # test. Boot the built server on the Render runtime and probe liveness.
+      - name: Set Up Render Node Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Boot Built Backend On Node
+        shell: bash
+        run: |
+          set -a; source .env.test; set +a
+          export PORT=3900 GIT_SHA="$GITHUB_SHA" SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:1/unreachable
+          node server/.output/server/index.mjs > /tmp/backend.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 30); do
+            body="$(curl --silent --max-time 5 http://127.0.0.1:3900/api/health || true)"
+            if [[ "$body" == *"\"version\":\"$GITHUB_SHA\""* ]]; then
+              echo "backend booted on $(node --version): $body"
+              kill "$pid"
+              exit 0
+            fi
+            sleep 2
+          done
+          kill "$pid" || true
+          cat /tmp/backend.log
+          exit 1

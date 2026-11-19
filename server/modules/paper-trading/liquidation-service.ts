@@ -162,6 +162,7 @@ export class PaperTradingLiquidationService {
             fillQuantity: position.totalShares,
             reason: "MARGIN_LIQUIDATION",
             ledgerSourceType: "LIQUIDATION_FILL",
+            markFor: (exchange, symbol) => quoteFor(exchange, symbol)?.price,
             now,
             createId: () => crypto.randomUUID(),
           });

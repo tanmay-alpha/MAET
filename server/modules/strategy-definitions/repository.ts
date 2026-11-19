@@ -8,7 +8,7 @@ import {
   strategyDefinitions,
   strategyVersions,
 } from "../../db/schema";
-import { eq, and, desc, count } from "drizzle-orm";
+import { eq, and, desc, max } from "drizzle-orm";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
 // ============================================================
@@ -147,6 +147,18 @@ export async function getVersion(
   return (row as unknown as StrategyVersionRow) ?? null;
 }
 
+export type CreateVersionResult =
+  | { created: StrategyVersionRow }
+  | { duplicateOf: StrategyVersionRow };
+
+/**
+ * Assigns the next version number and inserts the version atomically. The
+ * strategy row is locked for the transaction, so concurrent calls for one
+ * strategy are serialised: each sees the previous call's version, numbers stay
+ * consecutive, and an identical definition is reported as a duplicate instead
+ * of failing on the (strategy_id, definition_hash) unique index. Numbering uses
+ * max(version_number), not count(*), so it stays correct if a version row is removed.
+ */
 export async function createVersion(
   userId: string,
   strategyId: string,
@@ -154,41 +166,39 @@ export async function createVersion(
   definitionHash: string,
   engineVersion: string,
   indicatorVersion: string,
-): Promise<StrategyVersionRow> {
-  // Find next version number
-  const [countResult] = await db
-    .select({ count: count() })
-    .from(strategyVersions)
-    .where(eq(strategyVersions.strategyId, strategyId));
-  const nextVersion = (countResult?.count ?? 0) + 1;
+): Promise<CreateVersionResult> {
+  return db.transaction(async (tx) => {
+    await tx
+      .select({ id: strategyDefinitions.id })
+      .from(strategyDefinitions)
+      .where(and(eq(strategyDefinitions.id, strategyId), eq(strategyDefinitions.userId, userId)))
+      .for("update");
 
-  const [row] = await db
-    .insert(strategyVersions)
-    .values({
-      strategyId,
-      userId,
-      versionNumber: nextVersion,
-      definition: definition as unknown as Record<string, unknown>,
-      definitionHash,
-      engineVersion,
-      indicatorVersion,
-      schemaVersion: 1,
-    })
-    .returning();
-  return row as unknown as StrategyVersionRow;
-}
+    const [duplicate] = await tx
+      .select()
+      .from(strategyVersions)
+      .where(and(eq(strategyVersions.strategyId, strategyId), eq(strategyVersions.definitionHash, definitionHash)))
+      .limit(1);
+    if (duplicate) return { duplicateOf: duplicate as unknown as StrategyVersionRow };
 
-export async function getVersionByHash(
-  strategyId: string,
-  hash: string,
-): Promise<StrategyVersionRow | null> {
-  const [row] = await db
-    .select()
-    .from(strategyVersions)
-    .where(and(
-      eq(strategyVersions.strategyId, strategyId),
-      eq(strategyVersions.definitionHash, hash),
-    ))
-    .limit(1);
-  return (row as unknown as StrategyVersionRow) ?? null;
+    const [latest] = await tx
+      .select({ latest: max(strategyVersions.versionNumber) })
+      .from(strategyVersions)
+      .where(eq(strategyVersions.strategyId, strategyId));
+
+    const [row] = await tx
+      .insert(strategyVersions)
+      .values({
+        strategyId,
+        userId,
+        versionNumber: (latest?.latest ?? 0) + 1,
+        definition: definition as unknown as Record<string, unknown>,
+        definitionHash,
+        engineVersion,
+        indicatorVersion,
+        schemaVersion: 1,
+      })
+      .returning();
+    return { created: row as unknown as StrategyVersionRow };
+  });
 }

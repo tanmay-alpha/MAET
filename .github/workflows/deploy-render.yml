@@ -42,7 +42,9 @@ jobs:
       - name: Build Render backend
         run: bun run --cwd server build
 
-      - name: Verify production health endpoint
+      # /api/ready answers 503 until the database and Redis are reachable; its body
+      # is the health document, so the loop still reports the failing component.
+      - name: Verify production readiness and revision
         shell: bash
         run: |
           expected_sha="$GITHUB_SHA"
@@ -53,7 +55,7 @@ jobs:
           last_health_response=""
 
           while (( SECONDS < deadline )); do
-            http_status="$(curl --silent --show-error --output /tmp/maet-health.json --write-out '%{http_code}' --max-time 15 https://maet.onrender.com/api/health || true)"
+            http_status="$(curl --silent --show-error --output /tmp/maet-health.json --write-out '%{http_code}' --max-time 15 https://maet.onrender.com/api/ready || true)"
             last_http_status="${http_status:-curl-error}"
 
             health_fields=()
@@ -106,8 +108,8 @@ jobs:
               else
                 echo "Render deployment not ready: HTTP $http_status"
               fi
-            elif [[ "$http_status" == "200" ]]; then
-              echo "Render deployment not ready: HTTP 200 with malformed health response"
+            elif [[ "$http_status" == "200" || "$http_status" == "503" ]]; then
+              echo "Render deployment not ready: HTTP $http_status with malformed readiness response"
             else
               echo "Render deployment not ready: HTTP $last_http_status"
             fi
@@ -127,3 +129,6 @@ jobs:
             echo "last_health_response=$last_health_response"
           fi
           exit 1
+
+      - name: Smoke-test the deployed backend
+        run: bun run scripts/smoke-deploy.ts --sha "$GITHUB_SHA" --backend-only
