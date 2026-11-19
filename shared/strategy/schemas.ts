@@ -6,7 +6,8 @@
 import { z } from "zod";
 import {
   MAX_CONDITIONS, MAX_NESTING_DEPTH, MAX_LAG,
-  MAX_OPEN_POSITIONS, MAX_PYRAMIDS, MAX_CUSTOM_SYMBOLS,
+  MAX_OPEN_POSITIONS, MAX_CUSTOM_SYMBOLS,
+  unsupportedStrategyFeatures,
 } from "./ast";
 
 // ============================================================
@@ -136,15 +137,19 @@ export const StrategyRiskConfigSchema = z.object({
   stopLossPercent: z.number().positive().finite().optional(),
   takeProfitPercent: z.number().positive().finite().optional(),
   trailingStopPercent: z.number().positive().finite().optional(),
+  // Not supported by the backtest engine: rejected by StrategyDefinitionSchema (unsupportedStrategyFeatures).
   atrStopMultiplier: z.number().positive().finite().optional(),
   maximumOpenPositions: z.number().int().min(1).max(MAX_OPEN_POSITIONS),
   maximumPositionPercent: z.number().min(1).max(100).optional(),
   maximumSectorExposurePercent: z.number().min(1).max(100).optional(),
+  // Enforced by runner-v3 on closing marks: daily loss flattens and blocks entries until the next
+  // IST trading day; drawdown from the equity peak flattens and stops trading.
   maximumDailyLossPercent: z.number().min(0.1).max(50).optional(),
   maximumDrawdownPercent: z.number().min(1).max(100).optional(),
   cooldownBars: z.number().int().min(0).max(500).optional(),
+  // Pyramiding is not supported: allowPyramiding must be false and maximumPyramids absent.
   allowPyramiding: z.boolean(),
-  maximumPyramids: z.number().int().min(1).max(MAX_PYRAMIDS).optional(),
+  maximumPyramids: z.number().int().positive().optional(),
 });
 
 // ============================================================
@@ -178,6 +183,7 @@ export const StrategyExecutionConfigSchema = z.object({
 // Strategy direction
 // ============================================================
 
+// LONG_SHORT parses here but StrategyDefinitionSchema rejects it (unsupportedStrategyFeatures).
 export const StrategyDirectionSchema = z.enum(["LONG_ONLY", "SHORT_ONLY", "LONG_SHORT"]);
 
 // ============================================================
@@ -194,6 +200,11 @@ export const StrategyDefinitionSchema = z.object({
   exit: StrategyRuleGroupSchema,
   risk: StrategyRiskConfigSchema,
   execution: StrategyExecutionConfigSchema,
+}).superRefine((definition, ctx) => {
+  // Settings the engine would otherwise accept and silently ignore.
+  for (const issue of unsupportedStrategyFeatures(definition)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: issue.path.split("."), message: issue.message });
+  }
 });
 
 // ============================================================
