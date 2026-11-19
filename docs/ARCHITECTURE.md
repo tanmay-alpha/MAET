@@ -251,7 +251,7 @@ Sources: `server/api/trpc/routers/backtest-v2.ts`, `server/domain/backtest/prese
 | `server/domain/backtest/` | Metric formulas (`risk-metrics.ts`) and the preset adapter. |
 | `server/domain/data/`, `server/domain/fundamentals/` | Corporate-action adjustment; ratios and point-in-time fundamentals. |
 | `server/domain/calculations/`, `screener/`, `technical/`, `analysis/`, `company/`, `portfolio/` | Calculator registry and batch runner, screener engine, technical indicators, stock scorecard, company detail, position reconciliation. |
-| `server/modules/` | Feature services and repositories: `paper-trading/` (service, fill writer, tick processor, liquidation, risk monitor, outbox), `strategy-jobs/`, `strategy-definitions/`, `alerts/`, `capabilities/`, `options/`, `peers/`, `screener-dsl/`, `market-breadth/`, `chart-workspaces/`, `trade-theses/`, `technical-snapshots/`, `data-quality/`. |
+| `server/modules/` | Feature services and repositories: `paper-trading/` (service, fill writer, tick processor, liquidation, risk monitor, outbox), `strategy-jobs/`, `strategy-definitions/`, `alerts/`, `capabilities/`, `options/`, `peers/`, `screener-dsl/`, `market-breadth/`, `chart-workspaces/`, `trade-theses/`, `technical-snapshots/`, `data-quality/`, `demo/` (synthetic demo dataset and `MAET_DEMO_MODE`; seeded by `bun run seed:demo`). |
 | `server/data/` | Clients and provider adapters: Drizzle, Redis, BigQuery, Angel One, Yahoo, NSE master and index constituents, Yahoo fundamentals. |
 | `server/workers/` | In-process workers (Angel One WS, candle writer, market clock, order matcher, alert evaluator, daily processor), the backtest, sweep and walk-forward job functions run by the in-process strategy job runner, the standalone strategy evaluator, plus the ingestion engine. |
 | `server/infra/` | Event bus, logger (pino with redaction), health probes, AES-256-GCM credential encryption, client-IP derivation, DB diagnostics, and an unregistered shutdown helper (`shutdown.ts`). |
@@ -309,7 +309,7 @@ The account `generation` implements reset: every query filters by it, and a rese
 |---|---|---|
 | `GET /api/health` | Always HTTP 200 (so a provider outage does not make Render restart the instance), `Cache-Control: no-store`. Body: `status` `ok` or `degraded`, uptime, version (`GIT_SHA`, `RENDER_GIT_COMMIT` or `VERCEL_GIT_COMMIT_SHA`), checks `database` (`select 1`), `redis` (`PING`), `orchestrator`, `marketData`. Probes time out after 2 s and are cached for 10 s. | `server/api/health.get.ts`, `server/infra/health.ts` |
 | `GET /health/detailed` | Admin JWT required; row counts, dead-letter-queue stats, last 5 ingestion runs and source staleness. | `server/routes/health/detailed.get.ts` |
-| Capabilities | Feature readiness from `FEATURE_*` flags plus a 30 s cached table-existence check. | `server/modules/capabilities/readiness.ts` |
+| Capabilities | Feature readiness from `FEATURE_*` flags plus a 30 s cached table-existence check; `capabilities.get` also returns `demoMode` (`MAET_DEMO_MODE=1`), which makes the UI show a permanent synthetic-data banner. | `server/modules/capabilities/readiness.ts`, `server/modules/demo/mode.ts` |
 | Logging | pino, `info` in production; redacts password, TOTP secret, API key and authorization/cookie/idempotency headers. | `server/infra/logger.ts` |
 | tRPC errors | Internal errors are logged with path, code, cause chain and SQLSTATE; Drizzle query errors log the parameterised SQL but never bound parameters or procedure input. | `server/api/trpc/core.ts` (`reportTrpcError`) |
 

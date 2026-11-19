@@ -12,6 +12,7 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { API_BASE_URL } from "@/lib/api-url";
+import { DemoModeGate } from "@/components/demo/demo-mode-banner";
 
 function NotFoundComponent() {
   return (
@@ -102,7 +103,9 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   return (
     <QueryClientProvider client={queryClient}>
-      <Outlet />
+      <DemoModeGate>
+        <Outlet />
+      </DemoModeGate>
     </QueryClientProvider>
   );
 }
