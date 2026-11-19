@@ -14,6 +14,7 @@
  *    - PARAMETER_INSTABILITY (high neighbor variance or steep cliff)
  *    - HIGH_COST_DRAG (transaction costs consuming > 25% of gross profit)
  * 4. Parameter heatmap / 2D matrix projection for UI visualization.
+ * 5. Probability of backtest overfitting by combinatorially symmetric cross-validation (CSCV).
  */
 
 /** Grid spacing of one swept parameter; neighbours differ from the best point by about one step. */
@@ -244,4 +245,164 @@ export function build2DParameterHeatmap(
       sharpe: Number(p.sharpe.toFixed(2)),
       totalReturn: Number((p.totalReturn * 100).toFixed(2)),
     }));
+}
+
+// ============================================================
+// Probability of Backtest Overfitting (CSCV)
+// ============================================================
+
+/** Sufficient statistics of one candidate's per-period returns inside one CSCV block. */
+export interface ReturnBlockStats {
+  count: number;
+  sum: number;
+  sumSquares: number;
+}
+
+export interface PboResult {
+  /** Share of IS/OOS splits whose in-sample winner ranks at or below the OOS median (logit <= 0). */
+  pbo: number;
+  /** Candidates (parameter sets) the in-sample winner was picked from. */
+  trials: number;
+  /** S: contiguous blocks the observations were cut into. */
+  blocks: number;
+  /** C(S, S/2): in-sample / out-of-sample splits evaluated. */
+  splits: number;
+  /** Median logit of the winner's OOS relative rank; > 0 means it usually beats the OOS median. */
+  medianLogit: number;
+}
+
+export const DEFAULT_CSCV_BLOCKS = 16;
+
+/** Cuts `returns` into `blocks` contiguous blocks; block b holds indices [floor(bT/S), floor((b+1)T/S)). */
+export function summariseReturnBlocks(returns: readonly number[], blocks: number): ReturnBlockStats[] {
+  const stats = Array.from({ length: blocks }, () => ({ count: 0, sum: 0, sumSquares: 0 }));
+  returns.forEach((r, t) => {
+    const b = stats[Math.floor((t * blocks) / returns.length)];
+    b.count += 1;
+    b.sum += r;
+    b.sumSquares += r * r;
+  });
+  return stats;
+}
+
+/** Block sums one PBO may add up (splits x candidates x S/2): about 20 ms, cheap enough for a request. */
+const CSCV_WORK_BUDGET = 3_000_000;
+
+/**
+ * Largest even block count S <= 16 that leaves `minPerBlock` observations per block and keeps
+ * C(S, S/2) splits over `candidates` within the work budget; 0 when no S >= 2 qualifies.
+ */
+export function cscvBlockCount(observations: number, candidates: number, minPerBlock = 4): number {
+  for (let s = DEFAULT_CSCV_BLOCKS; s >= 2; s -= 2) {
+    let splits = 1;
+    for (let k = 1; k <= s / 2; k++) splits = (splits * (s / 2 + k)) / k;
+    if (observations / s >= minPerBlock && splits * candidates * (s / 2) <= CSCV_WORK_BUDGET) return s;
+  }
+  return 0;
+}
+
+/** Per-period Sharpe ratio (mean / sample standard deviation) from sufficient statistics. */
+function sharpeFromStats(count: number, sum: number, sumSquares: number): number {
+  const mean = sum / count;
+  const variance = count > 1 ? Math.max(0, (sumSquares - sum * mean) / (count - 1)) : 0;
+  if (variance > 0) return mean / Math.sqrt(variance);
+  return mean > 0 ? Infinity : mean < 0 ? -Infinity : 0;
+}
+
+/**
+ * Probability of Backtest Overfitting by combinatorially symmetric cross-validation (Bailey,
+ * Borwein, López de Prado and Zhu, 2015) from per-candidate block statistics: `candidates[n][b]`
+ * summarises candidate n's returns in block b, and every candidate uses the same blocks.
+ *
+ * For each of the C(S, S/2) ways to pick half the blocks as in-sample (the rest out of sample), the
+ * candidate with the best in-sample Sharpe is found; its out-of-sample relative rank
+ * w = rank / (N + 1) (rank 1 = worst, ties averaged) gives the logit l = ln(w / (1 - w)). PBO is
+ * the share of splits with l <= 0. Null when there are fewer than two candidates.
+ */
+export function pboFromBlockStats(candidates: readonly (readonly ReturnBlockStats[])[]): PboResult | null {
+  const n = candidates.length;
+  if (n < 2) return null;
+  const s = candidates[0].length;
+  if (s < 2 || s % 2 !== 0 || s > 24) throw new RangeError(`CSCV needs an even block count between 2 and 24, got ${s}`);
+  for (const blocks of candidates) {
+    if (blocks.length !== s) throw new RangeError("Every candidate must have the same number of blocks");
+    blocks.forEach((b, i) => {
+      if (b.count !== candidates[0][i].count || b.count < 1) throw new RangeError("Candidates must share the same non-empty blocks");
+    });
+  }
+
+  // Blocks are shared, so a split's observation counts are the same for every candidate.
+  const blockCounts = candidates[0].map((b) => b.count);
+  const totalCount = blockCounts.reduce((t, c) => t + c, 0);
+  const sums = new Float64Array(n * s);
+  const squares = new Float64Array(n * s);
+  const totalSums = new Float64Array(n);
+  const totalSquares = new Float64Array(n);
+  candidates.forEach((blocks, c) => blocks.forEach((b, i) => {
+    sums[c * s + i] = b.sum;
+    squares[c * s + i] = b.sumSquares;
+    totalSums[c] += b.sum;
+    totalSquares[c] += b.sumSquares;
+  }));
+  const isSharpe = new Float64Array(n);
+  const oosSharpe = new Float64Array(n);
+  const logits: number[] = [];
+  const chosen: number[] = [];
+
+  for (let mask = 0; mask < 1 << s; mask++) {
+    chosen.length = 0;
+    for (let b = 0; b < s; b++) if (mask & (1 << b)) chosen.push(b);
+    if (chosen.length !== s / 2) continue;
+    let count = 0;
+    for (const b of chosen) count += blockCounts[b];
+
+    let best = 0;
+    for (let c = 0; c < n; c++) {
+      let sum = 0;
+      let sumSquares = 0;
+      for (const b of chosen) {
+        sum += sums[c * s + b];
+        sumSquares += squares[c * s + b];
+      }
+      isSharpe[c] = sharpeFromStats(count, sum, sumSquares);
+      oosSharpe[c] = sharpeFromStats(totalCount - count, totalSums[c] - sum, totalSquares[c] - sumSquares);
+      if (isSharpe[c] > isSharpe[best]) best = c;
+    }
+
+    let below = 0;
+    let ties = 0;
+    for (let c = 0; c < n; c++) {
+      if (c === best) continue;
+      if (oosSharpe[c] < oosSharpe[best]) below += 1;
+      else if (oosSharpe[c] === oosSharpe[best]) ties += 1;
+    }
+    const omega = (1 + below + ties / 2) / (n + 1);
+    logits.push(Math.log(omega / (1 - omega)));
+  }
+
+  const sorted = [...logits].sort((a, b) => a - b);
+  const mid = sorted.length / 2;
+  return {
+    pbo: logits.filter((l) => l <= 0).length / logits.length,
+    trials: n,
+    blocks: s,
+    splits: logits.length,
+    medianLogit: sorted.length % 2 === 1 ? sorted[Math.floor(mid)] : (sorted[mid - 1] + sorted[mid]) / 2,
+  };
+}
+
+/**
+ * PBO of a T x N matrix of per-period returns (`returns[t][n]`: period t of candidate n), split into
+ * `blocks` contiguous blocks of (near-)equal length. Null when there are fewer than two candidates.
+ */
+export function probabilityOfBacktestOverfitting(
+  returns: readonly (readonly number[])[],
+  blocks: number = DEFAULT_CSCV_BLOCKS,
+): PboResult | null {
+  const t = returns.length;
+  const n = t > 0 ? returns[0].length : 0;
+  if (t < blocks) throw new RangeError(`CSCV needs at least one observation per block: ${t} observations, ${blocks} blocks`);
+  if (returns.some((row) => row.length !== n)) throw new RangeError("Every period must have a return for every candidate");
+  const perCandidate = Array.from({ length: n }, (_, c) => summariseReturnBlocks(returns.map((row) => row[c]), blocks));
+  return pboFromBlockStats(perCandidate);
 }

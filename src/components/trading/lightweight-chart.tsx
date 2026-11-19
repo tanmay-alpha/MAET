@@ -78,6 +78,8 @@ export interface PaperOverlayState {
 
 export interface LightweightChartProps {
   data: ChartCandle[];
+  /** What the chart shows (symbol, period, bar size), read out in place of the canvas. */
+  ariaLabel: string;
   height?: number;
   seriesType?: "candlestick" | "line" | "area";
   chartState?: ChartState;
@@ -107,6 +109,7 @@ function formatInr(price: number): string {
 
 export function LightweightChart({
   data,
+  ariaLabel,
   height = 480,
   seriesType = "candlestick",
   chartState,
@@ -742,6 +745,8 @@ export function LightweightChart({
       {/* Main Chart Container */}
       <div
         ref={containerRef}
+        role="img"
+        aria-label={ariaLabel}
         onClick={handleChartClick}
         className="w-full relative cursor-crosshair"
         style={{ height: indicators.rsi ? Math.max(height - 120, 260) : height }}
@@ -772,7 +777,7 @@ export function LightweightChart({
             <span className="text-purple-400 font-semibold">RSI(14)</span>
             <span>Wilder&apos;s Canonical</span>
           </div>
-          <div ref={rsiContainerRef} className="w-full h-[120px]" />
+          <div ref={rsiContainerRef} role="img" aria-label={`RSI (14) pane: ${ariaLabel}`} className="w-full h-[120px]" />
         </div>
       )}
 

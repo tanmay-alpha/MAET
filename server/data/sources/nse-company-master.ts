@@ -7,6 +7,10 @@ const ANGEL_ONE_INSTRUMENTS_URL =
 const COMPANY_MASTER_FALLBACK_URL =
   process.env.COMPANY_MASTER_FALLBACK_URL ?? "https://maet-pi.vercel.app/api/market/companies";
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+/** After a failed load, callers get the stale cache (or the failure) instead of a new upstream fetch. */
+export const COMPANY_MASTER_FAILURE_BACKOFF_MS = 60_000;
+/** `force` (e.g. the public `refresh=1` query) still serves a list fetched this recently. */
+export const COMPANY_MASTER_FORCE_MIN_AGE_MS = 60_000;
 
 export type CompanyMasterEntry = {
   symbol: string;
@@ -29,7 +33,17 @@ type AngelInstrument = {
 };
 
 let companyCache: { entries: CompanyMasterEntry[]; fetchedAt: number } | undefined;
+/** Single flight: every concurrent caller shares one upstream load. */
+let companyLoad: Promise<CompanyMasterEntry[]> | undefined;
+let lastLoadFailure: { at: number; error: unknown } | undefined;
 let tokenHydration: Promise<number> | undefined;
+
+/** Test-only: forgets the cached list, the in-flight load and the failure backoff. */
+export function resetCompanyMasterCacheForTests(): void {
+  companyCache = undefined;
+  companyLoad = undefined;
+  lastLoadFailure = undefined;
+}
 
 type CompanyPage = {
   pageCount: number;
@@ -114,8 +128,29 @@ export function parseNseCompanyCsv(csv: string): CompanyMasterEntry[] {
     .sort((left, right) => left.symbol.localeCompare(right.symbol));
 }
 
-export async function getNseCompanyMaster(force = false): Promise<CompanyMasterEntry[]> {
-  if (!force && companyCache && Date.now() - companyCache.fetchedAt < CACHE_TTL_MS) return companyCache.entries;
+/**
+ * The NSE EQ company list, cached for CACHE_TTL_MS. Concurrent callers share one upstream
+ * load, and for COMPANY_MASTER_FAILURE_BACKOFF_MS after a failed load nobody refetches:
+ * callers get the stale list when there is one, otherwise the failure. Anonymous public
+ * routes reach this (the companies fallback, `refresh=1`), so one failing NSE must not
+ * turn every request into another upstream fetch.
+ */
+export function getNseCompanyMaster(force = false): Promise<CompanyMasterEntry[]> {
+  const now = Date.now();
+  if (companyCache && now - companyCache.fetchedAt < (force ? COMPANY_MASTER_FORCE_MIN_AGE_MS : CACHE_TTL_MS)) {
+    return Promise.resolve(companyCache.entries);
+  }
+  if (companyLoad) return companyLoad;
+  if (lastLoadFailure && now - lastLoadFailure.at < COMPANY_MASTER_FAILURE_BACKOFF_MS) {
+    return companyCache ? Promise.resolve(companyCache.entries) : Promise.reject(lastLoadFailure.error);
+  }
+  companyLoad = loadNseCompanyMaster().finally(() => {
+    companyLoad = undefined;
+  });
+  return companyLoad;
+}
+
+async function loadNseCompanyMaster(): Promise<CompanyMasterEntry[]> {
   try {
     const response = await fetch(NSE_EQUITY_LIST_URL, {
       headers: { "user-agent": "MAET market scanner/1.0", accept: "text/csv" },
@@ -125,18 +160,21 @@ export async function getNseCompanyMaster(force = false): Promise<CompanyMasterE
     const entries = parseNseCompanyCsv(await response.text());
     if (entries.length < 1_000) throw new Error(`NSE company master returned only ${entries.length} EQ companies`);
     companyCache = { entries, fetchedAt: Date.now() };
+    lastLoadFailure = undefined;
     return entries;
   } catch (error) {
-    if (companyCache) return companyCache.entries;
-    if (!process.env.VERCEL) {
+    if (!companyCache && !process.env.VERCEL) {
       try {
         const entries = await getCompanyMasterFromEdgeFallback();
         companyCache = { entries, fetchedAt: Date.now() };
+        lastLoadFailure = undefined;
         return entries;
       } catch {
         // Preserve the original NSE error because it identifies the root cause.
       }
     }
+    lastLoadFailure = { at: Date.now(), error };
+    if (companyCache) return companyCache.entries;
     throw error;
   }
 }

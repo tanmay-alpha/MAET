@@ -1,13 +1,15 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { Bell, Settings } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
+import { HeaderAuthControl } from "@/components/auth-controls";
 import { ClientOnly } from "@/components/common/client-only";
 import { TickerTape } from "@/components/trading/ticker-tape";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { useSignedIn } from "@/hooks/use-signed-in";
 
-export function AppShell() {
+/** The app layout; `children` replaces the routed page (the error panel uses it). */
+export function AppShell({ children }: { children?: ReactNode }) {
   const signedIn = useSignedIn();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -49,7 +51,8 @@ export function AppShell() {
                 <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                 <span className="text-muted-foreground">NSE</span>
                 <span className="font-medium">Paper Workstation</span>
-              </div> : <span className="px-1 text-[11px] text-muted-foreground">Sign-in coming soon</span>}
+              </div> : null}
+              <HeaderAuthControl />
               <div className="relative">
                 <button
                   type="button"
@@ -77,7 +80,7 @@ export function AppShell() {
             <TickerTape />
           </ClientOnly>
           <main className="min-w-0 flex-1 overflow-hidden">
-            <Outlet />
+            {children ?? <Outlet />}
           </main>
         </div>
       </div>

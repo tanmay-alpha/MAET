@@ -127,6 +127,7 @@ export type StrategyAction = EntryAction | ExitAction;
 // Strategy direction
 // ============================================================
 
+/** LONG_SHORT is rejected by validation (see unsupportedStrategyFeatures); it remains for stored definitions. */
 export type StrategyDirection = "LONG_ONLY" | "SHORT_ONLY" | "LONG_SHORT";
 
 // ============================================================
@@ -166,17 +167,17 @@ export interface StrategyRiskConfig {
   stopLossPercent?: number;       // > 0
   takeProfitPercent?: number;     // > 0
   trailingStopPercent?: number;   // > 0
-  atrStopMultiplier?: number;     // > 0
+  atrStopMultiplier?: number;     // not supported: rejected by validation
 
   maximumOpenPositions: number;   // 1–50
   maximumPositionPercent?: number;         // 1–100
   maximumSectorExposurePercent?: number;   // 1–100
-  maximumDailyLossPercent?: number;        // 0.1–50
-  maximumDrawdownPercent?: number;         // 1–100
+  maximumDailyLossPercent?: number;        // 0.1–50; runner-v3 flattens and blocks entries for the rest of the day
+  maximumDrawdownPercent?: number;         // 1–100; runner-v3 flattens and stops trading
 
   cooldownBars?: number;          // 0–500
-  allowPyramiding: boolean;       // default false
-  maximumPyramids?: number;       // 1–5 if allowPyramiding = true
+  allowPyramiding: boolean;       // must be false: pyramiding is not supported
+  maximumPyramids?: number;       // not supported: rejected by validation
 }
 
 // ============================================================
@@ -250,7 +251,6 @@ export const MAX_CONDITIONS = 100;
 export const MAX_LAG = 50;
 export const MAX_CUSTOM_SYMBOLS = 50;
 export const MAX_OPEN_POSITIONS = 50;
-export const MAX_PYRAMIDS = 5;
 
 export interface StrategyValidationResult {
   valid: boolean;
@@ -258,6 +258,43 @@ export interface StrategyValidationResult {
   warnings: Array<{ path: string; message: string }>;
   conditionCount: number;
   maxDepthReached: number;
+}
+
+/**
+ * Settings the type admits but the backtest engine (runner-v3) does not implement. Validation
+ * rejects them rather than accepting and silently ignoring them; runner-v3 reports any it finds
+ * on a definition stored before this check as a result warning.
+ */
+export function unsupportedStrategyFeatures(
+  definition: { direction?: StrategyDirection; risk?: Partial<StrategyRiskConfig> },
+): Array<{ path: string; message: string }> {
+  const issues: Array<{ path: string; message: string }> = [];
+  if (definition.direction === "LONG_SHORT") {
+    issues.push({
+      path: "direction",
+      message: "LONG_SHORT is not supported: a strategy has one entry rule group, so it cannot tell long signals from short ones. Use LONG_ONLY or SHORT_ONLY.",
+    });
+  }
+  const risk = definition.risk;
+  if (risk?.atrStopMultiplier != null) {
+    issues.push({
+      path: "risk.atrStopMultiplier",
+      message: "atrStopMultiplier is not supported by the backtest engine. Use stopLossPercent or trailingStopPercent.",
+    });
+  }
+  if (risk?.allowPyramiding) {
+    issues.push({
+      path: "risk.allowPyramiding",
+      message: "Pyramiding is not supported: the backtest engine holds at most one position per symbol. Set allowPyramiding to false.",
+    });
+  }
+  if (risk?.maximumPyramids != null) {
+    issues.push({
+      path: "risk.maximumPyramids",
+      message: "maximumPyramids is not supported because pyramiding is not supported. Remove it.",
+    });
+  }
+  return issues;
 }
 
 // ============================================================
@@ -305,8 +342,8 @@ export function validateAst(definition: StrategyDefinition): StrategyValidationR
   if (definition.risk && (definition.risk.maximumOpenPositions < 1 || definition.risk.maximumOpenPositions > MAX_OPEN_POSITIONS)) {
     errors.push({ path: "risk.maximumOpenPositions", message: `Must be between 1 and ${MAX_OPEN_POSITIONS}` });
   }
-  if (definition.risk?.allowPyramiding && (definition.risk.maximumPyramids ?? 0) > MAX_PYRAMIDS) {
-    errors.push({ path: "risk.maximumPyramids", message: `Max pyramids is ${MAX_PYRAMIDS}` });
+  for (const issue of unsupportedStrategyFeatures(definition)) {
+    errors.push(issue);
   }
 
   validateLags(definition.entry, "entry", errors);
@@ -344,9 +381,21 @@ function checkOperandLag(operand: StrategyOperand, path: string, errors: Array<{
 
 // ============================================================
 // Canonical JSON serializer (for deterministic hash)
-// Excludes: createdAt, updatedAt, userId, id fields
 // ============================================================
 
+/**
+ * JSON with object keys sorted at every depth, so equal values serialize identically whatever
+ * their key order. Arrays keep their order; undefined properties are dropped (as by JSON.stringify).
+ */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) => {
+    if (v === null || typeof v !== "object" || Array.isArray(v)) return v;
+    const record = v as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(record).sort().map((k) => [k, record[k]]));
+  });
+}
+
+/** Canonical form of a definition: every field at every depth, keys sorted. */
 export function canonicalDefinitionJson(definition: StrategyDefinition): string {
-  return JSON.stringify(definition, Object.keys(definition).sort());
+  return canonicalJson(definition);
 }

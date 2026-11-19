@@ -3,6 +3,10 @@
  * strategy_parameter_sweeps row (on the strategy's latest version) and stores one result per
  * combination.
  *
+ * Each result also stores its per-bar returns summarised into CSCV blocks (`returnBlocks`, the same
+ * contiguous blocks for every combination), from which strategyOptimisation.getSweep computes the
+ * probability of backtest overfitting.
+ *
  * The job runner (server/modules/strategy-jobs/runner.ts) claims the row, heartbeats it and owns
  * shutdown / time-budget handling; `ctx.checkpoint()` after each backtest lets it interrupt the sweep
  * and keeps the event loop responsive. Results and the COMPLETED status are written in one
@@ -19,10 +23,12 @@ import {
   MAX_SWEEP_COMBINATIONS,
   parseStoredSweepParameters,
 } from "../domain/strategy/parameter-sweep";
+import { cscvBlockCount } from "../domain/strategy/robustness";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
 import { loadJobCandles } from "../modules/strategy-jobs/candles";
 import { JobInterruptedError, type JobContext } from "../modules/strategy-jobs/job-context";
 import { failSweep } from "../modules/strategy-optimisation/repository";
+import { equityReturnBlocks } from "../modules/strategy-optimisation/sweep-robustness";
 
 const PROGRESS_EVERY = 10;
 
@@ -52,6 +58,9 @@ export async function runSweepJob(sweepId: string, ctx: JobContext): Promise<voi
     if (candleData.length < 50) throw new Error(`Insufficient candle history: ${candleData.length} bars, need at least 50`);
 
     const results: Array<typeof strategySweepResults.$inferInsert> = [];
+    // The equity curve has one point per bar: the first bar's mark, then one return per later bar.
+    const expectedReturns = candleData.length - 1;
+    const blocks = cscvBlockCount(expectedReturns, combinations.length);
     for (let i = 0; i < combinations.length; i++) {
       const backtest = runBacktestV3({
         strategyVersionId: version.id,
@@ -75,6 +84,7 @@ export async function runSweepJob(sweepId: string, ctx: JobContext): Promise<voi
           profitFactor: m.profitFactor == null ? null : m.profitFactor.toFixed(4),
           tradeCount: backtest.tradeCount,
           costDragPercent: finite(backtest.costDragPercent ?? 0, 4),
+          returnBlocks: equityReturnBlocks(backtest.equityCurve.map((p) => p.equity), expectedReturns, blocks),
         },
       });
 

@@ -6,12 +6,14 @@ How MAET backtests a strategy and evaluates it out of sample, as implemented at 
 
 | Entry point | Path | Engine call | Results |
 |---|---|---|---|
-| `backtestV2.run` (tRPC, synchronous) | `server/api/trpc/routers/backtest-v2.ts` | Preset (SMA, EMA, RSI, MACD, Donchian, Bollinger) → `presetToV3Definition` (`server/domain/backtest/preset-to-v3-adapter.ts`) → `runBacktestV3`, inside the web request | `backtest_runs` |
+| `backtestV2.run` (tRPC, synchronous) | `server/api/trpc/routers/backtest-v2.ts` | Preset (SMA, EMA, RSI, MACD, Donchian, Bollinger) → `presetToV3Definition` (`server/domain/backtest/preset-to-v3-adapter.ts`) → `runBacktestV3`, inside the web request | `backtest_runs` (newest 50 per user, equity curve downsampled to about 1,000 points; the response carries every bar; `server/modules/backtest/run-store.ts`) |
 | `strategyBacktests.createJob` (tRPC, queued) | `server/api/trpc/routers/strategy-backtests.ts`, `server/modules/strategy-jobs/repository.ts` | `server/workers/backtest-worker.ts` claims the job and calls `runBacktestV3` | `strategy_backtest_trades`, `strategy_equity_points`, `strategy_performance_snapshots` |
 | `strategyOptimisation` sweeps | `server/api/trpc/routers/strategy-optimisation.ts` | `server/workers/sweep-worker.ts`: one `runBacktestV3` per parameter combination | `strategy_sweep_results` |
 | `strategyOptimisation` walk-forward | same router | `server/workers/walk-forward-worker.ts` → `runWalkForwardAnalysis` (`server/domain/strategy/walk-forward.ts`) | `strategy_walk_forward_runs`, `strategy_walk_forward_windows` |
 
-Strategies are an AST (`shared/strategy/ast.ts`, validated by `shared/strategy/schemas.ts`): entry/exit rule groups of conditions over price, market and indicator operands with lags 0–50, plus risk and execution config. Versions are immutable and identified by a SHA-256 of their canonical JSON (`server/modules/strategy-definitions/service.ts`).
+Strategies are an AST (`shared/strategy/ast.ts`, validated by `shared/strategy/schemas.ts`): entry/exit rule groups of conditions over price, market and indicator operands with lags 0–50, plus risk and execution config. Versions are immutable and identified by a SHA-256 of their canonical JSON (`canonicalDefinitionJson`: every field at every depth, object keys sorted, so key order never matters and any nested change is a new hash; `server/modules/strategy-definitions/service.ts`). Hashes stored before that fix covered only the top-level scalar fields, so one re-save of an unchanged legacy definition can create a new version instead of a conflict.
+
+**Rejected settings.** Validation (the Zod schema for API input, and `validateAst` when a stored draft is versioned) rejects settings the engine would otherwise ignore (`unsupportedStrategyFeatures` in `shared/strategy/ast.ts`): `direction: LONG_SHORT` (one entry rule group cannot say which signals go long and which short), `risk.atrStopMultiplier`, `risk.allowPyramiding: true` and `risk.maximumPyramids`. runner-v3 still runs definitions stored before the check (`LONG_SHORT` trades long) and adds an `UNSUPPORTED_SETTING_IGNORED` warning per setting.
 
 Queued jobs: creation takes a per-user advisory transaction lock and enforces a cap of 3 queued/running jobs of a kind in the last 6 hours; workers claim the oldest job with `FOR UPDATE SKIP LOCKED`, heartbeat every 30 s, and recover `RUNNING` jobs whose heartbeat is older than 5 minutes (`server/modules/strategy-jobs/repository.ts`, `server/modules/strategy-optimisation/repository.ts`; sweeps and walk-forward runs use `updated_at` as their heartbeat). The job runner (`server/modules/strategy-jobs/runner.ts`) runs inside the web service, started by `server/plugins/strategy-jobs.ts` unless `STRATEGY_JOBS_IN_PROCESS=false` (then `bun run worker:strategy-jobs` runs it standalone). It executes one job at a time, awaits a checkpoint after every backtest (handing the event loop back to the API and letting it stop the job), fails a job after `STRATEGY_JOB_TIME_BUDGET_MS` (default 15 min), requeues the running job on shutdown, and fails rather than requeues an abandoned job older than 6 hours. Results and the `COMPLETED` status are written in one transaction that commits only while the worker still holds the job.
 
@@ -41,6 +43,16 @@ equityCurve.append(mark-to-market at close[i])
 
 With `fillPolicy: ON_CLOSE`, `signalIdx = i`, fills are at `close[i]`, a rule exit fills after the protective exits, and there is no entry-bar protective check. After the loop any open position is closed at the last close with reason `end_of_period`.
 
+**Risk gates**, evaluated on every bar's closing mark $M_i$ (equity plus unrealised P&L at `close[i]`) after the bar's exits and entries. A triggered gate closes any open position at `close[i]` (a market-on-close order whatever the fill policy, so it uses no later data) and the curve point is the realised equity after exit costs:
+
+| Gate | Condition | Effect |
+|---|---|---|
+| Equity depleted | $M_i \le 0$ | exit reason `equity_depleted`; no further trades (`TRADING_HALTED` warning) |
+| `maximumDrawdownPercent` $d$ | $(\max_{s<i} M_s - M_i)/\max_{s<i} M_s \ge d\%$, peak including the starting capital | exit reason `max_drawdown`; no further trades (`TRADING_HALTED` warning) |
+| `maximumDailyLossPercent` $l$ | $(D - M_i)/D \ge l\%$, $D$ the last mark before the bar's IST calendar day began | exit reason `daily_loss_limit`; no entries until the first bar of the next IST day (`DAILY_LOSS_LIMIT` warning with the day count) |
+
+Once equity is at or below zero the curve stays flat, so `computeMetrics` never scores a move on a non-positive base (a further adverse move on negative equity would otherwise appear as a positive return). With daily bars every bar is its own day, so the daily-loss gate compares each close with the previous one.
+
 **Protective exits** (`protectiveExit`) are checked in a fixed conservative order: trailing stop, stop loss, take profit. If the bar opens beyond a level the fill is at the open (gap); otherwise at the level. So when one bar touches both stop and target, the stop wins. The trailing level uses the peak (trough for shorts) from *previous* bars, then updates it with the current bar. `intrabarPolicy` is returned as metadata; the order above is not configurable.
 
 **Look-ahead guarantees and their limits:**
@@ -49,7 +61,7 @@ With `fillPolicy: ON_CLOSE`, `signalIdx = i`, fills are at `close[i]`, a rule ex
 2. Position sizing uses ATR at `signalIdx`; the only bar-$i$ input is the open, which is known at the moment of the fill.
 3. The indicator cache is precomputed over the whole series, so correctness relies on every indicator being causal (trailing). The canonical implementations are trailing windows or recursive filters (`shared/indicators/canonical.ts`). Donchian channels include the current bar, which is still causal at `signalIdx`.
 4. A position closed on a bar cannot re-enter on that bar (`canEnter` is captured first).
-5. Tests: `truncated-history.test.ts` is the strongest check: a run that never saw bars after time $T$ must agree with the full-history run on every trade closed and every equity point marked before $T$ (for runner-v3 and the portfolio engine, long and short, both fill policies). `fill-bar-look-ahead.test.ts` perturbs the fill bar's high/low/close/volume and checks that sizing and fills decided at its open do not change. Also `look-ahead.test.ts`, `same-bar-exit-order.test.ts` and `reproducibility.test.ts` (all in `server/domain/strategy/`, run by `test:unit`).
+5. Tests: `truncated-history.test.ts` is the strongest check: a run that never saw bars after time $T$ must agree with the full-history run on every trade closed and every equity point marked before $T$ (for runner-v3 and the portfolio engine, long and short, both fill policies). `metamorphic-invariants.test.ts` repeats that over seeded random paths and random cut points, and also replaces every bar after the cut with unrelated data (trades closed, entries made and marks up to and including the cut must not change), with the risk gates enabled. `fill-bar-look-ahead.test.ts` perturbs the fill bar's high/low/close/volume and checks that sizing and fills decided at its open do not change. Also `look-ahead.test.ts`, `same-bar-exit-order.test.ts`, `runner-v3-risk-gates.test.ts` and `reproducibility.test.ts` (all in `server/domain/strategy/`, run by `test:unit`).
 
 `server/domain/strategy/look-ahead-detector.ts` offers an empirical check: it overwrites all OHLCV after a pivot with absurd values (99999.99) and asserts that signal timestamps up to the pivot do not change. It compares signal timestamps only, and only tests call it.
 
@@ -62,7 +74,7 @@ $$
 \text{net} = \text{gross} - \text{fees}_{in} - \text{fees}_{out} - \text{slip}_{in} - \text{slip}_{out}
 $$
 
-Only `SHORT_ONLY` produces shorts; `LONG_ONLY` and `LONG_SHORT` both trade long. Pyramiding, `maximumOpenPositions > 1`, daily-loss and drawdown gates are not implemented by this loop.
+Only `SHORT_ONLY` produces shorts; validation rejects `LONG_SHORT`, and a stored `LONG_SHORT` definition trades long with a warning. Pyramiding and `maximumOpenPositions > 1` are not implemented by this loop (pyramiding is rejected at validation).
 
 ## 3. Cost model
 
@@ -80,16 +92,16 @@ The statutory schedule is the same one paper trading uses (rates in [PAPER_TRADI
 
 **Cost drag** $= 100 \cdot \text{total costs} / \text{gross P\&L}$ when aggregate gross P&L is positive, else 0.
 
-The spread, square-root market impact and participation-cap model in `server/domain/strategy/execution-model.ts` is **not** used by runner-v3 (§9).
+The spread, square-root market impact and participation-cap model in `server/domain/strategy/execution-model.ts` is **not** used by runner-v3 (§9). Its participation cap fills at most $\lfloor V_{i-1} \cdot \min(1, \text{rate}) \rfloor$ shares; when that is 0, or the reference volume is missing, zero, negative or non-finite, the order fills nothing and the fill carries `rejectionReason` (`PARTICIPATION_CAP` or `NO_REFERENCE_VOLUME`). Forced exits ignore the cap.
 
 ## 4. Portfolio engine (research module)
 
 `runPortfolioBacktestEngine` in `server/domain/strategy/portfolio-engine.ts` simulates many symbols on one shared cash pool. No server endpoint or worker calls it (§9); it is described because it is tested and it is the intended next step.
 
 - **Timeline.** The sorted union of all candle timestamps; symbols with fewer than 5 bars are skipped; a symbol with no candle at a timestamp keeps its last mark.
-- **Order per timestamp.** Exits first (rule exit, stop before target), then entries; a symbol closed at a timestamp cannot reopen at it.
+- **Order per timestamp.** Under next-open: (A) held positions are marked to bar $i$'s open, and only exits that fill at the open happen (a rule exit decided on $i-1$, or a stop/target the bar opens beyond); (C) entries are decided and filled at the open; (D) stops and targets touched later in the bar (on held and new positions), the end-of-period close-out and the close mark follow. So neither the cash an intrabar stop frees nor any of bar $i$'s high, low or close can fund or size an entry at its open. Under on-close every exit happens at the complete bar, then entries at the close. A symbol closed at a timestamp cannot reopen at it.
 - **Ranking.** Candidates sort descending by a key, ties by symbol: `MOMENTUM` = $(c_{sig} - c_{sig-10})/c_{sig}$; `RELATIVE_VOLUME` actually uses raw signal-bar volume; `SCORECARD_SCORE` uses volume × momentum. Under next-open, all ranking and sizing inputs come from the signal bar $i-1$.
-- **Limits** per candidate: open-position cap (default 5), sector exposure of existing positions (default 40%), allocation $= \min(\text{equity}\cdot\text{pos\%},\ \text{cash} - \text{reserve})$ rejected if ≤ ₹100, gross exposure cap (default 100%); if the fill plus fees exceeds free cash the quantity is shrunk once to fit.
+- **Limits** per candidate, all checked on the portfolio as it would stand after the order (exposures valued at the step-A marks, the order at the higher of its fill and reference price): open-position cap (default 5); sizing budget $= \min(\text{equity}\cdot\text{pos\%},\ \text{cash} - \text{reserve})$; the order's exposure may not exceed $\min(\text{budget},\ \text{sector headroom},\ \text{gross headroom})$, where headroom = cap% × equity − current exposure (sector default 40%, gross default 100%). An order over that cap or over free cash (after fill frictions and charges) is resized down; it is rejected if the cap is ≤ ₹100 or the resized order rounds to 0 shares. Caps bind at entry only; later price moves can drift exposure above a cap. `excludedSignalsByReason` counts rejections (`MAX_OPEN_POSITIONS`, `SECTOR_EXPOSURE_CAP`, `GROSS_EXPOSURE_CAP`, `INSUFFICIENT_CAPITAL`, `ZERO_SIZE`, `NON_POSITIVE_EQUITY`, `PARTICIPATION_CAP`, `NO_REFERENCE_VOLUME`).
 - **Execution** goes through `ExecutionModel` (spread, impact, participation cap on bar-$(i-1)$ volume).
 - **Accounting identity.** Entry notional (long or short) is reserved from cash:
 
@@ -97,34 +109,47 @@ $$
 E_t = \text{cash}_t + \sum_j q_j\,p^{fill}_{j} + \sum_j u_j,\qquad u_j = \pm\, q_j\,(c_{j,t} - p^{fill}_{j})
 $$
 
-- **Not implemented** despite the config type: `rebalanceSchedule` is assigned but never read; there are no trailing stops or cooldowns; positions whose history ends before the global last timestamp are not force-closed; the "reproducibility hash" is a string of lengths and capital, not a data hash.
+- **Reproducibility hash**: SHA-256 (hex) of the canonical JSON of the definition, capital, resolved constraints, ranking, rebalance schedule, price series, sectors, corporate actions, every symbol's candles (sorted by time) and the benchmark candles.
+- **Not implemented** despite the config type: `rebalanceSchedule` is assigned but never read (it is part of the hash); there are no trailing stops, cooldowns, or drawdown/daily-loss gates; positions whose history ends before the global last timestamp are not force-closed.
 
 ## 5. Walk-forward analysis
 
-`runWalkForwardAnalysis` (`server/domain/strategy/walk-forward.ts`), called by `processWalkForward` in `server/workers/walk-forward-worker.ts`.
+`runWalkForwardAnalysis` (`server/domain/strategy/walk-forward.ts`), called by `runWalkForwardJob` in `server/workers/walk-forward-worker.ts`.
 
-**Windows** (`generate3PhaseWalkForwardWindows`). With span $S = t_{end} - t_{start}$ and $n$ windows, step $\Delta = \lfloor S/n \rfloor$. Window $k$ ends at $t_{start} + (k+1)\Delta$ and starts at $t_{start} + k\Delta$ (`ROLLING`) or $t_{start}$ (`ANCHORED`). Each window is split by duration: train $\lfloor 0.6\,D \rfloor$, validation $\lfloor 0.2\,D \rfloor$, test the remainder (defaults; 4 windows, rolling). Anchored windows therefore grow, and the ratios are re-applied to each growing window.
+**Spans.** The API takes `trainingWindowDays` $T$ and `validationWindowDays` $V$ (`shared/strategy/contracts.ts`, stored as `training_days` / `validation_days`). Every window has three adjacent phases of exact calendar-day lengths: training $T$, validation $V$ and out-of-sample test $V$ (`walkForwardRunSpans`). There is no hidden ratio: the router, worker, engine and run dialog ("Training days", "Validation / test days") all use these spans. The run's `to` date is inclusive, so the engine range is $[\text{from}, \text{to} + 1\,\text{ms})$ (`walkForwardRange`).
 
-The API takes `trainingDays` and `validationDays` (`shared/strategy/contracts.ts`); the worker treats `validationDays` as the out-of-sample share and holds out 25% of the training span for validation: train ratio $0.75\,T/(T+V)$, validation $0.25\,T/(T+V)$, test $V/(T+V)$ (`walk-forward-worker.ts`). The router persists $\min(\lfloor \text{totalDays}/V \rfloor,\ 2 \cdot \text{minimumWindows})$ windows (`strategy-optimisation.ts`).
+**Windows** (`generate3PhaseWalkForwardWindows`). Test segments are $V$ long, adjacent, and the last one ends at the range end; window $k$'s validation is the $V$ days before its test and its training the $T$ days before that (`ROLLING`) or everything from the range start (`ANCHORED`, so training grows). Windows step by $V$, so the validation of window $k+1$ is the test of window $k$: still after window $k+1$'s training, so no leakage. With range length $R$, $n = \lfloor (R - T - 2V)/V \rfloor + 1$ windows fit (`countWalkForwardWindows`). The router rejects a run unless $n \ge$ `minimumWindows` (needs $T + V + \text{minimumWindows}\cdot V$ days) and stores $\min(n,\ 2\cdot\text{minimumWindows})$ as `window_count`; when that is below $n$ the engine keeps the most recent windows, so the earliest days serve only as training history (or not at all, for rolling windows).
+
+Example: 2024-01-01 to 2024-12-31 ($R$ = 366 days), $T = 120$, $V = 40$: $n = \lfloor 166/40 \rfloor + 1 = 5$; the tests run 2024-06-15 to 2025-01-01 in five 40-day segments and the first training phase starts 2024-01-07. (Before this fix the range was cut into equal slices and split by ratio, giving roughly 91-day windows whatever was requested.)
 
 **Per window:**
 
-1. Skip if train < 20, validation < 10 or test < 10 bars. Each phase gets up to 250 preceding bars of warm-up passed as `tradeFrom`, and is sliced to end at the phase end, so later candles are never in the indicator cache.
+1. Skip the window (warning, no row) only if its test segment has no candles. Each phase gets up to 250 preceding bars of warm-up passed as `tradeFrom`, and is sliced to end at the phase end, so later candles are never in the indicator cache.
 2. A leakage guard (`assertNoDataLeakage`) throws if the last train timestamp is after the first validation timestamp, or the last validation timestamp after the first test timestamp.
-3. **Train:** run every parameter combination (Cartesian product, capped at 100; `server/domain/strategy/parameter-sweep.ts`) and keep the one with the highest training Sharpe.
-4. **Validate:** run it on the validation phase; reject the window if the validation Sharpe < −1.0 or the run fails. Validation does not choose parameters; it only vetoes.
-5. **Test:** only accepted windows trade out of sample, starting from the previous window's ending OOS equity, so the stitched OOS curve compounds. Rejected windows add no points.
+3. **Train (in sample):** with at least 20 training and 5 validation bars, run every parameter combination (Cartesian product, capped at 100; `server/domain/strategy/parameter-sweep.ts`) and keep the one with the highest training Sharpe. This is a retrospective best-of-N pick, so the training metrics are optimistic.
+4. **Validate (out-of-sample holdout):** run it on the validation phase; reject the window if the validation Sharpe < −1.0 or the run fails. Validation does not choose parameters; it only vetoes.
+5. **Test (out of sample), cash-or-trade:** an accepted window trades its test segment starting from the previous segment's ending OOS equity, so the stitched OOS curve compounds. A window that was rejected, could not select parameters (too few bars, every training run failed) or whose test run failed **holds cash**: it adds a flat segment (the as-of mark plus every test bar at the running equity) to the stitched curve, gets zero OOS metrics, and is stored with `test_metrics.position = "CASH"` and a `cashReason`.
 
-**Summary**, over windows actually tested:
+**Summary.** In-sample means are over windows that selected parameters; out-of-sample per-window means are over **every** window, cash windows counting as 0:
 
 $$
 \mathrm{WFE} = \frac{\overline{\mathrm{CAGR}}_{OOS}}{\overline{\mathrm{CAGR}}_{IS}}\ \ \text{if } \overline{\mathrm{CAGR}}_{IS} > 0,\qquad
 \text{retention} = \frac{\overline{\mathrm{Sharpe}}_{OOS}}{\overline{\mathrm{Sharpe}}_{IS}}\ \ \text{if } \overline{\mathrm{Sharpe}}_{IS} > 0
 $$
 
-Otherwise the value is `null` with a reason string. OOS total return is $(E^{OOS}_{final} - C_0)/C_0$; OOS max drawdown is the maximum of the per-window drawdowns, not recomputed on the stitched curve.
+Otherwise the value is `null` with a reason string (also when no window selected parameters). A walk-forward whose windows were all rejected therefore reports WFE 0, not "undefined". The stitched curve gives `oosReturnTotal` $= (E^{OOS}_{final} - C_0)/C_0$, `oosAnnualisedReturn`, `oosSharpe` and `oosDrawdownMax` (`computeMetrics` over the whole stitched curve, so drawdowns spanning windows count). Counts: `acceptedWindowsCount`, `testedWindowsCount` (traded), `cashWindowsCount`, `totalWindowsCount`.
+
+**Labels.** The stored `oos_summary.methodology` records the spans, `dayBasis: "CALENDAR"`, the step, `selection` (`IN_SAMPLE`, `RETROSPECTIVE_BEST_TRAINING_SHARPE`, `trialsPerWindow`), `validation` (`OUT_OF_SAMPLE_HOLDOUT`, veto below Sharpe −1), `test` (`OUT_OF_SAMPLE`) and `rejectedWindowPolicy: "CASH"`. `strategyOptimisation.getWalkForward` returns it with the run; the results view shows it above the windows table.
+
+**Benchmark.** `oos_summary.benchmark` is buy-and-hold of the same symbol over exactly the stitched OOS dates (first test start to last test end), run through runner-v3 with the strategy's own `execution` settings (fee model, slippage, fill policy) and the same starting capital, fully invested with no stops (`buyAndHoldDefinition`). It is `null` with `benchmarkReason` when that run fails. Runs stored before this change have no methodology or benchmark, and their summaries averaged only tested windows.
+
+No PBO is computed for walk-forward runs: only the selected parameter set is tested out of sample, and training phases of rolling windows overlap, so there is no common T x N return matrix to cross-validate. The trial count per window is reported instead.
 
 **Robustness** (`server/domain/strategy/robustness.ts`) scores a sweep; `strategyOptimisation.getSweep` returns it for a finished sweep (`server/modules/strategy-optimisation/sweep-robustness.ts`): neighbours differ in 1–2 parameters by at most 1.5 steps; a "fragile spike" (best Sharpe > 1 with neighbour mean below half of it) raises `OVERFIT_RISK`; overall score $= 0.40\,s_{neighbour} + 0.25\,s_{sample} + 0.20\,s_{drawdown} + 0.15\,s_{cost}$. Its inline comments cite thresholds (1.5, 100 trades) that differ from the code (1.0, 60 trades).
+
+**Multiple testing (sweeps).** A sweep's best result is a retrospective in-sample pick among all its parameter sets; `getSweep` returns `robustness.selection = { sample: "IN_SAMPLE", method: "RETROSPECTIVE_BEST_SHARPE", trials, pbo, pboReason }`. The probability of backtest overfitting uses combinatorially symmetric cross-validation (Bailey, Borwein, López de Prado and Zhu, 2015; `pboFromBlockStats`, `probabilityOfBacktestOverfitting`): the sweep job cuts each combination's per-bar returns into $S$ contiguous blocks (the same blocks for every combination) and stores $(n, \sum r, \sum r^2)$ per block as `result_summary.returnBlocks`. For each of the $\binom{S}{S/2}$ ways to pick half the blocks as in sample, the combination with the best in-sample Sharpe (mean / sample standard deviation of per-bar returns) is found; its out-of-sample rank $r$ among $N$ (1 = worst, ties averaged) gives $\omega = r/(N+1)$ and $\lambda = \ln(\omega/(1-\omega))$. PBO is the share of splits with $\lambda \le 0$; the result also has `trials` $N$, `blocks`, `splits` and the median $\lambda$. $S$ is the largest even number $\le 16$ that leaves 4 returns per block and keeps $\binom{S}{S/2} \cdot N \cdot S/2 \le 3{,}000{,}000$ block sums (so 16 up to 29 combinations, 14 up to 124, 12 up to 500), keeping the computation to tens of milliseconds per request. PBO is `null` with a reason for fewer than two combinations, too few bars, or results stored before `returnBlocks` existed.
+
+`getSweep` strips `returnBlocks` from the result rows it returns. The Strategy Lab sweep view does not display `selection` yet; it is available on the API.
 
 ## 6. Metrics
 
@@ -194,7 +219,7 @@ One adapter quirk: the Donchian preset compares the close with a channel that in
 |---|---|---|
 | `ExecutionModel` (spread models, square-root impact, participation cap) | Only called by the portfolio engine; runner-v3 charges slippage as a flat bps debit. | `server/domain/strategy/execution-model.ts`, imports in `portfolio-engine.ts` only |
 | Portfolio engine | No endpoint, worker or frontend code calls it; only its tests do. | `server/domain/strategy/portfolio-engine.ts` |
-| Point-in-time fundamentals and universe membership | Only tests call them. | `server/domain/fundamentals/point-in-time.ts`, `point-in-time.test.ts`, `p2-research-invariants.test.ts` |
+| Point-in-time fundamentals and universe membership | Only tests call them. A fundamentals row whose `availableFrom` is null, missing or unparseable is never visible (no lag from `periodEnd` is assumed; `new Date(null)` would otherwise date it 1970). | `server/domain/fundamentals/point-in-time.ts`, `point-in-time.test.ts`, `p2-research-invariants.test.ts` |
 | Corporate actions in backtests | Supported by the runner, never supplied by callers; no corporate-action ingestion. | §7 |
 | Look-ahead detector | Only tests call it. (Robustness scoring is returned by `strategyOptimisation.getSweep`.) | `look-ahead-detector.ts` |
 | In-memory replay engine | Only its test uses it; the replay router has its own DB-backed logic. | `server/modules/strategy-replay/replay-engine.ts`, `server/api/trpc/routers/strategy-replay.ts` |
@@ -212,3 +237,17 @@ What production does use: runner-v3, `computeMetrics`, the fee model with the sh
 - **State** (`src/lib/payoff-lab-state.ts`): the route's search schema holds the contract inputs and the legs (`legs=B_CE_24000_1_120~S_PE_23800_1_`: side, type, strike, lots, premium), so a URL reproduces a position; invalid values are dropped rather than failing the page. The last session is kept in localStorage under `maet:payoff-lab` and restored when the URL carries no state.
 - **Options chain hand-off**: the chain page's "Open in Payoff Lab" passes the underlying and the public spot quote; clicking a contract's LTP adds it as a bought leg with that LTP as an editable premium. Signed out, the chain is hidden but the link still opens the lab with the underlying and spot.
 - **Tests**: `shared/domain/options/black-scholes.test.ts` (textbook price, put-call parity, Greeks vs finite differences), `shared/domain/options/payoff.test.ts` (breakevens, unlimited detection, iron condor max profit, templates, lot defaults), `src/lib/payoff-lab-state.test.ts` (URL and storage round trips, validation) and `tests/e2e/payoff.spec.ts`.
+
+## 11. Run reports and comparisons
+
+`/research/reports` (`src/routes/_app.research.reports.*.tsx`) lists the user's completed strategy backtest jobs. A run opens as a report (`/research/reports/$jobId`); 2–4 runs open as a comparison (`/research/reports/compare?runs=a,b`). Server: `researchReports` router (`server/api/trpc/routers/research-reports.ts`), logic in `server/modules/research-reports/`. A run that is not one of the user's completed jobs returns `NOT_FOUND` from every procedure, including `compare` when only one of the ids belongs to someone else.
+
+**What a run records.** When the backtest worker completes a job it writes `strategy_backtest_jobs.reproducibility_metadata` in the same transaction as the results (`run-metadata.ts`): the server commit (`GIT_SHA`, else `RENDER_GIT_COMMIT`, else `"unknown"`), engine, indicator and fee-model versions, the symbols, the candle count, the first and last bar, and the full SHA-256 of the bars used (same serialisation as runner-v3's 16-hex `dataHash`, which is its prefix).
+
+**Report** (`report.ts`, `getReport`). Built from rows written once at completion (job, strategy version, performance snapshot, trades, equity points, run metadata), so it never changes. It holds the definition and its hash, the engine and indicator versions that ran and those the version pinned, the server commit, symbols, timeframe, requested window, candle count and fingerprint, the effective cost and fill assumptions (engine defaults filled in: fee model `VOLUME_AWARE`, NSE delivery, ₹0 brokerage, 10 bps for `FIXED_BPS`, 5 bps slippage), capital, benchmark, the snapshot metrics, and SHA-256 digests of the trades and equity CSVs. Jobs completed before the metadata existed show those fields as `null` and list them in `missingFields`; nothing is filled in from the current server or current candles. Benchmark return and alpha are `null` when no benchmark series was applied (the queued worker loads none, and the engine would otherwise store 0).
+
+**Reproducibility hash.** SHA-256 of the canonical JSON (keys sorted at every depth) of the report's `reproducible` section. It excludes the job id, user and timestamps, so the same version on the same data, costs and server commit with the same results gives the same hash. JSON, trades CSV and equity CSV download from the report page; `exportCsv` returns the file with its SHA-256, which matches the digest inside the report. Text cells that a spreadsheet would run as a formula get a leading `'`.
+
+**Comparison** (`comparison.ts`, `compare`). Each run's equity points are reduced to the last value per Indian market date; only dates every run has are kept, and the page states that window (or that the runs share none, or only one date). On those dates: equity rebased to 100, drawdown from the running peak, total return, CAGR over calendar days, max drawdown, Sharpe (zero risk-free rate, annualised by the number of common dates per calendar year, so gaps and sampled curves are not treated as daily), turnover (both legs' traded value / average equity) and cost drag (fees + slippage / equity at the window start) for trades entered inside the window, and trade count. Return, CAGR, drawdown and Sharpe need at least two common dates. Runs are flagged as not like-for-like when cost or fill assumptions, benchmark, timeframe or engine version differ.
+
+**Tests**: `server/modules/research-reports/research-reports.test.ts` (`test:unit`: hashing, fingerprint parity with runner-v3, default parity with the fee model and runner, alignment with no overlap, a single shared date and gaps, drawdown, cost drag, turnover, CAGR, Sharpe, flags, report hash and missing fields, CSV) and `research-reports.postgres.integration.test.ts` (`test:research-reports`: real jobs through the runner, metadata recorded at completion, CSV digests, comparison flags, `NOT_FOUND` for another user's or an unfinished run).

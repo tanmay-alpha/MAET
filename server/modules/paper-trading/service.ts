@@ -1,5 +1,5 @@
 import { and, count, eq, inArray } from "drizzle-orm";
-import { loadExecutionQuote } from "./execution-quote";
+import { liveMarkPrice, loadExecutionQuote } from "./execution-quote";
 import { computePhase, type MarketPhase } from "../../domain/market/clock";
 import { withSerializablePaperTransaction } from "./transaction-retry";
 import { bus } from "../../infra/bus";
@@ -32,7 +32,7 @@ import type {
 import { MAX_PAPER_SYMBOL_LENGTH } from "./contracts";
 import type { PaperDatabase, PaperTradingReadRepository, PaperTradingWriteRepository } from "./repository";
 import { createPostgresPaperReadRepository } from "./postgres-repository";
-import { applyFill, paperExecutionPolicy, type AppliedFill } from "./fill-writer";
+import { applyFill, paperExecutionPolicy, type AppliedFill, type MarkPriceSource } from "./fill-writer";
 import { ExchangeSchema, parseExecutionQuote, evaluateExecutionQuote } from "@shared/types/market";
 import { PaperExecutionError } from "@shared/domain/paper-trading/execution";
 
@@ -40,6 +40,8 @@ export interface PaperTradingServiceDependencies {
   database?: PaperDatabase;
   /** Quote for the order's exchange and symbol (default: live tick feed, then the market-data layer). */
   quoteLoader?: (exchange: "NSE" | "BSE", symbol: string) => Promise<unknown>;
+  /** Mark for the account's other positions in the margin check (default: the latest executable streamed tick). */
+  markFor?: MarkPriceSource;
   /** Session phase at a given instant; MARKET orders only execute while it is OPEN. */
   marketPhase?: (now: Date) => MarketPhase;
   now?: () => Date;
@@ -181,6 +183,7 @@ function parseOrderTerms(command: PaperOrderCommand): OrderTerms {
 
 export class PaperTradingService {
   private readonly quoteLoader: (exchange: "NSE" | "BSE", symbol: string) => Promise<unknown>;
+  private readonly markFor: MarkPriceSource;
   private readonly marketPhase: (now: Date) => MarketPhase;
   private readonly readRepo: PaperTradingReadRepository;
   private readonly now: () => Date;
@@ -189,6 +192,7 @@ export class PaperTradingService {
 
   constructor(deps: PaperTradingServiceDependencies = {}) {
     this.quoteLoader = deps.quoteLoader || loadExecutionQuote;
+    this.markFor = deps.markFor || liveMarkPrice;
     this.marketPhase = deps.marketPhase || ((now) => computePhase(now, getConfig().nseHolidays));
     this.now = deps.now || (() => new Date());
     this.createId = deps.createId || (() => crypto.randomUUID());
@@ -376,6 +380,7 @@ export class PaperTradingService {
           fillQuantity: terms.qty,
           reason: "USER_ORDER",
           ledgerSourceType: "FILL",
+          markFor: this.markFor,
           now,
           createId: this.createId,
         });

@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "bun:test";
+import type { Tick } from "@shared/types";
 import {
   subscribeSymbol,
   unsubscribeSymbol,
@@ -90,25 +91,35 @@ describe("Alert Subscriptions & Feed Reconciliation Suite", () => {
   });
 
   it("7. A failing alert evaluation on a tick is caught instead of rejecting", async () => {
+    await reconcileAlertSubscriptions(async () => ["RELIANCE"]);
     const seen: string[] = [];
     const failing = async (quote: { symbol: string }) => {
       seen.push(quote.symbol);
       throw new Error("connection terminated unexpectedly");
     };
-    await expect(
-      evaluateTickAlerts(
-        {
-          exchange: "NSE",
-          symbol: "RELIANCE",
-          price: 2500,
-          volume: 10,
-          ts: new Date().toISOString(),
-          source: "angelone",
-          quality: "live",
-        },
-        failing,
-      ),
-    ).resolves.toBeUndefined();
+    await expect(evaluateTickAlerts(tick("RELIANCE"), failing)).resolves.toBeUndefined();
     expect(seen).toEqual(["RELIANCE"]);
   });
+
+  it("8. A tick for a symbol without an active alert never reaches the alerts query", async () => {
+    await reconcileAlertSubscriptions(async () => ["TCS"]);
+    const loaded: string[] = [];
+    const loadAndEvaluate = async (quote: { symbol: string }) => {
+      loaded.push(quote.symbol);
+    };
+    // Streamed viewers' symbols tick constantly; only alert symbols cost a database read.
+    for (const symbol of ["RELIANCE", "INFY", "HDFCBANK", "TCS", "RELIANCE"]) {
+      await evaluateTickAlerts(tick(symbol), loadAndEvaluate);
+    }
+    expect(loaded).toEqual(["TCS"]);
+
+    // Once the last alert on TCS is gone, its ticks stop querying too.
+    await reconcileAlertSubscriptions(async () => []);
+    await evaluateTickAlerts(tick("TCS"), loadAndEvaluate);
+    expect(loaded).toEqual(["TCS"]);
+  });
 });
+
+function tick(symbol: string): Tick {
+  return { exchange: "NSE", symbol, price: 2500, volume: 10, ts: new Date().toISOString(), source: "angelone", quality: "live" };
+}

@@ -34,7 +34,7 @@ The client sends an `idempotencyKey` (required by `PaperOrderCommandSchema`). Un
 
 ### 6. How does a resting LIMIT order get filled?
 
-Every executable tick on the in-process bus goes to `PaperTradingTickProcessor.processTick`. It triggers stops (`price <= stop` for SELL, `>= stop` for BUY), checks LIMIT marketability, and fills at most `max(1, floor(10% of the volume traded since the previous tick))` per tick, so large orders fill gradually. The fill price is the tick price plus tiered slippage, capped at the limit. A business rejection such as insufficient margin leaves the order working. Files: `server/workers/order-matcher.ts`, `tick-processor.ts`, `volume-tracker.ts`, `shared/domain/paper-trading/execution.ts`.
+Every executable tick on the in-process bus goes to `PaperTradingTickProcessor.processTick`. It triggers stops (`price <= stop` for SELL, `>= stop` for BUY), checks LIMIT marketability, and fills at most `max(1, floor(10% of the volume traded since the previous tick))` per tick, so large orders fill gradually; a tick on which nothing traded (or an instrument's first tick, which has no baseline) fills nothing. The fill price is the tick price plus tiered slippage, capped at the limit. A business rejection such as insufficient margin leaves the order working. Files: `server/workers/order-matcher.ts`, `tick-processor.ts`, `volume-tracker.ts`, `shared/domain/paper-trading/execution.ts`.
 
 ### 7. How do brackets and OCO work?
 
@@ -42,7 +42,7 @@ Take-profit and stop-loss exits are created on the entry's first fill, sized to 
 
 ### 8. How does margin and liquidation work?
 
-Leverage is 5: allocated margin is $\sum |q|\bar p / 5$ and maintenance margin is 80% of that. A fill is refused if projected allocated margin would exceed projected equity (cash plus unrealised P&L). Every 2 s the risk monitor passes the latest executable prices to the SQL function `calculate_live_margin`, which returns accounts whose equity is below maintenance. The liquidation service re-checks under the account lock, sets `LIQUIDATION_PENDING`, cancels working orders and closes every position that has an executable quote; once flat the account is `LIQUIDATED`. If prices recover first, it releases the account. Files: `shared/domain/paper-trading/margin.ts`, `risk-monitor.ts`, `liquidation-service.ts`, migration `0023`.
+Leverage is 5: allocated margin is $\sum |q|\bar p / 5$ and maintenance margin is 80% of that. A fill is refused if projected allocated margin would exceed projected equity (cash plus unrealised P&L, with every position at its live mark; a position without one counts its last known loss but no gain). A fill that only reduces a position and frees margin is never refused, so stops and exits still work on an under-margined account. Every 2 s the risk monitor passes the latest executable prices to the SQL function `calculate_live_margin`, which returns accounts whose equity is below maintenance. The liquidation service re-checks under the account lock, sets `LIQUIDATION_PENDING`, cancels working orders and closes every position that has an executable quote; once flat the account is `LIQUIDATED`. If prices recover first, it releases the account. Files: `shared/domain/paper-trading/margin.ts`, `risk-monitor.ts`, `liquidation-service.ts`, migration `0023`.
 
 ### 9. How do you keep the books consistent?
 
@@ -50,7 +50,7 @@ Cash only changes through the ledger: every fill writes a `TRADE_REALIZED_PNL` r
 
 ### 10. What happens when the database is down?
 
-`/api/health` still returns HTTP 200 but reports `degraded` (deliberately, so Render does not restart the instance during an external outage). Quotes keep working because that path is in memory plus the providers. Candle requests fall back to Yahoo. Paper trading and strategy operations fail with a masked 500 / `INTERNAL_SERVER_ERROR`; there is no in-memory fallback for money-moving operations, which I think is right. Files: `server/infra/health.ts`, `server/domain/market/candle-service.ts`, `server/api/trpc/core.ts`.
+`/api/health` still returns HTTP 200 but reports `degraded` (deliberately, so Render does not restart the instance during an external outage). Quotes keep working because that path is in memory plus the providers. Candle requests fall back to Yahoo. Paper trading and strategy operations fail with 503 `SERVICE_UNAVAILABLE` (connection-class errors and the open circuit are mapped in `server/api/trpc/core.ts`), so the client can tell an outage from a bug; there is no in-memory fallback for money-moving operations, which I think is right. Files: `server/infra/health.ts`, `server/domain/market/candle-service.ts`, `server/api/trpc/core.ts`.
 
 ### 11. And when Angel One or Redis is down?
 
@@ -70,7 +70,7 @@ $\text{Sharpe} = \bar x / \mathrm{sd}(x) \cdot \sqrt{P}$, where $x$ are periodic
 
 ### 15. What is your walk-forward analysis and WFE?
 
-Each window splits into train, validation and test phases (60/20/20 by default; the worker derives the ratios from the requested training and OOS days). Parameters are chosen by the best training Sharpe. Validation can only veto a window, if its Sharpe falls below −1. Only accepted windows trade out of sample, and their OOS curves are stitched with compounding equity. WFE is mean OOS CAGR divided by mean in-sample CAGR, reported as `null` with a reason when the in-sample mean is ≤ 0, rather than a misleading ratio. Code: `server/domain/strategy/walk-forward.ts`, `server/workers/walk-forward-worker.ts`.
+Each window is training → validation → test with exact calendar-day spans: the requested training days, then the requested validation days for both validation and test; windows step by the test span so test segments tile the range. Parameters are chosen by the best training Sharpe, a retrospective best-of-N pick (the trial count is recorded). Validation can only veto a window, if its Sharpe falls below −1. Accepted windows trade out of sample; rejected ones hold cash, so they stay in the stitched OOS curve as flat segments and count as zero in OOS averages instead of silently dropping out. WFE is mean OOS CAGR (all windows) divided by mean in-sample CAGR, reported as `null` with a reason when the in-sample mean is ≤ 0, rather than a misleading ratio. OOS results come with buy-and-hold over the same dates and costs. Sweeps report the probability of backtest overfitting (CSCV). Code: `server/domain/strategy/walk-forward.ts`, `server/domain/strategy/robustness.ts`, `server/workers/walk-forward-worker.ts`.
 
 ### 16. Do you handle splits, bonuses and dividends?
 
@@ -254,4 +254,4 @@ These are the constraints I checked while designing the data paths. They shape w
 4. Run the research workers as a separate Render worker (or a queue), and move `backtestV2.run` onto the job queue.
 5. Wire corporate actions and point-in-time fundamentals into backtests, and replace the flat bps slippage with the existing `ExecutionModel`.
 6. Add a property-based test that $\sum \text{ledger} = \text{cash}$ after random sequences of fills, cancels and resets.
-7. Add a global Angel One token budget across market streams, alerts and paper interest, and a BSE live source.
+7. Add a BSE live source (the Angel One token budget across paper interest, alerts and market streams exists; BSE symbols still get no ticks).

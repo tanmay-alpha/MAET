@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { SIGN_IN_REQUIRED_MESSAGE } from "@/components/common/sign-in-required";
 import { PaperAccountNotice } from "@/components/common/signed-out-notice";
+import { SignInLink } from "@/components/common/sign-in-link";
 import { buildTicketOrder, type TicketOrderType } from "@/lib/order-ticket";
 import { AlertCircle, CheckCircle2, ShieldAlert } from "lucide-react";
 
@@ -128,7 +129,7 @@ export function OrderPanel({
 
       {status === "signed-out" && (
         <p role="status" className="mx-2 mt-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-400">
-          {SIGN_IN_REQUIRED_MESSAGE}
+          {SIGN_IN_REQUIRED_MESSAGE} <SignInLink />
         </p>
       )}
       <PaperAccountNotice status={status} onRetry={retry} className="mx-2 mt-2" />

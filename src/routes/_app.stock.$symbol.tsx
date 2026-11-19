@@ -230,7 +230,7 @@ function StockDetail() {
             <div className="flex items-center justify-between border-b border-border px-4 py-3"><div><h2 className="text-sm font-semibold">Price history · 1Y daily</h2><p className="text-[11px] text-muted-foreground">{historySource ? `Source: ${sourceName(historySource)}` : "Loading candles…"}</p></div>
               <div className="flex items-center gap-2"><CorporateActionsToggle enabled={showCorporateActions} onToggle={() => setShowCorporateActions((on) => !on)} />
               <button type="button" onClick={() => navigate({ to: `/chart/${symbol}` })} className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-accent"><BarChart3 className="h-3.5 w-3.5" />Full chart</button></div></div>
-            {chartData.length > 1 ? <CandlestickChart data={chartData} height={380} chartState={chartState} onChartStateChange={setChartState} drawingTool={null} indicators={{ sma: false, ema: false, rsi: false, macd: false, volume: true }} corporateActions={placedCorporateActions} /> :
+            {chartData.length > 1 ? <CandlestickChart data={chartData} ariaLabel={`${symbol} daily price chart`} height={380} chartState={chartState} onChartStateChange={setChartState} drawingTool={null} indicators={{ sma: false, ema: false, rsi: false, macd: false, volume: true }} corporateActions={placedCorporateActions} /> :
               <div className="flex h-[380px] items-center justify-center text-xs text-muted-foreground">{detail.availability.history.reason}</div>}
             {showCorporateActions && chartData.length > 1 && <CorporateActionsStatus data={corporateActions.data} isError={corporateActions.isError} placed={placedCorporateActions} />}
           </section>

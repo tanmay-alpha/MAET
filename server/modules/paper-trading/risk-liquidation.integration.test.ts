@@ -78,9 +78,13 @@ describe("Paper trading margin-call liquidation", () => {
       .from(paperLedgerEntries)
       .where(and(eq(paperLedgerEntries.userId, userId), eq(paperLedgerEntries.fillId, liquidationFills[0]!.id)));
     expect(ledger.map((entry) => entry.entryType).sort()).toEqual(["EXECUTION_FEE", "TRADE_REALIZED_PNL"]);
-    const realised = Number(ledger.find((entry) => entry.entryType === "TRADE_REALIZED_PNL")!.amount);
-    const fee = Number(ledger.find((entry) => entry.entryType === "EXECUTION_FEE")!.amount);
-    expect(Number(account!.cashBalance)).toBeCloseTo(Number(ledger[0]!.balanceAfter), 4);
+    const pnlRow = ledger.find((entry) => entry.entryType === "TRADE_REALIZED_PNL")!;
+    const feeRow = ledger.find((entry) => entry.entryType === "EXECUTION_FEE")!;
+    const realised = Number(pnlRow.amount);
+    const fee = Number(feeRow.amount);
+    // Running balances: P&L row first, the fee row leaves the account's cash.
+    expect(Number(account!.cashBalance)).toBeCloseTo(Number(feeRow.balanceAfter), 4);
+    expect(Number(pnlRow.balanceAfter) + fee).toBeCloseTo(Number(feeRow.balanceAfter), 4);
     expect(realised).toBeCloseTo(Number(liquidationFills[0]!.realizedPnl), 4);
     expect(fee).toBeCloseTo(-Number(liquidationFills[0]!.fees), 4);
 

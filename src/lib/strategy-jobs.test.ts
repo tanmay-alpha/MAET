@@ -143,8 +143,40 @@ describe("result mapping", () => {
     expect(view.summary.oosReturnTotal).toBe(0.05);
     expect(view.warnings).toEqual(["Window 2 rejected"]);
     expect(view.aggregateOosEquityCurve).toHaveLength(2);
-    expect(view.windows.map((w) => [w.windowNumber, w.validationAccepted, w.oosMetrics?.sharpe ?? null])).toEqual([[1, true, 1.1], [2, false, null]]);
+    expect(view.windows.map((w) => [w.windowNumber, w.validationAccepted, w.oosPosition, w.oosMetrics.sharpe])).toEqual([[1, true, "STRATEGY", 1.1], [2, false, "CASH", 0]]);
     expect(view.windows[1].rejectionReason).toMatch(/validation Sharpe/);
+  });
+
+  it("reads runs stored before the cash policy: rejected windows held cash, nothing else was recorded", () => {
+    const view = walkForwardViewResult(run, windows)!;
+    expect(view.windows[1].cashReason).toMatch(/validation Sharpe/);
+    expect(view.summary).toMatchObject({ cashWindowsCount: 1, oosSharpe: null, oosAnnualisedReturn: null, isAnnualisedAvg: null });
+    expect(view.methodology).toBeNull();
+    expect(view.benchmark).toBeNull();
+    expect(view.benchmarkReason).toMatch(/Not recorded/);
+  });
+
+  it("keeps the stored OOS position, cash reason, benchmark and methodology of current runs", () => {
+    const methodology = {
+      windowType: "ROLLING" as const, trainingDays: 120, validationDays: 40, testDays: 40, dayBasis: "CALENDAR" as const, stepDays: 40,
+      selection: { sample: "IN_SAMPLE" as const, method: "RETROSPECTIVE_BEST_TRAINING_SHARPE" as const, trialsPerWindow: 9 },
+      validation: { sample: "OUT_OF_SAMPLE_HOLDOUT" as const, rule: "VETO_IF_SHARPE_BELOW" as const, sharpeFloor: -1 },
+      test: { sample: "OUT_OF_SAMPLE" as const },
+      rejectedWindowPolicy: "CASH" as const,
+    };
+    const benchmark = { kind: "BUY_AND_HOLD" as const, from: "2024-04-01", to: "2024-09-01", totalReturn: 0.07, annualisedReturn: 0.18, sharpe: 0.9, maxDrawdown: 0.1, tradeCount: 1 };
+    const current: WalkForwardRunView = {
+      ...run,
+      oosSummary: { ...(run.oosSummary as object), cashWindowsCount: 1, oosSharpe: 0.4, methodology, benchmark, benchmarkReason: null } as WalkForwardRunView["oosSummary"],
+    };
+    const failedTest = { ...windows[0], testMetrics: { ...metrics, totalReturn: 0, sharpe: 0, position: "CASH" as const, cashReason: "out-of-sample run failed: boom" } };
+    const view = walkForwardViewResult(current, [failedTest, windows[1]])!;
+    expect(view.windows[0]).toMatchObject({ validationAccepted: true, oosPosition: "CASH", cashReason: "out-of-sample run failed: boom" });
+    expect(view.windows[0].oosMetrics).not.toHaveProperty("position");
+    expect(view.summary.oosSharpe).toBe(0.4);
+    expect(view.methodology?.selection.trialsPerWindow).toBe(9);
+    expect(view.benchmark).toEqual(benchmark);
+    expect(view.benchmarkReason).toBeNull();
   });
 
   it("has nothing to show until the run completes, and exposes a failure reason", () => {

@@ -6,7 +6,6 @@ import type {
   PaperTradingState,
   PaperOrderRow,
   PaperFillRow,
-  PaperLedgerEntryRow,
   MatchingReceipt,
   PaperAccountRow,
 } from "../../server/modules/paper-trading/contracts";
@@ -42,6 +41,13 @@ import type {
   WalkForwardWindowView,
 } from "./strategy-jobs";
 import type { SweepRobustness } from "../../server/modules/strategy-optimisation/sweep-robustness";
+import type { PaperLedgerPage } from "./paper-ledger";
+import type {
+  DataQualityReport,
+  DataQualityUniverse,
+  IngestionBatchView,
+  ReliabilityReport,
+} from "../../server/modules/data-quality/contracts";
 
 export type {
   BreadthOverview,
@@ -152,11 +158,6 @@ export function createMutationProcedure<TInput = void, TOutput = any>(path: stri
   };
 }
 
-export interface ListResponse<T> {
-  items: T[];
-  nextCursor?: string;
-}
-
 export interface PlaceOrderResult {
   order: PaperOrderRow;
   receipt?: MatchingReceipt;
@@ -239,17 +240,18 @@ export const trpc = {
       mutate: (input?: { confirmation?: boolean }): Promise<ResetAccountResult> =>
         trpcMutation<{ confirmation?: boolean }, ResetAccountResult>("paperTrading.resetAccount", input ?? { confirmation: true }),
     },
+    // Each list procedure pages newest first; nextCursor is null on the last page.
     listOrders: {
-      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<ListResponse<PaperOrderRow>> =>
-        trpcQuery<ListResponse<PaperOrderRow>>("paperTrading.listOrders", input),
+      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<{ orders: PaperOrderRow[]; nextCursor: string | null }> =>
+        trpcQuery("paperTrading.listOrders", input),
     },
     listFills: {
-      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<ListResponse<PaperFillRow>> =>
-        trpcQuery<ListResponse<PaperFillRow>>("paperTrading.listFills", input),
+      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<{ fills: PaperFillRow[]; nextCursor: string | null }> =>
+        trpcQuery("paperTrading.listFills", input),
     },
     listLedger: {
-      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<ListResponse<PaperLedgerEntryRow>> =>
-        trpcQuery<ListResponse<PaperLedgerEntryRow>>("paperTrading.listLedger", input),
+      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<PaperLedgerPage> =>
+        trpcQuery<PaperLedgerPage>("paperTrading.listLedger", input),
     },
   },
   tradeTheses: {
@@ -397,26 +399,18 @@ export const trpc = {
     },
   },
   dataQuality: {
+    getPublicReport: {
+      query: (input?: { universe?: DataQualityUniverse }): Promise<DataQualityReport> =>
+        trpcQuery("dataQuality.getPublicReport", input),
+    },
+    getReliability: {
+      query: (): Promise<ReliabilityReport> => trpcQuery("dataQuality.getReliability"),
+    },
     getOverview: {
-      query: (): Promise<any> => trpcQuery("dataQuality.getOverview"),
-    },
-    listAudits: {
-      query: (input?: { limit?: number }): Promise<any> => trpcQuery("dataQuality.listAudits", input),
-    },
-    listAnomalies: {
-      query: (input?: { limit?: number }): Promise<any> => trpcQuery("dataQuality.listAnomalies", input),
-    },
-    resolveAnomaly: {
-      mutate: (input: { anomalyId: string; resolutionNote?: string }): Promise<any> => trpcMutation("dataQuality.resolveAnomaly", input),
-    },
-    suppressAnomaly: {
-      mutate: (input: { anomalyId: string }): Promise<any> => trpcMutation("dataQuality.suppressAnomaly", input),
+      query: (): Promise<{ recentBatches: IngestionBatchView[] }> => trpcQuery("dataQuality.getOverview"),
     },
     retryBatch: {
-      mutate: (input: { batchId: string }): Promise<any> => trpcMutation("dataQuality.retryBatch", input),
-    },
-    getCoverage: {
-      query: (): Promise<any> => trpcQuery("dataQuality.getCoverage"),
+      mutate: (input: { batchId: string }): Promise<unknown> => trpcMutation("dataQuality.retryBatch", input),
     },
   },
   capabilities: {

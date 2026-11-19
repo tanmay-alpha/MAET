@@ -1,13 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { loadCorporateActions } from "@server/domain/market/corporate-action-service";
-import { MARKET_SYMBOL_PATTERN } from "@server/domain/market/symbol";
+import { isMarketSymbol } from "@server/domain/market/symbol-pattern";
 
 export const Route = createFileRoute("/api/market/corporate-actions")({
   server: {
     handlers: {
       GET: async ({ request }) => {
         const symbol = (new URL(request.url).searchParams.get("symbol") ?? "").trim().toUpperCase();
-        if (!symbol || !MARKET_SYMBOL_PATTERN.test(symbol)) {
+        if (!isMarketSymbol(symbol)) {
           return Response.json({ message: "Invalid symbol" }, { status: 400 });
         }
         try {
