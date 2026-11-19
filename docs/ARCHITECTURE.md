@@ -234,7 +234,7 @@ sequenceDiagram
     W->>DB: load version and candles
     W->>E: runBacktestV3
     E-->>W: result
-    W->>DB: INSERT trades, equity points, performance snapshot, job COMPLETED
+    W->>DB: INSERT trades, equity points, performance snapshot, job COMPLETED with reproducibility_metadata
 ```
 
 Sources: `server/api/trpc/routers/backtest-v2.ts`, `server/domain/backtest/preset-to-v3-adapter.ts`, `server/api/trpc/routers/strategy-backtests.ts`, `server/modules/strategy-jobs/repository.ts`, `server/workers/backtest-worker.ts`, `server/domain/strategy/runner-v3.ts`. The job runner in the web process (`server/modules/strategy-jobs/runner.ts`, started by `server/plugins/strategy-jobs.ts`) claims queued jobs one at a time; set `STRATEGY_JOBS_IN_PROCESS=false` and run `bun run worker:strategy-jobs` to move it to its own process. Details of the engine are in [RESEARCH_ENGINE.md](RESEARCH_ENGINE.md).
@@ -251,7 +251,7 @@ Sources: `server/api/trpc/routers/backtest-v2.ts`, `server/domain/backtest/prese
 | `server/domain/backtest/` | Metric formulas (`risk-metrics.ts`) and the preset adapter. |
 | `server/domain/data/`, `server/domain/fundamentals/` | Corporate-action adjustment; ratios and point-in-time fundamentals. |
 | `server/domain/calculations/`, `screener/`, `technical/`, `analysis/`, `company/`, `portfolio/` | Calculator registry and batch runner, screener engine, technical indicators, stock scorecard, company detail, position reconciliation. |
-| `server/modules/` | Feature services and repositories: `paper-trading/` (service, fill writer, tick processor, liquidation, risk monitor, outbox), `strategy-jobs/`, `strategy-definitions/`, `alerts/`, `capabilities/`, `options/`, `peers/`, `screener-dsl/`, `market-breadth/`, `chart-workspaces/`, `trade-theses/`, `technical-snapshots/`, `data-quality/`. |
+| `server/modules/` | Feature services and repositories: `paper-trading/` (service, fill writer, tick processor, liquidation, risk monitor, outbox), `strategy-jobs/`, `strategy-definitions/`, `research-reports/` (run reports and comparisons), `alerts/`, `capabilities/`, `options/`, `peers/`, `screener-dsl/`, `market-breadth/`, `chart-workspaces/`, `trade-theses/`, `technical-snapshots/`, `data-quality/`. |
 | `server/data/` | Clients and provider adapters: Drizzle, Redis, BigQuery, Angel One, Yahoo, NSE master and index constituents, Yahoo fundamentals. |
 | `server/workers/` | In-process workers (Angel One WS, candle writer, market clock, order matcher, alert evaluator, daily processor), the backtest, sweep and walk-forward job functions run by the in-process strategy job runner, the standalone strategy evaluator, plus the ingestion engine. |
 | `server/infra/` | Event bus, logger (pino with redaction), health probes, AES-256-GCM credential encryption, client-IP derivation, DB diagnostics, and an unregistered shutdown helper (`shutdown.ts`). |
