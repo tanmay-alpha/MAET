@@ -90,8 +90,9 @@ describe("data-quality report over seeded candles", () => {
     await db.insert(fundamentals).values([
       { id: `${SYMBOLS.fresh}-2026Q2`, companyId: SYMBOLS.fresh, periodDate: new Date("2026-09-30T00:00:00Z"), periodType: "quarterly", filingDate: new Date("2026-10-20T00:00:00Z"), availableFrom: new Date("2026-10-21T00:00:00Z") },
       { id: `${SYMBOLS.fresh}-2026Q1`, companyId: SYMBOLS.fresh, periodDate: new Date("2026-06-30T00:00:00Z"), periodType: "quarterly" },
-      // Daily market snapshots are not reported periods.
+      // Daily market rows and observation-time ratio snapshots (Yahoo/NSE) are not reported periods.
       { id: `${SYMBOLS.fresh}-market-2026-11-06`, companyId: SYMBOLS.fresh, periodDate: new Date("2026-11-06T10:00:00Z"), periodType: "market" },
+      { id: `${SYMBOLS.fresh}-snapshot-2026-11-07`, companyId: SYMBOLS.fresh, periodDate: new Date("2026-11-07T10:00:00Z"), periodType: "snapshot" },
     ]);
     await db.insert(corporateActions).values({ symbol: SYMBOLS.fresh, companyId: SYMBOLS.fresh, actionType: "DIVIDEND", exDate: new Date("2026-08-14T00:00:00+05:30") });
     await getSqlClient()`
