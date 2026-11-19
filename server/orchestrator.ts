@@ -25,6 +25,7 @@ import type { QuoteSnapshot } from "./modules/alerts/evaluator";
 import { listActiveAlertSymbols } from "./modules/alerts/repository";
 import { startOutboxPublisherWorker, stopOutboxPublisherWorker } from "./workers/paper-outbox-publisher";
 import { listPaperInterest, PaperInterestSubscriptions } from "./modules/paper-trading/interest-subscriptions";
+import { workingOrderSymbols } from "./modules/paper-trading/working-order-symbols";
 
 /**
  * Who asked for a symbol on the live feed. The Angel One session takes at most
@@ -40,10 +41,8 @@ const angelOne = new AngelOneWorker();
 const candleWriter = new CandleWriter();
 const marketClock = new MarketClockWorker();
 const screenerRunner = new ScreenerRunner();
-/** EXCHANGE:SYMBOL with a working paper order (current generations), from the last paper-interest read. */
-let workingOrderKeys = new Set<string>();
 const orderMatcher = new OrderMatcherWorker({
-  hasWorkingOrders: (exchange, symbol) => workingOrderKeys.has(`${exchange}:${symbol}`),
+  hasWorkingOrders: (exchange, symbol) => workingOrderSymbols.has(exchange, symbol),
 });
 /** Reference counts per source; Map order is first-subscription order (the tie-break within a source). */
 const subscriptionRefs: Record<FeedSource, Map<string, number>> = {
@@ -82,12 +81,9 @@ const paperInterest = new PaperInterestSubscriptions({
   unsubscribe: (symbol) => unsubscribeSymbol(symbol, "paper"),
   // The same read also tells the order matcher which symbols can have a resting order to match.
   fetchInterest: async () => {
+    const applyRead = workingOrderSymbols.beginRead();
     const rows = await listPaperInterest();
-    workingOrderKeys = new Set(
-      rows
-        .filter((row) => row.kind === "ORDER")
-        .map((row) => `${row.exchange.trim().toUpperCase()}:${row.symbol.trim().toUpperCase()}`)
-    );
+    applyRead(rows.filter((row) => row.kind === "ORDER"));
     return rows;
   },
   log: {
@@ -337,7 +333,7 @@ export async function stopOrchestrator(): Promise<void> {
     syncAngelSubscriptions();
   }
   paperInterest.stop();
-  workingOrderKeys = new Set();
+  workingOrderSymbols.reset();
 
   await angelOne.stop();
   screenerRunner.stop();
@@ -413,5 +409,5 @@ export function getPaperInterestSymbols(): string[] {
 export function resetSubscriptionRefsForTesting(): void {
   paperInterest.stop();
   for (const source of FEED_PRIORITY) subscriptionRefs[source].clear();
-  workingOrderKeys = new Set();
+  workingOrderSymbols.reset();
 }
