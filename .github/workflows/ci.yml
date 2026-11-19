@@ -215,6 +215,11 @@ jobs:
       - name: Build Frontend Bundle
         run: bun run build
 
+      # Fails when the landing route's initial JS grows more than 10% over
+      # scripts/bundle-budget.json; prints initial and lazy JS for the main routes.
+      - name: Check Bundle Budget
+        run: bun run check:bundle
+
   build-backend:
     name: Backend Server Build
     runs-on: ubuntu-latest

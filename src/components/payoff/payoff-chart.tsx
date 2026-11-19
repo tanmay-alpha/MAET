@@ -14,7 +14,7 @@ import {
 import { payoffAtExpiry, pnlAfterDays, type Leg } from "@shared/domain/options/payoff";
 import { formatPrice, formatSignedRupees, pnlTone } from "./format";
 
-interface PayoffChartProps {
+export interface PayoffChartProps {
   legs: Leg[];
   lotSize: number;
   spot: number;

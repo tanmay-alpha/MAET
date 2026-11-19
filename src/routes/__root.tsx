@@ -10,7 +10,10 @@ import {
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 
-import appCss from "../styles.css?url";
+// A side-effect import, not `?url`: TanStack Start links CSS imported by route chunks from
+// the client build's manifest. A `?url` link took its hash from the server build's own copy
+// of the CSS, which differs and is never served, so the first paint was unstyled.
+import "../styles.css";
 import { API_BASE_URL } from "@/lib/api-url";
 import { DemoModeBanner } from "@/components/demo/demo-mode-banner";
 import { clearQueriesOnSessionChange } from "@/lib/auth-session";
@@ -72,7 +75,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:card", content: "summary_large_image" },
     ],
     links: [
-      { rel: "stylesheet", href: appCss },
       { rel: "icon", href: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2311161f'/%3E%3Cpath d='M5 25l7-15 6 8 9-13M22 5h5v6' fill='none' stroke='%236ee7b7' stroke-width='3'/%3E%3C/svg%3E" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },

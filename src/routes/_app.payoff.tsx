@@ -10,7 +10,7 @@ import {
 import { ContractInputs } from "@/components/payoff/contract-inputs";
 import { formatPrice } from "@/components/payoff/format";
 import { LegsTable } from "@/components/payoff/legs-table";
-import { PayoffChart } from "@/components/payoff/payoff-chart";
+import { LazyPayoffChart } from "@/components/payoff/lazy-payoff-chart";
 import { PayoffSummary } from "@/components/payoff/payoff-summary";
 import { ScenarioGrid } from "@/components/payoff/scenario-grid";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -186,7 +186,7 @@ function PayoffLab() {
             </header>
             <div className="p-2">
               {lab && analysis ? (
-                <PayoffChart
+                <LazyPayoffChart
                   legs={lab.legs}
                   lotSize={lab.lotSize}
                   spot={lab.spot}
