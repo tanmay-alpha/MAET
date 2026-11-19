@@ -70,7 +70,7 @@ flowchart LR
 | `AngelOneWorker` | Logs in (retry 15 s, fresh login daily at 08:30 IST), streams subscribed tokens. | `server/orchestrator.ts`, `server/workers/angelone-ws.ts` |
 | Daily processor | Checked every 60 s; runs after 18:30 IST on trading days under a Redis `SET NX` lock. | `server/orchestrator.ts`, `server/workers/daily-processor-schedule.ts` |
 
-Also started by the web process: the strategy job runner (`server/plugins/strategy-jobs.ts`, unless `STRATEGY_JOBS_IN_PROCESS=false`), which executes queued backtests, sweeps and walk-forward runs. Not started by the web process: the strategy-evaluator loop (`bun run worker:evaluator`), the paper outbox publisher (`server/workers/paper-outbox-publisher.ts`, `startOutboxPublisherWorker` has no caller) and the technical-snapshot worker. See §9.
+Also started by the web process: the strategy job runner (`server/plugins/strategy-jobs.ts`, unless `STRATEGY_JOBS_IN_PROCESS=false`), which executes queued backtests, sweeps and walk-forward runs. Not started by the web process: the strategy-evaluator loop (`bun run worker:evaluator`), and the technical-snapshot worker. The paper outbox publisher (`server/workers/paper-outbox-publisher.ts`) is started and stopped by the orchestrator (`server/orchestrator.ts`). See §9.
 
 ## 2. Request flows
 
@@ -254,8 +254,8 @@ Sources: `server/api/trpc/routers/backtest-v2.ts`, `server/domain/backtest/prese
 | `server/modules/` | Feature services and repositories: `paper-trading/` (service, fill writer, tick processor, liquidation, risk monitor, outbox), `strategy-jobs/`, `strategy-definitions/`, `research-reports/` (run reports and comparisons), `alerts/`, `capabilities/`, `options/`, `peers/`, `screener-dsl/`, `market-breadth/`, `chart-workspaces/`, `trade-theses/`, `technical-snapshots/`, `data-quality/`, `demo/` (synthetic demo dataset and `MAET_DEMO_MODE`; seeded by `bun run seed:demo`). |
 | `server/data/` | Clients and provider adapters: Drizzle, Redis, BigQuery, Angel One, Yahoo, NSE master and index constituents, Yahoo fundamentals. |
 | `server/workers/` | In-process workers (Angel One WS, candle writer, market clock, order matcher, alert evaluator, daily processor), the backtest, sweep and walk-forward job functions run by the in-process strategy job runner, the standalone strategy evaluator, plus the ingestion engine. |
-| `server/infra/` | Event bus, logger (pino with redaction), health probes, AES-256-GCM credential encryption, client-IP derivation, DB diagnostics, and an unregistered shutdown helper (`shutdown.ts`). |
-| `server/db/` | Drizzle `schema.ts`, numbered SQL migrations (0001–0026), seeds. |
+| `server/infra/` | Event bus, logger (pino with redaction), health probes, AES-256-GCM credential encryption, client-IP derivation, DB diagnostics, and graceful shutdown (`shutdown.ts`, registered by the orchestrator plugin and used for scheduled jobs). |
+| `server/db/` | Drizzle `schema.ts`, numbered SQL migrations (0001–0030), seeds. |
 | `server/scripts/` | Migration runner, DB connection check, backfills, test-wiring check. |
 | `shared/` | Code used by both sides: `types/` (Zod market/order contracts and the execution-quote policy), `domain/paper-trading/` (pure execution, margin, reconciliation), `domain/costs/` (Indian equity charges), `indicators/` (canonical indicators), `strategy/` (strategy AST and schemas), `screener/`, `research/` (chart workspace and thesis contracts), `symbols/` (NIFTY 50 catalogue, NSE holidays). |
 | `src/` | `routes/` (pages and same-origin market routes), `components/`, `hooks/` (React Query adapters), `lib/` (tRPC client, market API, token refresh, paper SSE client), `store/`. |

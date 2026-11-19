@@ -47,8 +47,9 @@ free-tier resources and is an owner action. After the owner provisions them:
 3. Put the values in the git-ignored `.env.production.local` (never committed, never printed).
 4. Migrations (empty database, nothing to back up yet; for any non-empty target take a `pg_dump` first):
    ```bash
-   MIGRATION_DATABASE_URL=<session pooler URI, port 5432> bun run server/scripts/apply-migrations.ts
-   bun run verify:db   # compares key tables and migration ledger
+   export MIGRATION_DATABASE_URL='<session pooler URI, port 5432>'   # same shell for both commands
+   bun run server/scripts/apply-migrations.ts
+   bun run verify:db -- --url-env=MIGRATION_DATABASE_URL   # read-only; verify:db never reads .env files
    ```
    The runner applies each file in its own transaction and records it in the tracking table, so a failure leaves earlier migrations applied and the failing one rolled back.
 5. Render env vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (transaction pooler, 6543), `UPSTASH_REDIS_URL`. Saving triggers a redeploy.
