@@ -9,6 +9,7 @@ import { describe, expect, it } from "bun:test";
 import { applyMigrations } from "../../scripts/apply-migrations";
 import { getSqlClient } from "../../data/drizzle/client";
 import { runSweepJob } from "../../workers/sweep-worker";
+import { sweepSelection } from "./sweep-robustness";
 import { uninterruptedJobContext } from "../strategy-jobs/job-context";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
@@ -75,6 +76,16 @@ describe("Strategy parameter sweep worker", () => {
     expect(results.map((r) => r.parameter_values.fast)).toEqual([3, 5, 8]);
     // The parameter reaches the strategy: different fast periods give different backtests.
     expect(new Set(results.map((r) => JSON.stringify(r.result_summary))).size).toBeGreaterThan(1);
+
+    // 200 bars give 199 returns: 16 CSCV blocks per result, the same blocks for every combination.
+    for (const r of results) {
+      expect(r.result_summary.returnBlocks).toHaveLength(16);
+      expect(r.result_summary.returnBlocks.reduce((n: number, [count]: number[]) => n + count, 0)).toBe(199);
+    }
+    const selection = sweepSelection(results.map((r) => ({ parameterValues: r.parameter_values, resultSummary: r.result_summary })));
+    expect(selection).toMatchObject({ sample: "IN_SAMPLE", trials: 3, pboReason: null, pbo: { trials: 3, blocks: 16, splits: 12870 } });
+    expect(selection.pbo!.pbo).toBeGreaterThanOrEqual(0);
+    expect(selection.pbo!.pbo).toBeLessThanOrEqual(1);
 
     await sql`DELETE FROM public.strategy_parameter_sweeps WHERE id = ${sweepId}`;
     await sql`DELETE FROM public.candles WHERE symbol = ${symbol}`;
