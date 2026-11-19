@@ -42,6 +42,14 @@ import type {
 } from "./strategy-jobs";
 import type { SweepRobustness } from "../../server/modules/strategy-optimisation/sweep-robustness";
 import type { PaperLedgerPage } from "./paper-ledger";
+import type { DailyPipelineResult } from "../../server/workers/ingestion-engine/pipelines/daily-pipeline";
+import type { CorporateActionIngestionResult } from "../../server/modules/corporate-actions/ingest";
+
+/** What the admin ingestion triggers report about the ingestion_runs row they wrote. */
+export type IngestionRunSummary = Pick<
+  DailyPipelineResult,
+  "runId" | "status" | "symbolsAttempted" | "symbolsSucceeded" | "symbolsFailed" | "recordsInserted" | "durationMs"
+>;
 import type {
   DataQualityReport,
   DataQualityUniverse,
@@ -412,6 +420,15 @@ export const trpc = {
     retryBatch: {
       mutate: (input: { batchId: string }): Promise<unknown> => trpcMutation("dataQuality.retryBatch", input),
     },
+  },
+  ingestion: {
+    triggerRun: createMutationProcedure<
+      { source: "yahoo-history"; symbols: string[] },
+      { runId: string; status: string; symbols: string[]; result: DailyPipelineResult }
+    >("ingestion.triggerRun"),
+    triggerCorporateActions: createMutationProcedure<{ symbols?: string[] } | void, CorporateActionIngestionResult>(
+      "ingestion.triggerCorporateActions",
+    ),
   },
   capabilities: {
     get: {
