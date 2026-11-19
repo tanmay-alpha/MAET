@@ -86,8 +86,14 @@ export const CreateWalkForwardInputSchema = z.object({
   timeframe: z.string().min(1).max(10),
   from: z.string().datetime(),
   to: z.string().datetime(),
+  /** Calendar days of each window's training (in-sample parameter selection) phase. */
   trainingWindowDays: z.number().int().min(30),
+  /**
+   * Calendar days of each window's validation (holdout veto) phase and, equally, of its
+   * out-of-sample test phase. Windows step forward by this span, so test segments tile the range.
+   */
   validationWindowDays: z.number().int().min(14),
+  /** The range must fit this many windows; up to twice as many (the most recent) are run. */
   minimumWindows: z.number().int().min(2).max(20),
 });
 export type CreateWalkForwardInput = z.infer<typeof CreateWalkForwardInputSchema>;

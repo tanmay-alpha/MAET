@@ -11,7 +11,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../data/drizzle/client";
 import { strategyWalkForwardRuns, strategyWalkForwardWindows, strategyVersions } from "../db/schema";
-import { runWalkForwardAnalysis, type WalkForwardAnalysisResult } from "../domain/strategy/walk-forward";
+import { runWalkForwardAnalysis, walkForwardRange, walkForwardRunSpans, type WalkForwardAnalysisResult } from "../domain/strategy/walk-forward";
 import { parseStoredSweepParameters } from "../domain/strategy/parameter-sweep";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
 import { loadJobCandles } from "../modules/strategy-jobs/candles";
@@ -19,8 +19,6 @@ import { downsample } from "../modules/strategy-jobs/downsample";
 import { JobInterruptedError, type JobContext } from "../modules/strategy-jobs/job-context";
 import { failWalkForward } from "../modules/strategy-optimisation/repository";
 
-/** Share of each window's training segment held out for the engine's validation phase. */
-const VALIDATION_SHARE_OF_TRAINING = 0.25;
 /** Points of the aggregate out-of-sample equity curve kept in the run summary for charting. */
 const MAX_OOS_CURVE_POINTS = 500;
 
@@ -29,21 +27,21 @@ export interface WalkForwardRunSettings {
   windowCount: number;
   trainingDays: number;
   validationDays: number;
+  fromDate: Date;
+  toDate: Date;
 }
 
 /**
- * Maps a run's settings onto the 3-phase engine. The API's "validation" days are the
- * out-of-sample test segment; the last quarter of the training days becomes the engine's
- * validation (overfit rejection) phase, so the train : validation : test proportions follow the
- * requested training and validation lengths.
+ * Maps a stored run onto the engine. `training_days` is the training (parameter selection) span;
+ * `validation_days` is both the validation holdout and the out-of-sample test span, and windows
+ * step forward by it. All spans are calendar days; the run's `to_date` is inclusive.
  */
 export function walkForwardEngineConfig(run: WalkForwardRunSettings) {
-  const span = run.trainingDays + run.validationDays;
   return {
     windowType: run.mode,
-    numWindows: run.windowCount,
-    trainRatio: (run.trainingDays * (1 - VALIDATION_SHARE_OF_TRAINING)) / span,
-    valRatio: (run.trainingDays * VALIDATION_SHARE_OF_TRAINING) / span,
+    maxWindows: run.windowCount,
+    ...walkForwardRunSpans(run),
+    ...walkForwardRange(run.fromDate, run.toDate),
   };
 }
 
@@ -61,14 +59,20 @@ export function walkForwardWindowRows(runId: string, userId: string, result: Wal
     selectedParameters: w.selectedParameters,
     trainingMetrics: w.isMetrics,
     validationMetrics: { metrics: w.valMetrics, accepted: w.validationAccepted, rejectionReason: w.rejectionReason },
-    testMetrics: w.oosMetrics,
+    testMetrics: { ...w.oosMetrics, position: w.oosPosition, cashReason: w.cashReason },
   }));
 }
 
-/** The run's stored `oos_summary`: engine summary, warnings and a chartable aggregate OOS curve. */
+/**
+ * The run's stored `oos_summary`: engine summary, methodology (phase labels and trial count),
+ * buy-and-hold benchmark, warnings and a chartable aggregate OOS curve.
+ */
 export function walkForwardRunSummary(result: WalkForwardAnalysisResult) {
   return {
     ...result.summary,
+    methodology: result.methodology,
+    benchmark: result.benchmark,
+    benchmarkReason: result.benchmarkReason,
     warnings: result.warnings,
     oosEquityCurve: downsample(result.aggregateOosEquityCurve, MAX_OOS_CURVE_POINTS).map((p) => ({
       timestamp: p.timestamp,
@@ -106,6 +110,8 @@ export async function runWalkForwardJob(runId: string, ctx: JobContext): Promise
           windowCount: run.windowCount,
           trainingDays: run.trainingDays,
           validationDays: run.validationDays,
+          fromDate: run.fromDate,
+          toDate: run.toDate,
         }),
       },
       { yieldControl: () => ctx.checkpoint() },
