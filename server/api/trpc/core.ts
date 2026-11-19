@@ -1,6 +1,7 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import { DrizzleQueryError } from "drizzle-orm";
 import { logger } from "../../infra/logger";
+import { DatabaseUnavailableError, isConnectionError } from "../../data/drizzle/availability";
 
 export type Context = {
   userId?: string;
@@ -11,6 +12,7 @@ export type Context = {
 };
 
 export const INTERNAL_ERROR_MESSAGE = "Internal server error";
+export const DATABASE_UNAVAILABLE_MESSAGE = "Database temporarily unavailable";
 
 const t = initTRPC.context<Context>().create({
   errorFormatter({ shape, error }) {
@@ -63,7 +65,9 @@ export function reportTrpcError(
   log: ErrorLog = logger,
 ): void {
   const context = { path: path ?? "<no-path>", type, code: error.code };
-  if (error.code !== "INTERNAL_SERVER_ERROR") {
+  // A database outage mapped to SERVICE_UNAVAILABLE keeps its cause and is logged like an internal error.
+  const outage = error.code === "SERVICE_UNAVAILABLE" && error.cause !== undefined;
+  if (error.code !== "INTERNAL_SERVER_ERROR" && !outage) {
     log.debug({ ...context, message: redactQueryParams(error.message) }, "tRPC request failed");
     return;
   }
@@ -108,7 +112,30 @@ const isAdmin = t.middleware(({ ctx, next }) => {
   });
 });
 
+/**
+ * An unreachable database (connection refused, DNS failure, connect timeout, server
+ * shutdown, or the circuit breaker already open) is an outage, not a server bug: the
+ * client gets 503 SERVICE_UNAVAILABLE, which it may retry, instead of 500. Procedures
+ * that wrap a failure in their own TRPCError must pass it as `cause` to be recognised.
+ */
+export function isDatabaseOutage(error: unknown): boolean {
+  for (let current = error, depth = 0; current instanceof Error && depth < 5; current = current.cause, depth++) {
+    if (current instanceof DatabaseUnavailableError) return true;
+  }
+  return isConnectionError(error);
+}
+
+const mapDatabaseOutage = t.middleware(async ({ next }) => {
+  const result = await next();
+  if (!result.ok && result.error.code === "INTERNAL_SERVER_ERROR" && isDatabaseOutage(result.error.cause)) {
+    throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: DATABASE_UNAVAILABLE_MESSAGE, cause: result.error.cause });
+  }
+  return result;
+});
+
+const procedure = t.procedure.use(mapDatabaseOutage);
+
 export const createRouter = t.router;
-export const publicProcedure = t.procedure;
-export const protectedProcedure = t.procedure.use(isAuthed);
+export const publicProcedure = procedure;
+export const protectedProcedure = procedure.use(isAuthed);
 export const adminProcedure = protectedProcedure.use(isAdmin);

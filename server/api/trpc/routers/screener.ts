@@ -331,12 +331,18 @@ async function runTechnicalScreen(params: {
   }
 }
 
+/** Filters one screen may carry: each adds a query (technical) or a condition (candle). */
+export const MAX_SCREENER_FILTERS = 20;
+/** Saved screeners a user may hold; getScreeners lists this many. */
+export const MAX_SAVED_SCREENERS_PER_USER = 50;
+
 // Filter input type reused across procedures
 const filterSchema = z.array(z.object({
   field: z.enum(ALLOWED_FILTER_FIELDS),
   operator: z.enum(["gt", "gte", "lt", "lte", "eq", "between"]),
-  value: z.union([z.number(), z.array(z.number())]),
-}));
+  // A range ("between") is the only array value: its two inclusive bounds.
+  value: z.union([z.number(), z.array(z.number()).max(2)]),
+})).max(MAX_SCREENER_FILTERS);
 
 export const screenerRouter = createRouter({
   // Run a stock screen with filters
@@ -541,20 +547,35 @@ export const screenerRouter = createRouter({
         filters: input.filters,
       };
 
-      const [created] = await db
-        .insert(screenerRuns)
-        .values({
-          userId,
-          name: input.name,
-          criteria,
-          matches: [],
-          startedAt: new Date(),
-        })
-        .returning({
-          id: screenerRuns.id,
-          name: screenerRuns.name,
-          startedAt: screenerRuns.startedAt,
-        });
+      const created = await db.transaction(async (tx) => {
+        // Serialise this user's saves so concurrent requests cannot overshoot the cap.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`screener-runs:${userId}`}))`);
+        const [{ count }] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(screenerRuns)
+          .where(eq(screenerRuns.userId, userId));
+        if (count >= MAX_SAVED_SCREENERS_PER_USER) {
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: `At most ${MAX_SAVED_SCREENERS_PER_USER} saved screeners allowed; delete one to save another.`,
+          });
+        }
+        const [row] = await tx
+          .insert(screenerRuns)
+          .values({
+            userId,
+            name: input.name,
+            criteria,
+            matches: [],
+            startedAt: new Date(),
+          })
+          .returning({
+            id: screenerRuns.id,
+            name: screenerRuns.name,
+            startedAt: screenerRuns.startedAt,
+          });
+        return row;
+      });
 
       return {
         id: created.id,
