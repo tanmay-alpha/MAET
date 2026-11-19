@@ -25,7 +25,7 @@ branch, merged `main` into it, re-ran its suites and merged it only after CI pas
 | UX-3 | P1 | A11y | Shortcut hijack; unlabeled chart | `use-chart-layout.ts` | Skip interactive targets; `role=img` | FrontendAuth | `resilience.spec.ts` | done | #70 |
 | UX-4 | P1 | Responsive | 768 px squeeze; `/orders` +370 px overflow | Playwright | Slide-over sidebar < 1024 px | FrontendAuth | 360/768/1440 on six pages | done | #70 |
 | UX-5 | P2 | Portfolio | No cash ledger | no callers | Ledger + reconciliation | FrontendAuth | `ledger.spec.ts` | done | #70 |
-| UX-6 | P2 | Bundles | Chart libraries not split per route | build output | — | — | — | deferred | — |
+| UX-6 | P2 | Bundles | Chart routes wait for lightweight-charts/recharts before rendering | build output, start manifest preloads | Lazy chart components with sized `role=status` fallbacks; React and lightweight-charts vendor chunks; `check:bundle` budget in CI | BundleSplit | `lazy-charts.spec.ts`, `ssr-assets.spec.ts`, `bun run check:bundle` | done | `perf/route-bundle-splitting` |
 | FIN-1 | P1 | Paper margin | Stale marks | `margin.ts` | Live marks; unmarked gains never count | PaperRisk | counterexample + seeded sweep | done | #59 |
 | FIN-2 | P1 | Paper execution | Risk-reducing fills rejected | `execution.ts` | Never margin-reject pure reductions | PaperRisk | counterexample | done | #59 |
 | FIN-3 | P1 | runner-v3 | Risk settings ignored | `schemas.ts` | Drawdown/daily-loss enforced; others rejected | ResearchEngine | `runner-v3-risk-gates.test.ts` | done | #63 |

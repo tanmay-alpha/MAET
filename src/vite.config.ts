@@ -55,6 +55,25 @@ export default defineConfig({
   ssr: {
     external: ["react", "react-dom"],
   },
+  environments: {
+    client: {
+      build: {
+        rolldownOptions: {
+          output: {
+            // Libraries that change only on upgrades get their own chunks, so a deploy that
+            // only changes app code leaves them cached. React ships with every page; the chart
+            // library loads only with the lazy chart components (lazy-candlestick-chart.tsx).
+            codeSplitting: {
+              groups: [
+                { name: "vendor-react", test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+                { name: "vendor-lightweight-charts", test: /[\\/]node_modules[\\/](lightweight-charts|fancy-canvas)[\\/]/ },
+              ],
+            },
+          },
+        },
+      },
+    },
+  },
   optimizeDeps: {
     include: ["react", "react-dom", "react-dom/client", "use-sync-external-store/shim/with-selector"],
     ignoreOutdatedRequests: true,

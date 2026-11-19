@@ -51,7 +51,7 @@ Refuted infrastructure hypotheses (from the static audit, disproved by logs): IP
 
 ## Code findings
 
-Status legend: **verified** = reproduced or confirmed in current code; **refuted** = not true at `49dcad5`. The PR that fixed each finding is listed in [`implementation-roadmap.md`](implementation-roadmap.md); every finding there is fixed except OPS-1 (owner action), OPS-6, UX-6 and RES-4 (deferred).
+Status legend: **verified** = reproduced or confirmed in current code; **refuted** = not true at `49dcad5`. The PR that fixed each finding is listed in [`implementation-roadmap.md`](implementation-roadmap.md); every finding there is fixed except OPS-1 (owner action), OPS-6 and RES-4 (deferred).
 
 ### Financial correctness
 
@@ -104,7 +104,7 @@ Status legend: **verified** = reproduced or confirmed in current code; **refuted
 | UX-3 | P1 | Global chart shortcuts swallow keys in selects/comboboxes; chart canvas has no accessible name | verified (code) |
 | UX-4 | P1 | 768 px: desktop sidebar + hidden top nav squeeze content | verified with Playwright (also /orders +370 px at 360 px); fixed #70 |
 | UX-5 | P2 | `paperTrading.listLedger` has no UI (no cash ledger) | verified |
-| UX-6 | P2 | Heavy chart libraries not split per route | open (deferred) |
+| UX-6 | P2 | Heavy chart libraries not split per route | partly refuted: TanStack route splitting already kept them off the landing route; chart routes still loaded them before rendering. Fixed in `perf/route-bundle-splitting` (lazy chart components, CI bundle budget) |
 
 ### Backend
 

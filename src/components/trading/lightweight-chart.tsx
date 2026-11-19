@@ -24,6 +24,7 @@ import {
 } from "lightweight-charts";
 import { computeSMA, computeEMA, computeRSI, computeMACD } from "@shared/indicators";
 import { corporateActionTooltip, type PlacedCorporateActions } from "./chart-corporate-actions";
+import { mainPaneHeight, RSI_PANE_HEIGHT } from "./chart-dimensions";
 import { formatIstCrosshairTime, formatIstTickMark, hasIntradayBars } from "./chart-time";
 import { snapTradeMarkersToBars } from "./chart-trade-markers";
 
@@ -182,7 +183,7 @@ export function LightweightChart({
     if (!containerRef.current) return;
 
     const container = containerRef.current;
-    const chartHeight = indicators.rsi ? Math.max(height - 120, 260) : height;
+    const chartHeight = mainPaneHeight(height, indicators.rsi);
 
     const chart = createChart(container, {
       width: container.clientWidth || 800,
@@ -304,7 +305,7 @@ export function LightweightChart({
       for (const entry of entries) {
         if (entry.target === container && chartRef.current) {
           const newWidth = entry.contentRect.width;
-          const newHeight = indicators.rsi ? Math.max(height - 120, 260) : height;
+          const newHeight = mainPaneHeight(height, indicators.rsi);
           chartRef.current.resize(newWidth, newHeight);
         }
       }
@@ -336,7 +337,7 @@ export function LightweightChart({
     const rsiContainer = rsiContainerRef.current;
     const rsiChart = createChart(rsiContainer, {
       width: rsiContainer.clientWidth || 800,
-      height: 120,
+      height: RSI_PANE_HEIGHT,
       layout: {
         background: { type: ColorType.Solid, color: "#090d13" },
         textColor: "#94a3b8",
@@ -749,7 +750,7 @@ export function LightweightChart({
         aria-label={ariaLabel}
         onClick={handleChartClick}
         className="w-full relative cursor-crosshair"
-        style={{ height: indicators.rsi ? Math.max(height - 120, 260) : height }}
+        style={{ height: mainPaneHeight(height, indicators.rsi) }}
       />
 
       {eventTooltip && (
@@ -777,7 +778,7 @@ export function LightweightChart({
             <span className="text-purple-400 font-semibold">RSI(14)</span>
             <span>Wilder&apos;s Canonical</span>
           </div>
-          <div ref={rsiContainerRef} role="img" aria-label={`RSI (14) pane: ${ariaLabel}`} className="w-full h-[120px]" />
+          <div ref={rsiContainerRef} role="img" aria-label={`RSI (14) pane: ${ariaLabel}`} className="w-full" style={{ height: RSI_PANE_HEIGHT }} />
         </div>
       )}
 

@@ -10,7 +10,7 @@ import { usePaperAccount } from "@/hooks/use-paper-account";
 import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
 import { mapBacktestTradesToMarkers } from "@/components/trading/chart-trade-markers";
 import { isShortcutExemptEvent, useChartLayout, useChartShortcuts, useFullscreen } from "@/hooks/use-chart-layout";
-import { CandlestickChart } from "@/components/trading/candlestick-chart";
+import { LazyCandlestickChart } from "@/components/trading/lazy-candlestick-chart";
 import { ChartToolbar, CorporateActionsStatus } from "@/components/trading/chart-toolbar";
 import { placeCorporateActions } from "@/components/trading/chart-corporate-actions";
 import { getTradingViewUrl } from "@/lib/tradingview";
@@ -434,7 +434,7 @@ function ChartPage() {
               <p className="px-3 py-16 text-center text-xs text-muted-foreground lg:px-5">No {tf.label.toLowerCase()} history for {symbol}.</p>
             ) : (
               <div className="p-2 lg:p-3">
-                <CandlestickChart
+                <LazyCandlestickChart
                   data={candles}
                   ariaLabel={`${symbol} ${selectedChartType === "candles" ? "candlestick" : selectedChartType} chart, ${tf.label} of ${tf.timeframe} bars`}
                   height={420}

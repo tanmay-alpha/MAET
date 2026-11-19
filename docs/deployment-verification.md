@@ -20,7 +20,7 @@
 
 ## Release gates (on every push to `main`)
 
-1. `CI Validation Workflow`: typecheck, lint, test wiring, unit, Postgres integration/concurrency/advanced suites, Playwright, frontend build, backend build, **backend bundle booted on Node 22** (catches Bun-only APIs).
+1. `CI Validation Workflow`: typecheck, lint, test wiring, unit, Postgres integration/concurrency/advanced suites, Playwright, frontend build, frontend bundle budget (`check:bundle`), backend build, **backend bundle booted on Node 22** (catches Bun-only APIs).
 2. `Verify Render Deployment`: polls `/api/ready` until HTTP 200 **and** `version == $GITHUB_SHA`, then `scripts/smoke-deploy.ts --backend-only` (CORS preflight from the production origin, 401 on an anonymous protected procedure, a public DB-backed procedure, the quotes API). Read-only.
 3. `Verify Vercel Production`: polls `https://maet-pi.vercel.app/` until HTTP 200 **and** `x-maet-build == $GITHUB_SHA`. A rate-limited, failed or unpromoted build therefore fails the workflow instead of leaving an old revision silently in place.
 
