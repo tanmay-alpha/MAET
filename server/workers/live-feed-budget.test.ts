@@ -68,7 +68,9 @@ describe("Angel One token budget", () => {
     let seed = 0xfeed;
     const random = (limit: number) => {
       seed = (seed * 1_103_515_245 + 12_345) & 0x7fffffff;
-      return seed % limit;
+      // The low bits of a power-of-two LCG cycle with a short period (the lowest bit alternates,
+      // so `% 10` only ever drew even actions); use the high ones.
+      return (seed >>> 16) % limit;
     };
     const open: Array<() => void> = [];
     const paper = new Set<string>();
