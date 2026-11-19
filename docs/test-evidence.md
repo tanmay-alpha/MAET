@@ -21,21 +21,21 @@ Gaps in that baseline:
 - Playwright ran Chromium only, with no sign-in flow (none existed).
 - None of the financial counterexamples in [`engineering-audit.md`](engineering-audit.md) had a test.
 
-## Final: `main` at `f41bb87` (fresh worktree, fresh database `maet_test_final`)
+## Final: `main` at `6951f6c` (fresh worktree, fresh database `maet_test_final3`)
+
+All PRs #56–#89 were merged. Disposable Postgres 16 and Redis 7.
 
 | Command | Result |
 |---|---|
 | `bun run typecheck` (frontend + server) | pass |
 | `bun run lint` | pass |
 | `bunx tsc -p tests/e2e/tsconfig.json --noEmit` | pass |
-| `bun run check:test-wiring` | 240 tracked test files wired |
-| `bun run test:all` (unit + integration + concurrency + advanced, incl. migration 0013–0029 upgrade tests and migration runner) | **1800 pass, 0 fail, 0 skip**, 34 suite runs, exit 0 |
-| `CI= bunx playwright test --retries=0` (Chromium desktop + mobile) | **167 passed, 0 failed**, 15 skipped by design (single-project viewport sweeps) |
-| `E2E_ALL_BROWSERS=1 … --project=firefox --project=webkit` | see below |
+| `bun run check:test-wiring` | 251 tracked test files wired |
+| `bun run test:all` (unit, integration, concurrency, advanced; includes the migration 0013–0030 upgrade tests and the migration runner) | **1919 pass, 0 fail, 0 skip**, 36 suite runs, exit 0 |
+| `CI= bunx playwright test --retries=0` (Chromium desktop + mobile) | **205 passed, 0 failed**, 25 skipped by design (single-project viewport sweeps) |
+| `bun run build && bun run check:bundle` | within budget: landing initial JS 152.4 kB gzip (baseline 151.6 kB, limit 166.7 kB) |
 
-CI (`.github/workflows/ci.yml`) re-ran the same jobs on every PR. Each PR in the
-[roadmap](implementation-roadmap.md) merged only with all checks green, including the job that boots the
-built backend on Node 22.
+Earlier checkpoint: on `f41bb87`, `test:all` 1800/0 and Playwright 167/0. On `1b68dbc`, `test:all` 1913/0 and Playwright 197/0.
 
 ### Cross-browser
 
