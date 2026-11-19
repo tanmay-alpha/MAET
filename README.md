@@ -26,7 +26,8 @@ MAET combines screening, strategy research, paper trading, investing tools and w
 - **Screener & market pages**: 70 registered calculators (technical, fundamental, scanner, portfolio), Gainers/Losers sorted by change %, a public NIFTY 50 heatmap and source labels taken from the API response.
 - **Charts**: TradingView Lightweight Charts with an IST (exchange-time) axis, dividend and split markers, and paper/backtest trade markers placed on the bar that contains them.
 - **Strategy Lab**: backtests, walk-forward analysis, parameter-robustness heatmaps, bar replay and run comparison.
-- **Paper trading**: market/limit/stop orders with OCO brackets, 5× margin, serializable fills and a ledger.
+- **Paper trading**: market/limit/stop orders with OCO brackets, 5× margin, serializable fills and a ledger. `/portfolio` shows the cash ledger (running balance in INR) and reconciles opening cash + realised P&L − charges = cash and cash + unrealised P&L = equity against it.
+- **Accounts** (`/login`): email + password sign-in, sign-up (with the "check your email" step when the Supabase project confirms emails) and sign-out, against Supabase Auth's REST API with the public anon key. A session whose refresh token is revoked signs the browser out and says the session expired; signing out or switching user clears every cached query.
 - **Returns & tax** (`/portfolio`): XIRR of the paper account and an Indian capital-gains estimate (s.111A/s.112A, the 23 Jul 2024 rate change, ₹1.25 lakh exemption, loss set-off, 4% cess).
 - **Import portfolio** (`/import`): analyse a Zerodha or Groww tradebook (or any CSV) in the browser — FIFO holdings, realised gains per FY, tax estimate and XIRR. The file is never uploaded.
 - **Payoff Lab** (`/payoff`): multi-leg options builder with exact breakevens and max profit/loss, Black-Scholes Greeks and a scenario grid.
@@ -341,7 +342,7 @@ VITE_SUPABASE_URL=https://<project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon key, public by design>
 ```
 
-Outside tests, `server/config.ts` refuses to start without `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `UPSTASH_REDIS_URL`, `ANGELONE_MASTER_KEY` and the four `ANGELONE_*` credentials; the server also needs a database URL (`SUPABASE_DB_URL` or `DATABASE_URL`). On Render, set the server variables in the dashboard (`render.yaml` lists them, including the optional BigQuery ones); on Vercel, set the `VITE_*` variables.
+Outside tests, `server/config.ts` refuses to start without `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `UPSTASH_REDIS_URL`, `ANGELONE_MASTER_KEY` and the four `ANGELONE_*` credentials; the server also needs a database URL (`SUPABASE_DB_URL` or `DATABASE_URL`). On Render, set the server variables in the dashboard (`render.yaml` lists them, including the optional BigQuery ones); on Vercel, set the `VITE_*` variables. A frontend built without `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` has no fallback project: sign-in pages and links say "Sign-in is not configured" and no request goes to Supabase.
 
 ### 3. Running Locally
 Run the backend and frontend in two terminals:
@@ -408,10 +409,13 @@ bun run test:all
 End-to-end tests need no database, broker or secret: `bun run test:e2e` builds the frontend in
 production mode with `VITE_API_URL=https://api.test`, serves it with the node-server preview, and
 answers every backend request from `tests/e2e/support/mock-api.ts` (shaped like the real market,
-tRPC and SSE contracts). Install the browser once with `bunx playwright install chromium`. The 13 specs
-cover the landing page, screener, chart and corporate actions, quote freshness, the paper terminal and account
-states (signed in, signed out, expired session, backend down), account pages, strategy creation, the
-tradebook import, Payoff Lab and World Monitor, each on one desktop and one mobile viewport.
+tRPC and SSE contracts) and to Supabase Auth (`https://supabase.test/auth/v1/{token,signup,logout}`). Install the browser
+once with `bunx playwright install chromium`. The specs cover the landing page, screener, chart and corporate actions,
+quote freshness, the paper terminal and account states (signed in, signed out, expired session, backend down), sign-in,
+sign-up, sign-out and session refresh/expiry, the cash ledger and its reconciliation, account pages, strategy creation,
+the tradebook import, Payoff Lab, World Monitor, the in-app error panel, chart shortcuts next to form controls, and
+layout at 360/768/1440 px (screenshots of `/login` and `/portfolio` go to `test-results/screenshots/`), each on one
+desktop and one mobile viewport unless noted.
 
 ### Production Builds
 ```bash

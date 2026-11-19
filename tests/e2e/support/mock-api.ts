@@ -7,6 +7,8 @@
  *   - /api/market/stream: text/event-stream with `snapshot` and `tick` events
  *   - /api/trpc/<procedure>: non-batched tRPC, `{result:{data}}` / `{error:{...}}`
  *   - /api/paper/stream: the paper SSE frames server/api/paper/stream.get.ts writes
+ *   - https://supabase.test/auth/v1/{token,signup,logout}: Supabase Auth (GoTrue) REST,
+ *     with the request and error shapes GoTrue uses
  * Protected procedures answer 401 without a Bearer token, like protectedProcedure.
  */
 import type { Page, Request, Route } from "@playwright/test";
@@ -20,14 +22,22 @@ import {
   BASE_PRICES,
   COMPANIES,
   CREATED_STRATEGY_ID,
+  E2E_EMAIL,
+  E2E_PASSWORD,
   FIELD_AVAILABILITY,
   FIXED_NOW,
+  REFRESH_TOKEN,
+  SUPABASE_ANON_KEY,
+  SUPABASE_ORIGIN,
   USER_ID,
   candlesFor,
   paperAccountRow,
+  paperLedgerRow,
   paperOrderRow,
   quoteFor,
   type MarketSession,
+  type PaperLedgerEntryWire,
+  type PaperAccountWire,
   type PaperOrderWire,
 } from "./data";
 
@@ -110,6 +120,10 @@ export class MockApi {
   session: MarketSession = "open";
   /** Paper orders the fake account holds; placeOrder/cancelOrder mutate it. */
   readonly orders: PaperOrderWire[] = [];
+  /** The account row paperTrading.getState returns. */
+  account: PaperAccountWire = paperAccountRow();
+  /** Caps listLedger pages below the requested limit, to exercise paging; null = no cap. */
+  ledgerPageLimit: number | null = null;
   /** The tick each market SSE connection sends after its snapshot. */
   tick = { symbol: "NIFTY50", price: BASE_PRICES.NIFTY50 + 12.35 };
   /**
@@ -133,6 +147,25 @@ export class MockApi {
   worldUpstreams: { eonet: unknown; gdelt: unknown } = { eonet: null, gdelt: null };
   /** Every request the page sent to NASA EONET or GDELT, answered or not. */
   readonly upstreamRequests: URL[] = [];
+  /**
+   * The current generation's cash ledger listLedger serves, newest first; it matches the
+   * fixture account (₹10,00,000 opening cash, no trades).
+   */
+  ledger: PaperLedgerEntryWire[] = [
+    paperLedgerRow({
+      id: "00000000-0000-4000-9000-000000000001",
+      entryType: "INITIAL_CASH",
+      amount: 1_000_000,
+      balanceAfter: 1_000_000,
+      createdAt: "2026-10-01T04:00:00.000Z",
+    }),
+  ];
+  /** Every request the page sent to Supabase Auth, in order. */
+  readonly authRequests: RecordedRequest[] = [];
+  /** Refresh tokens the fake GoTrue still honours; revoke one by deleting it. */
+  readonly validRefreshTokens = new Set([REFRESH_TOKEN]);
+  /** Whether a sign-up must be confirmed by email first (GoTrue then returns no session). */
+  signupRequiresConfirmation = true;
 
   private readonly queries = new Map<string, TrpcHandler>();
   private readonly mutations = new Map<string, TrpcHandler>();
@@ -180,6 +213,11 @@ export class MockApi {
           body: JSON.stringify(payload),
         });
       },
+    );
+    // Supabase Auth: consulted before the blanket refusal, like the upstreams above.
+    await this.page.route(
+      (url) => url.origin === SUPABASE_ORIGIN,
+      (route, request) => this.goTrue(route, request),
     );
     await this.page.route(
       (url) => url.origin === API_ORIGIN || (appOrigin(url) && url.pathname.startsWith("/api/")),
@@ -422,6 +460,77 @@ export class MockApi {
     });
   }
 
+  /** Supabase Auth (GoTrue) REST: password and refresh grants, sign-up and logout. */
+  private async goTrue(route: Route, request: Request) {
+    const url = new URL(request.url());
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = null;
+    }
+    const cors = {
+      "access-control-allow-origin": "*",
+      "access-control-allow-headers": "apikey, authorization, content-type",
+      "access-control-allow-methods": "POST, OPTIONS",
+    };
+    if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+    this.authRequests.push({ method: request.method(), url, headers: request.headers(), body });
+    const reply = (status: number, payload: unknown) =>
+      route.fulfill({ status, headers: cors, contentType: "application/json", body: JSON.stringify(payload) });
+    const error = (status: number, errorCode: string, msg: string) =>
+      reply(status, { code: status, error_code: errorCode, msg });
+    if (request.headers().apikey !== SUPABASE_ANON_KEY) {
+      return reply(401, { message: "No API key found in request" });
+    }
+    const field = (key: string) => inputValue(body, key);
+    const session = (email: unknown = E2E_EMAIL) => ({
+      access_token: ACCESS_TOKEN,
+      token_type: "bearer",
+      expires_in: 3600,
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      refresh_token: REFRESH_TOKEN,
+      user: { id: USER_ID, aud: "authenticated", email },
+    });
+
+    if (url.pathname === "/auth/v1/token") {
+      const grant = url.searchParams.get("grant_type");
+      if (grant === "password") {
+        return field("email") === E2E_EMAIL && field("password") === E2E_PASSWORD
+          ? reply(200, session())
+          : error(400, "invalid_credentials", "Invalid login credentials");
+      }
+      if (grant === "refresh_token") {
+        return this.validRefreshTokens.has(String(field("refresh_token")))
+          ? reply(200, session())
+          : error(400, "refresh_token_not_found", "Invalid Refresh Token: Refresh Token Not Found");
+      }
+      return error(400, "validation_failed", "unsupported_grant_type");
+    }
+    if (url.pathname === "/auth/v1/signup") {
+      if (field("email") === E2E_EMAIL) return error(422, "user_already_exists", "User already registered");
+      if (!this.signupRequiresConfirmation) return reply(200, session(field("email")));
+      // GoTrue answers a sign-up awaiting confirmation with the bare user and no session.
+      return reply(200, {
+        id: "22222222-2222-4222-8222-222222222222",
+        aud: "authenticated",
+        role: "",
+        email: field("email"),
+        confirmation_sent_at: FIXED_NOW,
+        identities: [],
+      });
+    }
+    if (url.pathname === "/auth/v1/logout") {
+      if (request.headers().authorization !== `Bearer ${ACCESS_TOKEN}`) {
+        return error(401, "bad_jwt", "invalid JWT");
+      }
+      // scope=local revokes the refresh token of the session that signed out.
+      this.validRefreshTokens.delete(REFRESH_TOKEN);
+      return route.fulfill({ status: 204, headers: cors });
+    }
+    return error(404, "not_found", `No e2e fixture for ${request.method()} ${url.pathname}`);
+  }
+
   private async trpc(route: Route, request: Request, path: string) {
     const isMutation = request.method() === "POST";
     const handler = (isMutation ? this.mutations : this.queries).get(path);
@@ -454,15 +563,23 @@ export class MockApi {
   }
 
   private registerDefaults() {
-    const account = paperAccountRow();
-
     this.onQuery("paperTrading.getState", () => ({
-      account,
+      account: this.account,
       positions: [],
       orders: this.orders,
       fills: [],
       asOf: FIXED_NOW,
     }));
+    // Pages newest first like the repository; the cursor here is an offset.
+    this.onQuery("paperTrading.listLedger", (input) => {
+      const limit = Math.min(Number(inputValue(input, "limit") ?? 100), this.ledgerPageLimit ?? 100);
+      const offset = Number(inputValue(input, "cursor") ?? 0);
+      const next = offset + limit;
+      return {
+        entries: this.ledger.slice(offset, next),
+        nextCursor: next < this.ledger.length ? String(next) : null,
+      };
+    });
     this.onMutation("paperTrading.placeOrder", (input) => {
       const parsed = PaperOrderCommandSchema.safeParse(input);
       if (!parsed.success)
@@ -488,7 +605,7 @@ export class MockApi {
       return {
         order,
         fill: null,
-        account,
+        account: this.account,
         position: null,
         idempotentReplay: Boolean(replay),
         asOf: FIXED_NOW,

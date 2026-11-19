@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppAlertsRouteImport } from './routes/_app.alerts'
 import { Route as AppBacktestRouteImport } from './routes/_app.backtest'
 import { Route as AppChartGridRouteImport } from './routes/_app.chart-grid'
@@ -44,6 +45,9 @@ import { Route as ApiMarketCompaniesRouteImport } from './routes/api.market.comp
 import { Route as ApiMarketCompanyRouteImport } from './routes/api.market.company'
 import { Route as ApiMarketCorporateActionsRouteImport } from './routes/api.market.corporate-actions'
 import { Route as ApiMarketQuotesRouteImport } from './routes/api.market.quotes'
+import { Route as AppResearchReportsIndexRouteImport } from './routes/_app.research.reports.index'
+import { Route as AppResearchReportsJobIdRouteImport } from './routes/_app.research.reports.$jobId'
+import { Route as AppResearchReportsCompareRouteImport } from './routes/_app.research.reports.compare'
 import { Route as AppStrategiesStrategyIdIndexRouteImport } from './routes/_app.strategies.$strategyId.index'
 import { Route as AppStrategiesStrategyIdBacktestsRouteImport } from './routes/_app.strategies.$strategyId.backtests'
 import { Route as AppStrategiesStrategyIdDeploymentsRouteImport } from './routes/_app.strategies.$strategyId.deployments'
@@ -55,6 +59,11 @@ const IndexRoute = IndexRouteImport.update({
 } as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppAlertsRoute = AppAlertsRouteImport.update({
@@ -223,6 +232,22 @@ const ApiMarketQuotesRoute = ApiMarketQuotesRouteImport.update({
   path: '/api/market/quotes',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppResearchReportsIndexRoute = AppResearchReportsIndexRouteImport.update({
+  id: '/research/reports/',
+  path: '/research/reports/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppResearchReportsJobIdRoute = AppResearchReportsJobIdRouteImport.update({
+  id: '/research/reports/$jobId',
+  path: '/research/reports/$jobId',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppResearchReportsCompareRoute =
+  AppResearchReportsCompareRouteImport.update({
+    id: '/research/reports/compare',
+    path: '/research/reports/compare',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppStrategiesStrategyIdIndexRoute =
   AppStrategiesStrategyIdIndexRouteImport.update({
     id: '/strategies/$strategyId/',
@@ -244,6 +269,7 @@ const AppStrategiesStrategyIdDeploymentsRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
   '/alerts': typeof AppAlertsRoute
   '/backtest': typeof AppBacktestRoute
   '/chart-grid': typeof AppChartGridRoute
@@ -277,12 +303,16 @@ export interface FileRoutesByFullPath {
   '/api/market/corporate-actions': typeof ApiMarketCorporateActionsRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
   '/strategies/': typeof AppStrategiesIndexRoute
+  '/research/reports/$jobId': typeof AppResearchReportsJobIdRoute
+  '/research/reports/compare': typeof AppResearchReportsCompareRoute
   '/strategies/$strategyId/backtests': typeof AppStrategiesStrategyIdBacktestsRoute
   '/strategies/$strategyId/deployments': typeof AppStrategiesStrategyIdDeploymentsRoute
+  '/research/reports/': typeof AppResearchReportsIndexRoute
   '/strategies/$strategyId/': typeof AppStrategiesStrategyIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
   '/alerts': typeof AppAlertsRoute
   '/backtest': typeof AppBacktestRoute
   '/chart-grid': typeof AppChartGridRoute
@@ -316,14 +346,18 @@ export interface FileRoutesByTo {
   '/api/market/corporate-actions': typeof ApiMarketCorporateActionsRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
   '/strategies': typeof AppStrategiesIndexRoute
+  '/research/reports/$jobId': typeof AppResearchReportsJobIdRoute
+  '/research/reports/compare': typeof AppResearchReportsCompareRoute
   '/strategies/$strategyId/backtests': typeof AppStrategiesStrategyIdBacktestsRoute
   '/strategies/$strategyId/deployments': typeof AppStrategiesStrategyIdDeploymentsRoute
+  '/research/reports': typeof AppResearchReportsIndexRoute
   '/strategies/$strategyId': typeof AppStrategiesStrategyIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/login': typeof LoginRoute
   '/_app/alerts': typeof AppAlertsRoute
   '/_app/backtest': typeof AppBacktestRoute
   '/_app/chart-grid': typeof AppChartGridRoute
@@ -357,14 +391,18 @@ export interface FileRoutesById {
   '/api/market/corporate-actions': typeof ApiMarketCorporateActionsRoute
   '/api/market/quotes': typeof ApiMarketQuotesRoute
   '/_app/strategies/': typeof AppStrategiesIndexRoute
+  '/_app/research/reports/$jobId': typeof AppResearchReportsJobIdRoute
+  '/_app/research/reports/compare': typeof AppResearchReportsCompareRoute
   '/_app/strategies/$strategyId/backtests': typeof AppStrategiesStrategyIdBacktestsRoute
   '/_app/strategies/$strategyId/deployments': typeof AppStrategiesStrategyIdDeploymentsRoute
+  '/_app/research/reports/': typeof AppResearchReportsIndexRoute
   '/_app/strategies/$strategyId/': typeof AppStrategiesStrategyIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/login'
     | '/alerts'
     | '/backtest'
     | '/chart-grid'
@@ -398,12 +436,16 @@ export interface FileRouteTypes {
     | '/api/market/corporate-actions'
     | '/api/market/quotes'
     | '/strategies/'
+    | '/research/reports/$jobId'
+    | '/research/reports/compare'
     | '/strategies/$strategyId/backtests'
     | '/strategies/$strategyId/deployments'
+    | '/research/reports/'
     | '/strategies/$strategyId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/login'
     | '/alerts'
     | '/backtest'
     | '/chart-grid'
@@ -437,13 +479,17 @@ export interface FileRouteTypes {
     | '/api/market/corporate-actions'
     | '/api/market/quotes'
     | '/strategies'
+    | '/research/reports/$jobId'
+    | '/research/reports/compare'
     | '/strategies/$strategyId/backtests'
     | '/strategies/$strategyId/deployments'
+    | '/research/reports'
     | '/strategies/$strategyId'
   id:
     | '__root__'
     | '/'
     | '/_app'
+    | '/login'
     | '/_app/alerts'
     | '/_app/backtest'
     | '/_app/chart-grid'
@@ -477,14 +523,18 @@ export interface FileRouteTypes {
     | '/api/market/corporate-actions'
     | '/api/market/quotes'
     | '/_app/strategies/'
+    | '/_app/research/reports/$jobId'
+    | '/_app/research/reports/compare'
     | '/_app/strategies/$strategyId/backtests'
     | '/_app/strategies/$strategyId/deployments'
+    | '/_app/research/reports/'
     | '/_app/strategies/$strategyId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
+  LoginRoute: typeof LoginRoute
   ApiMarketCandlesRoute: typeof ApiMarketCandlesRoute
   ApiMarketCompaniesRoute: typeof ApiMarketCompaniesRoute
   ApiMarketCompanyRoute: typeof ApiMarketCompanyRoute
@@ -506,6 +556,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/alerts': {
@@ -739,6 +796,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMarketQuotesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/research/reports/': {
+      id: '/_app/research/reports/'
+      path: '/research/reports'
+      fullPath: '/research/reports/'
+      preLoaderRoute: typeof AppResearchReportsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/research/reports/$jobId': {
+      id: '/_app/research/reports/$jobId'
+      path: '/research/reports/$jobId'
+      fullPath: '/research/reports/$jobId'
+      preLoaderRoute: typeof AppResearchReportsJobIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/research/reports/compare': {
+      id: '/_app/research/reports/compare'
+      path: '/research/reports/compare'
+      fullPath: '/research/reports/compare'
+      preLoaderRoute: typeof AppResearchReportsCompareRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/strategies/$strategyId/': {
       id: '/_app/strategies/$strategyId/'
       path: '/strategies/$strategyId'
@@ -792,8 +870,11 @@ interface AppRouteChildren {
   AppOptionsUnderlyingRoute: typeof AppOptionsUnderlyingRoute
   AppStockSymbolRoute: typeof AppStockSymbolRoute
   AppStrategiesIndexRoute: typeof AppStrategiesIndexRoute
+  AppResearchReportsJobIdRoute: typeof AppResearchReportsJobIdRoute
+  AppResearchReportsCompareRoute: typeof AppResearchReportsCompareRoute
   AppStrategiesStrategyIdBacktestsRoute: typeof AppStrategiesStrategyIdBacktestsRoute
   AppStrategiesStrategyIdDeploymentsRoute: typeof AppStrategiesStrategyIdDeploymentsRoute
+  AppResearchReportsIndexRoute: typeof AppResearchReportsIndexRoute
   AppStrategiesStrategyIdIndexRoute: typeof AppStrategiesStrategyIdIndexRoute
 }
 
@@ -826,9 +907,12 @@ const AppRouteChildren: AppRouteChildren = {
   AppOptionsUnderlyingRoute: AppOptionsUnderlyingRoute,
   AppStockSymbolRoute: AppStockSymbolRoute,
   AppStrategiesIndexRoute: AppStrategiesIndexRoute,
+  AppResearchReportsJobIdRoute: AppResearchReportsJobIdRoute,
+  AppResearchReportsCompareRoute: AppResearchReportsCompareRoute,
   AppStrategiesStrategyIdBacktestsRoute: AppStrategiesStrategyIdBacktestsRoute,
   AppStrategiesStrategyIdDeploymentsRoute:
     AppStrategiesStrategyIdDeploymentsRoute,
+  AppResearchReportsIndexRoute: AppResearchReportsIndexRoute,
   AppStrategiesStrategyIdIndexRoute: AppStrategiesStrategyIdIndexRoute,
 }
 
@@ -837,6 +921,7 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
+  LoginRoute: LoginRoute,
   ApiMarketCandlesRoute: ApiMarketCandlesRoute,
   ApiMarketCompaniesRoute: ApiMarketCompaniesRoute,
   ApiMarketCompanyRoute: ApiMarketCompanyRoute,

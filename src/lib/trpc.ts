@@ -6,7 +6,6 @@ import type {
   PaperTradingState,
   PaperOrderRow,
   PaperFillRow,
-  PaperLedgerEntryRow,
   MatchingReceipt,
   PaperAccountRow,
 } from "../../server/modules/paper-trading/contracts";
@@ -42,6 +41,7 @@ import type {
   WalkForwardWindowView,
 } from "./strategy-jobs";
 import type { SweepRobustness } from "../../server/modules/strategy-optimisation/sweep-robustness";
+import type { PaperLedgerPage } from "./paper-ledger";
 import type {
   DataQualityReport,
   DataQualityUniverse,
@@ -158,11 +158,6 @@ export function createMutationProcedure<TInput = void, TOutput = any>(path: stri
   };
 }
 
-export interface ListResponse<T> {
-  items: T[];
-  nextCursor?: string;
-}
-
 export interface PlaceOrderResult {
   order: PaperOrderRow;
   receipt?: MatchingReceipt;
@@ -245,17 +240,18 @@ export const trpc = {
       mutate: (input?: { confirmation?: boolean }): Promise<ResetAccountResult> =>
         trpcMutation<{ confirmation?: boolean }, ResetAccountResult>("paperTrading.resetAccount", input ?? { confirmation: true }),
     },
+    // Each list procedure pages newest first; nextCursor is null on the last page.
     listOrders: {
-      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<ListResponse<PaperOrderRow>> =>
-        trpcQuery<ListResponse<PaperOrderRow>>("paperTrading.listOrders", input),
+      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<{ orders: PaperOrderRow[]; nextCursor: string | null }> =>
+        trpcQuery("paperTrading.listOrders", input),
     },
     listFills: {
-      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<ListResponse<PaperFillRow>> =>
-        trpcQuery<ListResponse<PaperFillRow>>("paperTrading.listFills", input),
+      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<{ fills: PaperFillRow[]; nextCursor: string | null }> =>
+        trpcQuery("paperTrading.listFills", input),
     },
     listLedger: {
-      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<ListResponse<PaperLedgerEntryRow>> =>
-        trpcQuery<ListResponse<PaperLedgerEntryRow>>("paperTrading.listLedger", input),
+      query: (input?: { generation?: number; limit?: number; cursor?: string }): Promise<PaperLedgerPage> =>
+        trpcQuery<PaperLedgerPage>("paperTrading.listLedger", input),
     },
   },
   tradeTheses: {

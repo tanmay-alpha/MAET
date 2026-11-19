@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { hasStoredSession, watchStoredSession } from "@/lib/auth-token";
+import { hasStoredSession, sessionEndedByExpiry, storedSessionEmail, watchStoredSession } from "@/lib/auth-token";
 
 /**
  * Whether the browser holds a Supabase session. Gate signed-in-only queries on it so
@@ -8,4 +8,14 @@ import { hasStoredSession, watchStoredSession } from "@/lib/auth-token";
  */
 export function useSignedIn(): boolean {
   return useSyncExternalStore(watchStoredSession, hasStoredSession, () => false);
+}
+
+/** The signed-in user's email (null when signed out or not recorded in the session). */
+export function useSessionEmail(): string | null {
+  return useSyncExternalStore(watchStoredSession, storedSessionEmail, () => null);
+}
+
+/** True after a session ended because it could no longer be refreshed, until the next sign-in. */
+export function useSessionExpired(): boolean {
+  return useSyncExternalStore(watchStoredSession, sessionEndedByExpiry, () => false);
 }
