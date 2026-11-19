@@ -52,6 +52,11 @@ export type PaperExecutionRequest = {
   reason: PaperExecutionReason;
   /** Exchange the order routes to; statutory charges depend on it. Defaults to the quote's exchange. */
   exchange?: EquityExchange;
+  /**
+   * Current mark price per held symbol other than the order's, for the margin check. A held
+   * position without a mark counts its last known loss but none of its gain.
+   */
+  marks?: ReadonlyMap<string, number>;
   policy?: {
     allowDelayed?: boolean;
     maxAgeMs?: number;
@@ -498,14 +503,16 @@ export function executePaperFill(
     fees: plan.fees,
     projectedPositions,
     leverage: PAPER_LEVERAGE,
+    marks: request.marks,
   });
-  const forcedLiquidationReduction =
-    request.reason === "MARGIN_LIQUIDATION" &&
+  // A fill that opens nothing and frees margin only lowers risk. Refusing it would trap an
+  // under-margined account in its exposure: exits, stops and partial closes could never fill.
+  const riskReducing =
     reconciliation.openedQuantity === 0 &&
-    projectedMargin.allocatedMarginAfter <
+    projectedMargin.allocatedMarginAfter <=
       projectedMargin.allocatedMarginBefore;
 
-  if (!projectedMargin.sufficient && !forcedLiquidationReduction) {
+  if (!projectedMargin.sufficient && !riskReducing) {
     throw new PaperExecutionError(
       "INSUFFICIENT_MARGIN",
       "Execution fill rejected: projected free margin is below zero"
@@ -772,6 +779,7 @@ export function settlePaperAccount(
   };
   let updated = false;
   let totalUnrealised = 0;
+  const marks = new Map<string, number>();
 
   next.positions = next.positions.map(
     (position): PaperPosition => {
@@ -784,7 +792,7 @@ export function settlePaperAccount(
         totalUnrealised += position.unrealisedPnl;
         return position;
       }
-
+      marks.set(position.symbol, quote.price);
       const unrealisedPnl =
         position.quantity > 0
           ? position.quantity *
@@ -854,6 +862,7 @@ export function settlePaperAccount(
           order: liquidationOrder,
           fillQuantity: liquidationOrder.quantity,
           quote,
+          marks,
           reason: "MARGIN_LIQUIDATION",
         }).account;
         updated = true;
@@ -1052,6 +1061,7 @@ export function settlePaperAccount(
         order,
         fillQuantity,
         quote,
+        marks,
         reason,
       }).account;
       updated = true;
