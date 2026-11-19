@@ -235,6 +235,47 @@ describe("backtestV2Router TRPC tests", () => {
     expect(res.result.equityCurve.length).toBe(60);
   });
 
+  it("6b. Warns about stored corporate actions inside the run window, in the response and the saved run", async () => {
+    const validCandles = Array.from({ length: 60 }, (_, i) => ({
+      id: `c-${i}`,
+      symbol: "INFY",
+      timeframe: "1d",
+      ts: new Date(Date.UTC(2025, 0, 1) + i * 86400000),
+      open: (1000 + i).toFixed(2),
+      high: (1010 + i).toFixed(2),
+      low: (990 + i).toFixed(2),
+      close: (1005 + i).toFixed(2),
+      volume: 10000,
+      source: "yahoo",
+    }));
+    const storedDividend = {
+      id: "ca-1",
+      companyId: "INFY",
+      symbol: "INFY",
+      actionType: "DIVIDEND",
+      announcementDate: null,
+      recordDate: null,
+      exDate: new Date("2025-01-31T00:00:00+05:30"),
+      details: null,
+      ratioNumerator: null,
+      ratioDenominator: null,
+      amount: "8.0000",
+      currency: "INR",
+      source: "yahoo",
+      sourceReference: "INFY.NS",
+      ingestedAt: new Date("2026-11-19T13:00:00Z"),
+      createdAt: new Date("2026-11-19T13:00:00Z"),
+    };
+    mockSelections.push(validCandles, [storedDividend]);
+    insertedRuns.length = 0;
+
+    const res = await caller.run({ ...baseInput, from: "2025-01-01T00:00:00.000Z", to: "2025-03-01T00:00:00.000Z" });
+
+    const expected = expect.stringContaining("CORPORATE_ACTIONS_IN_WINDOW: 1 corporate action(s) between 2025-01-01 and 2025-03-01 are not applied to these prices: dividend INR 8 ex 2025-01-31.");
+    expect(res.result.warnings).toEqual([expected]);
+    expect(insertedRuns.at(-1)?.result).toMatchObject({ warnings: [expected] });
+  });
+
   it("7. listRuns respects user-provided limit parameter", async () => {
     mockSelections.push([]);
     await caller.listRuns({ limit: 7 });

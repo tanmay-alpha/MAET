@@ -608,6 +608,8 @@ export const corporateActions = pgTable("corporate_actions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("corp_actions_symbol_ex_date_idx").on(table.symbol, table.exDate),
+  // Ingestion upsert key (0030_corporate_actions_identity.sql).
+  uniqueIndex("corporate_actions_symbol_type_ex_date_key").on(table.symbol, table.actionType, table.exDate),
 ]);
 
 export const shareholdingPatterns = pgTable("shareholding_patterns", {

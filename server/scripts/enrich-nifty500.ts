@@ -33,6 +33,7 @@ async function main(): Promise<void> {
     syncCompanyMaster: false,
     syncMarketData: false,
     syncFundamentals: true,
+    syncCorporateActions: false,
     refreshClassifications: true,
     cleanupStaleData: false,
   });

@@ -14,6 +14,7 @@ import { db } from "../data/drizzle/client";
 import { strategyBacktestJobs, strategyBacktestTrades, strategyEquityPoints, strategyPerformanceSnapshots } from "../db/schema";
 import * as jobs from "../modules/strategy-jobs/repository";
 import { JobCandleLimitError, loadJobCandles } from "../modules/strategy-jobs/candles";
+import { loadCorporateActions } from "../modules/corporate-actions/repository";
 import { downsample } from "../modules/strategy-jobs/downsample";
 import { JobInterruptedError, type JobContext } from "../modules/strategy-jobs/job-context";
 import { runBacktestV3, InsufficientHistoryV3Error } from "../domain/strategy/runner-v3";
@@ -54,6 +55,11 @@ export async function runBacktestJob(job: jobs.BacktestJobRow, workerId: string,
       return;
     }
 
+    const unappliedCorporateActions = await loadCorporateActions(
+      symbol,
+      new Date(candleData[0].ts),
+      new Date(candleData[candleData.length - 1].ts),
+    );
     const result = runBacktestV3({
       strategyVersionId: job.strategyVersionId,
       definition,
@@ -61,6 +67,7 @@ export async function runBacktestJob(job: jobs.BacktestJobRow, workerId: string,
       candles: candleData,
       overrideCapital: job.initialCapital ? Number(job.initialCapital) : undefined,
       timeframe: job.timeframe,
+      unappliedCorporateActions,
     });
     await ctx.checkpoint();
     await jobs.updateProgress(job.id, 70);

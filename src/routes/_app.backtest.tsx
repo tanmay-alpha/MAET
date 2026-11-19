@@ -63,6 +63,7 @@ interface RunResult {
   metrics?: RunMetrics;
   equityCurve?: Array<{ timestamp: number; equity: number }>;
   trades?: unknown[];
+  warnings?: string[];
 }
 
 interface RunResponse {
@@ -205,6 +206,11 @@ function Backtest() {
                 </button>
               </div>
             </div>
+            {result.warnings && result.warnings.length > 0 && (
+              <ul className="space-y-1 rounded border border-amber-500/30 px-3 py-2 text-xs text-amber-300">
+                {result.warnings.map((w) => <li key={w}>{w}</li>)}
+              </ul>
+            )}
             <div className="grid gap-3 xl:grid-cols-[1fr_28rem]">
               <div className="rounded border border-border bg-panel p-3">
                 <EquityLine label="Equity curve" height={260} points={(result.equityCurve ?? []).map((p) => ({ time: p.timestamp, equity: p.equity }))} />

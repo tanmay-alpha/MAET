@@ -41,7 +41,7 @@ branch, merged `main` into it, re-ran its suites and merged it only after CI pas
 | RES-1 | P1 | Walk-forward | Requested spans ignored | router + engine | Exact T/V/V windows | WalkForward | 300-case check | done | #62 |
 | RES-2 | P1 | Walk-forward | Rejected windows excluded | `walk-forward.ts` | Cash segments, counted | WalkForward | unit | done | #62 |
 | RES-3 | P1 | Fundamentals | Fabricated period dates | `daily-processor.ts` | NSE rows as snapshots; no invented dates | IngestionPipeline | unit | done | #67 |
-| RES-4 | P1 | Corporate actions | Never ingested | no writer | Reported on `/data-quality` | — | — | open (data source needed) | #65 |
+| RES-4 | P1 | Corporate actions | Never ingested | no writer | Daily + admin Yahoo ingestion into `corporate_actions` (unique key, `ingestion_runs`); not applied, because stored Yahoo candles are already split-adjusted (fixture across the Reliance 2024 bonus); backtests warn about actions in their window | CorpActions | `test:corporate-actions`, `test:migration-0030`, `yahoo-split-basis.test.ts`, `runner-v3-corporate-actions.test.ts` | done (ingested + warned; total-return series not offered) | #76 |
 | RES-5 | P1 | Docs | Survivorship claim unsupported | README | Claim removed; gap stated | orchestrator | doc review | done | docs |
 | RES-6 | P1 | Ingestion | Wrote `price_daily`; consumers read `candles` | writer | Validated upsert into `candles` | IngestionPipeline | Postgres pipeline test | done | #67 |
 | RES-7 | P2 | Sweeps | No overfitting control | `robustness.ts` | PBO via CSCV, shown on the sweep results page with trials and the reason when null | WalkForward, UiPolish | 30 seeded matrices, 3 component | done | #62, UiPolish PR |

@@ -190,7 +190,31 @@ Edge cases: fewer than two equity points or $E_0 \le 0$ returns all zeros. The q
 
 Rights issues and symbol changes are typed but not applied. A 2:1 split therefore never shows up as a 50% drawdown (`server/domain/strategy/p2-research-invariants.test.ts`).
 
-**Production status:** runner-v3 adjusts only when it receives actions, and none of `backtestV2.run`, the backtest worker, the sweep worker or the walk-forward worker passes any. Backtests run on stored candles as ingested from Yahoo (`server/data/sources/yahoo.ts` reads the quote OHLC arrays, not `adjclose`); the code alone does not establish how Yahoo adjusts those.
+**Production status:** runner-v3 adjusts only when it receives `corporateActions`, and none of `backtestV2.run`, the backtest worker, the sweep worker or the walk-forward worker passes any. That is deliberate: the stored candles are already split-adjusted (below), so applying stored splits would adjust them twice.
+
+**Ingestion.** `runCorporateActionIngestion` (`server/modules/corporate-actions/ingest.ts`) reads every dividend and split Yahoo reports for each symbol (`getCorporateActions` in `server/data/sources/yahoo.ts`, the same client behind `/api/market/corporate-actions`, which makes 3 attempts with exponential backoff on throttling, 5xx and network errors) and upserts them into `corporate_actions`:
+
+- Key: unique `(symbol, action_type, ex_date)` (migration `0030_corporate_actions_identity.sql`). Two dividends on one ex-date are stored as one row with their sum, and two splits on one day as their product. A row is rewritten only when it has `source = 'yahoo'` and a stored value changed, so a re-run leaves unchanged rows, including `ingested_at`, as they were.
+- `ex_date` is midnight IST of the exchange-local ex-date, the convention the data-quality report reads back with `AT TIME ZONE 'Asia/Kolkata'`.
+- Splits are stored as `SPLIT` with Yahoo's new-for-old ratio (a 1:1 bonus is 2:1; Yahoo does not separate bonuses from splits) and `details = {"mayBeBonus":true}`. Dividends carry `amount` (4 dp), `currency` and `details.restatedByProvider`: Yahoo restates older dividends for later splits, bonuses and rights issues, and the amount actually paid is not in its response.
+- `source = 'yahoo'`, `source_reference` = the Yahoo ticker, `company_id` set when a `companies` row exists.
+- Universe: the bundled Nifty 50 list (`shared/symbols/nifty50.json`), the data-quality report's default universe.
+
+It runs inside the daily processor after the close (18:30 IST, behind the processor's Redis lock and completion marker, `server/workers/daily-processor-schedule.ts`) and from the admin mutation `ingestion.triggerCorporateActions` (optional `symbols`, default Nifty 50). Each run is one `ingestion_runs` row (`source = 'yahoo-corporate-actions'`, `data_type = 'corporate-actions'`, `metadata.trigger` = `daily-processor` or `admin`); a symbol that still fails after the client's retries goes to `dead_letter_queue` and makes the run `partial`. Rows Yahoo later withdraws are not deleted.
+
+**Split basis of stored candles.** `getCandles` stores Yahoo's `indicators.quote` arrays (not `adjclose`). `server/data/sources/yahoo-split-basis.test.ts` replays a real Yahoo response for RELIANCE.NS across its 1:1 bonus (ex-date 28 Oct 2024, which Yahoo reports as a 2:1 split): the close goes from 1,327.85 on 25 Oct to 1,334.35 on 28 Oct (+0.5%), where raw exchange prices would halve, and pre-bonus volumes are doubled. So Yahoo's quote OHLCV is split-adjusted, and `adjclose` additionally folds in dividends. The same test shows that applying the stored 2:1 split to those bars would create a fake +100% gap. Two consequences:
+
+- Yahoo adjusts history as of the day it is fetched. The daily processor re-fetches the last 365 days every run, but candles older than that keep the basis they had when last written. A split after that point leaves a step in the stored series. To check one symbol around a known ex-date, compare each 1d close with the previous one; a ratio near $b/a$ (e.g. 0.5 for 2:1) means unadjusted rows:
+
+  ```sql
+  SELECT ts AT TIME ZONE 'Asia/Kolkata' AS ist, close, close / lag(close) OVER (ORDER BY ts) AS ratio
+  FROM candles WHERE symbol = 'RELIANCE' AND timeframe = '1d'
+    AND ts BETWEEN '2024-10-21' AND '2024-11-01' ORDER BY ts;
+  ```
+
+- Dividends are in neither the stored prices nor the returns: a backtest is a price-return backtest.
+
+**Backtest warning.** `backtestV2.run`, the backtest worker and the walk-forward worker load the stored actions for the symbol over the candle range (`loadCorporateActions` in `server/modules/corporate-actions/repository.ts`). runner-v3 receives them as `unappliedCorporateActions`, never applies them, and adds one `CORPORATE_ACTIONS_IN_WINDOW` warning listing those whose IST ex-date falls between the first traded bar and the last bar (at most 10 listed, then a count). The walk-forward worker adds the same warning once for the whole range. The synchronous backtest page, stored `backtest_runs` payloads, and run reports for queued backtests show it. Sweeps do not store warnings.
 
 ## 8. Canonical indicators
 
@@ -220,7 +244,7 @@ One adapter quirk: the Donchian preset compares the close with a channel that in
 | `ExecutionModel` (spread models, square-root impact, participation cap) | Only called by the portfolio engine; runner-v3 charges slippage as a flat bps debit. | `server/domain/strategy/execution-model.ts`, imports in `portfolio-engine.ts` only |
 | Portfolio engine | No endpoint, worker or frontend code calls it; only its tests do. | `server/domain/strategy/portfolio-engine.ts` |
 | Point-in-time fundamentals and universe membership | Only tests call them. A fundamentals row whose `availableFrom` is null, missing or unparseable is never visible (no lag from `periodEnd` is assumed; `new Date(null)` would otherwise date it 1970). | `server/domain/fundamentals/point-in-time.ts`, `point-in-time.test.ts`, `p2-research-invariants.test.ts` |
-| Corporate actions in backtests | Supported by the runner, never supplied by callers; no corporate-action ingestion. | §7 |
+| Corporate-action adjustment in backtests | Ingested daily into `corporate_actions` and listed in backtest warnings, but never applied: stored Yahoo candles are already split-adjusted. | §7 |
 | Look-ahead detector | Only tests call it. (Robustness scoring is returned by `strategyOptimisation.getSweep`.) | `look-ahead-detector.ts` |
 | In-memory replay engine | Only its test uses it; the replay router has its own DB-backed logic. | `server/modules/strategy-replay/replay-engine.ts`, `server/api/trpc/routers/strategy-replay.ts` |
 
