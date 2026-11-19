@@ -96,9 +96,11 @@ export function riskRows(risk: StrategyRiskConfig | undefined): Array<[string, s
     const value = risk[key];
     if (typeof value === "number") rows.push([name, `${value}%`]);
   }
-  if (typeof risk.atrStopMultiplier === "number") rows.push(["ATR stop", `${risk.atrStopMultiplier}× ATR`]);
+  // The backtest engine does not implement ATR stops or pyramiding (validation now rejects them);
+  // definitions saved before that still carry them, so show them as not applied.
+  if (typeof risk.atrStopMultiplier === "number") rows.push(["ATR stop", `${risk.atrStopMultiplier}× ATR (not supported, not applied)`]);
   if (typeof risk.cooldownBars === "number") rows.push(["Cooldown", `${risk.cooldownBars} bars`]);
-  rows.push(["Pyramiding", risk.allowPyramiding ? `Up to ${risk.maximumPyramids ?? 1} adds` : "Off"]);
+  rows.push(["Pyramiding", risk.allowPyramiding ? "Not supported, not applied" : "Off"]);
   return rows;
 }
 
