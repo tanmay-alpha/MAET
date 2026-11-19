@@ -10,6 +10,9 @@ const SOURCE_NAMES: Record<string, string> = {
   // Fundamentals / statements providers (server/data/sources/yahoo-fundamentals.ts)
   yahoo_timeseries: "Yahoo Finance · time series",
   yahoo_quote_summary: "Yahoo Finance · quote summary",
+  yahoo_candles: "Yahoo candles",
+  // Fundamentals on the company row (server/domain/screener/company-query.ts COMPANY_SNAPSHOT_SOURCE).
+  company_snapshot: "Stored company snapshot",
 };
 
 const CLOSED_PHASES: Record<string, true> = { CLOSED: true, HOLIDAY: true, AFTER_HOURS: true };

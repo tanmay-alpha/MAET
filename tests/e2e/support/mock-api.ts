@@ -13,6 +13,7 @@
  */
 import type { Page, Request, Route } from "@playwright/test";
 import type { MarketCandle, MarketCompany } from "../../../src/lib/market-api";
+import type { WorkspaceSavedScreener } from "../../../src/lib/trpc";
 import { PaperOrderCommandSchema } from "../../../server/modules/paper-trading/contracts";
 import { CreateStrategyInputSchema } from "../../../shared/strategy/contracts";
 import type { CorporateActionEvent } from "../../../shared/types/corporate-actions";
@@ -116,6 +117,8 @@ function sseFrame(event: string | null, data: unknown): string {
 export class MockApi {
   /** Every request the page sent to an /api path, on any origin, in order. */
   readonly requests: RecordedRequest[] = [];
+  /** Rows GET /api/market/companies screens; a metric may be null, as the API may send it. */
+  screenerRows: MarketCompany[] = COMPANIES;
   /** Exchange session the quote fixtures describe. */
   session: MarketSession = "open";
   /** Paper orders the fake account holds; placeOrder/cancelOrder mutate it. */
@@ -124,6 +127,8 @@ export class MockApi {
   account: PaperAccountWire = paperAccountRow();
   /** Caps listLedger pages below the requested limit, to exercise paging; null = no cap. */
   ledgerPageLimit: number | null = null;
+  /** The account's saved screener definitions; deleteScreener archives one, as the router does. */
+  readonly savedScreeners: WorkspaceSavedScreener[] = [];
   /** The tick each market SSE connection sends after its snapshot. */
   tick = { symbol: "NIFTY50", price: BASE_PRICES.NIFTY50 + 12.35 };
   /**
@@ -334,33 +339,44 @@ export class MockApi {
     const q = params.get("q")?.toLowerCase();
     const sectors = params.get("sector_in")?.toLowerCase().split(",");
     const buckets = params.get("bucket_in")?.split(",");
-    const range = (key: string, value: number | undefined) => {
-      const min = params.get(`${key}_min`);
-      const max = params.get(`${key}_max`);
-      if (min === null && max === null) return true;
-      if (value === undefined) return false;
-      return (min === null || value >= Number(min)) && (max === null || value <= Number(max));
-    };
-    const matches = COMPANIES.filter(
-      (company) =>
+    // Like screenCompanyScreenerRow: a missing (null or absent) metric never satisfies a filter,
+    // and a row left out only for that is reported, keyed by its fieldAvailability name.
+    const excludedForMissingData = { total: 0, byField: {} as Record<string, number> };
+    const matches = this.screenerRows.filter((company) => {
+      const missing: string[] = [];
+      const range = (key: string, field: string, value: number | null | undefined) => {
+        const min = params.get(`${key}_min`);
+        const max = params.get(`${key}_max`);
+        if (min === null && max === null) return true;
+        if (value == null) return missing.push(field) > 0;
+        return (min === null || value >= Number(min)) && (max === null || value <= Number(max));
+      };
+      const passes =
         (!q ||
           [company.symbol, company.name, company.isin].some((field) =>
             field.toLowerCase().includes(q),
           )) &&
-        (!sectors || sectors.includes(company.sector?.toLowerCase() ?? "")) &&
+        (!sectors || (company.sector == null ? missing.push("sector") > 0 : sectors.includes(company.sector.toLowerCase()))) &&
         (!buckets || buckets.includes(company.marketCapBucket)) &&
-        range("price", company.price) &&
-        range("market_cap", company.marketCap) &&
-        range("pe", company.pe),
-    );
+        range("price", "price", company.price) &&
+        range("market_cap", "marketCap", company.marketCap) &&
+        range("pe", "pe", company.pe);
+      if (passes && missing.length > 0) {
+        excludedForMissingData.total += 1;
+        for (const field of missing) {
+          excludedForMissingData.byField[field] = (excludedForMissingData.byField[field] ?? 0) + 1;
+        }
+      }
+      return passes && missing.length === 0;
+    });
     const field = SORT_FIELDS[params.get("sortBy") ?? "symbol"] ?? "symbol";
     const direction = params.get("sortDir") === "desc" ? -1 : 1;
     matches.sort((a, b) => {
       const left = a[field];
       const right = b[field];
       if (left === right) return a.symbol.localeCompare(b.symbol);
-      if (left === undefined) return 1;
-      if (right === undefined) return -1;
+      if (left == null) return 1;
+      if (right == null) return -1;
       return (left < right ? -1 : 1) * direction;
     });
     return {
@@ -369,12 +385,13 @@ export class MockApi {
       source: "database",
       sourceSummary: ["NSE company master", "PostgreSQL stored snapshots"],
       total: matches.length,
-      universeTotal: COMPANIES.length,
+      universeTotal: this.screenerRows.length,
       page,
       pageSize: limit,
       pageCount: Math.max(1, Math.ceil(matches.length / limit)),
       items: matches.slice((page - 1) * limit, page * limit),
       fieldAvailability: FIELD_AVAILABILITY,
+      excludedForMissingData,
       capBucketMethodology:
         "Market-cap buckets from the stored fundamentals snapshot (e2e fixture).",
     };
@@ -629,7 +646,45 @@ export class MockApi {
       screenerCount: 0,
       unreadNotifications: 0,
     }));
-    this.onQuery("workspace.listSavedScreeners", () => []);
+    // server/api/trpc/routers/workspace.ts: newest first, archived rows hidden.
+    this.onQuery("workspace.listSavedScreeners", () =>
+      this.savedScreeners.filter((screener) => !screener.isArchived).reverse(),
+    );
+    const savedScreener = (input: unknown) => {
+      const screener = this.savedScreeners.find((row) => row.id === requireString(input, "screenerId"));
+      if (!screener || screener.isArchived) {
+        throw new TrpcError("NOT_FOUND", "Saved screener not found or access denied");
+      }
+      return screener;
+    };
+    this.onMutation("workspace.saveScreener", (input) => {
+      const screener: WorkspaceSavedScreener = {
+        id: `33333333-3333-4333-8333-${String(this.savedScreeners.length + 1).padStart(12, "0")}`,
+        name: requireString(input, "name").trim(),
+        description: null,
+        universe: "NSE",
+        criteria: inputValue(input, "criteria"),
+        isPinned: false,
+        isArchived: false,
+        createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
+        lastRunAt: null,
+      };
+      this.savedScreeners.push(screener);
+      return screener;
+    });
+    this.onMutation("workspace.updateScreener", (input) => {
+      const screener = savedScreener(input);
+      const name = inputValue(input, "name");
+      const criteria = inputValue(input, "criteria");
+      if (typeof name === "string") screener.name = name.trim();
+      if (criteria !== undefined) screener.criteria = criteria;
+      return screener;
+    });
+    this.onMutation("workspace.deleteScreener", (input) => {
+      savedScreener(input).isArchived = true;
+      return { success: true };
+    });
     this.onQuery("workspace.listRecentRuns", () => []);
 
     const strategies = new Map<string, unknown>();
