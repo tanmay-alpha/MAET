@@ -11,17 +11,22 @@
  * - Trade records include MFE, MAE, entry/exit reason, fees, slippage, netPnl
  * - Deterministic: identical strategy + candles = identical results
  * - Reproducibility hash: SHA-256 of canonical candle inputs
+ * - Risk gates on each closing mark: equity <= 0 (always) and maximumDrawdownPercent flatten and
+ *   stop trading; maximumDailyLossPercent flattens and blocks entries for the rest of the IST day
+ * - Settings validation rejects (LONG_SHORT, ATR stops, pyramiding) are reported as warnings when
+ *   a stored definition still carries them
  */
 
 import { createHash } from "crypto";
 import type { Candle } from "@shared/types";
-import type { StrategyDefinition, StrategyRiskConfig, StrategyExecutionConfig } from "../../../shared/strategy/ast";
+import { unsupportedStrategyFeatures, type StrategyDefinition, type StrategyRiskConfig, type StrategyExecutionConfig } from "../../../shared/strategy/ast";
 import { IndicatorStateCache } from "./indicator-state";
 import { evaluateRuleGroup } from "./ast-evaluator";
 import { calculatePositionSize } from "./position-sizer";
 import { computeLegCharges } from "./fee-model";
 import { computeMetrics } from "../backtest/risk-metrics";
 import type { EquityPoint, TradeRecord } from "../backtest/risk-metrics";
+import { istDateKey } from "../market/clock";
 import { STRATEGY_ENGINE_VERSION, FEE_MODEL_VERSION } from "../../../shared/strategy/version";
 import { INDICATOR_ENGINE_VERSION } from "../../../shared/indicators/canonical";
 
@@ -200,6 +205,22 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
   const slippageBps = exec.slippageBps ?? 5;
   const slippageRate = slippageBps / 10000;
 
+  // Risk gates, evaluated on each bar's closing mark (see the loop). `halted` ends trading for the
+  // rest of the run: equity depleted, or maximumDrawdownPercent reached. `dailyLossDay` is the IST
+  // date on which maximumDailyLossPercent was reached; entries stay blocked until the next date.
+  const maxDrawdownPct = risk.maximumDrawdownPercent;
+  const maxDailyLossPct = risk.maximumDailyLossPercent;
+  let halted = false;
+  let peakMark = initialCapital;
+  let currentDay = "";
+  let dayStartMark = initialCapital;
+  let dailyLossDay: string | null = null;
+  let dailyLossDays = 0;
+
+  for (const issue of unsupportedStrategyFeatures(definition)) {
+    warnings.push(`UNSUPPORTED_SETTING_IGNORED: ${issue.path}: ${issue.message}`);
+  }
+
   // First bar on which orders may fill; the bar before it is the equity curve's starting mark.
   const tradeFromMs = request.tradeFrom === undefined ? null : new Date(request.tradeFrom).getTime();
   const firstTradeBar = tradeFromMs === null
@@ -339,12 +360,19 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
     const bar = sorted[i];
     const barTs = new Date(bar.ts).getTime();
 
+    // The daily-loss reference is the last mark before the first bar of each IST calendar day.
+    const day = istDateKey(new Date(barTs));
+    if (day !== currentDay) {
+      currentDay = day;
+      dayStartMark = equityCurve[equityCurve.length - 1].equity;
+    }
+
     // NEXT_BAR_OPEN acts at this bar's open on rules evaluated at bar i-1.
     // ON_CLOSE acts at this bar's close on rules evaluated at bar i.
     const signalIdx = onClose ? i : i - 1;
     const fillPrice = onClose ? bar.close : bar.open;
     // A position closed on this bar cannot re-enter on the same bar.
-    const canEnter = !inPosition && cooldownBarsRemaining === 0;
+    const canEnter = !inPosition && cooldownBarsRemaining === 0 && !halted && dailyLossDay !== day;
 
     if (inPosition) {
       // Events in bar order: a NEXT_BAR_OPEN exit rule (decided on bar i-1) fills at the open,
@@ -402,10 +430,42 @@ export function runBacktestV3(request: V3BacktestRunRequest): V3BacktestRunResul
       }
     }
 
-    // P0-C fix: Push equity curve point using mark-to-market value so the curve reflects
-    // unrealized gains/losses on open positions. Without this, the curve is flat between
-    // entry and exit, causing drawdown metrics to miss intra-trade adverse excursions.
-    equityCurve.push({ timestamp: barTs, equity: mtmEquity(bar.close) });
+    // Risk gates on the closing mark. They are decided and filled at this bar's close (a
+    // market-on-close liquidation whatever the fill policy), so they use no later data.
+    // Equity at or below zero always stops trading: a further move would be scored on a
+    // non-positive base and flip the sign of every later return.
+    let mark = mtmEquity(bar.close);
+    if (!halted) {
+      const drawdownPct = ((peakMark - mark) / peakMark) * 100;
+      const dayLossPct = dayStartMark > 0 ? ((dayStartMark - mark) / dayStartMark) * 100 : 0;
+      const gate = mark <= 0 ? "equity_depleted"
+        : maxDrawdownPct != null && drawdownPct >= maxDrawdownPct ? "max_drawdown"
+          : maxDailyLossPct != null && dailyLossDay !== day && dayLossPct >= maxDailyLossPct ? "daily_loss_limit"
+            : null;
+      if (gate) {
+        if (inPosition) closeTrade(i, bar.close, gate);
+        mark = equity;
+        if (gate === "daily_loss_limit") {
+          dailyLossDay = day;
+          dailyLossDays++;
+        } else {
+          halted = true;
+          warnings.push(gate === "equity_depleted"
+            ? `TRADING_HALTED: equity fell to ${mark.toFixed(2)} on ${day}; no further trades`
+            : `TRADING_HALTED: drawdown reached maximumDrawdownPercent ${maxDrawdownPct}% on ${day}; no further trades`);
+        }
+      }
+    }
+    peakMark = Math.max(peakMark, mark);
+
+    // Push the mark-to-market value so the curve reflects unrealised P&L on open positions.
+    equityCurve.push({ timestamp: barTs, equity: mark });
+  }
+  if (dailyLossDays > 0) {
+    warnings.push(
+      `DAILY_LOSS_LIMIT: maximumDailyLossPercent ${maxDailyLossPct}% reached on ${dailyLossDays} day(s); `
+      + "the position was closed and entries blocked for the rest of each such day",
+    );
   }
 
   // Force-close open position at last bar with full fee and slippage model applied

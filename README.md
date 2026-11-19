@@ -101,7 +101,8 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 
 > **Wiring status.** Production backtests run `server/domain/strategy/runner-v3.ts`: the synchronous `backtestV2` tRPC router and the queued backtest, sweep and walk-forward jobs in `server/workers/`.
 >
-> - **Look-ahead:** with the default `NEXT_BAR_OPEN` policy, rules are evaluated on bar *i−1* and filled at bar *i*'s open. `server/domain/strategy/truncated-history.test.ts` checks that a run which never saw bars after time *T* agrees with the full-history run on every trade and equity point before *T*. `fill-bar-look-ahead.test.ts` checks that changing the fill bar's high/low/close/volume does not change anything decided at its open. Indicators are trailing and `null` during warm-up. Corporate actions and point-in-time fundamentals are not applied (B, C), so results use the candles as stored.
+> - **Look-ahead:** with the default `NEXT_BAR_OPEN` policy, rules are evaluated on bar *i−1* and filled at bar *i*'s open. `server/domain/strategy/truncated-history.test.ts` checks that a run which never saw bars after time *T* agrees with the full-history run on every trade and equity point before *T*; `metamorphic-invariants.test.ts` repeats that on seeded random paths and also replaces every bar after *T* with unrelated data. `fill-bar-look-ahead.test.ts` checks that changing the fill bar's high/low/close/volume does not change anything decided at its open. Indicators are trailing and `null` during warm-up. Corporate actions and point-in-time fundamentals are not applied (B, C), so results use the candles as stored.
+> - **Risk gates:** `maximumDrawdownPercent` flattens at the close and stops trading; `maximumDailyLossPercent` flattens at the close and blocks entries until the next IST day; equity at or below zero always stops trading. Validation rejects settings the engine does not implement (`LONG_SHORT`, ATR stops, pyramiding). Details in [docs/RESEARCH_ENGINE.md](docs/RESEARCH_ENGINE.md) §1–2.
 > - **Costs:** fees follow the strategy's `feeModel`. `backtestV2` presets use a flat 10 bps per leg (`FIXED_BPS`, `feeBps` default 10; no fee when 0). Strategy Lab definitions can select `VOLUME_AWARE`, the statutory Indian schedule in `shared/domain/costs`. Slippage is a per-leg bps debit (default 5 bps).
 > - **Modules:** walk-forward analysis (E) runs in production through `server/workers/walk-forward-worker.ts`, and `strategyOptimisation.getSweep` returns the robustness analysis (F) of a finished sweep. The execution model (A), point-in-time fundamentals (C) and shared-capital portfolio engine (D) are **research modules covered by tests** (for example `server/domain/strategy/p2-research-invariants.test.ts`); production backtests do not call them.
 > - **Job execution:** queued backtests, sweeps and walk-forward runs execute inside the API process (`server/plugins/strategy-jobs.ts`): one job at a time, handing control back to the API between backtests, with a per-job time budget (`STRATEGY_JOB_TIME_BUDGET_MS`, default 15 min). Set `STRATEGY_JOBS_IN_PROCESS=false` to run them in a separate `bun run worker:strategy-jobs` process instead. On Render's free plan the service sleeps when idle, so queued jobs wait until it wakes.
@@ -112,7 +113,7 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
   $$\text{impactBps} = \text{impactCoeff} \times \sqrt{\frac{\text{OrderVolume}}{\text{BarVolume}}} \times \sigma_{\text{vol}}$$
 - **Bid-Ask Spread Models**: Configurable spread dynamics: `NONE`, `FIXED_BPS`, `VOLATILITY_BASED`, and `LIQUIDITY_BASED`.
 - **Directional Price Shift**: BUY orders shift execution price upward; SELL orders shift price downward, appropriately penalising aggressive fills.
-- **Participation Rate Capping**: Caps fills to a configurable percentage of bar volume.
+- **Participation Rate Capping**: Fills at most ⌊bar volume × rate⌋ whole shares; when that is 0, or the volume is missing or not positive, the order is not filled and the fill records why.
 - **Full Drag Accounting**: Explicitly accounts for brokerage, exchange turnover fees, STT, GST, SEBI charges, stamp duty, spread, and market impact.
 
 ### B. Corporate Actions & Price Adjustments (`server/domain/data/corporate-actions.ts`)
@@ -125,6 +126,7 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 ### C. Point-in-Time Fundamentals & Survivorship Bias Prevention (`server/domain/fundamentals/point-in-time.ts`)
 - **Availability Boundary**: A statement is visible only once it is available:
   $$\text{availableFrom} \le T_{\text{simulation}}$$
+  A row with no known `availableFrom` (null, missing or unparseable) is never visible.
 - **Full Restatement Tracking**: Backtests evaluated before an accounting restatement see Revision 1; evaluations after see Revision 2.
 - **Universe Membership**: Point-in-time index constituent queries (`getActiveUniverseConstituents()`) intended to keep delisted or excluded companies in their historical windows and so avoid survivorship bias once wired.
 - **Status**: Not yet used by any backtest.
@@ -133,7 +135,8 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 - **Synchronized Timeline**: Bar-by-bar multi-asset evaluation across instrument universes.
 - **Shared Capital Pool**: Instruments compete for shared cash—preventing capital double-spending.
 - **Deterministic Priority Ranking**: `MOMENTUM` (10-bar return), `RELATIVE_VOLUME` (currently raw signal-bar volume), `SCORECARD_SCORE` (currently volume × momentum) or `SYMBOL_ASCENDING`, all computed from the signal bar.
-- **Risk Limits**: Max open positions, max position %, gross exposure caps, sector exposure limits (checked on existing positions), and minimum cash reserve.
+- **Risk Limits**: Max open positions, max position %, gross exposure caps, sector exposure limits and minimum cash reserve, all checked on the portfolio as it would be after the order: an order that would breach one is resized down to fit, or rejected if nothing meaningful fits. Under `NEXT_BAR_OPEN`, entries at bar *i*'s open are sized from held positions marked at that open, never from bar *i*'s close or intrabar exits.
+- **Reproducibility Hash**: SHA-256 of the canonical configuration and every input candle.
 - **Performance & Attribution Metrics**: CAGR, Sharpe, Sortino, Max Drawdown, Calmar, win rate, profit factor, cost drag, raw turnover (traded notional in INR), average gross exposure, and P&L attribution by symbol, sector, month and exit reason. It does not compute beta, alpha or tracking error. Sharpe is the mean excess periodic return divided by its standard deviation, times $\sqrt{\text{periods per year}}$ (risk-free rate configurable, default 0); Sortino uses downside deviation over all $N$ periods.
 - **Status**: No endpoint or worker calls it; it runs only in tests. `rebalanceSchedule` is accepted but not implemented.
 
