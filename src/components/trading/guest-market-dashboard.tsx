@@ -3,14 +3,14 @@ import { useMemo, type ReactNode } from "react";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { useWatchlist } from "@/hooks/use-watchlist";
 import type { MarketQuote } from "@/lib/market-api";
+import { quoteProviderName, quoteSourceTitle } from "@/lib/quote-source";
 import type { MarketCatalogItem } from "@/lib/market-catalog";
 import { marketPhaseLabel, NIFTY50_SYMBOLS, rankNiftyMovers } from "./guest-market-movers";
 import { SignInLink } from "@/components/common/sign-in-link";
 
 function QuoteRow({ symbol, name, quote }: { symbol: string; name: string; quote?: MarketQuote }) {
-  const source = quote?.source === "angelone" ? "Angel One" : quote?.source === "yahoo" ? "Yahoo" : quote?.source;
   return (
-    <tr className="border-b border-border/60 text-xs hover:bg-accent/50" title={source ? `Quote source: ${source}` : "Quote unavailable"}>
+    <tr className="border-b border-border/60 text-xs hover:bg-accent/50" title={quoteSourceTitle(quote)}>
       <td className="min-w-0 py-2 pr-3">
         <Link to="/stock/$symbol" params={{ symbol }} className="block font-medium hover:text-primary">{symbol}</Link>
         <span className="block max-w-44 truncate text-[10px] text-muted-foreground">{name}</span>
@@ -48,7 +48,7 @@ export function GuestMarketDashboard({
     for (let index = 0; index < items.length; index += 50) batches.push(items.slice(index, index + 50));
     return batches;
   }, [items]);
-  const sources = [...new Set([...quoteMap.values()].map((quote) => quote.source === "angelone" ? "Angel One" : quote.source === "yahoo" ? "Yahoo" : quote.source))].join(" / ");
+  const sources = [...new Set([...quoteMap.values()].map((quote) => quoteProviderName(quote.source)))].join(" / ");
 
   return (
     <div className="h-full overflow-y-auto p-4">

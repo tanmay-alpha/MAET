@@ -192,7 +192,7 @@ function MyStrategies({ onBrowse }: { onBrowse: () => void }) {
   }
 
   return (
-    <div className="h-full overflow-auto">
+    <div className="relative h-full overflow-auto">
       <table className="w-full text-xs">
         <thead className="sticky top-0 border-b border-border bg-panel text-muted-foreground">
           <tr>

@@ -1,5 +1,7 @@
 import type { MarketQuote, MarketQuotesResponse } from "@/lib/market-api";
 import { quoteFeedLabel } from "@/lib/quote-status";
+import { quoteSourceLabel } from "@/lib/quote-source";
+import { SYNTHETIC_QUOTE_LABEL } from "@/components/demo/demo-mode";
 
 /** Fixed buckets keep the same percentage the same colour across refreshes. */
 export function heatmapTone(changePct: number | undefined): string {
@@ -23,6 +25,11 @@ export function sourceName(source: string): string {
   return ({ angelone: "Angel One", yahoo: "Yahoo Finance" } as Record<string, string>)[source] ?? source;
 }
 
+/** Hover text for one quote: source and delay (synthetic in a demo build), staleness, IST time. */
+export function quoteTooltip(quote: MarketQuote): string {
+  return `${quoteSourceLabel(quote.source, quote.delayed)}${quote.quality === "stale" ? " · stale" : ""} · ${quoteTime(quote.ts)} IST`;
+}
+
 export function quoteTime(timestamp: string): string {
   return new Date(timestamp).toLocaleString("en-IN", {
     timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric",
@@ -32,7 +39,7 @@ export function quoteTime(timestamp: string): string {
 
 export function marketSummary(data: MarketQuotesResponse): string {
   const sources = [...new Set(data.quotes.map((quote) => quote.source))];
-  const source = (sources.length ? sources : [data.source]).map(sourceName).join(" + ");
+  const source = (sources.length ? sources : [data.source]).map((s) => (s === "simulated" ? SYNTHETIC_QUOTE_LABEL : sourceName(s))).join(" + ");
   const stale = data.quotes.some((quote) => quote.quality === "stale");
   const status = stale ? "Stale quotes" : quoteFeedLabel({
     isError: false,

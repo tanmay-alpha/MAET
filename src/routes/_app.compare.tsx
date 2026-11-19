@@ -309,9 +309,10 @@ function Compare() {
         </div>
 
         {activeTab === "Performance" && (
-          <div className="flex items-center gap-3 py-1.5">
+          // Wraps on phones: the range and mode controls do not fit one 360 px row.
+          <div className="flex max-w-full flex-wrap items-center gap-x-3 gap-y-1.5 py-1.5">
             {/* Range Selector */}
-            <div className="flex items-center rounded border border-border bg-background p-0.5 text-[11px]">
+            <div className="flex max-w-full flex-wrap items-center rounded border border-border bg-background p-0.5 text-[11px]">
               {RANGE_LABELS.map((r) => (
                 <button
                   key={r.id}
@@ -329,7 +330,7 @@ function Compare() {
             </div>
 
             {/* Chart Mode Selector */}
-            <div className="flex items-center rounded border border-border bg-background p-0.5 text-[11px]">
+            <div className="flex max-w-full flex-wrap items-center rounded border border-border bg-background p-0.5 text-[11px]">
               <button
                 type="button"
                 onClick={() => setChartMode("pct")}
@@ -404,7 +405,8 @@ function Compare() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          {/* relative: the sr-only "Action" header label is absolutely positioned and would otherwise widen the page. */}
+          <div className="relative overflow-x-auto">
           <table className="w-full min-w-[720px] text-xs">
             <thead className="bg-panel text-muted-foreground">
               <tr>
