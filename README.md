@@ -102,7 +102,8 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 
 > **Wiring status.** Production backtests run `server/domain/strategy/runner-v3.ts`: the synchronous `backtestV2` tRPC router and the queued backtest, sweep and walk-forward jobs in `server/workers/`.
 >
-> - **Look-ahead:** with the default `NEXT_BAR_OPEN` policy, rules are evaluated on bar *i−1* and filled at bar *i*'s open. `server/domain/strategy/truncated-history.test.ts` checks that a run which never saw bars after time *T* agrees with the full-history run on every trade and equity point before *T*. `fill-bar-look-ahead.test.ts` checks that changing the fill bar's high/low/close/volume does not change anything decided at its open. Indicators are trailing and `null` during warm-up. Corporate actions and point-in-time fundamentals are not applied (B, C), so results use the candles as stored.
+> - **Look-ahead:** with the default `NEXT_BAR_OPEN` policy, rules are evaluated on bar *i−1* and filled at bar *i*'s open. `server/domain/strategy/truncated-history.test.ts` checks that a run which never saw bars after time *T* agrees with the full-history run on every trade and equity point before *T*; `metamorphic-invariants.test.ts` repeats that on seeded random paths and also replaces every bar after *T* with unrelated data. `fill-bar-look-ahead.test.ts` checks that changing the fill bar's high/low/close/volume does not change anything decided at its open. Indicators are trailing and `null` during warm-up. Corporate actions and point-in-time fundamentals are not applied (B, C), so results use the candles as stored.
+> - **Risk gates:** `maximumDrawdownPercent` flattens at the close and stops trading; `maximumDailyLossPercent` flattens at the close and blocks entries until the next IST day; equity at or below zero always stops trading. Validation rejects settings the engine does not implement (`LONG_SHORT`, ATR stops, pyramiding). Details in [docs/RESEARCH_ENGINE.md](docs/RESEARCH_ENGINE.md) §1–2.
 > - **Costs:** fees follow the strategy's `feeModel`. `backtestV2` presets use a flat 10 bps per leg (`FIXED_BPS`, `feeBps` default 10; no fee when 0). Strategy Lab definitions can select `VOLUME_AWARE`, the statutory Indian schedule in `shared/domain/costs`. Slippage is a per-leg bps debit (default 5 bps).
 > - **Modules:** walk-forward analysis (E) runs in production through `server/workers/walk-forward-worker.ts`, and `strategyOptimisation.getSweep` returns the robustness analysis (F) of a finished sweep. The execution model (A), point-in-time fundamentals (C) and shared-capital portfolio engine (D) are **research modules covered by tests** (for example `server/domain/strategy/p2-research-invariants.test.ts`); production backtests do not call them.
 > - **Job execution:** queued backtests, sweeps and walk-forward runs execute inside the API process (`server/plugins/strategy-jobs.ts`): one job at a time, handing control back to the API between backtests, with a per-job time budget (`STRATEGY_JOB_TIME_BUDGET_MS`, default 15 min). Set `STRATEGY_JOBS_IN_PROCESS=false` to run them in a separate `bun run worker:strategy-jobs` process instead. On Render's free plan the service sleeps when idle, so queued jobs wait until it wakes.
@@ -113,7 +114,7 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
   $$\text{impactBps} = \text{impactCoeff} \times \sqrt{\frac{\text{OrderVolume}}{\text{BarVolume}}} \times \sigma_{\text{vol}}$$
 - **Bid-Ask Spread Models**: Configurable spread dynamics: `NONE`, `FIXED_BPS`, `VOLATILITY_BASED`, and `LIQUIDITY_BASED`.
 - **Directional Price Shift**: BUY orders shift execution price upward; SELL orders shift price downward, appropriately penalising aggressive fills.
-- **Participation Rate Capping**: Caps fills to a configurable percentage of bar volume.
+- **Participation Rate Capping**: Fills at most ⌊bar volume × rate⌋ whole shares; when that is 0, or the volume is missing or not positive, the order is not filled and the fill records why.
 - **Full Drag Accounting**: Explicitly accounts for brokerage, exchange turnover fees, STT, GST, SEBI charges, stamp duty, spread, and market impact.
 
 ### B. Corporate Actions & Price Adjustments (`server/domain/data/corporate-actions.ts`)
@@ -126,6 +127,7 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 ### C. Point-in-Time Fundamentals & Survivorship Bias Prevention (`server/domain/fundamentals/point-in-time.ts`)
 - **Availability Boundary**: A statement is visible only once it is available:
   $$\text{availableFrom} \le T_{\text{simulation}}$$
+  A row with no known `availableFrom` (null, missing or unparseable) is never visible.
 - **Full Restatement Tracking**: Backtests evaluated before an accounting restatement see Revision 1; evaluations after see Revision 2.
 - **Universe Membership**: Point-in-time index constituent queries (`getActiveUniverseConstituents()`) intended to keep delisted or excluded companies in their historical windows and so avoid survivorship bias once wired.
 - **Status**: Not yet used by any backtest.
@@ -134,22 +136,26 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 - **Synchronized Timeline**: Bar-by-bar multi-asset evaluation across instrument universes.
 - **Shared Capital Pool**: Instruments compete for shared cash—preventing capital double-spending.
 - **Deterministic Priority Ranking**: `MOMENTUM` (10-bar return), `RELATIVE_VOLUME` (currently raw signal-bar volume), `SCORECARD_SCORE` (currently volume × momentum) or `SYMBOL_ASCENDING`, all computed from the signal bar.
-- **Risk Limits**: Max open positions, max position %, gross exposure caps, sector exposure limits (checked on existing positions), and minimum cash reserve.
+- **Risk Limits**: Max open positions, max position %, gross exposure caps, sector exposure limits and minimum cash reserve, all checked on the portfolio as it would be after the order: an order that would breach one is resized down to fit, or rejected if nothing meaningful fits. Under `NEXT_BAR_OPEN`, entries at bar *i*'s open are sized from held positions marked at that open, never from bar *i*'s close or intrabar exits.
+- **Reproducibility Hash**: SHA-256 of the canonical configuration and every input candle.
 - **Performance & Attribution Metrics**: CAGR, Sharpe, Sortino, Max Drawdown, Calmar, win rate, profit factor, cost drag, raw turnover (traded notional in INR), average gross exposure, and P&L attribution by symbol, sector, month and exit reason. It does not compute beta, alpha or tracking error. Sharpe is the mean excess periodic return divided by its standard deviation, times $\sqrt{\text{periods per year}}$ (risk-free rate configurable, default 0); Sortino uses downside deviation over all $N$ periods.
 - **Status**: No endpoint or worker calls it; it runs only in tests. `rebalanceSchedule` is accepted but not implemented.
 
 ### E. Walk-Forward Analysis & Optimization (`server/domain/strategy/walk-forward.ts`)
-- **Three-Phase Windowing**: Each window is split into training, validation and out-of-sample (OOS) phases. Parameters are chosen by the best training Sharpe; validation only rejects a window whose Sharpe is below −1; accepted windows are then tested OOS.
+- **Three-Phase Windowing**: Each window is training (in sample) → validation (out-of-sample holdout) → test (out of sample), with exact calendar-day spans: `trainingWindowDays`, then `validationWindowDays` for both validation and test. Windows step by the test span, so test segments tile the range and the last ends at the range end. Parameters are chosen by the best training Sharpe (a retrospective best-of-N pick); validation only rejects a window whose Sharpe is below −1.
+- **Cash-or-Trade**: Accepted windows trade their test segment; rejected windows (or windows that could not select or test parameters) hold cash. Cash segments stay in the stitched OOS curve as flat equity and count as zero in every OOS average.
 - **Leakage Isolation**: Each phase's candles are sliced to end at the phase boundary, so test candles never enter training/validation indicator caches; `assertNoDataLeakage` throws on overlapping timestamps.
-- **Walk-Forward Efficiency (WFE)**: Mean OOS annualised return divided by mean in-sample annualised return over the tested windows; `null` with a reason when the in-sample mean is $\le 0$. Performance retention is the same ratio of Sharpe ratios.
-- **Continuous OOS Curve**: Stitches out-of-sample equity curves across consecutive windows, compounding equity.
-- **Status**: Used in production by `server/workers/walk-forward-worker.ts`, run by the in-process job runner (see wiring status above).
+- **Walk-Forward Efficiency (WFE)**: Mean OOS annualised return over all windows divided by mean in-sample annualised return over windows that selected parameters; `null` with a reason when the in-sample mean is $\le 0$. Performance retention is the same ratio of Sharpe ratios. Return, CAGR, Sharpe and max drawdown are also computed on the stitched OOS curve.
+- **Benchmark**: Buy-and-hold of the same symbol over the same OOS dates, with the strategy's own fee, slippage and fill settings.
+- **Labels**: Each run records its methodology (spans, in-sample / holdout / out-of-sample roles, trials per window, cash policy), returned by `strategyOptimisation.getWalkForward` and shown in the results view.
+- **Status**: Used in production by `server/workers/walk-forward-worker.ts`, run by the in-process job runner (see wiring status above). Details: [docs/RESEARCH_ENGINE.md §5](docs/RESEARCH_ENGINE.md#5-walk-forward-analysis).
 
 ### F. Parameter Robustness & Overfit Detection (`server/domain/strategy/robustness.ts`)
 - **2D Parameter Sensitivity Heatmap**: Identifies parameter plateaus vs overfit fragile spikes.
 - **Neighbor Stability Scoring**: Penalises isolated parameter spikes where adjacent settings collapse.
 - **Safeguard Flags**: `OVERFIT_RISK`, `PARAMETER_INSTABILITY`, `LOW_SAMPLE_SIZE` and `HIGH_COST_DRAG`.
-- **Status**: `strategyOptimisation.getSweep` returns this analysis for a finished parameter sweep (the Strategy Lab renders it as a heatmap). Sweeps do not record costs, so `HIGH_COST_DRAG` never fires there.
+- **Probability of Backtest Overfitting**: CSCV (Bailey, Borwein, López de Prado and Zhu, 2015) over each combination's per-bar returns cut into up to 16 blocks, reported with the number of trials and labelled as a retrospective in-sample selection.
+- **Status**: `strategyOptimisation.getSweep` returns this analysis, including `selection.pbo` and `selection.trials`, for a finished parameter sweep (the Strategy Lab renders the heatmap; it does not show PBO yet). Sweeps store each combination's cost drag, so `HIGH_COST_DRAG` can fire.
 
 ---
 

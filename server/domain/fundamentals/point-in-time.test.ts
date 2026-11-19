@@ -136,3 +136,41 @@ describe("P2 Point-in-Time Fundamentals & Universe Membership (Commit 4)", () =>
     expect(audit.message).toContain("Historical universe membership unavailable");
   });
 });
+
+describe("point-in-time fundamentals with unknown availability", () => {
+  const row = (overrides: Partial<PointInTimeFundamental>): PointInTimeFundamental => ({
+    id: "r", companyId: "c-infy", symbol: "INFY", periodEnd: "2023-12-31T00:00:00.000Z", periodType: "quarterly",
+    filingDate: "2024-01-15T00:00:00.000Z", availableFrom: "2024-01-15T18:00:00.000Z", revision: 1, metrics: { eps: 20 },
+    ...overrides,
+  });
+  // Spans 1970 (where new Date(null) lands) to well after every row.
+  const asOfDates = ["1970-01-01T00:00:00.000Z", "1990-06-01T00:00:00.000Z", "2024-01-16T00:00:00.000Z", "2099-01-01T00:00:00.000Z"];
+  const unknown: Array<PointInTimeFundamental["availableFrom"] | undefined> = [null, undefined, "", "not-a-date"];
+
+  it("never shows a row whose availableFrom is null, missing or unparseable, at any date", () => {
+    for (const availableFrom of unknown) {
+      for (const filingDate of [null, "2024-01-15T00:00:00.000Z"]) {
+        const records = [row({ availableFrom: availableFrom as PointInTimeFundamental["availableFrom"], filingDate })];
+        for (const asOf of asOfDates) {
+          expect(getPointInTimeFundamentals(records, asOf).get("INFY")).toBeUndefined();
+        }
+      }
+    }
+  });
+
+  it("an unknown-availability restatement neither shows up nor hides the known revision", () => {
+    const known = row({ id: "rev1" });
+    const restated = row({ id: "rev2", revision: 2, availableFrom: null, filingDate: null, metrics: { eps: 1 } });
+    for (const records of [[known, restated], [restated, known]]) {
+      expect(getPointInTimeFundamentals(records, "2024-01-10T00:00:00.000Z").get("INFY")).toBeUndefined();
+      expect(getPointInTimeFundamentals(records, "2024-02-01T00:00:00.000Z").get("INFY")?.id).toBe("rev1");
+      expect(getPointInTimeFundamentals(records, "2099-01-01T00:00:00.000Z").get("INFY")?.id).toBe("rev1");
+    }
+  });
+
+  it("an unknown-availability later period does not displace the latest known period", () => {
+    const q3 = row({ id: "q3" });
+    const q4 = row({ id: "q4", periodEnd: "2024-03-31T00:00:00.000Z", availableFrom: null });
+    expect(getPointInTimeFundamentals([q4, q3], "2025-01-01T00:00:00.000Z").get("INFY")?.id).toBe("q3");
+  });
+});

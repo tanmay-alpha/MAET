@@ -63,7 +63,6 @@ function createCachedProbe(
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finished = observe?.();
     let failure: unknown;
-    // Executor form on purpose: Render runs Node 20, which lacks Promise.withResolvers.
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`${component} probe timed out after ${timeoutMs}ms`)), timeoutMs);
     });

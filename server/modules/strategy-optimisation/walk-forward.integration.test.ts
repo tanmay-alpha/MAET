@@ -14,14 +14,24 @@ import { uninterruptedJobContext } from "../strategy-jobs/job-context";
 import type { StrategyDefinition } from "../../../shared/strategy/ast";
 
 describe("Walk-forward worker", () => {
-  it("splits each window into train : validation : test from the requested day counts", () => {
-    const config = walkForwardEngineConfig({ mode: "ROLLING", windowCount: 4, trainingDays: 120, validationDays: 40 });
-    expect(config.windowType).toBe("ROLLING");
-    expect(config.numWindows).toBe(4);
-    // 120 training days: 90 train + 30 validation; 40 days out of sample.
-    expect(config.trainRatio).toBeCloseTo(90 / 160, 10);
-    expect(config.valRatio).toBeCloseTo(30 / 160, 10);
-    expect(1 - config.trainRatio - config.valRatio).toBeCloseTo(40 / 160, 10);
+  it("maps the run onto calendar-day training, validation and test spans over the inclusive date range", () => {
+    const config = walkForwardEngineConfig({
+      mode: "ROLLING",
+      windowCount: 4,
+      trainingDays: 120,
+      validationDays: 40,
+      fromDate: new Date("2024-01-01T00:00:00.000Z"),
+      toDate: new Date("2024-12-31T23:59:59.999Z"),
+    });
+    expect(config).toEqual({
+      windowType: "ROLLING",
+      maxWindows: 4,
+      trainingDays: 120,
+      validationDays: 40,
+      testDays: 40,
+      rangeStart: new Date("2024-01-01T00:00:00.000Z"),
+      rangeEnd: new Date("2025-01-01T00:00:00.000Z"),
+    });
   });
 
   it("claims a queued run, optimises the swept parameter and persists every phase", async () => {
@@ -87,18 +97,29 @@ describe("Walk-forward worker", () => {
     const [run] = await sql`SELECT status, oos_summary FROM public.strategy_walk_forward_runs WHERE id = ${runId}`;
     expect(run.status).toBe("COMPLETED");
     expect(run.oos_summary.totalWindowsCount).toBe(4);
+    expect(run.oos_summary.methodology).toMatchObject({ trainingDays: 60, validationDays: 20, testDays: 20, selection: { trialsPerWindow: 3 } });
+    expect(run.oos_summary.benchmark).toMatchObject({ kind: "BUY_AND_HOLD", tradeCount: 1 });
 
     const windows = await sql`
-      SELECT window_index, training_to, validation_from, validation_to, test_from, selected_parameters, test_metrics, validation_metrics
+      SELECT window_index, training_from, training_to, validation_from, validation_to, test_from, test_to, selected_parameters, test_metrics, validation_metrics
       FROM public.strategy_walk_forward_windows WHERE run_id = ${runId} ORDER BY window_index`;
     expect(windows).toHaveLength(4);
-    for (const w of windows) {
-      const ms = (value: string | Date) => new Date(value).getTime();
-      expect(ms(w.training_to)).toBeLessThanOrEqual(ms(w.validation_from));
-      expect(ms(w.validation_to)).toBeLessThanOrEqual(ms(w.test_from));
+    const ms = (value: string | Date) => new Date(value).getTime();
+    const day = 86_400_000;
+    windows.forEach((w, i) => {
+      expect(ms(w.training_to) - ms(w.training_from)).toBe(60 * day);
+      expect(ms(w.training_to)).toBe(ms(w.validation_from));
+      expect(ms(w.validation_to) - ms(w.validation_from)).toBe(20 * day);
+      expect(ms(w.validation_to)).toBe(ms(w.test_from));
+      expect(ms(w.test_to) - ms(w.test_from)).toBe(20 * day);
+      if (i > 0) expect(ms(w.test_from)).toBe(ms(windows[i - 1].test_to));
       expect([3, 5, 8]).toContain(w.selected_parameters.fast);
-      expect(w.test_metrics === null).toBe(!w.validation_metrics.accepted);
-    }
+      // Every test segment is recorded; a rejected window's held cash.
+      if (!w.validation_metrics.accepted) expect(w.test_metrics).toMatchObject({ position: "CASH", totalReturn: 0 });
+      expect(["STRATEGY", "CASH"]).toContain(w.test_metrics.position);
+    });
+    // The last test segment ends just after the inclusive to_date.
+    expect(ms(windows[3].test_to)).toBe(start + 399 * day + 1);
 
     await sql`DELETE FROM public.strategy_walk_forward_runs WHERE id = ${runId}`;
     await sql`DELETE FROM public.candles WHERE symbol = ${symbol}`;

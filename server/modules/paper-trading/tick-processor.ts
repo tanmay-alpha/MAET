@@ -6,7 +6,8 @@ import { evaluateExecutionQuote, type ExecutionQuote, type Tick } from "@shared/
 import type { MatchingReceipt, PaperOrderRow } from "./contracts";
 import { computeQuoteFingerprint } from "./quote-fingerprint";
 import { withSerializablePaperTransaction } from "./transaction-retry";
-import { applyFill, paperExecutionPolicy } from "./fill-writer";
+import { applyFill, paperExecutionPolicy, type MarkPriceSource } from "./fill-writer";
+import { liveMarkPrice } from "./execution-quote";
 import { signedPositionQuantity } from "./mapper";
 import { CumulativeVolumeTracker } from "./volume-tracker";
 
@@ -20,11 +21,24 @@ const MATCHABLE_STATUS_LOOKUP: Partial<Record<PaperOrderRow["status"], true>> = 
 
 /** Share of the volume traded since the previous tick a resting order may take. */
 const MAX_TICK_PARTICIPATION = 0.1;
-/** Every marketable tick may fill at least this many shares, so quote-only ticks still progress. */
-const MIN_FILL_PER_TICK = 1;
+/** A tick with traded volume may fill at least this many shares, so thinly traded symbols still progress. */
+const MIN_FILL_PER_TRADED_TICK = 1;
+
+/**
+ * Most shares one resting order may take from a tick. Nothing traded since the previous tick
+ * (a quote-only update, an out-of-order snapshot) or an unknown baseline (an instrument's first
+ * tick since start-up) is no liquidity: such a tick can still trigger stops but fills nothing.
+ */
+export function tickLiquidityCap(tradedVolume: number | undefined): number {
+  if (tradedVolume === undefined || !(tradedVolume > 0)) return 0;
+  return Math.max(MIN_FILL_PER_TRADED_TICK, Math.floor(tradedVolume * MAX_TICK_PARTICIPATION));
+}
 
 export class PaperTradingTickProcessor {
   private readonly volumes = new CumulativeVolumeTracker();
+
+  /** @param markFor marks the account's other positions in the margin check. */
+  constructor(private readonly markFor: MarkPriceSource = liveMarkPrice) {}
 
   async processTick(tick: Tick): Promise<MatchingReceipt[]> {
     const policy = evaluateExecutionQuote(tick, tick.symbol, paperExecutionPolicy());
@@ -33,11 +47,7 @@ export class PaperTradingTickProcessor {
     }
 
     const { exchange, symbol } = tick;
-    const tradedVolume = this.volumes.traded(`${exchange}:${symbol}`, tick.volume, tick.ts);
-    const liquidityCap = Math.max(
-      MIN_FILL_PER_TICK,
-      Math.floor((tradedVolume ?? 0) * MAX_TICK_PARTICIPATION)
-    );
+    const liquidityCap = tickLiquidityCap(this.volumes.traded(`${exchange}:${symbol}`, tick.volume, tick.ts));
     const quote: ExecutionQuote = {
       exchange,
       symbol,
@@ -139,6 +149,10 @@ export class PaperTradingTickProcessor {
             }
             fillQuantity = Math.min(fillQuantity, closable);
           }
+          if (fillQuantity === 0) {
+            // No volume traded on this tick: the order stays working (a stop stays TRIGGERED).
+            return null;
+          }
 
           try {
             const applied = await applyFill({
@@ -151,6 +165,7 @@ export class PaperTradingTickProcessor {
               fillQuantity,
               reason: isStop ? "STOP_TRIGGER" : "USER_ORDER",
               ledgerSourceType: "FILL",
+              markFor: this.markFor,
               now: new Date(),
               createId: () => crypto.randomUUID(),
             });

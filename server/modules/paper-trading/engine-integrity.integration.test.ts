@@ -784,7 +784,7 @@ describe("Paper trading engine integrity", () => {
       expect([position?.side, position?.totalShares]).toEqual(["LONG", 10]);
     });
 
-    it("#6: fills are sized from the traded volume since the previous tick", async () => {
+    it("#6: fills are sized from the traded volume since the previous tick; nothing traded fills nothing", async () => {
       const symbol = uniqueSymbol("VOL");
       const userId = await createTestUser();
       await makeService({ prices: { [symbol]: 1000 } }).placeOrder({
@@ -792,13 +792,15 @@ describe("Paper trading engine integrity", () => {
         command: { symbol, exchange: "NSE", side: "BUY", type: "LIMIT", limitPrice: 1000, qty: 500 },
       });
 
-      await primeVolume(symbol, 1001, 50_000);
+      // The first marketable tick has no baseline: its volume is not known to have traded now.
+      expect(await paperTradingTickProcessor.processTick(tick(symbol, 999, 50_000))).toEqual([]);
       const quantities: number[] = [];
       for (const cumulative of [50_009, 50_109, 50_109, 50_309]) {
         const [receipt] = await paperTradingTickProcessor.processTick(tick(symbol, 999, cumulative));
         quantities.push(receipt?.quantity ?? 0);
       }
-      expect(quantities).toEqual([1, 10, 1, 20]);
+      // 9 traded -> the 1-share floor; 100 -> 10%; a repeated cumulative volume (0 traded) -> no fill.
+      expect(quantities).toEqual([1, 10, 0, 20]);
     });
 
     it("#7: idempotent retries match prices at stored precision and keys are per generation", async () => {
