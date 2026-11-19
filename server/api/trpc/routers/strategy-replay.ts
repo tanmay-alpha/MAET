@@ -10,8 +10,39 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, protectedProcedure } from "../core";
 import { db } from "../../../data/drizzle/client";
 import { strategyReplaySessions, candles } from "../../../db/schema";
-import { eq, and, desc, asc, lte, sql } from "drizzle-orm";
+import { eq, and, desc, asc, lte, gte, gt } from "drizzle-orm";
 import { CreateReplayInputSchema } from "../../../../shared/strategy/contracts";
+
+/** Largest quantity a single replay order may carry. */
+export const MAX_REPLAY_ORDER_QTY = 1_000_000;
+/** Pending orders a single replay session may hold at once. */
+export const MAX_REPLAY_OPEN_ORDERS = 50;
+
+type ReplayTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type ReplaySessionRow = typeof strategyReplaySessions.$inferSelect;
+
+/**
+ * Runs a read-modify-write of a replay session's JSONB state under a row lock.
+ * step, placeOrder, cancelOrder and reset each rewrite the whole `state`
+ * document, so without the lock a concurrent step + placeOrder would let the
+ * later writer drop the other's orders/fills.
+ */
+function withLockedSession<T>(
+  sessionId: string,
+  userId: string,
+  fn: (tx: ReplayTx, session: ReplaySessionRow) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    const [session] = await tx
+      .select()
+      .from(strategyReplaySessions)
+      .where(and(eq(strategyReplaySessions.id, sessionId), eq(strategyReplaySessions.userId, userId)))
+      .limit(1)
+      .for("update");
+    if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Replay session not found" });
+    return fn(tx, session);
+  });
+}
 
 export const strategyReplayRouter = createRouter({
   /** Create a new bar replay session */
@@ -27,7 +58,7 @@ export const strategyReplayRouter = createRouter({
         .where(and(
           eq(candles.symbol, input.symbol),
           eq(candles.timeframe, input.timeframe),
-          sql`${candles.ts} >= ${startTs}`
+          gte(candles.ts, startTs),
         ))
         .orderBy(asc(candles.ts))
         .limit(1);
@@ -77,24 +108,17 @@ export const strategyReplayRouter = createRouter({
   /** Step forward one bar — reveals exactly one next candle and processes pending replay orders */
   step: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }).strict())
-    .mutation(async ({ ctx, input }) => {
-      const [session] = await db
-        .select()
-        .from(strategyReplaySessions)
-        .where(and(eq(strategyReplaySessions.id, input.sessionId), eq(strategyReplaySessions.userId, ctx.userId!)))
-        .limit(1);
-
-      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Replay session not found" });
+    .mutation(async ({ ctx, input }) => withLockedSession(input.sessionId, ctx.userId!, async (tx, session) => {
       if (session.status !== "ACTIVE") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Session is not active" });
 
       // Find the next candle strictly after currentBarTimestamp
-      const [nextBar] = await db
+      const [nextBar] = await tx
         .select()
         .from(candles)
         .where(and(
           eq(candles.symbol, session.symbol),
           eq(candles.timeframe, session.timeframe),
-          sql`${candles.ts} > ${session.currentBarTimestamp}`
+          gt(candles.ts, session.currentBarTimestamp),
         ))
         .orderBy(asc(candles.ts))
         .limit(1);
@@ -182,7 +206,7 @@ export const strategyReplayRouter = createRouter({
       }
 
       // Update session in DB
-      await db
+      await tx
         .update(strategyReplaySessions)
         .set({
           currentBarTimestamp: nextBar.ts,
@@ -198,7 +222,7 @@ export const strategyReplayRouter = createRouter({
         endOfData: false,
         barsRevealed: session.barsRevealed + 1,
       };
-    }),
+    })),
 
   /** Get current session state including revealed bars */
   getState: protectedProcedure
@@ -217,7 +241,7 @@ export const strategyReplayRouter = createRouter({
         .where(and(
           eq(candles.symbol, session.symbol),
           eq(candles.timeframe, session.timeframe),
-          sql`${candles.ts} >= ${session.startTimestamp}`,
+          gte(candles.ts, session.startTimestamp),
           lte(candles.ts, session.currentBarTimestamp),
         ))
         .orderBy(asc(candles.ts));
@@ -242,20 +266,21 @@ export const strategyReplayRouter = createRouter({
       sessionId: z.string().uuid(),
       side: z.enum(["BUY", "SELL"]),
       type: z.enum(["MARKET", "LIMIT"]),
-      qty: z.number().int().positive(),
+      qty: z.number().int().positive().max(MAX_REPLAY_ORDER_QTY),
       limitPrice: z.number().positive().optional(),
     }).strict())
-    .mutation(async ({ ctx, input }) => {
-      const [session] = await db
-        .select()
-        .from(strategyReplaySessions)
-        .where(and(eq(strategyReplaySessions.id, input.sessionId), eq(strategyReplaySessions.userId, ctx.userId!)))
-        .limit(1);
-
-      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+    .mutation(async ({ ctx, input }) => withLockedSession(input.sessionId, ctx.userId!, async (tx, session) => {
+      if (session.status !== "ACTIVE") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Session is not active" });
 
       const state = (session.state as any) ?? { orders: [], fills: [], positions: [], ledger: [] };
       const orders = state.orders ?? [];
+      const openOrders = orders.filter((o: { status?: string }) => o.status === "PENDING").length;
+      if (openOrders >= MAX_REPLAY_OPEN_ORDERS) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `A replay session can hold at most ${MAX_REPLAY_OPEN_ORDERS} open orders`,
+        });
+      }
       const newOrder = {
         id: crypto.randomUUID(),
         symbol: session.symbol,
@@ -269,7 +294,7 @@ export const strategyReplayRouter = createRouter({
 
       orders.push(newOrder);
 
-      await db
+      await tx
         .update(strategyReplaySessions)
         .set({
           state: { ...state, orders },
@@ -278,20 +303,12 @@ export const strategyReplayRouter = createRouter({
         .where(eq(strategyReplaySessions.id, input.sessionId));
 
       return { order: newOrder };
-    }),
+    })),
 
   /** Cancel a pending replay order */
   cancelOrder: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid(), orderId: z.string().uuid() }).strict())
-    .mutation(async ({ ctx, input }) => {
-      const [session] = await db
-        .select()
-        .from(strategyReplaySessions)
-        .where(and(eq(strategyReplaySessions.id, input.sessionId), eq(strategyReplaySessions.userId, ctx.userId!)))
-        .limit(1);
-
-      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
-
+    .mutation(async ({ ctx, input }) => withLockedSession(input.sessionId, ctx.userId!, async (tx, session) => {
       const state = (session.state as any) ?? { orders: [], fills: [], positions: [], ledger: [] };
       const orders = state.orders ?? [];
       const order = orders.find((o: any) => o.id === input.orderId);
@@ -299,7 +316,7 @@ export const strategyReplayRouter = createRouter({
 
       order.status = "CANCELLED";
 
-      await db
+      await tx
         .update(strategyReplaySessions)
         .set({
           state: { ...state, orders },
@@ -308,7 +325,7 @@ export const strategyReplayRouter = createRouter({
         .where(eq(strategyReplaySessions.id, input.sessionId));
 
       return { cancelled: true };
-    }),
+    })),
 
   /** List replay orders */
   listOrders: protectedProcedure
@@ -369,14 +386,7 @@ export const strategyReplayRouter = createRouter({
   /** Reset session to start (clear revealed bars, restore initial capital) */
   reset: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }).strict())
-    .mutation(async ({ ctx, input }) => {
-      const [session] = await db
-        .select()
-        .from(strategyReplaySessions)
-        .where(and(eq(strategyReplaySessions.id, input.sessionId), eq(strategyReplaySessions.userId, ctx.userId!)))
-        .limit(1);
-      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
-
+    .mutation(async ({ ctx, input }) => withLockedSession(input.sessionId, ctx.userId!, async (tx, session) => {
       const initialCap = Number(session.initialCapital);
       const resetState = {
         orders: [],
@@ -393,7 +403,7 @@ export const strategyReplayRouter = createRouter({
         ],
       };
 
-      await db
+      await tx
         .update(strategyReplaySessions)
         .set({
           currentBarTimestamp: session.startTimestamp,
@@ -405,7 +415,7 @@ export const strategyReplayRouter = createRouter({
         .where(eq(strategyReplaySessions.id, input.sessionId));
 
       return { reset: true };
-    }),
+    })),
 
   /** Close and expire a replay session */
   close: protectedProcedure
