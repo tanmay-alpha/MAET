@@ -138,17 +138,20 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
 - **Status**: No endpoint or worker calls it; it runs only in tests. `rebalanceSchedule` is accepted but not implemented.
 
 ### E. Walk-Forward Analysis & Optimization (`server/domain/strategy/walk-forward.ts`)
-- **Three-Phase Windowing**: Each window is split into training, validation and out-of-sample (OOS) phases. Parameters are chosen by the best training Sharpe; validation only rejects a window whose Sharpe is below −1; accepted windows are then tested OOS.
+- **Three-Phase Windowing**: Each window is training (in sample) → validation (out-of-sample holdout) → test (out of sample), with exact calendar-day spans: `trainingWindowDays`, then `validationWindowDays` for both validation and test. Windows step by the test span, so test segments tile the range and the last ends at the range end. Parameters are chosen by the best training Sharpe (a retrospective best-of-N pick); validation only rejects a window whose Sharpe is below −1.
+- **Cash-or-Trade**: Accepted windows trade their test segment; rejected windows (or windows that could not select or test parameters) hold cash. Cash segments stay in the stitched OOS curve as flat equity and count as zero in every OOS average.
 - **Leakage Isolation**: Each phase's candles are sliced to end at the phase boundary, so test candles never enter training/validation indicator caches; `assertNoDataLeakage` throws on overlapping timestamps.
-- **Walk-Forward Efficiency (WFE)**: Mean OOS annualised return divided by mean in-sample annualised return over the tested windows; `null` with a reason when the in-sample mean is $\le 0$. Performance retention is the same ratio of Sharpe ratios.
-- **Continuous OOS Curve**: Stitches out-of-sample equity curves across consecutive windows, compounding equity.
-- **Status**: Used in production by `server/workers/walk-forward-worker.ts`, run by the in-process job runner (see wiring status above).
+- **Walk-Forward Efficiency (WFE)**: Mean OOS annualised return over all windows divided by mean in-sample annualised return over windows that selected parameters; `null` with a reason when the in-sample mean is $\le 0$. Performance retention is the same ratio of Sharpe ratios. Return, CAGR, Sharpe and max drawdown are also computed on the stitched OOS curve.
+- **Benchmark**: Buy-and-hold of the same symbol over the same OOS dates, with the strategy's own fee, slippage and fill settings.
+- **Labels**: Each run records its methodology (spans, in-sample / holdout / out-of-sample roles, trials per window, cash policy), returned by `strategyOptimisation.getWalkForward` and shown in the results view.
+- **Status**: Used in production by `server/workers/walk-forward-worker.ts`, run by the in-process job runner (see wiring status above). Details: [docs/RESEARCH_ENGINE.md §5](docs/RESEARCH_ENGINE.md#5-walk-forward-analysis).
 
 ### F. Parameter Robustness & Overfit Detection (`server/domain/strategy/robustness.ts`)
 - **2D Parameter Sensitivity Heatmap**: Identifies parameter plateaus vs overfit fragile spikes.
 - **Neighbor Stability Scoring**: Penalises isolated parameter spikes where adjacent settings collapse.
 - **Safeguard Flags**: `OVERFIT_RISK`, `PARAMETER_INSTABILITY`, `LOW_SAMPLE_SIZE` and `HIGH_COST_DRAG`.
-- **Status**: `strategyOptimisation.getSweep` returns this analysis for a finished parameter sweep (the Strategy Lab renders it as a heatmap). Sweeps do not record costs, so `HIGH_COST_DRAG` never fires there.
+- **Probability of Backtest Overfitting**: CSCV (Bailey, Borwein, López de Prado and Zhu, 2015) over each combination's per-bar returns cut into up to 16 blocks, reported with the number of trials and labelled as a retrospective in-sample selection.
+- **Status**: `strategyOptimisation.getSweep` returns this analysis, including `selection.pbo` and `selection.trials`, for a finished parameter sweep (the Strategy Lab renders the heatmap; it does not show PBO yet). Sweeps store each combination's cost drag, so `HIGH_COST_DRAG` can fire.
 
 ---
 

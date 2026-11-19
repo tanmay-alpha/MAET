@@ -101,30 +101,42 @@ $$
 
 ## 5. Walk-forward analysis
 
-`runWalkForwardAnalysis` (`server/domain/strategy/walk-forward.ts`), called by `processWalkForward` in `server/workers/walk-forward-worker.ts`.
+`runWalkForwardAnalysis` (`server/domain/strategy/walk-forward.ts`), called by `runWalkForwardJob` in `server/workers/walk-forward-worker.ts`.
 
-**Windows** (`generate3PhaseWalkForwardWindows`). With span $S = t_{end} - t_{start}$ and $n$ windows, step $\Delta = \lfloor S/n \rfloor$. Window $k$ ends at $t_{start} + (k+1)\Delta$ and starts at $t_{start} + k\Delta$ (`ROLLING`) or $t_{start}$ (`ANCHORED`). Each window is split by duration: train $\lfloor 0.6\,D \rfloor$, validation $\lfloor 0.2\,D \rfloor$, test the remainder (defaults; 4 windows, rolling). Anchored windows therefore grow, and the ratios are re-applied to each growing window.
+**Spans.** The API takes `trainingWindowDays` $T$ and `validationWindowDays` $V$ (`shared/strategy/contracts.ts`, stored as `training_days` / `validation_days`). Every window has three adjacent phases of exact calendar-day lengths: training $T$, validation $V$ and out-of-sample test $V$ (`walkForwardRunSpans`). There is no hidden ratio: the router, worker, engine and run dialog ("Training days", "Validation / test days") all use these spans. The run's `to` date is inclusive, so the engine range is $[\text{from}, \text{to} + 1\,\text{ms})$ (`walkForwardRange`).
 
-The API takes `trainingDays` and `validationDays` (`shared/strategy/contracts.ts`); the worker treats `validationDays` as the out-of-sample share and holds out 25% of the training span for validation: train ratio $0.75\,T/(T+V)$, validation $0.25\,T/(T+V)$, test $V/(T+V)$ (`walk-forward-worker.ts`). The router persists $\min(\lfloor \text{totalDays}/V \rfloor,\ 2 \cdot \text{minimumWindows})$ windows (`strategy-optimisation.ts`).
+**Windows** (`generate3PhaseWalkForwardWindows`). Test segments are $V$ long, adjacent, and the last one ends at the range end; window $k$'s validation is the $V$ days before its test and its training the $T$ days before that (`ROLLING`) or everything from the range start (`ANCHORED`, so training grows). Windows step by $V$, so the validation of window $k+1$ is the test of window $k$: still after window $k+1$'s training, so no leakage. With range length $R$, $n = \lfloor (R - T - 2V)/V \rfloor + 1$ windows fit (`countWalkForwardWindows`). The router rejects a run unless $n \ge$ `minimumWindows` (needs $T + V + \text{minimumWindows}\cdot V$ days) and stores $\min(n,\ 2\cdot\text{minimumWindows})$ as `window_count`; when that is below $n$ the engine keeps the most recent windows, so the earliest days serve only as training history (or not at all, for rolling windows).
+
+Example: 2024-01-01 to 2024-12-31 ($R$ = 366 days), $T = 120$, $V = 40$: $n = \lfloor 166/40 \rfloor + 1 = 5$; the tests run 2024-06-15 to 2025-01-01 in five 40-day segments and the first training phase starts 2024-01-07. (Before this fix the range was cut into equal slices and split by ratio, giving roughly 91-day windows whatever was requested.)
 
 **Per window:**
 
-1. Skip if train < 20, validation < 10 or test < 10 bars. Each phase gets up to 250 preceding bars of warm-up passed as `tradeFrom`, and is sliced to end at the phase end, so later candles are never in the indicator cache.
+1. Skip the window (warning, no row) only if its test segment has no candles. Each phase gets up to 250 preceding bars of warm-up passed as `tradeFrom`, and is sliced to end at the phase end, so later candles are never in the indicator cache.
 2. A leakage guard (`assertNoDataLeakage`) throws if the last train timestamp is after the first validation timestamp, or the last validation timestamp after the first test timestamp.
-3. **Train:** run every parameter combination (Cartesian product, capped at 100; `server/domain/strategy/parameter-sweep.ts`) and keep the one with the highest training Sharpe.
-4. **Validate:** run it on the validation phase; reject the window if the validation Sharpe < −1.0 or the run fails. Validation does not choose parameters; it only vetoes.
-5. **Test:** only accepted windows trade out of sample, starting from the previous window's ending OOS equity, so the stitched OOS curve compounds. Rejected windows add no points.
+3. **Train (in sample):** with at least 20 training and 5 validation bars, run every parameter combination (Cartesian product, capped at 100; `server/domain/strategy/parameter-sweep.ts`) and keep the one with the highest training Sharpe. This is a retrospective best-of-N pick, so the training metrics are optimistic.
+4. **Validate (out-of-sample holdout):** run it on the validation phase; reject the window if the validation Sharpe < −1.0 or the run fails. Validation does not choose parameters; it only vetoes.
+5. **Test (out of sample), cash-or-trade:** an accepted window trades its test segment starting from the previous segment's ending OOS equity, so the stitched OOS curve compounds. A window that was rejected, could not select parameters (too few bars, every training run failed) or whose test run failed **holds cash**: it adds a flat segment (the as-of mark plus every test bar at the running equity) to the stitched curve, gets zero OOS metrics, and is stored with `test_metrics.position = "CASH"` and a `cashReason`.
 
-**Summary**, over windows actually tested:
+**Summary.** In-sample means are over windows that selected parameters; out-of-sample per-window means are over **every** window, cash windows counting as 0:
 
 $$
 \mathrm{WFE} = \frac{\overline{\mathrm{CAGR}}_{OOS}}{\overline{\mathrm{CAGR}}_{IS}}\ \ \text{if } \overline{\mathrm{CAGR}}_{IS} > 0,\qquad
 \text{retention} = \frac{\overline{\mathrm{Sharpe}}_{OOS}}{\overline{\mathrm{Sharpe}}_{IS}}\ \ \text{if } \overline{\mathrm{Sharpe}}_{IS} > 0
 $$
 
-Otherwise the value is `null` with a reason string. OOS total return is $(E^{OOS}_{final} - C_0)/C_0$; OOS max drawdown is the maximum of the per-window drawdowns, not recomputed on the stitched curve.
+Otherwise the value is `null` with a reason string (also when no window selected parameters). A walk-forward whose windows were all rejected therefore reports WFE 0, not "undefined". The stitched curve gives `oosReturnTotal` $= (E^{OOS}_{final} - C_0)/C_0$, `oosAnnualisedReturn`, `oosSharpe` and `oosDrawdownMax` (`computeMetrics` over the whole stitched curve, so drawdowns spanning windows count). Counts: `acceptedWindowsCount`, `testedWindowsCount` (traded), `cashWindowsCount`, `totalWindowsCount`.
+
+**Labels.** The stored `oos_summary.methodology` records the spans, `dayBasis: "CALENDAR"`, the step, `selection` (`IN_SAMPLE`, `RETROSPECTIVE_BEST_TRAINING_SHARPE`, `trialsPerWindow`), `validation` (`OUT_OF_SAMPLE_HOLDOUT`, veto below Sharpe −1), `test` (`OUT_OF_SAMPLE`) and `rejectedWindowPolicy: "CASH"`. `strategyOptimisation.getWalkForward` returns it with the run; the results view shows it above the windows table.
+
+**Benchmark.** `oos_summary.benchmark` is buy-and-hold of the same symbol over exactly the stitched OOS dates (first test start to last test end), run through runner-v3 with the strategy's own `execution` settings (fee model, slippage, fill policy) and the same starting capital, fully invested with no stops (`buyAndHoldDefinition`). It is `null` with `benchmarkReason` when that run fails. Runs stored before this change have no methodology or benchmark, and their summaries averaged only tested windows.
+
+No PBO is computed for walk-forward runs: only the selected parameter set is tested out of sample, and training phases of rolling windows overlap, so there is no common T x N return matrix to cross-validate. The trial count per window is reported instead.
 
 **Robustness** (`server/domain/strategy/robustness.ts`) scores a sweep; `strategyOptimisation.getSweep` returns it for a finished sweep (`server/modules/strategy-optimisation/sweep-robustness.ts`): neighbours differ in 1–2 parameters by at most 1.5 steps; a "fragile spike" (best Sharpe > 1 with neighbour mean below half of it) raises `OVERFIT_RISK`; overall score $= 0.40\,s_{neighbour} + 0.25\,s_{sample} + 0.20\,s_{drawdown} + 0.15\,s_{cost}$. Its inline comments cite thresholds (1.5, 100 trades) that differ from the code (1.0, 60 trades).
+
+**Multiple testing (sweeps).** A sweep's best result is a retrospective in-sample pick among all its parameter sets; `getSweep` returns `robustness.selection = { sample: "IN_SAMPLE", method: "RETROSPECTIVE_BEST_SHARPE", trials, pbo, pboReason }`. The probability of backtest overfitting uses combinatorially symmetric cross-validation (Bailey, Borwein, López de Prado and Zhu, 2015; `pboFromBlockStats`, `probabilityOfBacktestOverfitting`): the sweep job cuts each combination's per-bar returns into $S$ contiguous blocks (the same blocks for every combination) and stores $(n, \sum r, \sum r^2)$ per block as `result_summary.returnBlocks`. For each of the $\binom{S}{S/2}$ ways to pick half the blocks as in sample, the combination with the best in-sample Sharpe (mean / sample standard deviation of per-bar returns) is found; its out-of-sample rank $r$ among $N$ (1 = worst, ties averaged) gives $\omega = r/(N+1)$ and $\lambda = \ln(\omega/(1-\omega))$. PBO is the share of splits with $\lambda \le 0$; the result also has `trials` $N$, `blocks`, `splits` and the median $\lambda$. $S$ is the largest even number $\le 16$ that leaves 4 returns per block and keeps $\binom{S}{S/2} \cdot N \cdot S/2 \le 3{,}000{,}000$ block sums (so 16 up to 29 combinations, 14 up to 124, 12 up to 500), keeping the computation to tens of milliseconds per request. PBO is `null` with a reason for fewer than two combinations, too few bars, or results stored before `returnBlocks` existed.
+
+`getSweep` strips `returnBlocks` from the result rows it returns. The Strategy Lab sweep view does not display `selection` yet; it is available on the API.
 
 ## 6. Metrics
 

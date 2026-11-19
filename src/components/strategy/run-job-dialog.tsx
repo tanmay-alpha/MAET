@@ -37,7 +37,8 @@ const TITLES: Record<JobKind, { title: string; description: string }> = {
   sweep: { title: "Parameter sweep", description: "Backtest every combination of the parameter values below." },
   "walk-forward": {
     title: "Walk-forward test",
-    description: "Pick parameters on past windows, validate them, then test them on the following unseen window.",
+    description:
+      "Each window selects parameters on its training days, validates them on the next span, then tests them out of sample on the span after that. Windows step forward by the validation / test span.",
   },
 };
 
@@ -155,7 +156,7 @@ function RunJobForm({ kind, strategyId, version, onCreated }: Omit<Props, "kind"
     const validation = Number(validationDays);
     const windows = Number(minimumWindows);
     if (!Number.isInteger(training) || training < 30) return setFormError("Training window must be at least 30 days.");
-    if (!Number.isInteger(validation) || validation < 14) return setFormError("Test window must be at least 14 days.");
+    if (!Number.isInteger(validation) || validation < 14) return setFormError("Validation / test span must be at least 14 days.");
     if (!Number.isInteger(windows) || windows < 2 || windows > 20) return setFormError("Use between 2 and 20 windows.");
     createWalkForward.mutate(
       {
@@ -217,10 +218,10 @@ function RunJobForm({ kind, strategyId, version, onCreated }: Omit<Props, "kind"
                 <option value="ANCHORED">Anchored</option>
               </select>
             </Field>
-            <Field label="Training days">
+            <Field label="Training days (calendar)">
               <input type="number" min={30} value={trainingDays} onChange={(e) => setTrainingDays(e.target.value)} className={inputClass} />
             </Field>
-            <Field label="Test days">
+            <Field label="Validation / test days (each)">
               <input type="number" min={14} value={validationDays} onChange={(e) => setValidationDays(e.target.value)} className={inputClass} />
             </Field>
             <Field label="Min. windows">
