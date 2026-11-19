@@ -175,6 +175,7 @@ function LoginPage() {
           <button
             type="button"
             onClick={() => switchMode(signingIn ? "sign-up" : "sign-in")}
+            disabled={!hydrated}
             className="font-semibold text-primary hover:underline"
           >
             {signingIn ? "Create an account" : "Sign in"}

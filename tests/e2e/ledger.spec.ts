@@ -7,27 +7,28 @@ const FILL_1 = "00000000-0000-4000-a000-000000000001";
 const FILL_2 = "00000000-0000-4000-a000-000000000002";
 
 /**
- * A traded account and its ledger, newest first, as the engine writes them: a BUY (no
- * realised P&L, ₹23.45 charges), then a SELL realising ₹1,250.50 with ₹31.20 charges.
- * Both entries of a fill carry the cash after the fill as balance_after.
+ * A traded account and its ledger as listLedger returns it (created_at desc, then id desc):
+ * a BUY (no realised P&L, ₹23.45 charges), then a SELL realising ₹1,250.50 with ₹31.20
+ * charges. Each row's balance_after is the cash after it (realised P&L posts before the
+ * charges of its fill), and within each fill the uuid order puts the P&L row first.
  */
 function seedTradedAccount(api: MockApi) {
   api.account = { ...api.account, cashBalance: "1001195.8500", realisedPnl: "1250.5000", lastEquity: "1001195.8500" };
   api.ledger = [
-    paperLedgerRow({ id: "00000000-0000-4000-9000-000000000005", entryType: "TRADE_REALIZED_PNL", amount: 1250.5, balanceAfter: 1001195.85, createdAt: "2026-10-20T05:30:00.000Z", fillId: FILL_2, metadata: { side: "SELL", qty: 10, fillPrice: 2575.55 } }),
+    paperLedgerRow({ id: "00000000-0000-4000-9000-000000000005", entryType: "TRADE_REALIZED_PNL", amount: 1250.5, balanceAfter: 1001227.05, createdAt: "2026-10-20T05:30:00.000Z", fillId: FILL_2, metadata: { side: "SELL", qty: 10, fillPrice: 2575.55 } }),
     paperLedgerRow({ id: "00000000-0000-4000-9000-000000000004", entryType: "EXECUTION_FEE", amount: -31.2, balanceAfter: 1001195.85, createdAt: "2026-10-20T05:30:00.000Z", fillId: FILL_2 }),
-    paperLedgerRow({ id: "00000000-0000-4000-9000-000000000003", entryType: "TRADE_REALIZED_PNL", amount: 0, balanceAfter: 999976.55, createdAt: "2026-10-05T04:00:00.000Z", fillId: FILL_1, metadata: { side: "BUY", qty: 10, fillPrice: 2450.5 } }),
+    paperLedgerRow({ id: "00000000-0000-4000-9000-000000000003", entryType: "TRADE_REALIZED_PNL", amount: 0, balanceAfter: 1_000_000, createdAt: "2026-10-05T04:00:00.000Z", fillId: FILL_1, metadata: { side: "BUY", qty: 10, fillPrice: 2450.5 } }),
     paperLedgerRow({ id: "00000000-0000-4000-9000-000000000002", entryType: "EXECUTION_FEE", amount: -23.45, balanceAfter: 999976.55, createdAt: "2026-10-05T04:00:00.000Z", fillId: FILL_1 }),
     paperLedgerRow({ id: "00000000-0000-4000-9000-000000000001", entryType: "INITIAL_CASH", amount: 1_000_000, balanceAfter: 1_000_000, createdAt: "2026-10-01T04:00:00.000Z" }),
   ];
 }
 
-/** [type, amount, balance] of each ledger row, top to bottom. */
+/** [type, amount, balance] of each ledger row, top to bottom: newest posted first. */
 const EXPECTED_ROWS = [
-  ["Realised P&L", "+₹1,250.50", "₹10,01,195.85"],
-  ["Charges", "−₹31.20", "₹9,99,945.35"],
-  ["Realised P&L", "₹0.00", "₹9,99,976.55"],
+  ["Charges", "−₹31.20", "₹10,01,195.85"],
+  ["Realised P&L", "+₹1,250.50", "₹10,01,227.05"],
   ["Charges", "−₹23.45", "₹9,99,976.55"],
+  ["Realised P&L", "₹0.00", "₹10,00,000.00"],
   ["Opening cash", "+₹10,00,000.00", "₹10,00,000.00"],
 ];
 
@@ -50,7 +51,7 @@ test("ledger: /portfolio lists every cash movement with its running balance in I
   expect(rows.map(([, type, , amount, balance]) => [type, amount, balance])).toEqual(EXPECTED_ROWS);
   // Timestamps are shown in IST with the date: 20 Oct 2026 05:30 UTC is 11:00 IST.
   expect(rows[0]![0]).toMatch(/^20 Oct 2026, 11:00:00 IST$/);
-  expect(rows[0]![2]).toBe("Fill: SELL 10 @ ₹2,575.55");
+  expect(rows[1]![2]).toBe("Fill: SELL 10 @ ₹2,575.55");
 
   const reconciliation = page.getByRole("region", { name: "Cash and equity reconciliation" });
   await expect(reconciliation.getByRole("status")).toHaveText("Ledger reconciles: its 5 entries sum to the cash balance.");

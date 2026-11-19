@@ -29,18 +29,88 @@ export interface LedgerRow {
 }
 
 /**
+ * Rows that share a created_at (the two rows of a fill, or every row of a liquidation that
+ * closed several positions in one transaction) come back in uuid order, not posting order.
+ * This puts each such group newest posted first:
+ * - within a fill, the charges row is posted after the realised-P&L row (fill-writer);
+ * - between fills (or other rows), the posting order is the chain in which each one's cash
+ *   before is the previous one's cash after. A fill's cash after is its charges row's
+ *   balance_after, which holds both for rows that record a running balance per row and for
+ *   older rows that shared one balance_after per fill. Without a unique chain the server's
+ *   order is kept.
+ */
+export function inPostingOrder(entries: readonly PaperLedgerEntry[]): PaperLedgerEntry[] {
+  const ordered: PaperLedgerEntry[] = [];
+  for (let start = 0; start < entries.length; ) {
+    let end = start + 1;
+    while (end < entries.length && entries[end]!.createdAt === entries[start]!.createdAt) end++;
+    const units = postingUnits(entries.slice(start, end));
+    for (const unit of balanceChain(units) ?? units) ordered.push(...unit.rows);
+    start = end;
+  }
+  return ordered;
+}
+
+interface PostingUnit {
+  /** Newest posted first. */
+  rows: PaperLedgerEntry[];
+  /** Cash before and after the unit, in 1/10,000 rupee. */
+  before: number;
+  after: number;
+}
+
+/** One unit per fill (its rows, charges first) and per row without a fill, in first-seen order. */
+function postingUnits(group: PaperLedgerEntry[]): PostingUnit[] {
+  const byFill = new Map<string, PaperLedgerEntry[]>();
+  const units: PaperLedgerEntry[][] = [];
+  for (const entry of group) {
+    const existing = entry.fillId === null ? undefined : byFill.get(entry.fillId);
+    if (existing) {
+      existing.push(entry);
+      continue;
+    }
+    const rows = [entry];
+    units.push(rows);
+    if (entry.fillId !== null) byFill.set(entry.fillId, rows);
+  }
+  return units.map((rows) => {
+    const sorted = [...rows].sort((a, b) => Number(b.entryType === "EXECUTION_FEE") - Number(a.entryType === "EXECUTION_FEE"));
+    const after = toUnits(sorted[0]!.balanceAfter);
+    return { rows: sorted, after, before: after - sorted.reduce((sum, entry) => sum + toUnits(entry.amount), 0) };
+  });
+}
+
+/** The units newest posted first by their balance chain, or null when they do not form exactly one. */
+function balanceChain(units: PostingUnit[]): PostingUnit[] | null {
+  if (units.length === 1) return units;
+  // The last posted unit is the one no other unit continues from.
+  const last = units.filter((unit) => !units.some((other) => other !== unit && other.before === unit.after));
+  if (last.length !== 1) return null;
+  const chain = [last[0]!];
+  const remaining = new Set(units.filter((unit) => unit !== last[0]));
+  while (remaining.size > 0) {
+    const before = chain.at(-1)!.before;
+    const previous = [...remaining].filter((unit) => unit.after === before);
+    if (previous.length !== 1) return null;
+    chain.push(previous[0]!);
+    remaining.delete(previous[0]!);
+  }
+  return chain;
+}
+
+/**
  * Running cash balance after each entry, for entries ordered newest first (the order
- * listLedger pages in). The newest entry's balance_after is the cash once it posted; each
- * older row's balance is the newer row's balance minus the newer row's amount. The two
- * entries of one fill (realised P&L and charges) share one balance_after, so walking the
- * amounts — not reading balance_after — gives each row its own balance. Holds for any
- * newest-first prefix, so older pages can be appended without recomputing loaded rows.
+ * listLedger pages in), newest posted first. The newest entry's balance_after is the cash
+ * once it posted; each older row's balance is the newer row's balance minus the newer row's
+ * amount, which also gives older rows that shared one balance_after per fill their own
+ * balance. Holds for any newest-first prefix, so older pages can be appended.
  */
 export function withRunningBalances(entries: readonly PaperLedgerEntry[]): LedgerRow[] {
-  const first = entries[0];
+  const ordered = inPostingOrder(entries);
+  const first = ordered[0];
   if (!first) return [];
   let balance = toUnits(first.balanceAfter);
-  return entries.map((entry) => {
+  return ordered.map((entry) => {
     const amount = toUnits(entry.amount);
     const row = { entry, amount: toRupees(amount), runningBalance: toRupees(balance) };
     balance -= amount;

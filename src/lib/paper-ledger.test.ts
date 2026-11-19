@@ -18,60 +18,101 @@ function prng(seed: number) {
   };
 }
 
-function entry(input: Pick<PaperLedgerEntry, "id" | "entryType" | "amount" | "balanceAfter">): PaperLedgerEntry {
+function entry(
+  input: Pick<PaperLedgerEntry, "id" | "entryType" | "amount" | "balanceAfter"> & Partial<Pick<PaperLedgerEntry, "fillId" | "createdAt">>,
+): PaperLedgerEntry {
   return {
-    ...input,
     userId: "u",
     generation: 1,
     fillId: null,
     currency: "INR",
     sourceType: input.entryType === "INITIAL_CASH" ? "ACCOUNT_OPEN" : "FILL",
-    sourceId: input.id,
+    sourceId: input.fillId ?? input.id,
     metadata: {},
     createdAt: "2026-11-06T10:15:00.000Z",
+    ...input,
   };
 }
 
 /** Exact paise-of-paise arithmetic for the expected values: amounts are numeric(18,4). */
 const units = (value: string) => Math.round(Number(value) * 10_000);
+const rupees = (tenThousandths: number) => (tenThousandths / 10_000).toFixed(4);
+
+function shuffle<T>(items: T[], random: () => number): T[] {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index--) {
+    const other = Math.floor(random() * (index + 1));
+    [copy[index], copy[other]] = [copy[other]!, copy[index]!];
+  }
+  return copy;
+}
 
 /**
- * A ledger the way the engine writes one, newest first: INITIAL_CASH, then per fill a
- * realised-P&L and a charges entry that share one balance_after (cash after both), the
- * pair in either order (equal created_at, ordered by random uuid).
+ * A ledger the way the engine writes one: INITIAL_CASH, then per fill a realised-P&L row and
+ * then a charges row with one created_at; a margin liquidation writes several fills with one
+ * created_at. `legacy` rows share the fill's final cash as balance_after (engine before
+ * running balances); otherwise each row records the cash after itself. Returns the true
+ * posting history newest first, and what listLedger returns: newest created_at first with
+ * ties in uuid (here: random) order.
  */
-function generateLedger(random: () => number) {
+function generateLedger(random: () => number, legacy = random() < 0.5) {
   const opening = 100_000 + Math.floor(random() * 5_000_000);
   let cash = opening * 10_000;
   let realized = 0;
   let fees = 0;
-  const oldestFirst: PaperLedgerEntry[] = [
-    entry({ id: "open", entryType: "INITIAL_CASH", amount: opening.toFixed(4), balanceAfter: opening.toFixed(4) }),
+  let time = Date.parse("2026-10-01T04:00:00.000Z");
+  const history: Array<{ entry: PaperLedgerEntry; balance: number }> = [
+    { entry: entry({ id: "open", entryType: "INITIAL_CASH", amount: rupees(cash), balanceAfter: rupees(cash), createdAt: new Date(time).toISOString() }), balance: cash },
   ];
   const fills = Math.floor(random() * 40);
   for (let fill = 0; fill < fills; fill++) {
+    // A liquidation posts its fills in one transaction, so they share a created_at.
+    if (random() < 0.7) time += 60_000 + Math.floor(random() * 86_400_000);
+    const createdAt = new Date(time).toISOString();
     const pnl = random() < 0.4 ? 0 : Math.round((random() - 0.45) * 50_000_000); // in 1/10,000 ₹
-    const fee = Math.round(random() * 2_000_000);
-    cash += pnl - fee;
+    const fee = 1 + Math.round(random() * 2_000_000);
+    const afterPnl = cash + pnl;
+    cash = afterPnl - fee;
     realized += pnl;
     fees += fee;
-    const balanceAfter = (cash / 10_000).toFixed(4);
-    const pair = [
-      entry({ id: `pnl-${fill}`, entryType: "TRADE_REALIZED_PNL", amount: (pnl / 10_000).toFixed(4), balanceAfter }),
-      entry({ id: `fee-${fill}`, entryType: "EXECUTION_FEE", amount: (-fee / 10_000).toFixed(4), balanceAfter }),
-    ];
-    oldestFirst.push(...(random() < 0.5 ? pair : pair.reverse()));
+    const fillId = `fill-${fill}`;
+    history.push(
+      { entry: entry({ id: `pnl-${fill}`, fillId, createdAt, entryType: "TRADE_REALIZED_PNL", amount: rupees(pnl), balanceAfter: rupees(legacy ? cash : afterPnl) }), balance: afterPnl },
+      { entry: entry({ id: `fee-${fill}`, fillId, createdAt, entryType: "EXECUTION_FEE", amount: rupees(-fee), balanceAfter: rupees(cash) }), balance: cash },
+    );
   }
-  return { newestFirst: oldestFirst.reverse(), opening, cash: cash / 10_000, realized: realized / 10_000, fees: fees / 10_000 };
+  const posted = history.reverse();
+  const groups = new Map<string, PaperLedgerEntry[]>();
+  for (const { entry: row } of posted) groups.set(row.createdAt, [...(groups.get(row.createdAt) ?? []), row]);
+  const served = [...groups.values()].flatMap((group) => shuffle(group, random));
+  return { posted, served, opening, cash: cash / 10_000, realized: realized / 10_000, fees: fees / 10_000 };
 }
 
 describe("withRunningBalances", () => {
-  test("every row's balance is the next older row's balance plus its own amount, ending at zero before opening cash", () => {
+  test("shows rows in posting order with the cash after each, whatever order equal timestamps arrive in", () => {
     const random = prng(20261110);
-    for (let run = 0; run < 300; run++) {
-      const { newestFirst, cash } = generateLedger(random);
-      const rows = withRunningBalances(newestFirst);
+    for (let run = 0; run < 400; run++) {
+      const { posted, served } = generateLedger(random);
+      const rows = withRunningBalances(served);
+      expect(rows.map((row) => [row.entry.id, units(String(row.runningBalance))])).toEqual(
+        posted.map(({ entry: row, balance }) => [row.id, balance]),
+      );
+    }
+  });
 
+  test("for running-balance rows, every displayed balance is the one the server recorded", () => {
+    const random = prng(7);
+    for (let run = 0; run < 200; run++) {
+      const rows = withRunningBalances(generateLedger(random, false).served);
+      for (const row of rows) expect(units(String(row.runningBalance))).toBe(units(row.entry.balanceAfter));
+    }
+  });
+
+  test("each row's balance is the next older row's plus its own amount, down to the opening cash", () => {
+    const random = prng(31);
+    for (let run = 0; run < 200; run++) {
+      const { served, cash } = generateLedger(random);
+      const rows = withRunningBalances(served);
       expect(rows[0]!.runningBalance).toBe(cash);
       for (let index = 0; index + 1 < rows.length; index++) {
         expect(units(String(rows[index]!.runningBalance)) - units(String(rows[index]!.amount))).toBe(
@@ -84,31 +125,34 @@ describe("withRunningBalances", () => {
     }
   });
 
-  test("the later entry of each fill shows the balance the server recorded for the fill", () => {
-    const random = prng(7);
+  test("the rows of a page keep their balances when older pages are appended", () => {
+    const random = prng(99);
     for (let run = 0; run < 200; run++) {
-      const rows = withRunningBalances(generateLedger(random).newestFirst);
-      // Newest first, the first row of each fill's pair is the one posted last.
-      for (let index = 0; index < rows.length; index++) {
-        const previous = rows[index - 1];
-        const isLaterOfPair = rows[index]!.entry.entryType !== "INITIAL_CASH" &&
-          (!previous || previous.entry.id.slice(4) !== rows[index]!.entry.id.slice(4));
-        if (isLaterOfPair) {
-          expect(units(String(rows[index]!.runningBalance))).toBe(units(rows[index]!.entry.balanceAfter));
-        }
-      }
+      const { served } = generateLedger(random);
+      const full = withRunningBalances(served);
+      // A page boundary never splits a created_at group in this check: listLedger pages by
+      // (created_at, id), so a group split across pages is only ordered once both are loaded.
+      const boundaries = served.flatMap((row, index) => (index > 0 && served[index - 1]!.createdAt !== row.createdAt ? [index] : []));
+      if (boundaries.length === 0) continue;
+      const pageSize = boundaries[Math.floor(random() * boundaries.length)]!;
+      const page = withRunningBalances(served.slice(0, pageSize));
+      expect(page.map((row) => [row.entry.id, row.runningBalance])).toEqual(
+        full.slice(0, pageSize).map((row) => [row.entry.id, row.runningBalance]),
+      );
     }
   });
 
-  test("a newest-first page shows the same balances as the full ledger (older pages can be appended)", () => {
-    const random = prng(99);
-    for (let run = 0; run < 200; run++) {
-      const { newestFirst } = generateLedger(random);
-      const full = withRunningBalances(newestFirst);
-      const pageSize = 1 + Math.floor(random() * newestFirst.length);
-      const page = withRunningBalances(newestFirst.slice(0, pageSize));
-      expect(page.map((row) => row.runningBalance)).toEqual(full.slice(0, pageSize).map((row) => row.runningBalance));
-    }
+  test("legacy fill rows sharing one balance_after still get their own balances, charges listed last-posted", () => {
+    const rows = withRunningBalances([
+      entry({ id: "b", fillId: "f", entryType: "TRADE_REALIZED_PNL", amount: "0.0000", balanceAfter: "999976.5500" }),
+      entry({ id: "a", fillId: "f", entryType: "EXECUTION_FEE", amount: "-23.4500", balanceAfter: "999976.5500" }),
+      entry({ id: "o", entryType: "INITIAL_CASH", amount: "1000000.0000", balanceAfter: "1000000.0000", createdAt: "2026-10-01T04:00:00.000Z" }),
+    ]);
+    expect(rows.map((row) => [row.entry.id, row.runningBalance])).toEqual([
+      ["a", 999_976.55],
+      ["b", 1_000_000],
+      ["o", 1_000_000],
+    ]);
   });
 
   test("is empty for an empty ledger", () => {
@@ -121,7 +165,7 @@ describe("ledgerTotals", () => {
     const random = prng(42);
     for (let run = 0; run < 300; run++) {
       const ledger = generateLedger(random);
-      const totals = ledgerTotals(ledger.newestFirst);
+      const totals = ledgerTotals(ledger.served);
       expect(totals.openingCash).toBe(ledger.opening);
       expect(totals.realizedPnl).toBe(ledger.realized);
       expect(totals.charges).toBe(ledger.fees);
