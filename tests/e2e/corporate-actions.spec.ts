@@ -31,7 +31,11 @@ async function tooltipsAcross(page: Page, chart: Locator): Promise<string[]> {
 
 test("stock page: dividend and split markers with hover details, a toggle and the corporate actions table", async ({
   page,
+  browserName,
 }) => {
+  // Two hover sweeps of ~150 mouse moves each: WebKit dispatches input slowly enough to need
+  // ~35 s (measured), past the 30 s default. The assertions are the same on every browser.
+  test.slow(browserName === "webkit");
   await page.goto("/stock/RELIANCE");
 
   const table = page.getByRole("region", { name: "Corporate actions" });
