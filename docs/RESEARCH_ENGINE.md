@@ -6,7 +6,7 @@ How MAET backtests a strategy and evaluates it out of sample, as implemented at 
 
 | Entry point | Path | Engine call | Results |
 |---|---|---|---|
-| `backtestV2.run` (tRPC, synchronous) | `server/api/trpc/routers/backtest-v2.ts` | Preset (SMA, EMA, RSI, MACD, Donchian, Bollinger) → `presetToV3Definition` (`server/domain/backtest/preset-to-v3-adapter.ts`) → `runBacktestV3`, inside the web request | `backtest_runs` |
+| `backtestV2.run` (tRPC, synchronous) | `server/api/trpc/routers/backtest-v2.ts` | Preset (SMA, EMA, RSI, MACD, Donchian, Bollinger) → `presetToV3Definition` (`server/domain/backtest/preset-to-v3-adapter.ts`) → `runBacktestV3`, inside the web request | `backtest_runs` (newest 50 per user, equity curve downsampled to about 1,000 points; the response carries every bar; `server/modules/backtest/run-store.ts`) |
 | `strategyBacktests.createJob` (tRPC, queued) | `server/api/trpc/routers/strategy-backtests.ts`, `server/modules/strategy-jobs/repository.ts` | `server/workers/backtest-worker.ts` claims the job and calls `runBacktestV3` | `strategy_backtest_trades`, `strategy_equity_points`, `strategy_performance_snapshots` |
 | `strategyOptimisation` sweeps | `server/api/trpc/routers/strategy-optimisation.ts` | `server/workers/sweep-worker.ts`: one `runBacktestV3` per parameter combination | `strategy_sweep_results` |
 | `strategyOptimisation` walk-forward | same router | `server/workers/walk-forward-worker.ts` → `runWalkForwardAnalysis` (`server/domain/strategy/walk-forward.ts`) | `strategy_walk_forward_runs`, `strategy_walk_forward_windows` |

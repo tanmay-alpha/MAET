@@ -203,6 +203,15 @@ export class PaperTradingTickProcessor {
 
     return receipts;
   }
+
+  /**
+   * Advances the volume baseline without matching (no database access): callers that skip
+   * processTick for symbols without working orders keep "traded since the previous tick"
+   * measured from the last tick seen, not from the last tick that was matched.
+   */
+  observeTick(tick: Tick): void {
+    this.volumes.traded(`${tick.exchange}:${tick.symbol}`, tick.volume, tick.ts);
+  }
 }
 
 export const paperTradingTickProcessor = new PaperTradingTickProcessor();
