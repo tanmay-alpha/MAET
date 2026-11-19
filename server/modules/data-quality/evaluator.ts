@@ -233,8 +233,8 @@ export function detectPipelineGaps(probe: StructuralProbe): PipelineGap[] {
     gaps.push({
       id: "price_daily_not_consumed",
       severity: behind ? "critical" : "warning",
-      title: "Ingestion engine writes price_daily; consumers read candles",
-      detail: `price_daily holds daily bars up to ${priceDaily.latestDate ?? "an unknown date"}, but charts, the screener and backtests read the candles table (latest 1d bar ${dailyCandles.latestDate ?? "none"}). Nothing copies price_daily into candles${behind ? ", so newer bars are invisible to users" : ""}.`,
+      title: "Legacy price_daily rows are not read by the app",
+      detail: `price_daily holds daily bars up to ${priceDaily.latestDate ?? "an unknown date"}. The ingestion pipeline now writes candles, and charts, the screener and backtests read only candles (latest 1d bar ${dailyCandles.latestDate ?? "none"}). These rows are left over from the earlier pipeline${behind ? ", and bars newer than the latest candle are invisible to users until candles are backfilled" : ""}.`,
     });
   }
   if (fundamentals.financialRows > 0 && (fundamentals.missingFilingDate > 0 || fundamentals.missingAvailableFrom > 0)) {

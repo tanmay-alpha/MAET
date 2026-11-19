@@ -181,7 +181,7 @@ export async function loadFundamentalsAggregates(
     FROM companies co
     JOIN fundamentals f ON f.company_id = co.id
     WHERE co.symbol = ANY(${symbols as string[]}::text[])
-      AND f.period_type <> 'market'
+      AND f.period_type IN ('quarterly', 'annual')
     GROUP BY co.symbol
   `;
   return rows.map((row) => ({
