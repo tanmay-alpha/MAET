@@ -45,19 +45,42 @@ afterAll(() => {
   mock.module("../../../data/drizzle/client", () => realDrizzleClient);
 });
 
+/** The equity curve a captured insert would store, checked rather than cast. */
+function storedEquityCurveOf(row: Record<string, unknown> | undefined): Array<{ timestamp: number; equity: number }> {
+  const result = row?.result;
+  if (!result || typeof result !== "object" || !("equityCurve" in result) || !Array.isArray(result.equityCurve)) {
+    throw new Error("insert carried no equity curve");
+  }
+  return result.equityCurve;
+}
+
+/** Rows saveBacktestRun inserted, and the statements it ran, through the mocked transaction. */
+const insertedRuns: Array<Record<string, unknown>> = [];
+const txStatements: SQL[] = [];
+const insertBuilder = {
+  values: (row: Record<string, unknown>) => {
+    insertedRuns.push(row);
+    return { returning: () => Promise.resolve([{ id: "mock-run-id-123", name: "preset-name" }]) };
+  },
+};
+
 mock.module("../../../data/drizzle/client", () => ({
   db: {
     select: () => ({
       from: () => createMockQuery(mockSelections.shift() ?? []),
     }),
-    insert: () => ({
-      values: () => ({
-        returning: () => Promise.resolve([{ id: "mock-run-id-123", name: "preset-name" }]),
-      }),
-    }),
+    insert: () => insertBuilder,
     delete: () => ({
       where: () => Promise.resolve(),
     }),
+    transaction: <T>(fn: (tx: unknown) => Promise<T>) =>
+      fn({
+        execute: (statement: SQL) => {
+          txStatements.push(statement);
+          return Promise.resolve([]);
+        },
+        insert: () => insertBuilder,
+      }),
   },
 }));
 
@@ -254,5 +277,51 @@ describe("backtestV2Router TRPC tests", () => {
     const query = new PgDialect().sqlToQuery(lastCapturedWhere[0] as SQL);
     expect(query.params).toEqual(["test-user-1", ...runIds]);
     expect(query.sql).not.toContain("::uuid[]");
+  });
+
+  it("11. Stores a downsampled equity curve, keeps first and last points, and returns every bar", async () => {
+    const bars = 2_345;
+    const longCandles = Array.from({ length: bars }, (_, i) => {
+      const close = 1000 + 60 * Math.sin(i / 9) + i * 0.1;
+      return {
+        id: `c-${i}`,
+        symbol: "INFY",
+        timeframe: "1d",
+        ts: new Date(Date.UTC(2015, 0, 1) + i * 86400000),
+        open: close.toFixed(2),
+        high: (close + 5).toFixed(2),
+        low: (close - 5).toFixed(2),
+        close: close.toFixed(2),
+        volume: 10000,
+        source: "NSE",
+      };
+    });
+    mockSelections.push(longCandles);
+    insertedRuns.length = 0;
+    txStatements.length = 0;
+
+    const res = await caller.run(baseInput);
+
+    expect(res.result.equityCurve).toHaveLength(bars);
+    expect(insertedRuns).toHaveLength(1);
+    const stored = storedEquityCurveOf(insertedRuns[0]);
+    expect(stored.length).toBeGreaterThan(1);
+    expect(stored.length).toBeLessThanOrEqual(1_001);
+    expect(stored[0]).toEqual(res.result.equityCurve[0]);
+    expect(stored.at(-1)).toEqual(res.result.equityCurve.at(-1));
+    // Every stored point is a real bar of the run, in order.
+    const timestamps = res.result.equityCurve.map((point) => point.timestamp);
+    let cursor = -1;
+    for (const point of stored) {
+      const next = timestamps.indexOf(point.timestamp, cursor + 1);
+      expect(next).toBeGreaterThan(cursor);
+      cursor = next;
+    }
+    // Insert and retention share the user's advisory-locked transaction.
+    const [lock, retention] = txStatements.map((statement) => new PgDialect().sqlToQuery(statement));
+    expect(lock.sql).toContain("pg_advisory_xact_lock");
+    expect(lock.params).toEqual(["backtest-runs:test-user-1"]);
+    expect(retention.sql).toContain("DELETE FROM public.backtest_runs");
+    expect(retention.params).toContain(50);
   });
 });

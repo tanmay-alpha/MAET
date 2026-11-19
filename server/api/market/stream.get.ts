@@ -3,7 +3,7 @@ import { getClientIp } from "../../infra/client-ip";
 import { bus } from "../../infra/bus";
 import { buildQuotesPayload, loadQuotes } from "../../domain/market/quote-service";
 import { toMarketQuote } from "../../domain/market/quote-quality";
-import { MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol";
+import { INDEX_SYMBOLS, lookupSymbol, MARKET_SYMBOL_PATTERN } from "../../domain/market/symbol";
 import { subscribeMarketSymbols } from "../../orchestrator";
 import { MAX_STREAM_SYMBOLS, type Tick } from "@shared/types";
 
@@ -20,8 +20,19 @@ export function getActiveStreamConnections(): number {
   return activeConnections;
 }
 
+const INDEX_NAMES = new Set(INDEX_SYMBOLS.map((index) => index.symbol));
+
+/**
+ * Indices and symbols in the market symbol master (the bundled NIFTY 50 plus, once the
+ * Angel One instrument master has loaded, every NSE equity). Only these can stream: an
+ * anonymous client must not put arbitrary strings into the feed registry or the snapshot.
+ */
+function isCatalogued(symbol: string): boolean {
+  return INDEX_NAMES.has(symbol) || lookupSymbol("NSE", symbol) !== undefined || lookupSymbol("BSE", symbol) !== undefined;
+}
+
 export default defineEventHandler(async (event) => {
-  const symbols = [...new Set(
+  const requested = [...new Set(
     String(getQuery(event).symbols ?? "")
       .split(",")
       .map((symbol) => symbol.trim().toUpperCase())
@@ -29,11 +40,17 @@ export default defineEventHandler(async (event) => {
   )];
   // The browser shares one stream across all mounted components, so this cap
   // is the union-sized MAX_STREAM_SYMBOLS, not the 50-symbol REST quotes cap.
-  if (symbols.length === 0 || symbols.length > MAX_STREAM_SYMBOLS) {
+  if (requested.length === 0 || requested.length > MAX_STREAM_SYMBOLS) {
     throw createError({ statusCode: 400, statusMessage: `Request between 1 and ${MAX_STREAM_SYMBOLS} symbols` });
   }
-  if (symbols.some((symbol) => !MARKET_SYMBOL_PATTERN.test(symbol))) {
+  if (requested.some((symbol) => !MARKET_SYMBOL_PATTERN.test(symbol))) {
     throw createError({ statusCode: 400, statusMessage: "Invalid symbol" });
+  }
+  // Unknown symbols are dropped rather than failing the stream: the browser streams the
+  // union of every mounted component, and its REST poll still covers anything dropped.
+  const symbols = requested.filter(isCatalogued);
+  if (symbols.length === 0) {
+    throw createError({ statusCode: 400, statusMessage: "No known symbols" });
   }
 
   if (activeConnections >= MAX_CONNECTIONS) {
