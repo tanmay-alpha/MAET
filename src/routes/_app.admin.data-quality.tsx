@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
@@ -7,7 +7,8 @@ import { apiUrl } from "@/lib/api-url";
 import { fetchMarketQuotes } from "@/lib/market-api";
 import { quoteSourceLabel } from "@/lib/quote-source";
 import { useSignedIn } from "@/hooks/use-signed-in";
-import { DataQualityOverviewComponent } from "@/components/data-quality/data-quality-overview";
+import { IngestionBatches } from "@/components/data-quality/ingestion-batches";
+import { ReliabilityPanel } from "@/components/data-quality/reliability-panel";
 
 export const Route = createFileRoute("/_app/admin/data-quality")({
   head: () => ({ meta: [{ title: "Data status — MAET" }] }),
@@ -19,15 +20,6 @@ type HealthReport = {
   status: "ok" | "degraded";
   version?: string;
   checks: { database: boolean; redis: boolean; orchestrator: boolean; marketData: boolean };
-};
-
-type DataAnomaly = {
-  id: string;
-  checkType: string;
-  dataType: string;
-  severity: string;
-  description: string;
-  isResolved: boolean;
 };
 
 const PROBE_SYMBOLS = ["RELIANCE", "HDFCBANK", "TCS"];
@@ -61,6 +53,11 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
   );
 }
 
+function isAccessDenied(error: unknown): boolean {
+  return error instanceof AuthenticationError ||
+    (error instanceof TrpcRequestError && (error.code === "FORBIDDEN" || error.code === "UNAUTHORIZED"));
+}
+
 function DataStatusPage() {
   const queryClient = useQueryClient();
   const signedIn = useSignedIn();
@@ -78,31 +75,20 @@ function DataStatusPage() {
     refetchInterval: 30_000,
   });
 
-  const overviewQuery = useQuery({
+  const reliabilityQuery = useQuery({
+    queryKey: ["dataQuality", "getReliability"],
+    queryFn: () => trpc.dataQuality.getReliability.query(),
+    retry: false,
+    enabled: signedIn,
+  });
+  const batchesQuery = useQuery({
     queryKey: ["dataQuality", "getOverview"],
     queryFn: () => trpc.dataQuality.getOverview.query(),
     retry: false,
     enabled: signedIn,
   });
-  const coverageQuery = useQuery({
-    queryKey: ["dataQuality", "getCoverage"],
-    queryFn: () => trpc.dataQuality.getCoverage.query(),
-    retry: false,
-    enabled: signedIn,
-  });
-  const anomaliesQuery = useQuery({
-    queryKey: ["dataQuality", "listAnomalies"],
-    queryFn: () => trpc.dataQuality.listAnomalies.query(),
-    retry: false,
-    enabled: signedIn,
-  });
-
   const retryMutation = useMutation({
     mutationFn: (batchId: string) => trpc.dataQuality.retryBatch.mutate({ batchId }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dataQuality"] }),
-  });
-  const resolveMutation = useMutation({
-    mutationFn: (anomalyId: string) => trpc.dataQuality.resolveAnomaly.mutate({ anomalyId }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dataQuality"] }),
   });
 
@@ -110,11 +96,7 @@ function DataStatusPage() {
   const checks = health?.checks;
   const quotes = quotesQuery.data;
   const quotedCount = quotes?.quotes.length ?? 0;
-  const anomalies: DataAnomaly[] = anomaliesQuery.data?.items ?? [];
   const checkedAt = healthQuery.dataUpdatedAt || quotesQuery.dataUpdatedAt;
-  const adminError = overviewQuery.error;
-  const notAdmin = adminError instanceof AuthenticationError ||
-    (adminError instanceof TrpcRequestError && (adminError.code === "FORBIDDEN" || adminError.code === "UNAUTHORIZED"));
 
   return (
     <div className="h-full overflow-auto">
@@ -136,6 +118,11 @@ function DataStatusPage() {
             <RefreshCw className={`h-3.5 w-3.5 ${healthQuery.isFetching || quotesQuery.isFetching ? "animate-spin" : ""}`} />
           </button>
         </header>
+
+        <p className="pt-3 text-xs text-muted-foreground">
+          Per-symbol freshness, gaps and invalid bars:{" "}
+          <Link to="/data-quality" className="text-primary hover:underline">Market data quality</Link>.
+        </p>
 
         <Section
           title="Backend"
@@ -185,50 +172,31 @@ function DataStatusPage() {
           </dl>
         </Section>
 
-        <Section title="Ingestion audits">
+        <Section title="Reliability">
           {!signedIn ? (
-            <p className="text-xs text-muted-foreground">Ingestion audits and anomalies are visible to admin accounts.</p>
-          ) : overviewQuery.isError ? (
+            <p className="text-xs text-muted-foreground">Job queues, ingestion runs and dead-letter stats are visible to admin accounts.</p>
+          ) : reliabilityQuery.isError ? (
             <p className="text-xs text-muted-foreground">
-              {notAdmin ? "Ingestion audits are visible to admin accounts only." : "Ingestion audits are unavailable right now."}
+              {isAccessDenied(reliabilityQuery.error) ? "Reliability details are visible to admin accounts only." : "Reliability details are unavailable right now."}
             </p>
-          ) : overviewQuery.isLoading ? (
+          ) : !reliabilityQuery.data ? (
             <p className="text-xs text-muted-foreground">Loading…</p>
           ) : (
-            <div className="space-y-4">
-              <DataQualityOverviewComponent
-                overview={overviewQuery.data ?? null}
-                coverage={coverageQuery.data ?? null}
-                onRetryBatch={(batchId) => retryMutation.mutate(batchId)}
-              />
-              <div>
-                <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">Open anomalies</h3>
-                {anomalies.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">None.</p>
-                ) : (
-                  <ul className="text-xs">
-                    {anomalies.map((anomaly) => (
-                      <li key={anomaly.id} className="flex items-start justify-between gap-3 border-b border-border/60 py-1.5 last:border-0">
-                        <div>
-                          <span className="font-medium">{anomaly.checkType}</span>
-                          <span className="ml-2 text-muted-foreground">{anomaly.dataType} · {anomaly.severity}</span>
-                          <p className="text-muted-foreground">{anomaly.description}</p>
-                        </div>
-                        {!anomaly.isResolved && (
-                          <button
-                            type="button"
-                            onClick={() => resolveMutation.mutate(anomaly.id)}
-                            className="shrink-0 rounded border border-border px-2 py-0.5 hover:bg-accent"
-                          >
-                            Resolve
-                          </button>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
+            <ReliabilityPanel report={reliabilityQuery.data} />
+          )}
+        </Section>
+
+        <Section title="Ingestion batches">
+          {!signedIn ? (
+            <p className="text-xs text-muted-foreground">Ingestion batches are visible to admin accounts.</p>
+          ) : batchesQuery.isError ? (
+            <p className="text-xs text-muted-foreground">
+              {isAccessDenied(batchesQuery.error) ? "Ingestion batches are visible to admin accounts only." : "Ingestion batches are unavailable right now."}
+            </p>
+          ) : !batchesQuery.data ? (
+            <p className="text-xs text-muted-foreground">Loading…</p>
+          ) : (
+            <IngestionBatches batches={batchesQuery.data.recentBatches} onRetryBatch={(batchId) => retryMutation.mutate(batchId)} />
           )}
         </Section>
       </div>
