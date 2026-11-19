@@ -472,7 +472,7 @@ export class MockApi {
     const cors = {
       "access-control-allow-origin": "*",
       "access-control-allow-headers": "apikey, authorization, content-type",
-      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
     };
     if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
     this.authRequests.push({ method: request.method(), url, headers: request.headers(), body });
@@ -519,6 +519,12 @@ export class MockApi {
         confirmation_sent_at: FIXED_NOW,
         identities: [],
       });
+    }
+    if (url.pathname === "/auth/v1/user") {
+      // GoTrue vouches only for tokens it issued.
+      return request.headers().authorization === `Bearer ${ACCESS_TOKEN}`
+        ? reply(200, { id: USER_ID, aud: "authenticated", role: "authenticated", email: E2E_EMAIL })
+        : error(401, "bad_jwt", "invalid JWT");
     }
     if (url.pathname === "/auth/v1/logout") {
       if (request.headers().authorization !== `Bearer ${ACCESS_TOKEN}`) {

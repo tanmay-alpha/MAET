@@ -155,7 +155,8 @@ function sessionKeys(storage: Storage): string[] {
 
 /**
  * Forgets every stored session in this browser and tells every watcher. `reason: "expired"`
- * records that the session ended because GoTrue refused to refresh it.
+ * records that the session ended because GoTrue refused to refresh it; without it (an
+ * explicit sign-out) any such earlier record is dropped.
  */
 export function clearStoredSession(reason?: "expired"): void {
   const storage = localStore();
@@ -163,6 +164,7 @@ export function clearStoredSession(reason?: "expired"): void {
   sessionGeneration++;
   for (const key of sessionKeys(storage)) storage.removeItem(key);
   if (reason === "expired") window.sessionStorage?.setItem(SESSION_EXPIRED_FLAG, "1");
+  else window.sessionStorage?.removeItem(SESSION_EXPIRED_FLAG);
   notifySessionChange();
 }
 
