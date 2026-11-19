@@ -1,4 +1,4 @@
-import { SYNTHETIC_QUOTE_LABEL, isDemoModeActive } from "@/components/demo/demo-mode";
+import { SYNTHETIC_QUOTE_LABEL, isDemoBuild } from "@/components/demo/demo-mode";
 
 const SOURCE_NAMES: Record<string, string> = {
   angelone: "Angel One",
@@ -21,11 +21,11 @@ export function sourceName(source: string): string {
 
 /**
  * "Angel One · live", "Yahoo · delayed", "Yahoo · delayed · market closed": from the API's own
- * `source` field. Simulated quotes say "synthetic", and a demo deployment labels every quote
- * synthetic: its data is generated, whatever provider name a response carries.
+ * `source` field. Simulated quotes say "synthetic", and a demo build (VITE_MAET_DEMO_MODE=1)
+ * labels every quote synthetic: its data is generated, whatever provider name a response carries.
  */
 export function quoteSourceLabel(source: string, delayed: boolean, marketPhase?: string): string {
-  if (isDemoModeActive()) return SYNTHETIC_QUOTE_LABEL;
+  if (isDemoBuild()) return SYNTHETIC_QUOTE_LABEL;
   const parts = [sourceName(source), source === "simulated" ? "synthetic" : delayed ? "delayed" : "live"];
   if (marketPhase && CLOSED_PHASES[marketPhase]) parts.push("market closed");
   return parts.join(" · ");

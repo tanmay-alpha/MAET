@@ -1,17 +1,12 @@
 /**
- * Demo mode as reported by the server (`capabilities.get` → `demoMode`, set by MAET_DEMO_MODE=1).
- * Kept outside React so plain label helpers (quoteSourceLabel) can read it; DemoModeGate sets it
- * before re-rendering the app with the answer.
+ * Demo mode is a build-time flag: a demo deployment builds the frontend with VITE_MAET_DEMO_MODE=1
+ * (and runs the server with MAET_DEMO_MODE=1, which `capabilities.get` reports as `demoMode` for
+ * API consumers). Vite inlines the value, so ordinary builds make no request and render nothing
+ * extra. Read per call so tests can set the variable.
  */
-let demoModeActive = false;
+export function isDemoBuild(): boolean {
+  return import.meta.env.VITE_MAET_DEMO_MODE === "1";
+}
 
 export const DEMO_BANNER_TEXT = "Demo — synthetic data, not market data";
 export const SYNTHETIC_QUOTE_LABEL = "Synthetic demo data · not market data";
-
-export function isDemoModeActive(): boolean {
-  return demoModeActive;
-}
-
-export function setDemoModeActive(active: boolean): void {
-  demoModeActive = active;
-}
