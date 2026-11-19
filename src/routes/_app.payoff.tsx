@@ -15,11 +15,9 @@ import { PayoffSummary } from "@/components/payoff/payoff-summary";
 import { ScenarioGrid } from "@/components/payoff/scenario-grid";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
-  MAX_LEGS,
   draftFromSearch,
   istIsoDate,
   loadStoredSearch,
-  parsePayoffSearch,
   searchFromDraft,
   storeSearch,
   validateLab,
@@ -27,6 +25,7 @@ import {
   type LabDraft,
   type LegDraft,
 } from "@/lib/payoff-lab-state";
+import { MAX_LEGS, parsePayoffSearch } from "@/lib/payoff-search";
 
 export const Route = createFileRoute("/_app/payoff")({
   validateSearch: parsePayoffSearch,

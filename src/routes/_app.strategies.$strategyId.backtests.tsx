@@ -17,19 +17,16 @@ import {
   describeJobError,
   isActiveJob,
   jobPollInterval,
-  JOB_KIND_FOR_TAB,
-  parseResearchSearch,
-  RESEARCH_TAB_FOR_KIND,
   sweepProgress,
   walkForwardError,
   walkForwardViewResult,
   type BacktestJobView,
   type JobKind,
-  type ResearchTab,
   type SweepResultView,
   type SweepView,
   type WalkForwardRunView,
 } from "@/lib/strategy-jobs";
+import { JOB_KIND_FOR_TAB, parseResearchSearch, RESEARCH_TAB_FOR_KIND, type ResearchTab } from "@/lib/strategy-research-search";
 
 export const Route = createFileRoute("/_app/strategies/$strategyId/backtests")({
   validateSearch: parseResearchSearch,

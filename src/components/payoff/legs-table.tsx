@@ -1,6 +1,7 @@
 import { Plus, X } from "lucide-react";
 import { STRATEGY_TEMPLATES, type Instrument, type StrategyTemplate } from "@shared/domain/options/payoff";
-import { MAX_LEGS, type LegDraft, type LegErrors } from "@/lib/payoff-lab-state";
+import type { LegDraft, LegErrors } from "@/lib/payoff-lab-state";
+import { MAX_LEGS } from "@/lib/payoff-search";
 import { cn } from "@/lib/utils";
 import { INPUT_CLASS, decimalDraft } from "./field";
 
