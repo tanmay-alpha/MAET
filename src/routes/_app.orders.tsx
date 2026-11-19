@@ -164,7 +164,8 @@ function OrdersPage() {
               />
             </div>
 
-            <div className="overflow-x-auto rounded border border-border bg-panel">
+            {/* relative: the sr-only header label is absolutely positioned and would otherwise widen the page. */}
+            <div className="relative overflow-x-auto rounded border border-border bg-panel">
               <table className="w-full min-w-[46rem] text-left font-mono text-xs tabular-nums">
                 <thead>
                   <tr className="border-b border-border text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -232,7 +233,7 @@ function OrdersPage() {
             </div>
           </>
         ) : (
-          <div className="overflow-x-auto rounded border border-border bg-panel">
+          <div className="relative overflow-x-auto rounded border border-border bg-panel">
             <table className="w-full min-w-[42rem] text-left font-mono text-xs tabular-nums">
               <thead>
                 <tr className="border-b border-border text-[10px] uppercase tracking-wide text-muted-foreground">
