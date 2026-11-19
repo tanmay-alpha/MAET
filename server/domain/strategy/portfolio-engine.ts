@@ -14,9 +14,10 @@
  *    Beta, Alpha, Tracking Error, Correlation against benchmark.
  */
 
+import { createHash } from "crypto";
 import type { Candle } from "@shared/types";
-import type { StrategyDefinition } from "../../../shared/strategy/ast";
-import { ExecutionModel, type ExecutionContext } from "./execution-model";
+import { canonicalJson, type StrategyDefinition } from "../../../shared/strategy/ast";
+import { ExecutionModel, type ExecutionContext, type FillRejectionReason, type SingleFillResult } from "./execution-model";
 import { adjustCandles, type CorporateAction, type PriceAdjustmentSeries } from "../data/corporate-actions";
 import { IndicatorStateCache } from "./indicator-state";
 import { evaluateRuleGroup } from "./ast-evaluator";
@@ -127,9 +128,25 @@ export interface PortfolioBacktestResult {
   trades: PortfolioTradeRecord[];
   attribution: PortfolioAttribution;
   excludedSignalsCount: number;
+  /** excludedSignalsCount broken down by the reason each entry signal was not filled. */
+  excludedSignalsByReason: Partial<Record<ExcludedSignalReason, number>>;
   warnings: string[];
+  /** SHA-256 (hex) of the canonical configuration and input data. */
   reproducibilityHash: string;
 }
+
+/** Why an entry signal was not filled. */
+export type ExcludedSignalReason =
+  | "MAX_OPEN_POSITIONS"
+  | "NON_POSITIVE_EQUITY"
+  | "SECTOR_EXPOSURE_CAP"
+  | "GROSS_EXPOSURE_CAP"
+  | "INSUFFICIENT_CAPITAL"
+  | "ZERO_SIZE"
+  | FillRejectionReason;
+
+/** Smallest exposure budget (INR) an entry order is placed with. */
+const MIN_ORDER_CAPITAL = 100;
 
 // ============================================================
 // Ranking Helper
@@ -175,6 +192,16 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
     maximumSectorExposurePercent: input.constraints?.maximumSectorExposurePercent ?? 40,
     cashReservePercent: input.constraints?.cashReservePercent ?? 0,
   };
+  const maxPos = constraints.maximumOpenPositions ?? 5;
+  const maxPosPct = constraints.maximumPositionPercent ?? (100 / maxPos);
+  const maxSectorPct = constraints.maximumSectorExposurePercent ?? 40;
+  const maxGrossExpPct = constraints.maximumGrossExposurePercent ?? 100;
+  const cashReservePct = constraints.cashReservePercent ?? 0;
+  const stopPct = risk.stopLossPercent;
+  const targetPct = risk.takeProfitPercent;
+  const direction: "long" | "short" = definition.direction === "SHORT_ONLY" ? "short" : "long";
+  const entryGroup = definition.entry ?? definition.entryRules;
+  const exitGroup = definition.exit ?? definition.exitRules;
 
   const rankingMethod = input.rankingMethod ?? "SYMBOL_ASCENDING";
   const rebalanceSchedule = input.rebalanceSchedule ?? "SIGNAL_DRIVEN";
@@ -226,6 +253,11 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
   const drawdownCurve: { timestamp: number; drawdown: number }[] = [];
   let peakEquity = capital;
   let excludedSignalsCount = 0;
+  const excludedSignalsByReason: Partial<Record<ExcludedSignalReason, number>> = {};
+  function excludeSignal(reason: ExcludedSignalReason) {
+    excludedSignalsCount++;
+    excludedSignalsByReason[reason] = (excludedSignalsByReason[reason] ?? 0) + 1;
+  }
   let cumulativeTurnover = 0;
   let totalGrossExposureSum = 0;
 
@@ -281,10 +313,11 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
     return { totalEquity, unrealizedPnl, grossExposure };
   }
 
-  function markToClose(pos: PortfolioPosition, close: number) {
-    pos.currentPrice = close;
-    pos.notional = pos.quantity * close;
-    pos.unrealizedPnl = (pos.direction === "long" ? 1 : -1) * pos.quantity * (close - pos.entryPrice);
+  /** Values a position at `price`: the latest price known at the point of the bar being simulated. */
+  function markPosition(pos: PortfolioPosition, price: number) {
+    pos.currentPrice = price;
+    pos.notional = pos.quantity * price;
+    pos.unrealizedPnl = (pos.direction === "long" ? 1 : -1) * pos.quantity * (price - pos.entryPrice);
   }
 
   /**
@@ -378,27 +411,32 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
     const ts = timeline[t];
     const isLastBar = t === timeline.length - 1;
 
-    // A. Update current price and check stop / target exits for active positions
-    // Symbols closed on this bar cannot reopen on it: under NEXT_BAR_OPEN the open has passed.
+    // A. Exits that happen before entries are decided, and the marks entries are sized from.
+    // Under NEXT_BAR_OPEN entries are decided at bar i's open, when only its open is known: held
+    // positions are marked to the open and only exits that fill at the open happen here (a rule exit
+    // decided on bar i-1, or a stop/target the bar opens beyond). Stops and targets touched later in
+    // the bar and the close mark come after the entries (step D), so neither the cash they free nor
+    // the prices they reveal can fund or size an entry at the open. Under ON_CLOSE entries fill at
+    // the close of a complete bar: positions are marked to the close and every exit happens first.
+    // Symbols closed on this bar cannot reopen on it.
     const closedThisBar = new Set<string>();
     for (const [sym, pos] of positions.entries()) {
       const candleInfo = candleByTsMap[sym]?.get(ts);
       if (!candleInfo) continue; // No tick on this bar for this symbol
 
       const bar = candleInfo.candle;
-      markToClose(pos, bar.close);
+      markPosition(pos, onClose ? bar.close : bar.open);
 
       // Events in bar order: a NEXT_BAR_OPEN exit rule (decided on bar i-1) fills at the open,
       // before stops and targets; an ON_CLOSE exit rule fills at the close, after them.
       const signalIdx = onClose ? candleInfo.index : candleInfo.index - 1;
-      const exitGroup = definition.exit ?? (definition as any).exitRules;
       const ruleExit = signalIdx >= 0 && evaluateRuleGroup(exitGroup, cacheMap[sym], signalIdx).matched
         ? { price: onClose ? bar.close : bar.open, reason: "exit_rule" }
         : null;
-      const exit = (!onClose && ruleExit)
-        || stopOrTargetExit(pos, bar)
-        || ruleExit
-        || (isLastBar ? { price: bar.close, reason: "end_of_period" } : null);
+      const protective = stopOrTargetExit(pos, bar);
+      const exit = onClose
+        ? protective || ruleExit || (isLastBar ? { price: bar.close, reason: "end_of_period" } : null)
+        : ruleExit || (protective && protective.price === bar.open ? protective : null);
 
       if (exit && exit.price > 0) {
         closePosition(pos, bar, candleInfo.index, exit.price, exit.reason, ts);
@@ -427,7 +465,6 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
 
         const cache = cacheMap[sym];
         const signalIdx = onClose ? candleInfo.index : candleInfo.index - 1;
-        const entryGroup = definition.entry ?? (definition as any).entryRules;
         const evalRes = evaluateRuleGroup(entryGroup, cache, signalIdx);
 
         if (evalRes.matched) {
@@ -456,52 +493,48 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
 
       // Rank candidate signals deterministically
       const ranked = rankCandidates(candidates, rankingMethod);
-      const direction: "long" | "short" = definition.direction === "SHORT_ONLY" ? "short" : "long";
 
-      // C. Allocate capital and execute entries for top candidates respecting portfolio constraints
+      // C. Allocate capital and execute entries in rank order. Every limit is checked against the
+      // portfolio as it would stand after the order: current exposure at the step-A marks plus the
+      // order's fill exposure. An order that would breach the position cap, the sector cap, the
+      // gross exposure cap or the free cash is resized down to fit, and rejected if the remaining
+      // budget is at most MIN_ORDER_CAPITAL or rounds to zero shares. Caps bind at entry only: later
+      // price moves can drift exposure above a cap; the engine does not trim positions.
       for (const cand of ranked) {
-        const { totalEquity, grossExposure } = calculateCurrentEquity();
-
-        // 1. Max open positions cap
-        const maxPos = constraints.maximumOpenPositions ?? 5;
         if (positions.size >= maxPos) {
-          excludedSignalsCount++;
+          excludeSignal("MAX_OPEN_POSITIONS");
           continue;
         }
 
-        // 2. Sector exposure cap
+        const { totalEquity, grossExposure } = calculateCurrentEquity();
+        if (!(totalEquity > 0)) {
+          excludeSignal("NON_POSITIVE_EQUITY");
+          continue;
+        }
+
         const sector = symbolSectors[cand.symbol] ?? "GENERAL";
-        const maxSectorPct = constraints.maximumSectorExposurePercent ?? 40;
-        const sectorPositions = Array.from(positions.values()).filter((p) => p.sector === sector);
-        const sectorExposure = sectorPositions.reduce((s, p) => s + p.notional, 0);
-        if (totalEquity > 0 && (sectorExposure / totalEquity) * 100 >= maxSectorPct) {
-          excludedSignalsCount++;
-          continue;
+        let sectorExposure = 0;
+        for (const p of positions.values()) {
+          if (p.sector === sector) sectorExposure += p.notional;
         }
 
-        // 3. Max position size and Cash Reserve constraints
-        const maxPosPct = constraints.maximumPositionPercent ?? (100 / maxPos);
-        const maxAllocatableCapital = totalEquity * (maxPosPct / 100);
-        const cashReservePct = constraints.cashReservePercent ?? 0;
         const minimumCashToKeep = totalEquity * (cashReservePct / 100);
         const availableCashForTrade = Math.max(0, cash - minimumCashToKeep);
-
-        const capitalForTrade = Math.min(maxAllocatableCapital, availableCashForTrade);
-        if (capitalForTrade <= 100) {
-          excludedSignalsCount++;
+        // Sizing budget: the per-position cap, limited by free cash.
+        const capitalForTrade = Math.min(totalEquity * (maxPosPct / 100), availableCashForTrade);
+        const sectorHeadroom = totalEquity * (maxSectorPct / 100) - sectorExposure;
+        const grossHeadroom = totalEquity * (maxGrossExpPct / 100) - grossExposure;
+        // Most exposure this order may add without breaching any cap.
+        const exposureCap = Math.min(capitalForTrade, sectorHeadroom, grossHeadroom);
+        if (exposureCap <= MIN_ORDER_CAPITAL) {
+          excludeSignal(
+            exposureCap === sectorHeadroom ? "SECTOR_EXPOSURE_CAP"
+              : exposureCap === grossHeadroom ? "GROSS_EXPOSURE_CAP"
+                : "INSUFFICIENT_CAPITAL",
+          );
           continue;
         }
 
-        // Gross exposure check
-        const maxGrossExpPct = constraints.maximumGrossExposurePercent ?? 100;
-        const projectedGrossExposure = grossExposure + capitalForTrade;
-        if (totalEquity > 0 && (projectedGrossExposure / totalEquity) * 100 > maxGrossExpPct) {
-          excludedSignalsCount++;
-          continue;
-        }
-
-        // Position sizing
-        const stopPct = risk.stopLossPercent;
         const sizing = calculatePositionSize(risk, {
           currentEquity: capitalForTrade,
           entryPrice: cand.fillPrice,
@@ -509,9 +542,9 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
           stopPrice: stopPct ? cand.fillPrice * (direction === "long" ? 1 - stopPct / 100 : 1 + stopPct / 100) : undefined,
         });
 
-        const targetQty = sizing.quantity;
-        if (targetQty <= 0) {
-          excludedSignalsCount++;
+        const targetQty = Math.min(sizing.quantity, Math.floor(exposureCap / cand.fillPrice));
+        if (!(targetQty > 0)) {
+          excludeSignal("ZERO_SIZE");
           continue;
         }
 
@@ -526,17 +559,24 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
           config: execConfig,
           barIndex: cand.barIndex,
         };
+        // The order's exposure is valued at the higher of its fill and reference price, so it stays
+        // within the cap whether the position is valued at the fill or at the market.
+        const fillExposure = (f: SingleFillResult) => f.fillQuantity * Math.max(f.effectivePrice, f.referencePrice);
         let entryFill = execModel.executeBarFill(entryCtx, targetQty);
         let cashNeeded = entryFill.notional + entryFill.costs.brokerageFees + entryFill.costs.taxesAndCharges;
-        if (entryFill.fillQuantity > 0 && cashNeeded > availableCashForTrade) {
-          // Fill-price frictions and charges pushed the order past the free cash: shrink it to fit.
-          const fittedQty = Math.floor((entryFill.fillQuantity * availableCashForTrade) / cashNeeded);
-          entryFill = execModel.executeBarFill(entryCtx, fittedQty);
+        const overshoot = Math.max(fillExposure(entryFill) / exposureCap, cashNeeded / availableCashForTrade);
+        if (entryFill.fillQuantity > 0 && overshoot > 1) {
+          // Fill-price frictions and charges pushed the order past a cap or the free cash: shrink it.
+          entryFill = execModel.executeBarFill(entryCtx, Math.floor(entryFill.fillQuantity / overshoot));
           cashNeeded = entryFill.notional + entryFill.costs.brokerageFees + entryFill.costs.taxesAndCharges;
         }
 
-        if (entryFill.fillQuantity <= 0 || cashNeeded > availableCashForTrade) {
-          excludedSignalsCount++;
+        if (entryFill.fillQuantity <= 0) {
+          excludeSignal(entryFill.rejectionReason ?? "ZERO_SIZE");
+          continue;
+        }
+        if (fillExposure(entryFill) > exposureCap || cashNeeded > availableCashForTrade) {
+          excludeSignal("INSUFFICIENT_CAPITAL");
           continue;
         }
 
@@ -544,7 +584,6 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
         cumulativeTurnover += entryFill.notional;
 
         const fill = entryFill.effectivePrice;
-        const targetPct = risk.takeProfitPercent;
         const position: PortfolioPosition = {
           symbol: cand.symbol,
           direction,
@@ -565,18 +604,29 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
           entryImpactCost: entryFill.costs.marketImpactCost,
         };
         positions.set(cand.symbol, position);
+        // Value the new position like the held ones: at the price the entry was decided on.
+        markPosition(position, cand.fillPrice);
+      }
+    }
 
-        // After an open fill the rest of the entry bar trades: stops and targets can trigger on it.
-        const sameBarExit = onClose ? null : stopOrTargetExit(position, cand.bar);
-        if (sameBarExit) {
-          closePosition(position, cand.bar, cand.barIndex, sameBarExit.price, sameBarExit.reason, ts);
+    // D. Rest of the bar under NEXT_BAR_OPEN, after the entries decided at the open: stops and
+    // targets touched intrabar (on held and just-opened positions alike), the end-of-period
+    // close-out, then the close mark. Under ON_CLOSE step A already did all of this.
+    if (!onClose) {
+      for (const [sym, pos] of positions.entries()) {
+        const candleInfo = candleByTsMap[sym]?.get(ts);
+        if (!candleInfo) continue;
+        const bar = candleInfo.candle;
+        const exit = stopOrTargetExit(pos, bar) || (isLastBar ? { price: bar.close, reason: "end_of_period" } : null);
+        if (exit && exit.price > 0) {
+          closePosition(pos, bar, candleInfo.index, exit.price, exit.reason, ts);
         } else {
-          markToClose(position, cand.bar.close);
+          markPosition(pos, bar.close);
         }
       }
     }
 
-    // D. Mark-to-market continuous equity recording
+    // E. Mark-to-market continuous equity recording
     const { totalEquity, grossExposure } = calculateCurrentEquity();
     peakEquity = Math.max(peakEquity, totalEquity);
     const dd = peakEquity > 0 ? (peakEquity - totalEquity) / peakEquity : 0;
@@ -614,9 +664,22 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
   const costDragPercent = grossPnl > 0 ? (totalTransactionCosts / grossPnl) * 100 : 0;
   const avgExposure = timeline.length > 0 ? totalGrossExposureSum / timeline.length : 0;
 
-  // Reproducibility hash based on all symbol candles and timestamps
-  const canonicalData = symbols.map((s) => `${s}:${adjustedCandles[s]?.length ?? 0}`).join(",");
-  const reproducibilityHash = `${timeline.length}:${canonicalData}:${capital}`;
+  // Reproducibility hash: SHA-256 over the canonical JSON (keys sorted at every depth) of the
+  // resolved configuration and every input series, candles ordered by timestamp. Any change to a
+  // candle, an action, the definition or a constraint changes it; input ordering does not.
+  const byTs = (a: Candle, b: Candle) => new Date(a.ts).getTime() - new Date(b.ts).getTime();
+  const reproducibilityHash = createHash("sha256").update(canonicalJson({
+    definition,
+    initialCapital: capital,
+    constraints,
+    rankingMethod,
+    rebalanceSchedule,
+    priceSeries,
+    symbolSectors,
+    corporateActions: input.corporateActions ?? {},
+    symbolCandles: Object.fromEntries(symbols.map((s) => [s, [...input.symbolCandles[s]].sort(byTs)])),
+    benchmarkCandles: [...(input.benchmarkCandles ?? [])].sort(byTs),
+  })).digest("hex");
 
   return {
     initialCapital: capital,
@@ -647,6 +710,7 @@ export function runPortfolioBacktestEngine(input: PortfolioEngineInput): Portfol
       pnlByReason,
     },
     excludedSignalsCount,
+    excludedSignalsByReason,
     warnings,
     reproducibilityHash,
   };
