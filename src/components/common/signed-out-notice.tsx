@@ -1,5 +1,6 @@
 import type { PaperAccountStatus } from "@/lib/paper-account-status";
-import { PAPER_ACCOUNT_UNAVAILABLE_MESSAGE, SESSION_EXPIRED_MESSAGE } from "./sign-in-required";
+import { PAPER_ACCOUNT_UNAVAILABLE_MESSAGE } from "./sign-in-required";
+import { SignInLink } from "./sign-in-link";
 
 const NOTICE_CLASS = "rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400";
 
@@ -7,7 +8,7 @@ const NOTICE_CLASS = "rounded border border-amber-500/30 bg-amber-500/10 px-3 py
 export function SignedOutNotice({ feature }: { feature: string }) {
   return (
     <p role="status" className={NOTICE_CLASS}>
-      {feature} require a signed-in account. Sign-in is coming soon.
+      {feature} require a signed-in account. <SignInLink />
     </p>
   );
 }
@@ -26,7 +27,12 @@ export function PaperAccountNotice({
   className?: string;
 }) {
   if (status === "unauthorized") {
-    return <p role="status" className={`${NOTICE_CLASS} ${className}`}>{SESSION_EXPIRED_MESSAGE}</p>;
+    // Reads as SESSION_EXPIRED_MESSAGE, with "Sign in again" as the link.
+    return (
+      <p role="status" className={`${NOTICE_CLASS} ${className}`}>
+        Your session has expired. <SignInLink label="Sign in again" />.
+      </p>
+    );
   }
   if (status !== "unavailable") return null;
   return (

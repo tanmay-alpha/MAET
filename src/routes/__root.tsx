@@ -13,6 +13,7 @@ import { useEffect, type ReactNode } from "react";
 import appCss from "../styles.css?url";
 import { API_BASE_URL } from "@/lib/api-url";
 import { DemoModeBanner } from "@/components/demo/demo-mode-banner";
+import { clearQueriesOnSessionChange } from "@/lib/auth-session";
 
 function NotFoundComponent() {
   return (
@@ -101,6 +102,9 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  // Sign-out (here or in another tab) or a different user must not leave the last
+  // account's cached data on screen.
+  useEffect(() => clearQueriesOnSessionChange(queryClient), [queryClient]);
   return (
     <QueryClientProvider client={queryClient}>
       <DemoModeBanner />

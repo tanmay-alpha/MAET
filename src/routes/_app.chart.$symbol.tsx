@@ -9,7 +9,7 @@ import { useCorporateActions } from "@/hooks/use-corporate-actions";
 import { usePaperAccount } from "@/hooks/use-paper-account";
 import { extractPaperOverlay } from "@/components/trading/chart-paper-overlay";
 import { mapBacktestTradesToMarkers } from "@/components/trading/chart-trade-markers";
-import { useChartLayout, useChartShortcuts, useFullscreen } from "@/hooks/use-chart-layout";
+import { isShortcutExemptEvent, useChartLayout, useChartShortcuts, useFullscreen } from "@/hooks/use-chart-layout";
 import { CandlestickChart } from "@/components/trading/candlestick-chart";
 import { ChartToolbar, CorporateActionsStatus } from "@/components/trading/chart-toolbar";
 import { placeCorporateActions } from "@/components/trading/chart-corporate-actions";
@@ -152,7 +152,7 @@ function ChartPage() {
   // Period switching shortcuts
   useEffect(() => {
     const handlePeriodKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (isShortcutExemptEvent(e)) return;
       if (e.altKey) {
         const tfKeys = Object.keys(TIMEFRAMES);
         const currentIdx = tfKeys.indexOf(selectedTF);
@@ -436,6 +436,7 @@ function ChartPage() {
               <div className="p-2 lg:p-3">
                 <CandlestickChart
                   data={candles}
+                  ariaLabel={`${symbol} ${selectedChartType === "candles" ? "candlestick" : selectedChartType} chart, ${tf.label} of ${tf.timeframe} bars`}
                   height={420}
                   seriesType={selectedChartType === "candles" ? "candlestick" : selectedChartType}
                   chartState={chartState}

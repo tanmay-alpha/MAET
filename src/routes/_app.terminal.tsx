@@ -330,6 +330,7 @@ function Terminal() {
             {candles.length > 1 ? (
               <CandlestickChart
                 data={candles}
+                ariaLabel={`${active} ${chartType === "line" ? "line" : "candlestick"} chart, ${intervalConfig.timeframe} bars over ${intervalConfig.range}`}
                 height={350}
                 seriesType={chartType === "line" ? "line" : "candlestick"}
                 indicators={indicators}

@@ -1,5 +1,5 @@
 /**
- * CandlestickChart & CandlestickChartSimple
+ * CandlestickChart
  *
  * Backwards-compatible wrapper around MAET's high-performance
  * LightweightChart engine. Integrates canonical indicator calculations,
@@ -7,7 +7,6 @@
  * canvas-rendered interactions.
  */
 
-import React from "react";
 import {
   LightweightChart,
   type ChartCandle,
@@ -30,6 +29,8 @@ export type {
 
 export interface CandlestickChartProps {
   data: Candle[];
+  /** What the chart shows (symbol, period, bar size), read out in place of the canvas. */
+  ariaLabel: string;
   height?: number;
   chartState?: ChartState;
   onChartStateChange?: (state: ChartState) => void;
@@ -44,6 +45,7 @@ export interface CandlestickChartProps {
 
 export function CandlestickChart({
   data,
+  ariaLabel,
   height = 420,
   chartState,
   onChartStateChange,
@@ -58,6 +60,7 @@ export function CandlestickChart({
   return (
     <LightweightChart
       data={data}
+      ariaLabel={ariaLabel}
       height={height}
       seriesType={seriesType}
       chartState={chartState}
@@ -67,28 +70,6 @@ export function CandlestickChart({
       trades={trades}
       paperOverlay={paperOverlay ?? undefined}
       corporateActions={corporateActions}
-      className={className}
-    />
-  );
-}
-
-/**
- * Simplified candlestick chart without drawing controls or complex panels.
- */
-export function CandlestickChartSimple({
-  data,
-  height = 420,
-  className = "",
-}: {
-  data: Candle[];
-  height?: number;
-  className?: string;
-}) {
-  return (
-    <LightweightChart
-      data={data}
-      height={height}
-      indicators={{ volume: true, sma: false, ema: false, rsi: false, macd: false }}
       className={className}
     />
   );
