@@ -28,21 +28,30 @@ export function normalizeIp(raw: string): string {
 }
 
 /**
+ * Proxies in front of this server that each append one X-Forwarded-For entry
+ * (`TRUSTED_PROXY_HOPS`, default 0: X-Forwarded-For is ignored).
+ */
+const TRUSTED_PROXY_HOPS = Math.max(0, Number.parseInt(process.env.TRUSTED_PROXY_HOPS ?? "0", 10) || 0);
+
+/**
  * Client IP for per-client limits (rate limiting, connection caps).
  *
- * Order: `cf-connecting-ip`, `true-client-ip` (set by the edge, overwriting
- * client values), then the LEFTMOST X-Forwarded-For entry, then the socket.
- * Render appends its own internal proxy hop on the right of X-Forwarded-For, so
- * the rightmost entry is shared by every client. The leftmost entry is
- * client-controlled and therefore spoofable: callers must not treat it as an
- * identity, only as a best-effort bucket key alongside per-user limits.
+ * Order: `cf-connecting-ip`, then `true-client-ip`, then the X-Forwarded-For
+ * entry appended by the outermost of `trustedProxyHops` trusted proxies, then
+ * the socket. On Render, Cloudflare fronts every service, overwrites both
+ * headers with the address it accepted the connection from, and its chain is
+ * `<client>, <Cloudflare edge>, <Render proxy>`: anything a client sends lands
+ * to the left of those entries. A client-supplied (leftmost) X-Forwarded-For
+ * value is therefore never used; with fewer entries than trusted hops the
+ * chain is not the expected one and the socket address is used instead.
  */
-export function getClientIp(event: H3Event): string {
+export function getClientIp(event: H3Event, trustedProxyHops = TRUSTED_PROXY_HOPS): string {
   const header = (name: string) => getRequestHeader(event, name)?.trim() || undefined;
+  const forwarded = trustedProxyHops > 0 ? header("x-forwarded-for")?.split(",") : undefined;
   const ip =
     header("cf-connecting-ip") ??
     header("true-client-ip") ??
-    (header("x-forwarded-for")?.split(",")[0]?.trim() || undefined) ??
+    (forwarded && forwarded.length >= trustedProxyHops ? forwarded[forwarded.length - trustedProxyHops].trim() || undefined : undefined) ??
     event.node.req.socket?.remoteAddress;
   return ip ? normalizeIp(ip) : "unknown";
 }

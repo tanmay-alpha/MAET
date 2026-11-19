@@ -20,11 +20,99 @@ import type { Candle } from "@shared/types";
 import { strategyDeploymentsRouter, createStrategyDeploymentsRouter } from "../../api/trpc/routers/strategy-deployments";
 import { getSqlClient } from "../../data/drizzle/client";
 
+const DAY_MS = 86_400_000;
+const FIRST_BAR_MS = Date.parse("2026-06-01T00:00:00Z");
+
+function dailyBars(symbol: string, closes: number[]): Candle[] {
+  return closes.map((close, i) => ({
+    symbol, tf: "1d", ts: new Date(FIRST_BAR_MS + i * DAY_MS).toISOString(),
+    open: close, high: close, low: close, close, volume: 1000, source: "test",
+  }));
+}
+
+/** One minute after bar i closed: fresh data. */
+const afterBarClose = (i: number) => () => new Date(FIRST_BAR_MS + (i + 1) * DAY_MS + 60_000);
+
+function closeRule(operator: string, value: number) {
+  return {
+    kind: "GROUP", id: `g-${operator}-${value}`, combinator: "AND",
+    children: [{
+      kind: "CONDITION", id: `c-${operator}-${value}`, operator,
+      left: { kind: "PRICE", field: "CLOSE" },
+      right: { kind: "CONSTANT", value },
+    }],
+  };
+}
+
+/** Live NSE quotes per symbol (a symbol without a price has no quote) shared by the evaluator and the paper service. */
+function paperFixture() {
+  const prices: Record<string, number> = {};
+  const quoteLoader = async (exchange: "NSE" | "BSE", symbol: string) => prices[symbol] === undefined ? null : ({
+    exchange, symbol, price: prices[symbol], volume: 100, ts: new Date().toISOString(), source: "angelone", quality: "live",
+  });
+  const paperService = createPaperTradingService({
+    database: getDb(),
+    marketPhase: () => "OPEN",
+    quoteLoader,
+    symbolExists: async () => true,
+  });
+  return { prices, quoteLoader, paperService };
+}
+
+async function seedStrategyUser(
+  user: string,
+  versions: Array<{ id: string; definition: unknown }>,
+  deployments: Array<{ id: string; versionId: string; mode: string; universe: string; riskLimits: unknown }>,
+) {
+  const sql = getSqlClient();
+  const strategyId = crypto.randomUUID();
+  await sql`INSERT INTO auth.users (id) VALUES (${user}) ON CONFLICT DO NOTHING`;
+  await sql`INSERT INTO public.users (id, email) VALUES (${user}, ${`seed-${user}@example.com`})`;
+  await sql`
+    INSERT INTO public.strategy_definitions (id, user_id, name, current_draft)
+    VALUES (${strategyId}, ${user}, 'Seeded Strat', '{"name":"Seeded"}')
+  `;
+  for (const [index, version] of versions.entries()) {
+    await sql`
+      INSERT INTO public.strategy_versions (id, strategy_id, user_id, version_number, definition, definition_hash, engine_version, indicator_version)
+      VALUES (${version.id}, ${strategyId}, ${user}, ${index + 1}, ${JSON.stringify(version.definition)}::jsonb, ${`hash-${version.id}`}, '3.0.0', '1.0.0')
+    `;
+  }
+  for (const deployment of deployments) {
+    await sql`
+      INSERT INTO public.strategy_deployments (id, user_id, strategy_version_id, mode, universe, timeframe, status, risk_limits)
+      VALUES (${deployment.id}, ${user}, ${deployment.versionId}, ${deployment.mode}, ${deployment.universe}, '1d', 'ACTIVE',
+              ${JSON.stringify(deployment.riskLimits)}::jsonb)
+    `;
+  }
+  await sql`INSERT INTO public.paper_accounts (user_id, cash_balance, initial_cash) VALUES (${user}, 100000, 100000)`;
+}
+
+async function removeUser(user: string) {
+  // Paper fills and ledger entries are append-only outside an explicit history-mutation scope.
+  await getSqlClient().begin(async (tx) => {
+    await tx`SELECT set_config('maet.allow_history_mutation', 'true', true)`;
+    await tx`DELETE FROM public.users WHERE id = ${user}`;
+    await tx`DELETE FROM auth.users WHERE id = ${user}`;
+  });
+}
+
+async function withAutomation<T>(run: () => Promise<T>): Promise<T> {
+  const automation = process.env.GLOBAL_PAPER_AUTOMATION_ENABLED;
+  process.env.GLOBAL_PAPER_AUTOMATION_ENABLED = "true";
+  try {
+    return await run();
+  } finally {
+    if (automation === undefined) delete process.env.GLOBAL_PAPER_AUTOMATION_ENABLED;
+    else process.env.GLOBAL_PAPER_AUTOMATION_ENABLED = automation;
+  }
+}
+
 describe("Strategy Deployments Test Suite", () => {
-  it("1. Generates deterministic signal fingerprint", () => {
-    const fp1 = computeSignalFingerprint("dep-1", "ver-1", "RELIANCE", "1d", "2026-06-01T00:00:00Z", "ENTRY");
-    const fp2 = computeSignalFingerprint("dep-1", "ver-1", "RELIANCE", "1d", "2026-06-01T00:00:00Z", "ENTRY");
-    const fp3 = computeSignalFingerprint("dep-1", "ver-1", "RELIANCE", "1d", "2026-06-01T00:00:00Z", "EXIT");
+  it("1. Generates a deterministic per-bar claim fingerprint", () => {
+    const fp1 = computeSignalFingerprint("dep-1", "ver-1", "RELIANCE", "1d", "2026-06-01T00:00:00Z");
+    const fp2 = computeSignalFingerprint("dep-1", "ver-1", "RELIANCE", "1d", "2026-06-01T00:00:00Z");
+    const fp3 = computeSignalFingerprint("dep-1", "ver-1", "RELIANCE", "1d", "2026-06-02T00:00:00Z");
 
     expect(fp1).toBe(fp2);
     expect(fp1).not.toBe(fp3);
@@ -156,24 +244,17 @@ describe("Strategy Deployments Test Suite", () => {
       symbol: "TCS", tf: "1d", ts: new Date(firstBarMs + i * dayMs).toISOString(),
       open: close, high: close, low: close, close, volume: 1000, source: "test",
     }));
-    let quotePrice = 0;
-    const paperService = createPaperTradingService({
-      database: getDb(),
-      marketPhase: () => "OPEN",
-      quoteLoader: async (exchange: "NSE" | "BSE", symbol: string) => ({
-        exchange, symbol, price: quotePrice, volume: 100, ts: new Date().toISOString(), source: "angelone", quality: "live",
-      }),
-      symbolExists: async () => true,
-    });
+    const { prices, quoteLoader, paperService } = paperFixture();
     const context = (id: string, versionId: string): DeploymentEvaluationContext => ({
       id, userId: user, strategyVersionId: versionId, mode: "AUTO_PAPER", universe: "TCS", timeframe: "1d",
       status: "ACTIVE", riskLimits: { maximumOpenPositions: 1, maximumDailyLossPercent: 5 },
       userKillSwitch: false, deploymentKillSwitch: false,
     });
     const evaluate = (deployment: DeploymentEvaluationContext, i: number) => {
-      quotePrice = closes[i];
+      prices.TCS = closes[i];
       return evaluateDeploymentForBar(deployment, bars[i], bars.slice(0, i + 1), {
         paperService,
+        quoteLoader,
         // One minute after the bar closed: fresh data.
         now: () => new Date(firstBarMs + (i + 1) * dayMs + 60_000),
       });
@@ -290,27 +371,22 @@ describe("Strategy Deployments Test Suite", () => {
       symbol: "TCS", tf: "1d", ts: new Date(firstBarMs + i * dayMs).toISOString(),
       open: close, high: close, low: close, close, volume: 1000, source: "test",
     }));
-    let quotePrice = 0;
-    const paperService = createPaperTradingService({
-      database: getDb(),
-      marketPhase: () => "OPEN",
-      quoteLoader: async (exchange: "NSE" | "BSE", symbol: string) => ({
-        exchange, symbol, price: quotePrice, volume: 100, ts: new Date().toISOString(), source: "angelone", quality: "live",
-      }),
-      symbolExists: async () => true,
-    });
+    const { prices, quoteLoader, paperService } = paperFixture();
+    // RELIANCE trades at its entry price: no unrealised P&L to trip the loss limits.
+    prices.RELIANCE = 1500;
     const deployment: DeploymentEvaluationContext = {
       id: deploymentId, userId: user, strategyVersionId: versionId, mode: "MANUAL_CONFIRM", universe: "TCS",
       timeframe: "1d", status: "ACTIVE", riskLimits, userKillSwitch: false, deploymentKillSwitch: false,
     };
     const propose = async (i: number) => {
-      quotePrice = closes[i];
+      prices.TCS = closes[i];
       const { decision } = await evaluateDeploymentForBar(deployment, bars[i], bars.slice(0, i + 1), {
+        quoteLoader,
         now: () => new Date(firstBarMs + (i + 1) * dayMs + 60_000),
       });
       return decision;
     };
-    const caller = createStrategyDeploymentsRouter(paperService)
+    const caller = createStrategyDeploymentsRouter({ paperService, quoteLoader })
       .createCaller({ userId: user, email: "manual@example.com", role: "user" });
     const confirm = async (decisionId: string) => {
       try {
@@ -370,6 +446,151 @@ describe("Strategy Deployments Test Suite", () => {
         await tx`DELETE FROM public.users WHERE id = ${user}`;
         await tx`DELETE FROM auth.users WHERE id = ${user}`;
       });
+    }
+  }, 30_000);
+  it("8. DB integration: other holdings' current losses count toward an entry's daily-loss limit", async () => {
+    if (!process.env.TEST_DATABASE_URL) return;
+    const sql = getSqlClient();
+    const user = crypto.randomUUID();
+    const [versionId, deploymentId] = [crypto.randomUUID(), crypto.randomUUID()];
+    const { prices, quoteLoader, paperService } = paperFixture();
+    const bars = dailyBars("TCS", [90, 110, 115, 120]);
+    const deployment: DeploymentEvaluationContext = {
+      id: deploymentId, userId: user, strategyVersionId: versionId, mode: "AUTO_PAPER", universe: "TCS", timeframe: "1d",
+      status: "ACTIVE", riskLimits: { maximumOpenPositions: 5, maximumDailyLossPercent: 5 },
+      userKillSwitch: false, deploymentKillSwitch: false,
+    };
+    const evaluate = (i: number) => {
+      prices.TCS = bars[i].close;
+      return evaluateDeploymentForBar(deployment, bars[i], bars.slice(0, i + 1), { paperService, quoteLoader, now: afterBarClose(i) });
+    };
+
+    try {
+      await seedStrategyUser(
+        user,
+        [{ id: versionId, definition: { name: "loss", entry: closeRule("GREATER_THAN", 100), exit: closeRule("LESS_THAN", 100) } }],
+        [{ id: deploymentId, versionId, mode: "AUTO_PAPER", universe: "TCS", riskLimits: deployment.riskLimits }],
+      );
+      // INFY was last filled at 1000 (its stored mark), so only a current quote shows its loss.
+      await sql`
+        INSERT INTO public.paper_positions (user_id, symbol, average_entry_price, total_shares, last_quote_price, unrealized_pnl)
+        VALUES (${user}, 'INFY', 1000, 100, 1000, 0)
+      `;
+
+      await withAutomation(async () => {
+        // INFY now trades at 900: a ₹10,000 (10%) loss today blocks the TCS entry.
+        prices.INFY = 900;
+        const marked = await evaluate(2);
+        expect([marked.decision?.decision, marked.decision?.reasonCode]).toEqual(["REJECTED", "DAILY_LOSS_LIMIT_REACHED"]);
+
+        // Without a current quote the stored loss still counts.
+        delete prices.INFY;
+        await sql`UPDATE public.paper_positions SET unrealized_pnl = -6000 WHERE user_id = ${user} AND symbol = 'INFY'`;
+        const stored = await evaluate(3);
+        expect([stored.decision?.decision, stored.decision?.reasonCode]).toEqual(["REJECTED", "DAILY_LOSS_LIMIT_REACHED"]);
+      });
+      const [orders] = await sql`SELECT count(*)::int AS n FROM public.paper_orders WHERE user_id = ${user}`;
+      expect(orders.n).toBe(0);
+    } finally {
+      await removeUser(user);
+    }
+  }, 30_000);
+
+  it("9. DB integration: entries are re-sized against the executable quote in AUTO_PAPER and on MANUAL_CONFIRM", async () => {
+    if (!process.env.TEST_DATABASE_URL) return;
+    const sql = getSqlClient();
+    const user = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const [autoId, manualId] = [crypto.randomUUID(), crypto.randomUUID()];
+    const { prices, quoteLoader, paperService } = paperFixture();
+    const riskLimits = { maximumOpenPositions: 5, maximumDailyLossPercent: 5, maximumPositionCapital: 10_000 };
+    const context = (id: string, mode: "AUTO_PAPER" | "MANUAL_CONFIRM", universe: string): DeploymentEvaluationContext => ({
+      id, userId: user, strategyVersionId: versionId, mode, universe, timeframe: "1d", status: "ACTIVE", riskLimits,
+      userKillSwitch: false, deploymentKillSwitch: false,
+    });
+    // Both signals size on a 500 close: 10% of ₹100,000 is 20 shares, exactly the ₹10,000 cap.
+    const evaluate = (deployment: DeploymentEvaluationContext) => {
+      const bars = dailyBars(deployment.universe, [90, 500, 500]);
+      return evaluateDeploymentForBar(deployment, bars[2], bars, { paperService, quoteLoader, now: afterBarClose(2) });
+    };
+    const caller = createStrategyDeploymentsRouter({ paperService, quoteLoader })
+      .createCaller({ userId: user, email: "resize@example.com", role: "user" });
+
+    try {
+      await seedStrategyUser(
+        user,
+        [{
+          id: versionId,
+          definition: {
+            name: "resize", entry: closeRule("GREATER_THAN", 100), exit: closeRule("LESS_THAN", 100),
+            risk: { sizingMethod: "PERCENT_OF_EQUITY", sizeValue: 10, maximumOpenPositions: 5, allowPyramiding: false },
+          },
+        }],
+        [
+          { id: autoId, versionId, mode: "AUTO_PAPER", universe: "TCS", riskLimits },
+          { id: manualId, versionId, mode: "MANUAL_CONFIRM", universe: "WIPRO", riskLimits },
+        ],
+      );
+
+      // A proposal keeps its 500-close size until it is confirmed at the then-current quote.
+      prices.WIPRO = 500;
+      const proposal = (await evaluate(context(manualId, "MANUAL_CONFIRM", "WIPRO"))).decision;
+      expect(proposal?.proposedOrder).toMatchObject({ signalType: "ENTRY", side: "BUY", quantity: 20 });
+
+      // The live quote is 600, not 500: 20 shares would fill ₹12,006 against a ₹10,000 cap.
+      prices.TCS = 600;
+      const auto = await withAutomation(() => evaluate(context(autoId, "AUTO_PAPER", "TCS")));
+      expect(auto.decision?.decision).toBe("EXECUTED");
+      expect(auto.decision?.proposedOrder).toMatchObject({ plannedQuantity: 20, quantity: 16 });
+
+      prices.WIPRO = 600;
+      await caller.confirmProposal({ decisionId: proposal.id });
+
+      const fills = await sql`
+        SELECT o.symbol, o.qty, f.fill_price FROM public.paper_orders o JOIN public.paper_fills f ON f.order_id = o.id
+        WHERE o.user_id = ${user} ORDER BY o.symbol
+      `;
+      expect(fills.map((f) => [f.symbol, f.qty])).toEqual([["TCS", 16], ["WIPRO", 16]]);
+      for (const fill of fills) expect(fill.qty * Number(fill.fill_price)).toBeLessThanOrEqual(10_000);
+    } finally {
+      await removeUser(user);
+    }
+  }, 30_000);
+
+  it("10. DB integration: re-polling a bar after its entry filled never trades an overlapping exit", async () => {
+    if (!process.env.TEST_DATABASE_URL) return;
+    const sql = getSqlClient();
+    const user = crypto.randomUUID();
+    const [versionId, deploymentId] = [crypto.randomUUID(), crypto.randomUUID()];
+    const { prices, quoteLoader, paperService } = paperFixture();
+    const bars = dailyBars("TCS", [90, 110, 115]);
+    const deployment: DeploymentEvaluationContext = {
+      id: deploymentId, userId: user, strategyVersionId: versionId, mode: "AUTO_PAPER", universe: "TCS", timeframe: "1d",
+      status: "ACTIVE", riskLimits: { maximumOpenPositions: 1, maximumDailyLossPercent: 5 },
+      userKillSwitch: false, deploymentKillSwitch: false,
+    };
+    prices.TCS = 115;
+
+    try {
+      // Every close above 100 also satisfies the exit rule (close above 50).
+      await seedStrategyUser(
+        user,
+        [{ id: versionId, definition: { name: "overlap", entry: closeRule("GREATER_THAN", 100), exit: closeRule("GREATER_THAN", 50) } }],
+        [{ id: deploymentId, versionId, mode: "AUTO_PAPER", universe: "TCS", riskLimits: deployment.riskLimits }],
+      );
+      await withAutomation(async () => {
+        const poll = () => evaluateDeploymentForBar(deployment, bars[2], bars, { paperService, quoteLoader, now: afterBarClose(2) });
+        const first = await poll();
+        expect(first.decision?.decision).toBe("EXECUTED");
+        // Now positioned, the exit rule matches the same bar; the bar is already claimed.
+        const again = await poll();
+        expect(again.decision).toBeNull();
+        expect(again.signalEvent?.id).toBe(first.signalEvent?.id);
+      });
+      const orders = await sql`SELECT side FROM public.paper_orders WHERE user_id = ${user}`;
+      expect(orders.map((o) => o.side)).toEqual(["BUY"]);
+    } finally {
+      await removeUser(user);
     }
   }, 30_000);
 });

@@ -15,6 +15,8 @@ import { runWalkForwardAnalysis, walkForwardRange, walkForwardRunSpans, type Wal
 import { parseStoredSweepParameters } from "../domain/strategy/parameter-sweep";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
 import { loadJobCandles } from "../modules/strategy-jobs/candles";
+import { loadCorporateActions } from "../modules/corporate-actions/repository";
+import { unappliedCorporateActionsWarning } from "../domain/data/corporate-actions";
 import { downsample } from "../modules/strategy-jobs/downsample";
 import { JobInterruptedError, type JobContext } from "../modules/strategy-jobs/job-context";
 import { failWalkForward } from "../modules/strategy-optimisation/repository";
@@ -116,6 +118,12 @@ export async function runWalkForwardJob(runId: string, ctx: JobContext): Promise
       },
       { yieldControl: () => ctx.checkpoint() },
     );
+    // Every phase runs on these stored candles (the engine threw above if there were too few), so the
+    // corporate actions they do not reflect are named once for the whole range.
+    const first = new Date(candleData[0].ts);
+    const last = new Date(candleData[candleData.length - 1].ts);
+    const corporateActionWarning = unappliedCorporateActionsWarning(await loadCorporateActions(run.symbol, first, last), first, last);
+    if (corporateActionWarning) result.warnings.push(corporateActionWarning);
 
     const windowRows = walkForwardWindowRows(run.id, run.userId, result);
     await db.transaction(async (tx) => {

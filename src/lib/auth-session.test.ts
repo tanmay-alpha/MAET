@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   SIGN_IN_NOT_CONFIGURED_MESSAGE,
   clearQueriesOnSessionChange,
+  consumeAuthRedirect,
   goTrueErrorMessage,
   safeRedirectPath,
   signInWithPassword,
   signOut,
   signUpWithPassword,
 } from "./auth-session";
-import { hasStoredSession, storeSession, storedSessionEmail } from "./auth-token";
+import { hasStoredSession, sessionEndedByExpiry, storeSession, storedSessionEmail, storedSessionIdentity } from "./auth-token";
 import { MemoryStorage } from "@/test-utils/memory-storage";
 
 // The code reads import.meta.env (Vite inlines it); in Bun it starts as process.env, but other
@@ -176,6 +177,99 @@ describe("Supabase email + password auth", () => {
     };
     await signOut();
     expect(hasStoredSession()).toBe(false);
+  });
+
+  test("sign-out of an idle-expired session refreshes first, then revokes with the new token", async () => {
+    storeSession({ access_token: "expired-access", refresh_token: "refresh-1", expires_at: Math.floor(Date.now() / 1000) - 60 });
+    let storedWhileRevoking: string | null = "unset";
+    respond = (url) => {
+      if (url.includes("grant_type=refresh_token")) {
+        return json(200, { access_token: "fresh-access", refresh_token: "refresh-2", expires_in: 3600 });
+      }
+      storedWhileRevoking = storage.getItem(SESSION_KEY);
+      return new Response(null, { status: 204 });
+    };
+
+    await signOut();
+
+    expect(calls.map(({ url }) => url)).toEqual([
+      `${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,
+      `${SUPABASE_URL}/auth/v1/logout?scope=local`,
+    ]);
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ refresh_token: "refresh-1" });
+    expect((calls[1]!.init?.headers as Record<string, string>).authorization).toBe("Bearer fresh-access");
+    // The refreshed session is forgotten locally before the revocation goes out.
+    expect(storedWhileRevoking).toBeNull();
+    expect(storage.length).toBe(0);
+  });
+
+  test("sign-out whose refresh token was already revoked skips /logout and does not say 'expired'", async () => {
+    storeSession({ access_token: "expired-access", refresh_token: "revoked", expires_at: Math.floor(Date.now() / 1000) - 60 });
+    respond = () => json(400, { error_code: "refresh_token_not_found", msg: "Invalid Refresh Token" });
+
+    await signOut();
+
+    expect(calls.map(({ url }) => url)).toEqual([`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`]);
+    expect(storage.length).toBe(0);
+    expect(sessionEndedByExpiry()).toBe(false);
+  });
+
+  describe("consumeAuthRedirect", () => {
+    function landOn(url: string) {
+      const parsed = new URL(url, "https://maet.example");
+      Object.assign(window, { location: { pathname: parsed.pathname, search: parsed.search, hash: parsed.hash } });
+    }
+    const replaced: string[] = [];
+    const replaceUrl = (pathAndSearch: string) => void replaced.push(pathAndSearch);
+    beforeEach(() => void (replaced.length = 0));
+
+    test("stores a confirmed sign-up's session after GoTrue vouches for the token, and strips it from the URL first", async () => {
+      landOn("/dashboard?tab=1#access_token=link-access&refresh_token=link-refresh&expires_in=3600&token_type=bearer&type=signup");
+      let strippedBeforeCheck = false;
+      respond = () => {
+        strippedBeforeCheck = replaced.length === 1;
+        return json(200, { id: "user-9", email: "new@example.com", aud: "authenticated" });
+      };
+
+      expect(await consumeAuthRedirect(replaceUrl)).toEqual({ kind: "signed-in" });
+
+      expect(replaced).toEqual(["/dashboard?tab=1"]);
+      expect(strippedBeforeCheck).toBe(true);
+      expect(calls[0]!.url).toBe(`${SUPABASE_URL}/auth/v1/user`);
+      expect((calls[0]!.init?.headers as Record<string, string>).authorization).toBe("Bearer link-access");
+      const stored = JSON.parse(storage.getItem(SESSION_KEY)!);
+      expect(stored).toMatchObject({ access_token: "link-access", refresh_token: "link-refresh", user: { id: "user-9", email: "new@example.com" } });
+      expect(stored.expires_at).toBeGreaterThan(Date.now() / 1000 + 3500);
+      expect(storedSessionIdentity()).toBe("user-9");
+    });
+
+    test("a token GoTrue rejects is stripped but not stored", async () => {
+      landOn("/#access_token=forged&refresh_token=forged");
+      respond = () => json(401, { code: 401, error_code: "bad_jwt", msg: "invalid JWT" });
+      expect(await consumeAuthRedirect(replaceUrl)).toEqual({
+        kind: "error",
+        message: "This sign-in link is no longer valid. Sign in with your email and password.",
+      });
+      expect(replaced).toEqual(["/"]);
+      expect(hasStoredSession()).toBe(false);
+    });
+
+    test("an error fragment is stripped and reported without any request", async () => {
+      landOn("/#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired");
+      expect(await consumeAuthRedirect(replaceUrl)).toEqual({
+        kind: "error",
+        message: "This email link is invalid or has expired. Sign in, or sign up again to get a new link.",
+      });
+      expect(replaced).toEqual(["/"]);
+      expect(calls).toHaveLength(0);
+    });
+
+    test("an ordinary anchor is left in place", async () => {
+      landOn("/#paper");
+      expect(await consumeAuthRedirect(replaceUrl)).toEqual({ kind: "none" });
+      expect(replaced).toEqual([]);
+      expect(calls).toHaveLength(0);
+    });
   });
 });
 

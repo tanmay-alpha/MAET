@@ -5,6 +5,7 @@
  * Responsibilities:
  * - Fetch and store historical candle data for tracked symbols
  * - Sync fundamental data from NSE
+ * - Upsert Yahoo dividends and splits into corporate_actions
  * - Validate data quality and flag anomalies
  * - Run screener results cache refresh
  * - Data cleanup and archival
@@ -29,6 +30,7 @@ import { resolveMarketSymbol } from "../domain/market/symbol";
 import { loadQuote } from "../domain/market/quote-service";
 import { classifyByMarketCapRank } from "../domain/fundamentals/classification";
 import { calculateFundamentalRatios } from "../domain/fundamentals/ratios";
+import { runCorporateActionIngestion, TRACKED_CORPORATE_ACTION_SYMBOLS } from "../modules/corporate-actions/ingest";
 import type { Candle } from "@shared/types";
 import { lt, sql } from "drizzle-orm";
 
@@ -41,6 +43,11 @@ export type DailyProcessorOptions = {
   backfillDays?: number;
   /** Whether to sync fundamentals. Default: true. */
   syncFundamentals?: boolean;
+  /**
+   * Whether to upsert Yahoo dividends and splits into corporate_actions. Default: true.
+   * Covers `symbols` when given, else the tracked Nifty 50 list.
+   */
+  syncCorporateActions?: boolean;
   /** Whether to refresh the NSE company master. Default: true. */
   syncCompanyMaster?: boolean;
   /** Whether to fetch candles and quote snapshots. Default: true. */
@@ -130,6 +137,9 @@ export interface ProcessingStats {
   candlesWritten: number;
   fundamentalsSynced: number;
   fundamentalsFailed: string[];
+  /** corporate_actions rows inserted or changed. */
+  corporateActionsWritten: number;
+  corporateActionsFailed: string[];
   quoteSnapshotsWritten: number;
   classificationsSynced: number;
   errors: string[];
@@ -161,6 +171,8 @@ export class DailyProcessor {
   private timeframes: Candle["tf"][];
   private backfillDays: number;
   private syncFundamentals: boolean;
+  private syncCorporateActions: boolean;
+  private corporateActionSymbols: readonly string[];
   private syncCompanyMaster: boolean;
   private syncMarketData: boolean;
   private refreshClassifications: boolean;
@@ -173,6 +185,8 @@ export class DailyProcessor {
     this.timeframes = opts.timeframes ?? DEFAULT_TIMEFRAMES;
     this.backfillDays = opts.backfillDays ?? 365;
     this.syncFundamentals = opts.syncFundamentals ?? true;
+    this.syncCorporateActions = opts.syncCorporateActions ?? true;
+    this.corporateActionSymbols = opts.symbols ?? TRACKED_CORPORATE_ACTION_SYMBOLS;
     this.syncCompanyMaster = opts.syncCompanyMaster ?? true;
     this.syncMarketData = opts.syncMarketData ?? true;
     this.refreshClassifications = opts.refreshClassifications ?? true;
@@ -192,6 +206,8 @@ export class DailyProcessor {
       candlesWritten: 0,
       fundamentalsSynced: 0,
       fundamentalsFailed: [],
+      corporateActionsWritten: 0,
+      corporateActionsFailed: [],
       quoteSnapshotsWritten: 0,
       classificationsSynced: 0,
       errors: [],
@@ -209,6 +225,9 @@ export class DailyProcessor {
       }
       if (this.syncFundamentals) {
         await this.processFundamentals(stats, log);
+      }
+      if (this.syncCorporateActions) {
+        await this.processCorporateActions(stats, log);
       }
       if (this.refreshClassifications) {
         stats.classificationsSynced = await this.refreshMarketCapClassifications(log);
@@ -722,6 +741,28 @@ export class DailyProcessor {
     } catch (err) {
       log.warn({ symbol, err: String(err) }, "failed to sync fundamentals");
       return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Corporate actions
+  // -------------------------------------------------------------------------
+
+  private async processCorporateActions(stats: ProcessingStats, log: ProcessorLogger): Promise<void> {
+    try {
+      const result = await runCorporateActionIngestion({
+        symbols: this.corporateActionSymbols,
+        trigger: "daily-processor",
+        dryRun: this.dryRun,
+      });
+      stats.corporateActionsWritten = result.recordsInserted + result.recordsUpdated;
+      for (const failure of result.failures) {
+        stats.corporateActionsFailed.push(failure.symbol);
+        stats.errors.push(`corporate actions ${failure.symbol}: ${failure.error}`);
+      }
+    } catch (err) {
+      log.warn({ err: String(err) }, "corporate actions ingestion failed");
+      stats.errors.push(`corporate actions: ${String(err)}`);
     }
   }
 

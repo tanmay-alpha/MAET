@@ -9,13 +9,13 @@ import {
   expandRange,
   jobPollInterval,
   jobWindowToIso,
-  parseResearchSearch,
   sweepProgress,
   walkForwardError,
   walkForwardViewResult,
   type WalkForwardRunView,
   type WalkForwardWindowView,
 } from "./strategy-jobs";
+import { parseResearchSearch } from "./strategy-research-search";
 import { TrpcRequestError } from "./trpc";
 
 const sma = (period: number) => ({ kind: "INDICATOR", indicator: "SMA", params: { period }, lag: 0 });

@@ -88,6 +88,7 @@ async function serveNseFallback(page: Page) {
           sector: unavailable("Sector unavailable from the verified company snapshot"),
           rsi: unavailable("RSI(14) unavailable"),
         },
+        excludedForMissingData: { total: 0, byField: {} },
         capBucketMethodology: "e2e fixture",
       },
     });
@@ -127,10 +128,10 @@ test("screener: with the database offline, presets sort the live page by change 
   await page.goto("/screener");
   await expectRows(page, ALPHABETICAL);
   await expect(page.getByText(/^Database offline:/)).toBeVisible();
-  for (const empty of ["Market cap", "Sector"]) {
+  for (const empty of ["Market cap (₹ Cr)", "Sector"]) {
     await expect(page.getByRole("columnheader", { name: empty })).toHaveCount(0);
   }
-  await expect(page.getByRole("columnheader", { name: "Chg %" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Chg (%)" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Valuation" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "RSI Oversold" })).toBeDisabled();
 
@@ -188,7 +189,7 @@ test("screener: sorting and filtering re-query the API and reorder the rows; a r
 
   const marketCapHeader = page
     .getByRole("columnheader")
-    .getByRole("button", { name: "Market cap", exact: true });
+    .getByRole("button", { name: "Market cap (₹ Cr)", exact: true });
   await marketCapHeader.click();
   await expect
     .poll(() => lastCompaniesQuery(api))

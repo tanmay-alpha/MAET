@@ -142,3 +142,53 @@ test("session expiry: a revoked refresh token signs the browser out and says the
   await page.getByRole("banner").getByRole("link", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "Your session expired. Sign in again to continue." })).toBeVisible();
 });
+
+test("email link: landing with the session in the fragment signs in and leaves a clean URL", async ({ page, api }) => {
+  const fragment = new URLSearchParams({
+    access_token: ACCESS_TOKEN,
+    refresh_token: REFRESH_TOKEN,
+    expires_in: "3600",
+    token_type: "bearer",
+    type: "signup",
+  });
+  await page.goto(`/#${fragment}`);
+
+  await expect.poll(() => storedSessions(page)).toEqual([SESSION_STORAGE_KEY]);
+  await expect(page).toHaveURL(/\/$/);
+  expect(await page.evaluate(() => window.location.hash)).toBe("");
+  // GoTrue vouched for the token before it was stored.
+  expect(api.authRequests.map(({ url }) => url.pathname)).toEqual(["/auth/v1/user"]);
+  expect(api.authRequests[0]?.headers.authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+  const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "null"), SESSION_STORAGE_KEY);
+  expect(stored).toMatchObject({ access_token: ACCESS_TOKEN, refresh_token: REFRESH_TOKEN, user: { id: USER_ID, email: E2E_EMAIL } });
+
+  // Signed in for the app: the portfolio loads the account.
+  await page.goto("/portfolio");
+  await expect(page.getByText(FIXTURE_CASH, { exact: true })).toBeVisible();
+  // The history entry the link created no longer carries the tokens.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/$/);
+  expect(await page.evaluate(() => window.location.href)).not.toContain("access_token");
+});
+
+test("email link: an expired link lands on /login with the reason and no tokens in the URL", async ({ page, api }) => {
+  await page.goto("/#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired");
+
+  await expect(page).toHaveURL(/\/login\?authError=/);
+  await expect(page.getByRole("alert")).toHaveText(
+    "This email link is invalid or has expired. Sign in, or sign up again to get a new link.",
+  );
+  expect(await page.evaluate(() => window.location.hash)).toBe("");
+  expect(api.authRequests).toEqual([]);
+  expect(await storedSessions(page)).toEqual([]);
+});
+
+test("email link: a token GoTrue does not recognise is not stored", async ({ page, api }) => {
+  await page.goto("/#access_token=forged-token&refresh_token=forged-refresh&expires_in=3600&type=signup");
+
+  await expect(page).toHaveURL(/\/login\?authError=/);
+  await expect(page.getByRole("alert")).toHaveText("This sign-in link is no longer valid. Sign in with your email and password.");
+  expect(api.authRequests.map(({ url }) => url.pathname)).toEqual(["/auth/v1/user"]);
+  expect(await storedSessions(page)).toEqual([]);
+  expect(await page.evaluate(() => window.location.href)).not.toContain("forged");
+});

@@ -33,6 +33,7 @@ import { MAX_PAPER_SYMBOL_LENGTH } from "./contracts";
 import type { PaperDatabase, PaperTradingReadRepository, PaperTradingWriteRepository } from "./repository";
 import { createPostgresPaperReadRepository } from "./postgres-repository";
 import { applyFill, paperExecutionPolicy, type AppliedFill, type MarkPriceSource } from "./fill-writer";
+import { workingOrderSymbols } from "./working-order-symbols";
 import { ExchangeSchema, parseExecutionQuote, evaluateExecutionQuote } from "@shared/types/market";
 import { PaperExecutionError } from "@shared/domain/paper-trading/execution";
 
@@ -224,10 +225,18 @@ export class PaperTradingService {
       clientOrderId: command.clientOrderId || null,
     };
 
-    const result =
-      terms.type === "MARKET"
-        ? await this.placeMarketOrder(userId, terms, keys)
-        : await this.placeRestingOrder(userId, terms, keys);
+    // Pinned before the transaction and marked when it ends, so the order matcher matches
+    // every tick after the commit; the paper-interest read only catches up later.
+    const releasePlacement = workingOrderSymbols.beginPlacement(terms.exchange, terms.symbol);
+    let result: PlaceOrderResult;
+    try {
+      result =
+        terms.type === "MARKET"
+          ? await this.placeMarketOrder(userId, terms, keys)
+          : await this.placeRestingOrder(userId, terms, keys);
+    } finally {
+      releasePlacement();
+    }
     // After commit: the live feed must subscribe a resting order's symbol before ticks can fill it.
     bus.emit("paper:interest_changed", { reason: "order_placed" });
     return result;

@@ -13,6 +13,7 @@ import { getDLQStats, getPendingRetries } from "../../../workers/ingestion-engin
 import * as YahooHistory from "../../../workers/ingestion-engine/sources/yahoo-history";
 import * as NSEEquities from "../../../workers/ingestion-engine/sources/nse-equities";
 import { normalizeAngelOneOptionExpiry } from "../../../modules/options/repository";
+import { runCorporateActionIngestion } from "../../../modules/corporate-actions/ingest";
 
 // FIX 3: Concurrency guard — only one manual pipeline run at a time
 const runningPipelines = new Map<string, { startedAt: Date; runId: string }>();
@@ -186,8 +187,9 @@ export const ingestionRouter = createRouter({
             symbols: input.symbols,
             backfillDays: 365,
           });
+          // result.runId is the ingestion_runs batch id; the slot id names only the lock.
           return {
-            runId,
+            runId: result.runId,
             status: result.symbolsFailed === 0 ? "completed" : result.symbolsSucceeded > 0 ? "partial" : "failed",
             symbols: input.symbols,
             result,
@@ -216,6 +218,28 @@ export const ingestionRouter = createRouter({
       } finally {
         // Always release the concurrency slot
         releasePipelineSlot(input.source);
+      }
+    }),
+
+  /**
+   * Upsert Yahoo dividends and splits into corporate_actions (admin only). Defaults to the tracked
+   * Nifty 50 list; the run is recorded in ingestion_runs like the daily processor's.
+   */
+  triggerCorporateActions: adminProcedure
+    .input(z.object({ symbols: z.array(z.string().trim().min(1).max(32)).min(1).max(100).optional() }).optional())
+    .mutation(async ({ input }) => {
+      const slot = acquirePipelineSlot("yahoo-corporate-actions");
+      if (!slot.acquired) {
+        throw new TRPCError({ code: "CONFLICT", message: "A corporate-actions ingestion is already running." });
+      }
+      try {
+        return await runCorporateActionIngestion({ symbols: input?.symbols, trigger: "admin" });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown pipeline error";
+        console.error("[ingestion] Corporate-actions ingestion failed:", error);
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `Corporate-actions ingestion failed: ${message}` });
+      } finally {
+        releasePipelineSlot("yahoo-corporate-actions");
       }
     }),
 

@@ -4,6 +4,7 @@ import {
   activeScreenerPreset,
   applyScreenerPreset,
   arrangeLivePage,
+  liveMissingExclusions,
   DEFAULT_SCREENER_SORT,
   type ScreenerSort,
 } from "./screener-presets";
@@ -128,5 +129,46 @@ describe("arrangeLivePage", () => {
       filterLive: false,
     });
     expect(rows.map((row) => row.symbol)).toEqual(["CCC", "AAA", "BBB"]);
+  });
+
+  // The API may send `null` for a metric it has no value for.
+  const withNullChange = company("HHH", { changePct: null } as unknown as Partial<MarketCompany>);
+
+  it("never reads a null stored value as 0 when filtering the live page", () => {
+    const rows = arrangeLivePage([...page, withNullChange], quotes, {
+      filters: { change_pct_min: "-1" },
+      sort: DEFAULT_SCREENER_SORT,
+      filterLive: true,
+    });
+    // DDD's quote has no change and HHH's stored change is null: both are missing, not 0.
+    expect(rows.map((row) => row.symbol)).toEqual(["AAA", "BBB", "CCC", "FFF"]);
+  });
+
+  it("sorts a null stored value last, like a missing one", () => {
+    const rows = arrangeLivePage([withNullChange, page[0], page[1]], quotes, {
+      filters: {},
+      sort: { sortBy: "change_pct", sortDir: "desc" },
+      filterLive: false,
+    });
+    expect(rows.map((row) => row.symbol)).toEqual(["AAA", "BBB", "HHH"]);
+  });
+});
+
+describe("liveMissingExclusions", () => {
+  const quotes = new Map([quote("AAA", 1.2), quote("BBB", undefined), quote("CCC", -3)].map((entry) => [entry.symbol, entry]));
+  const page = ["AAA", "BBB", "CCC", "DDD"].map((symbol) => company(symbol));
+
+  it("counts rows a live filter leaves out only because the filtered value is missing", () => {
+    // BBB's quote has no change; DDD has no quote at all, so neither change nor price.
+    expect(liveMissingExclusions(page, quotes, { change_pct_min: "-1", price_min: "50" })).toEqual({
+      total: 2,
+      byField: { changePct: 2, price: 1 },
+    });
+  });
+
+  it("does not count rows that fail on the data they have, or any row when no filter is set", () => {
+    // AAA, BBB and CCC all fail the price floor on the price they have.
+    expect(liveMissingExclusions(page.slice(0, 3), quotes, { change_pct_min: "-1", price_min: "500" })).toEqual({ total: 0, byField: {} });
+    expect(liveMissingExclusions(page, quotes, {})).toEqual({ total: 0, byField: {} });
   });
 });

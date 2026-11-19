@@ -27,7 +27,11 @@ import { calculatePositionSize } from "../domain/strategy/position-sizer";
 import { istDateKey } from "../domain/market/clock";
 import { calculateMarkedUnrealisedPnl } from "../../shared/domain/paper-trading/margin";
 import { signedPositionQuantity } from "../modules/paper-trading/mapper";
-import type { PaperTradingService } from "../modules/paper-trading/service";
+import type { PaperTradingService, PlaceOrderResult } from "../modules/paper-trading/service";
+import type { ExecutionQuoteLoader } from "../modules/paper-trading/execution-quote";
+import { paperExecutionPolicy } from "../modules/paper-trading/fill-writer";
+import { calculateSlippage } from "../../shared/domain/paper-trading/execution";
+import { evaluateExecutionQuote, parseExecutionQuote, type ExecutionQuote } from "@shared/types/market";
 import { getConfig } from "../config";
 import type {
   StrategyDefinition,
@@ -173,16 +177,45 @@ export function sizeAutoPaperEntry(
     atr,
     stopPrice: stopPct ? price * (long ? 1 - stopPct / 100 : 1 + stopPct / 100) : undefined,
   });
-  let quantity = sizing.quantity;
-  if (quantity > 0 && sizing.capitalRequired > equity) {
-    return { quantity: 0, rejectReason: "INSUFFICIENT_EQUITY" };
-  }
+  if (sizing.quantity <= 0) return { quantity: 0, rejectReason: "POSITION_SIZE_ZERO" };
+  // The cap applies first: an oversized request the cap brings within equity is still tradable.
+  return capEntryQuantity(sizing.quantity, limits, equity, price);
+}
+
+/**
+ * Largest quantity, at most `quantity`, whose notional at `price` fits both the deployment's
+ * maximumPositionCapital and the account equity.
+ */
+export function capEntryQuantity(
+  quantity: number,
+  limits: DeploymentRiskLimits,
+  equity: number,
+  price: number,
+): EntrySizing {
   if (limits.maximumPositionCapital != null) {
     quantity = Math.min(quantity, Math.floor(limits.maximumPositionCapital / price));
     if (quantity <= 0) return { quantity: 0, rejectReason: "MAX_POSITION_CAPITAL_TOO_SMALL" };
   }
-  if (quantity <= 0) return { quantity: 0, rejectReason: "POSITION_SIZE_ZERO" };
+  if (quantity * price > equity) return { quantity: 0, rejectReason: "INSUFFICIENT_EQUITY" };
   return { quantity };
+}
+
+/**
+ * Re-sizes an entry against the price it will actually fill at: the executable quote plus, for a
+ * buy, the paper engine's slippage. A proposal sized on the signal bar's close (or 24 hours earlier
+ * for MANUAL_CONFIRM) is cut down, never up, so its notional stays within the cap and equity.
+ */
+export function resizeEntryForQuote(
+  planned: number,
+  side: "BUY" | "SELL",
+  limits: DeploymentRiskLimits,
+  equity: number,
+  quotePrice: number,
+): EntrySizing {
+  // Slippage only grows with order value, so the planned quantity's slippage bounds any smaller one's.
+  // A sell fills at or below the quote, so the quote bounds a short's notional.
+  const fillPrice = side === "BUY" ? quotePrice + calculateSlippage(quotePrice, planned) : quotePrice;
+  return capEntryQuantity(planned, limits, equity, fillPrice);
 }
 
 /** walk-forward's default warm-up; also enough for the 50-bar minimum runner-v3 enforces. */
@@ -254,38 +287,45 @@ export function barDataFreshnessMs(bar: Pick<Candle, "ts" | "tf">, nowMs: number
   return nowMs - (new Date(bar.ts).getTime() + TIMEFRAME_MS[bar.tf]);
 }
 
+/**
+ * Claim key for one bar of one deployment/version/symbol/timeframe. It deliberately excludes the
+ * signal type: a bar acts at most once, so re-polling it after its entry filled cannot turn an
+ * overlapping exit rule into an unintended same-bar round trip.
+ */
 export function computeSignalFingerprint(
   deploymentId: string,
   versionId: string,
   symbol: string,
   timeframe: string,
   barTs: string | number,
-  signalType: string,
 ): string {
-  const raw = `${deploymentId}::${versionId}::${symbol}::${timeframe}::${barTs}::${signalType}`;
+  const raw = `${deploymentId}::${versionId}::${symbol}::${timeframe}::${barTs}`;
   return createHash("sha256").update(raw).digest("hex").slice(0, 32);
 }
 
 interface PaperPositionSnapshot {
   symbol: string;
+  exchange: string;
   side: string;
   totalShares: number;
   averageEntryPrice: string;
-  lastQuotePrice: string | null;
+  /** Unrealised P&L stored at the position's last fill or mark. */
+  unrealizedPnl: string;
 }
 
 export interface AutoPaperState {
   cash: number;
+  initialCash: number;
+  /** Open positions of the account's current generation. */
   positions: PaperPositionSnapshot[];
-  equity: DeploymentEquityState;
+  /** Equity at the close of the previous trading session (or the generation's initial cash). */
+  dayStartEquity: number;
+  /** Highest end-of-session equity the generation has recorded. */
+  snapshotPeakEquity: number;
 }
 
-/** Loads the user's current-generation paper account, its open positions, and its equity marks. */
-export async function loadPaperState(
-  userId: string,
-  mark: { symbol: string; price: number } | null,
-  now: Date,
-): Promise<AutoPaperState> {
+/** Loads the user's current-generation paper account, its open positions, and its recorded equity marks. */
+export async function loadPaperState(userId: string, now: Date): Promise<AutoPaperState> {
   const [account] = await db
     .select()
     .from(paperAccounts)
@@ -294,16 +334,17 @@ export async function loadPaperState(
   if (!account) {
     // placeOrder opens the account with the configured initial cash on first use.
     const initialCash = getConfig().paperInitialCashInr;
-    return { cash: initialCash, positions: [], equity: { equity: initialCash, dayStartEquity: initialCash, peakEquity: initialCash } };
+    return { cash: initialCash, initialCash, positions: [], dayStartEquity: initialCash, snapshotPeakEquity: initialCash };
   }
 
   const positions = await db
     .select({
       symbol: paperPositions.symbol,
+      exchange: paperPositions.exchange,
       side: paperPositions.side,
       totalShares: paperPositions.totalShares,
       averageEntryPrice: paperPositions.averageEntryPrice,
-      lastQuotePrice: paperPositions.lastQuotePrice,
+      unrealizedPnl: paperPositions.unrealizedPnl,
     })
     .from(paperPositions)
     .where(and(
@@ -312,18 +353,7 @@ export async function loadPaperState(
       sql`${paperPositions.totalShares} > 0`,
     ));
 
-  const cash = Number(account.cashBalance);
   const initialCash = Number(account.initialCash);
-  // Equity = cash + unrealised P&L (paper positions are margined), marked at `mark` for its symbol.
-  const unrealised = positions.reduce((sum, p) => {
-    const price = p.symbol === mark?.symbol ? mark.price : Number(p.lastQuotePrice ?? p.averageEntryPrice);
-    return sum + calculateMarkedUnrealisedPnl(
-      { quantity: signedPositionQuantity(p), averagePrice: Number(p.averageEntryPrice) },
-      price,
-    );
-  }, 0);
-  const equity = cash + unrealised;
-
   const generationSnapshots = and(
     eq(paperPortfolioSnapshots.userId, userId),
     eq(paperPortfolioSnapshots.generation, account.generation),
@@ -340,14 +370,138 @@ export async function loadPaperState(
     .where(generationSnapshots);
 
   return {
-    cash,
+    cash: Number(account.cashBalance),
+    initialCash,
     positions,
-    equity: {
-      equity,
-      dayStartEquity: previousClose ? Number(previousClose.equity) : initialCash,
-      peakEquity: Math.max(initialCash, equity, peak?.equity == null ? 0 : Number(peak.equity)),
-    },
+    dayStartEquity: previousClose ? Number(previousClose.equity) : initialCash,
+    snapshotPeakEquity: peak?.equity == null ? initialCash : Number(peak.equity),
   };
+}
+
+/** Current executable price of EXCHANGE:SYMBOL, or undefined when none is known. */
+export type AsyncMarkSource = (exchange: string, symbol: string) => Promise<number | undefined>;
+
+/**
+ * Mark source over an execution quote loader (the live tick, then the market-data layer): a quote
+ * is a mark only when it is on the position's exchange and executable under the paper quote policy,
+ * the same qualification as the margin check's live marks.
+ */
+export function createQuoteMarkSource(loader: ExecutionQuoteLoader): AsyncMarkSource {
+  return async (exchange, symbol) => {
+    if (exchange !== "NSE" && exchange !== "BSE") return undefined;
+    const quote = await loadExecutableQuote(loader, exchange, symbol).catch(() => null);
+    return quote && "quote" in quote ? quote.quote.price : undefined;
+  };
+}
+
+/**
+ * Unrealised P&L the risk gate counts for a position: marked at a current price when one is known;
+ * otherwise, as in the margin check, its stored loss but none of its stored gain.
+ */
+export function gateUnrealisedPnl(position: PaperPositionSnapshot, mark: number | undefined): number {
+  if (mark !== undefined && Number.isFinite(mark) && mark > 0) {
+    return calculateMarkedUnrealisedPnl(
+      { quantity: signedPositionQuantity(position), averagePrice: Number(position.averageEntryPrice) },
+      mark,
+    );
+  }
+  return Math.min(0, Number(position.unrealizedPnl));
+}
+
+/**
+ * Equity marks for the daily-loss and drawdown limits. Equity = cash + unrealised P&L (paper
+ * positions are margined); `known` prices one symbol directly (the evaluated bar or the
+ * execution quote) and every other holding is marked through `markFor`.
+ */
+export async function markPaperEquity(
+  state: AutoPaperState,
+  known: { exchange: string; symbol: string; price: number } | null,
+  markFor: AsyncMarkSource,
+): Promise<DeploymentEquityState> {
+  const unrealised = await Promise.all(state.positions.map(async (p) => {
+    const mark = known && p.symbol === known.symbol && p.exchange === known.exchange
+      ? known.price
+      : await markFor(p.exchange, p.symbol);
+    return gateUnrealisedPnl(p, mark);
+  }));
+  const equity = state.cash + unrealised.reduce((sum, value) => sum + value, 0);
+  return {
+    equity,
+    dayStartEquity: state.dayStartEquity,
+    peakEquity: Math.max(state.initialCash, state.snapshotPeakEquity, equity),
+  };
+}
+
+export type ExecutableQuoteResult = { raw: unknown; quote: ExecutionQuote } | { rejectReason: string; details: string };
+
+/** Loads the quote a paper MARKET order would fill at and applies the service's own execution checks. */
+export async function loadExecutableQuote(
+  loader: ExecutionQuoteLoader,
+  exchange: "NSE" | "BSE",
+  symbol: string,
+): Promise<ExecutableQuoteResult> {
+  const raw = await loader(exchange, symbol);
+  const parsed = parseExecutionQuote(raw, symbol);
+  if (!parsed.ok) return { rejectReason: "QUOTE_NOT_EXECUTABLE", details: parsed.reason };
+  if (parsed.quote.exchange !== exchange) {
+    return { rejectReason: "QUOTE_NOT_EXECUTABLE", details: `Quote for ${symbol} is from ${parsed.quote.exchange}, not ${exchange}` };
+  }
+  const policy = evaluateExecutionQuote(parsed.quote, symbol, paperExecutionPolicy());
+  if (!policy.executable) return { rejectReason: "QUOTE_NOT_EXECUTABLE", details: policy.reason ?? "quote not executable" };
+  return { raw, quote: parsed.quote };
+}
+
+export interface PaperOrderDependencies {
+  /** Paper order API; defaults to the canonical PaperTradingService filling at the checked quote. */
+  paperService?: Pick<PaperTradingService, "placeOrder">;
+  /** Execution quote source for marks and fills; defaults to the paper engine's loadExecutionQuote. */
+  quoteLoader?: ExecutionQuoteLoader;
+}
+
+export async function resolveQuoteLoader(deps: PaperOrderDependencies): Promise<ExecutionQuoteLoader> {
+  return deps.quoteLoader ?? (await import("../modules/paper-trading/execution-quote")).loadExecutionQuote;
+}
+
+export type PaperSubmission =
+  | { placed: PlaceOrderResult; quantity: number; quote: ExecutionQuote }
+  | { rejectReason: string; details?: string };
+
+/**
+ * Places a MARKET paper order for a signal at the price it will execute at. An entry is first
+ * re-sized against the executable quote; the default service fills at that same checked quote.
+ */
+export async function submitSignalOrder(
+  params: {
+    userId: string;
+    symbol: string;
+    signalType: "ENTRY" | "EXIT";
+    side: "BUY" | "SELL";
+    quantity: number;
+    limits: DeploymentRiskLimits;
+    equity: number;
+    idempotencyKey: string;
+    /** Executable quote already loaded by the caller, if any. */
+    executable?: { raw: unknown; quote: ExecutionQuote };
+  },
+  deps: PaperOrderDependencies,
+): Promise<PaperSubmission> {
+  const executable = params.executable ?? await loadExecutableQuote(await resolveQuoteLoader(deps), "NSE", params.symbol);
+  if ("rejectReason" in executable) return executable;
+
+  let quantity = params.quantity;
+  if (params.signalType === "ENTRY") {
+    const resized = resizeEntryForQuote(quantity, params.side, params.limits, params.equity, executable.quote.price);
+    if (!resized.quantity) return { rejectReason: resized.rejectReason ?? "POSITION_SIZE_ZERO" };
+    quantity = resized.quantity;
+  }
+
+  const service = deps.paperService
+    ?? (await import("../modules/paper-trading/service")).createPaperTradingService({ quoteLoader: async () => executable.raw });
+  const placed = await service.placeOrder({
+    userId: params.userId,
+    command: { symbol: params.symbol, side: params.side, type: "MARKET", qty: quantity, idempotencyKey: params.idempotencyKey },
+  });
+  return { placed, quantity, quote: executable.quote };
 }
 
 /**
@@ -358,7 +512,7 @@ function planPaperOrder(
   signalType: "ENTRY" | "EXIT",
   definition: StrategyDefinition,
   limits: DeploymentRiskLimits,
-  state: AutoPaperState,
+  equity: number,
   heldPosition: PaperPositionSnapshot | null,
   bar: Candle,
   cache: IndicatorStateCache,
@@ -372,7 +526,7 @@ function planPaperOrder(
   const sizing = sizeAutoPaperEntry(
     definition,
     limits,
-    state.equity.equity,
+    equity,
     bar.close,
     cache.resolve("ATR", { period: 14 }, signalIdx) ?? undefined,
   );
@@ -380,9 +534,7 @@ function planPaperOrder(
   return { side: entrySide(definition.direction), quantity: sizing.quantity };
 }
 
-export interface EvaluateDeploymentOptions {
-  /** Paper order API; defaults to the canonical PaperTradingService. */
-  paperService?: Pick<PaperTradingService, "placeOrder">;
+export interface EvaluateDeploymentOptions extends PaperOrderDependencies {
   now?: () => Date;
 }
 
@@ -424,7 +576,7 @@ export async function evaluateDeploymentForBar(
 
   // Paper-trading modes trade like runner-v3: flat → entry rules, positioned → exit rules. No pyramiding,
   // so a held entry condition never re-fires while the position is open, and an exit while flat is moot.
-  const paperState = mode === "AUTO_PAPER" || mode === "MANUAL_CONFIRM" ? await loadPaperState(userId, { symbol, price: bar.close }, now) : null;
+  const paperState = mode === "AUTO_PAPER" || mode === "MANUAL_CONFIRM" ? await loadPaperState(userId, now) : null;
   const heldPosition = paperState?.positions.find((p) => p.symbol === symbol) ?? null;
 
   let signalType: "ENTRY" | "EXIT" | null = null;
@@ -436,15 +588,14 @@ export async function evaluateDeploymentForBar(
 
   if (!signalType) return { signalEvent: null, decision: null };
 
-  // 3. Generate deterministic fingerprint; the unique (deployment, fingerprint) index makes a
-  // re-evaluated bar a no-op even when two evaluators race.
+  // 3. Claim the bar: the unique (deployment, fingerprint) index makes a re-evaluated bar a no-op,
+  // whatever it would signal now, even when two evaluators race.
   const fingerprint = computeSignalFingerprint(
     deploymentId,
     versionId,
     symbol,
     timeframe,
     bar.ts,
-    signalType,
   );
 
   const [signalEvent] = await db
@@ -486,6 +637,13 @@ export async function evaluateDeploymentForBar(
     return dec;
   };
 
+  // The evaluated bar marks its own symbol; every other holding is marked at its current quote.
+  const markEquity = async (state: AutoPaperState) => markPaperEquity(
+    state,
+    { exchange: heldPosition?.exchange ?? "NSE", symbol, price: bar.close },
+    createQuoteMarkSource(await resolveQuoteLoader(options)),
+  );
+
   let decision: any = null;
 
   // 4. Mode Routing
@@ -506,7 +664,8 @@ export async function evaluateDeploymentForBar(
     });
   } else if (mode === "MANUAL_CONFIRM" && paperState) {
     // The proposal carries the same side and size AUTO_PAPER would trade; confirmation re-runs the gate.
-    const plan = planPaperOrder(signalType, definition, deployment.riskLimits ?? {}, paperState, heldPosition, bar, cache, signalIdx);
+    const equity = await markEquity(paperState);
+    const plan = planPaperOrder(signalType, definition, deployment.riskLimits ?? {}, equity.equity, heldPosition, bar, cache, signalIdx);
     if ("rejectReason" in plan) {
       return { signalEvent, decision: await recordDecision({ decision: "REJECTED", reasonCode: plan.rejectReason }) };
     }
@@ -536,44 +695,65 @@ export async function evaluateDeploymentForBar(
       return { signalEvent, decision };
     }
 
+    const equity = await markEquity(paperState);
     const riskRes = evaluateRiskGate(
       deployment,
       { type: signalType, symbol },
       paperState.cash,
       paperState.positions.length,
       barDataFreshnessMs(bar, now.getTime()),
-      paperState.equity,
+      equity,
     );
     if (!riskRes.passed) {
       return { signalEvent, decision: await recordDecision({ decision: "REJECTED", reasonCode: riskRes.rejectReason }) };
     }
 
-    const plan = planPaperOrder(signalType, definition, deployment.riskLimits ?? {}, paperState, heldPosition, bar, cache, signalIdx);
+    const limits = deployment.riskLimits ?? {};
+    const plan = planPaperOrder(signalType, definition, limits, equity.equity, heldPosition, bar, cache, signalIdx);
     if ("rejectReason" in plan) {
       return { signalEvent, decision: await recordDecision({ decision: "REJECTED", reasonCode: plan.rejectReason }) };
     }
-    const { side, quantity } = plan;
 
     const proposedOrder = {
       symbol,
       exchange: "NSE",
       signalType,
-      side,
+      side: plan.side,
       type: "MARKET",
-      quantity,
+      quantity: plan.quantity,
       strategyVersionId: versionId,
       signalId: signalEvent.id,
       quoteMetadata: { price: bar.close, ts: bar.ts },
     };
     try {
-      const service = options.paperService ?? new (await import("../modules/paper-trading/service")).PaperTradingService();
-      // The key is derived from the signal fingerprint: a re-placed order for the same bar replays
+      // The key is derived from the bar's claim: a re-placed order for the same bar replays
       // (or, with different terms, is refused) instead of filling twice.
-      const orderRes = await service.placeOrder({
+      const submission = await submitSignalOrder({
         userId,
-        command: { symbol, side, type: "MARKET", qty: quantity, idempotencyKey: `auto-${fingerprint}` },
-      });
-      decision = await recordDecision({ decision: "EXECUTED", paperOrderId: orderRes.order.id, proposedOrder });
+        symbol,
+        signalType,
+        side: plan.side,
+        quantity: plan.quantity,
+        limits,
+        equity: equity.equity,
+        idempotencyKey: `auto-${fingerprint}`,
+      }, options);
+      if ("rejectReason" in submission) {
+        decision = await recordDecision({
+          decision: "REJECTED",
+          reasonCode: submission.rejectReason,
+          reasonDetails: submission.details,
+          proposedOrder,
+        });
+      } else {
+        decision = await recordDecision({
+          decision: "EXECUTED",
+          paperOrderId: submission.placed.order.id,
+          quoteSource: submission.quote.source,
+          quoteTimestamp: new Date(submission.quote.ts),
+          proposedOrder: { ...proposedOrder, plannedQuantity: plan.quantity, quantity: submission.quantity },
+        });
+      }
     } catch (err: any) {
       decision = await recordDecision({
         decision: "REJECTED",

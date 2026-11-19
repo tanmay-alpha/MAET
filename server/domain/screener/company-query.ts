@@ -88,6 +88,16 @@ export type FieldAvailability = Record<string, {
   reason?: string;
 }>;
 
+/**
+ * Rows a filter left out only because a filtered metric is missing (null, not 0), keyed by
+ * the `fieldAvailability` key of each missing metric. A row missing two filtered metrics
+ * counts once in `total` and once under each field.
+ */
+export type MissingDataExclusions = {
+  total: number;
+  byField: Record<string, number>;
+};
+
 export type CompanyScreenerResponse = {
   asOf: string;
   generatedAt: string;
@@ -100,8 +110,13 @@ export type CompanyScreenerResponse = {
   pageCount: number;
   items: CompanyScreenerRow[];
   fieldAvailability: FieldAvailability;
+  excludedForMissingData: MissingDataExclusions;
   capBucketMethodology: string;
 };
+
+/** Fundamentals read from the `companies` table, whose provider is not recorded per value. */
+export const COMPANY_SNAPSHOT_SOURCE = "company_snapshot";
+const FUNDAMENTALS_STALE_AFTER_MS = 120 * 86_400_000;
 
 export type CompanyScreenerParams = {
   q: string;
@@ -222,44 +237,106 @@ export function percentInRange(value: number | undefined, min: number | undefine
   return inRange(value, minDecimal, maxDecimal);
 }
 
-export function matchesCompanyScreenerRow(row: CompanyScreenerRow, input: CompanyScreenerParams): boolean {
-  const q = input.q.toLocaleLowerCase("en-IN");
-  if (q && ![row.symbol, row.name, row.isin, row.bseCode ?? ""].some((value) => value.toLocaleLowerCase("en-IN").includes(q))) return false;
+/**
+ * How one row fares against the filters. `passes` covers only the metrics the row has;
+ * `missing` lists the `fieldAvailability` keys of filtered metrics it lacks. A missing metric
+ * never satisfies a filter (it is not treated as 0), and the caller reports it.
+ */
+export function screenCompanyScreenerRow(row: CompanyScreenerRow, input: CompanyScreenerParams): { passes: boolean; missing: string[] } {
+  const missing = new Set<string>();
+  let passes = true;
   const n = input.numbers;
-  if (!inRange(row.price, n.price_min, n.price_max)) return false;
-  if (!inRange(row.changePct, n.change_pct_min, n.change_pct_max)) return false;
-  if (!inRange(row.volume, n.volume_min, n.volume_max)) return false;
-  if (!inRange(row.relVolume, n.rel_volume_min, n.rel_volume_max)) return false;
-  if (!inRange(row.marketCap, n.market_cap_min, n.market_cap_max)) return false;
-  if (!inRange(row.pe, n.pe_min, n.pe_max)) return false;
-  if (!inRange(row.pb, n.pb_min, n.pb_max)) return false;
-  if (!percentInRange(row.roe, n.roe_min, n.roe_max)) return false;
-  if (!percentInRange(row.roce, n.roce_min, n.roce_max)) return false;
-  if (!percentInRange(row.dividendYield, n.dividend_yield_min, n.dividend_yield_max)) return false;
-  if (!inRange(row.debtToEquity, undefined, n.debt_to_equity_max)) return false;
-  if (!inRange(row.currentRatio, n.current_ratio_min, undefined)) return false;
-  if (!percentInRange(row.salesGrowth, n.sales_growth_min, undefined)) return false;
-  if (!percentInRange(row.profitGrowth, n.profit_growth_min, undefined)) return false;
-  if (input.buckets.length > 0 && !input.buckets.includes(row.marketCapBucket)) return false;
-  if (input.sectors.length > 0 && (!row.sector || !input.sectors.some((sector) => sector.toLocaleLowerCase("en-IN") === row.sector!.toLocaleLowerCase("en-IN")))) return false;
-  if (input.industries.length > 0 && (!row.industry || !input.industries.some((industry) => industry.toLocaleLowerCase("en-IN") === row.industry!.toLocaleLowerCase("en-IN")))) return false;
-  if (input.highBreakout && (row.price === undefined || row.fiftyTwoWeekHigh === undefined || row.price < row.fiftyTwoWeekHigh)) return false;
-  if (input.lowNear && (row.price === undefined || row.fiftyTwoWeekLow === undefined || row.price > row.fiftyTwoWeekLow * 1.05)) return false;
+  const range = (
+    field: string,
+    value: number | undefined,
+    min: number | undefined,
+    max: number | undefined,
+    test: (value: number, min: number | undefined, max: number | undefined) => boolean = inRange,
+  ) => {
+    if (min === undefined && max === undefined) return;
+    if (value === undefined || Number.isNaN(value)) missing.add(field);
+    else if (!test(value, min, max)) passes = false;
+  };
+  /** A condition over several metrics: evaluated only when all of them are present. */
+  const condition = (active: boolean, values: Record<string, number | boolean | undefined>, holds: () => boolean) => {
+    if (!active) return;
+    const absent = Object.entries(values).filter(([, value]) => value === undefined).map(([field]) => field);
+    if (absent.length > 0) absent.forEach((field) => missing.add(field));
+    else if (!holds()) passes = false;
+  };
+  const listed = (field: string, value: string | undefined, allowed: string[]) => {
+    if (allowed.length === 0) return;
+    if (!value) missing.add(field);
+    else if (!allowed.some((entry) => entry.toLocaleLowerCase("en-IN") === value.toLocaleLowerCase("en-IN"))) passes = false;
+  };
+
+  const q = input.q.toLocaleLowerCase("en-IN");
+  if (q && ![row.symbol, row.name, row.isin, row.bseCode ?? ""].some((value) => value.toLocaleLowerCase("en-IN").includes(q))) passes = false;
+  range("price", row.price, n.price_min, n.price_max);
+  range("changePct", row.changePct, n.change_pct_min, n.change_pct_max);
+  range("volume", row.volume, n.volume_min, n.volume_max);
+  range("relVolume", row.relVolume, n.rel_volume_min, n.rel_volume_max);
+  range("marketCap", row.marketCap, n.market_cap_min, n.market_cap_max);
+  range("pe", row.pe, n.pe_min, n.pe_max);
+  range("pb", row.pb, n.pb_min, n.pb_max);
+  range("roe", row.roe, n.roe_min, n.roe_max, percentInRange);
+  range("roce", row.roce, n.roce_min, n.roce_max, percentInRange);
+  range("dividendYield", row.dividendYield, n.dividend_yield_min, n.dividend_yield_max, percentInRange);
+  range("debtToEquity", row.debtToEquity, undefined, n.debt_to_equity_max);
+  range("currentRatio", row.currentRatio, n.current_ratio_min, undefined);
+  range("salesGrowth", row.salesGrowth, n.sales_growth_min, undefined, percentInRange);
+  range("profitGrowth", row.profitGrowth, n.profit_growth_min, undefined, percentInRange);
+  // "unknown" means the market cap the bucket is ranked from is missing.
+  if (input.buckets.length > 0 && !input.buckets.includes(row.marketCapBucket)) {
+    if (row.marketCapBucket === "unknown") missing.add("marketCap");
+    else passes = false;
+  }
+  listed("sector", row.sector, input.sectors);
+  listed("industry", row.industry, input.industries);
+  condition(input.highBreakout, { price: row.price, fiftyTwoWeekHigh: row.fiftyTwoWeekHigh }, () => row.price! >= row.fiftyTwoWeekHigh!);
+  condition(input.lowNear, { price: row.price, fiftyTwoWeekLow: row.fiftyTwoWeekLow }, () => row.price! <= row.fiftyTwoWeekLow! * 1.05);
 
   // Technical Indicator filters
-  if (!inRange(row.rsi14, n.rsi_min, n.rsi_max)) return false;
-  if (!inRange(row.distanceFromSma200Pct, n.distance_sma200_min, n.distance_sma200_max)) return false;
-  if (!inRange(row.distanceFrom52WeekHighPct, n.distance_52w_high_min, n.distance_52w_high_max)) return false;
-  if (!inRange(row.atr14, n.atr_min, n.atr_max)) return false;
+  range("rsi", row.rsi14, n.rsi_min, n.rsi_max);
+  range("sma200", row.distanceFromSma200Pct, n.distance_sma200_min, n.distance_sma200_max);
+  range("fiftyTwoWeekHigh", row.distanceFrom52WeekHighPct, n.distance_52w_high_min, n.distance_52w_high_max);
+  range("atr", row.atr14, n.atr_min, n.atr_max);
 
   // Technical boolean condition filters
-  if (input.priceAboveSma200 && (row.priceAboveSma200 !== true)) return false;
-  if (input.priceAboveSma50 && (row.priceAboveSma50 !== true)) return false;
-  if (input.goldenCross && (row.sma50 === undefined || row.sma200 === undefined || row.sma50 <= row.sma200)) return false;
-  if (input.rsiOversold && (row.rsi14 === undefined || row.rsi14 > 30)) return false;
-  if (input.rsiOverbought && (row.rsi14 === undefined || row.rsi14 < 70)) return false;
+  condition(input.priceAboveSma200, { sma200: row.priceAboveSma200 }, () => row.priceAboveSma200 === true);
+  condition(input.priceAboveSma50, { sma50: row.priceAboveSma50 }, () => row.priceAboveSma50 === true);
+  condition(input.goldenCross, { sma50: row.sma50, sma200: row.sma200 }, () => row.sma50! > row.sma200!);
+  condition(input.rsiOversold, { rsi: row.rsi14 }, () => row.rsi14! <= 30);
+  condition(input.rsiOverbought, { rsi: row.rsi14 }, () => row.rsi14! >= 70);
 
-  return true;
+  return { passes, missing: [...missing] };
+}
+
+export function matchesCompanyScreenerRow(row: CompanyScreenerRow, input: CompanyScreenerParams): boolean {
+  const { passes, missing } = screenCompanyScreenerRow(row, input);
+  return passes && missing.length === 0;
+}
+
+/** The rows that match, and a count of rows left out only because a filtered metric is missing. */
+export function screenCompanyScreenerRows(
+  rows: CompanyScreenerRow[],
+  input: CompanyScreenerParams,
+): { matches: CompanyScreenerRow[]; excludedForMissingData: MissingDataExclusions } {
+  const matches: CompanyScreenerRow[] = [];
+  const excludedForMissingData: MissingDataExclusions = { total: 0, byField: {} };
+  for (const row of rows) {
+    const { passes, missing } = screenCompanyScreenerRow(row, input);
+    if (!passes) continue;
+    if (missing.length === 0) {
+      matches.push(row);
+      continue;
+    }
+    excludedForMissingData.total += 1;
+    for (const field of missing) {
+      excludedForMissingData.byField[field] = (excludedForMissingData.byField[field] ?? 0) + 1;
+    }
+  }
+  return { matches, excludedForMissingData };
 }
 
 function compareRows(left: CompanyScreenerRow, right: CompanyScreenerRow, input: CompanyScreenerParams): number {
@@ -360,8 +437,13 @@ async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScree
     const fund = fundamentalsByCompany.get(company.id);
     const marketMetrics = marketMetricsByCompany.get(company.id);
     const tech = technicalBySymbol.get(company.symbol);
-    const fundamentalsAsOf = fund?.periodDate;
-    const isStale = fund?.isStale ?? Boolean(fundamentalsAsOf && Date.now() - fundamentalsAsOf.getTime() > 120 * 86_400_000);
+    // Provenance of the fundamentals the row displays: the latest stored statement when it was
+    // loaded, otherwise the values on the company row and the time they were last written.
+    const companySnapshot = [company.marketCap, company.peRatio, company.pbRatio, company.roe, company.dividendYield, company.eps, company.debtToEquity]
+      .some((value) => value !== null) || company.lastFundamentalsUpdate !== null;
+    const fundamentalsAsOf = fund ? fund.periodDate : company.lastFundamentalsUpdate ?? undefined;
+    const fundamentalsSource = fund ? fund.source : companySnapshot ? COMPANY_SNAPSHOT_SOURCE : undefined;
+    const isStale = fund?.isStale ?? Boolean(fundamentalsAsOf && Date.now() - fundamentalsAsOf.getTime() > FUNDAMENTALS_STALE_AFTER_MS);
     return {
       symbol: company.symbol,
       name: company.name,
@@ -404,7 +486,7 @@ async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScree
       quoteAsOf: quote?.asOf?.toISOString(),
       fundamentalsAsOf: fundamentalsAsOf?.toISOString(),
       quoteSource: quote?.source,
-      fundamentalsSource: fund?.source ?? company.dataSource,
+      fundamentalsSource,
       staleFundamentals: isStale,
       source: "database",
 
@@ -437,7 +519,8 @@ async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScree
       technicalEngineVersion: tech?.indicatorEngineVersion ?? undefined,
     };
   });
-  const filtered = allRows.filter((row) => matchesCompanyScreenerRow(row, input)).sort((a, b) => compareRows(a, b, input));
+  const { matches, excludedForMissingData } = screenCompanyScreenerRows(allRows, input);
+  const filtered = matches.sort((a, b) => compareRows(a, b, input));
   const start = (input.page - 1) * input.limit;
   const generatedAt = new Date().toISOString();
   return {
@@ -452,6 +535,7 @@ async function queryDatabase(input: CompanyScreenerParams): Promise<CompanyScree
     pageCount: Math.ceil(filtered.length / input.limit),
     items: filtered.slice(start, start + input.limit),
     fieldAvailability: fieldAvailability(allRows),
+    excludedForMissingData,
     capBucketMethodology: CAP_BUCKET_METHODOLOGY,
   };
 }
@@ -462,15 +546,14 @@ async function queryNseFallback(input: CompanyScreenerParams): Promise<CompanySc
     input.sectors.length > 0 || input.industries.length > 0 || input.highBreakout || input.lowNear ||
     input.priceAboveSma200 || input.priceAboveSma50 || input.goldenCross || input.rsiOversold || input.rsiOverbought ||
     input.buckets.some((bucket) => bucket !== "unknown");
-  const filtered = requiresStoredData ? [] : searchNseCompanyMaster(all, input.q).filter(() =>
-    input.buckets.length === 0 || input.buckets.includes("unknown")
-  );
-  const rows: CompanyScreenerRow[] = filtered.map((company) => ({
+  // The NSE master carries no stored metrics, so any metric filter leaves a row out for missing data.
+  const searched: CompanyScreenerRow[] = searchNseCompanyMaster(all, input.q).map((company) => ({
     ...company,
     marketCapBucket: "unknown",
     yahooSymbol: `${company.symbol}.NS`,
     source: "nse",
   }));
+  const { matches: rows, excludedForMissingData } = screenCompanyScreenerRows(searched, { ...input, q: "" });
   const start = (input.page - 1) * input.limit;
   const generatedAt = new Date().toISOString();
   return {
@@ -487,6 +570,7 @@ async function queryNseFallback(input: CompanyScreenerParams): Promise<CompanySc
     pageCount: Math.ceil(rows.length / input.limit),
     items: rows.slice(start, start + input.limit),
     fieldAvailability: fieldAvailability(rows),
+    excludedForMissingData,
     capBucketMethodology: CAP_BUCKET_METHODOLOGY,
   };
 }

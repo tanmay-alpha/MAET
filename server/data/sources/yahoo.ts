@@ -1,5 +1,5 @@
 import type { Candle, CorporateActionEvent, Tick } from "../../../shared/types";
-import { UpstreamDegradedError, UpstreamPermanentError } from "../../../shared/types";
+import { MAX_STREAM_SYMBOLS, UpstreamDegradedError, UpstreamPermanentError } from "../../../shared/types";
 import { getCachedJson, setCachedJson } from "../../data/redis/client";
 import { RedisKeys } from "../../data/redis/keys";
 
@@ -11,6 +11,19 @@ export { UpstreamDegradedError, UpstreamPermanentError };
 
 const HOST = "query1.finance.yahoo.com";
 const MAX_CONCURRENT_REQUESTS = 4;
+/**
+ * Requests allowed to wait for one of those slots; beyond this a caller fails at once
+ * (503 at the routes) instead of queueing behind a flood it cannot outlast. Sized to the
+ * largest legitimate burst, a stream snapshot of MAX_STREAM_SYMBOLS uncached quotes while
+ * Angel One is down. At Yahoo's usual 0.2-0.3 s per request that queue drains in about
+ * the browser's 12 s backend timeout, so waiting longer would not help the caller anyway.
+ */
+export const MAX_QUEUED_YAHOO_REQUESTS = MAX_STREAM_SYMBOLS;
+/** Deadline per Yahoo request, covering the response body as well as the headers. */
+const FETCH_TIMEOUT_MS = 8_000;
+/** How long a ticker Yahoo answered 404 for is refused without asking again. */
+const UNKNOWN_TICKER_TTL_MS = 10 * 60_000;
+const MAX_UNKNOWN_TICKERS = 1_000;
 // Yahoo throttles (429) non-browser agents from datacenter IPs; quotes and
 // candles must present the same browser identity.
 const BROWSER_USER_AGENT =
@@ -30,15 +43,45 @@ const CANDLE_CACHE_SECONDS: Record<Candle["tf"], number> = {
 
 let activeRequests = 0;
 const requestWaiters: Array<() => void> = [];
+let fetchTimeoutMs = FETCH_TIMEOUT_MS;
+/** Ticker → time its 404 stops being trusted. Insertion order is eviction order. */
+const unknownTickers = new Map<string, number>();
+
+/** A Yahoo request outlived its deadline. Not retried: a stalled upstream rarely recovers in 200 ms. */
+export class YahooTimeoutError extends UpstreamDegradedError {
+  constructor(message: string) {
+    super(message);
+    this.name = "YahooTimeoutError";
+  }
+}
+
+/** Every slot is busy and the wait queue is full. Not retried: retrying only lengthens the queue. */
+export class YahooOverloadedError extends UpstreamDegradedError {
+  constructor(message: string) {
+    super(message);
+    this.name = "YahooOverloadedError";
+  }
+}
 
 export function _resetCircuitForTest(): void {
   activeRequests = 0;
   requestWaiters.splice(0).forEach((release) => release());
+  fetchTimeoutMs = FETCH_TIMEOUT_MS;
+  unknownTickers.clear();
+}
+
+export function _setFetchTimeoutForTest(ms: number): void {
+  fetchTimeoutMs = ms;
 }
 
 async function withRequestSlot<T>(fn: () => Promise<T>): Promise<T> {
   if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
-    await new Promise<void>((resolve) => requestWaiters.push(resolve));
+    if (requestWaiters.length >= MAX_QUEUED_YAHOO_REQUESTS) {
+      throw new YahooOverloadedError(`yahoo request queue full (${MAX_QUEUED_YAHOO_REQUESTS} waiting)`);
+    }
+    const { promise, resolve } = Promise.withResolvers<void>();
+    requestWaiters.push(resolve);
+    await promise;
   }
   activeRequests++;
   try {
@@ -47,6 +90,29 @@ async function withRequestSlot<T>(fn: () => Promise<T>): Promise<T> {
     activeRequests--;
     requestWaiters.shift()?.();
   }
+}
+
+/**
+ * One chart API request: refuses a ticker Yahoo recently reported unknown, waits for a
+ * bounded slot, and aborts after `fetchTimeoutMs` (the signal also bounds reading the body).
+ */
+async function fetchChart(ticker: string, url: string): Promise<Response> {
+  const unknownUntil = unknownTickers.get(ticker);
+  if (unknownUntil !== undefined) {
+    if (Date.now() < unknownUntil) throw new UpstreamPermanentError(`yahoo 404 for ${ticker} (cached)`);
+    unknownTickers.delete(ticker);
+  }
+  const res = await withRequestSlot(() =>
+    fetch(url, { headers: { "User-Agent": BROWSER_USER_AGENT }, signal: AbortSignal.timeout(fetchTimeoutMs) })
+  );
+  if (res.status === 404) {
+    unknownTickers.set(ticker, Date.now() + UNKNOWN_TICKER_TTL_MS);
+    if (unknownTickers.size > MAX_UNKNOWN_TICKERS) {
+      const oldest = unknownTickers.keys().next().value;
+      if (oldest !== undefined) unknownTickers.delete(oldest);
+    }
+  }
+  return res;
 }
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -58,8 +124,11 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
       const r = await fn();
       return r;
     } catch (e) {
+      if (e instanceof DOMException && e.name === "TimeoutError") {
+        throw new YahooTimeoutError(`yahoo request exceeded ${fetchTimeoutMs} ms`);
+      }
       lastErr = e;
-      if (e instanceof UpstreamPermanentError) throw e;
+      if (e instanceof UpstreamPermanentError || e instanceof YahooOverloadedError) throw e;
       if (i === tries - 1) break;
       const wait = 200 * Math.pow(2, i) + Math.floor(Math.random() * 100);
       await new Promise((res) => setTimeout(res, wait));
@@ -187,7 +256,7 @@ export async function getCorporateActions(ticker: string): Promise<CorporateActi
   return withRetry(async () => {
     // Monthly bars keep the full-history response small; events carry their own dates.
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(fullTicker)}?range=max&interval=1mo&events=div%2Csplits`;
-    const res = await withRequestSlot(() => fetch(url, { headers: { "User-Agent": BROWSER_USER_AGENT } }));
+    const res = await fetchChart(fullTicker, url);
     if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo events ${res.status} for ${fullTicker}`);
     if (!res.ok) throw new UpstreamPermanentError(`yahoo events ${res.status} for ${fullTicker}`);
     const data = (await res.json()) as YahooChartResp;
@@ -211,11 +280,7 @@ export async function getQuote(
   const ticker = tickerOverride ?? symbolToTicker(symbol);
   return withRetry(async () => {
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`;
-    const res = await withRequestSlot(() =>
-      fetch(url, {
-        headers: { "User-Agent": BROWSER_USER_AGENT },
-      })
-    );
+    const res = await fetchChart(ticker, url);
     if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo ${res.status}`);
     if (res.status === 404) throw new UpstreamPermanentError(`symbol not found: ${ticker}`);
     if (!res.ok) throw new UpstreamPermanentError(`yahoo ${res.status}`);
@@ -292,9 +357,7 @@ export async function getCandles(
     const period2 = Math.floor(to.getTime() / 1000);
     const interval = tf === "1h" ? "60m" : tf;
     const url = `https://${HOST}/v8/finance/chart/${encodeURIComponent(fullTicker)}?period1=${period1}&period2=${period2}&interval=${interval}`;
-    const res = await withRequestSlot(() =>
-      fetch(url, { headers: { "User-Agent": BROWSER_USER_AGENT } })
-    );
+    const res = await fetchChart(fullTicker, url);
     if (res.status === 429 || res.status >= 500) throw new UpstreamDegradedError(`yahoo candles ${res.status} for ${fullTicker}`);
     if (!res.ok) throw new UpstreamPermanentError(`yahoo candles ${res.status} for ${fullTicker}`);
     const data = (await res.json()) as YahooChartResp;

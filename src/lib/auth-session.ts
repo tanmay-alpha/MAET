@@ -7,6 +7,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import {
   clearStoredSession,
+  getCurrentAccessToken,
   storeSession,
   storedAccessToken,
   storedSessionIdentity,
@@ -14,6 +15,7 @@ import {
   watchStoredSession,
   type GoTrueSession,
 } from "./auth-token";
+import { parseAuthFragment } from "./auth-fragment";
 
 export const SIGN_IN_NOT_CONFIGURED_MESSAGE = "Sign-in is not configured on this deployment.";
 const UNREACHABLE_MESSAGE = "Could not reach the sign-in service. Check your connection and try again.";
@@ -106,14 +108,28 @@ export async function signUpWithPassword(email: string, password: string): Promi
   return { status: "confirmation-required", email: address };
 }
 
+/** How long sign-out waits for a token refresh before revoking with the token it has. */
+const SIGN_OUT_REFRESH_TIMEOUT_MS = 5_000;
+
 /**
- * Forgets the session in this browser immediately, then asks GoTrue to revoke its refresh
- * token. The local sign-out does not wait for (or depend on) the network.
+ * Signs out here and on the server. GoTrue's /logout revokes the session's refresh token
+ * only when called with a valid access token, and an idle tab's token has usually expired:
+ * so the token is refreshed first (bounded by SIGN_OUT_REFRESH_TIMEOUT_MS), then the session
+ * is forgotten locally, then revoked. If no valid token can be had (offline, refresh token
+ * already rejected), the local sign-out still happens.
  */
 export async function signOut(): Promise<void> {
-  const accessToken = storedAccessToken();
-  clearStoredSession();
   const config = supabaseAuthConfig();
+  let accessToken: string | null = null;
+  if (config) {
+    const { promise: timeout, resolve } = Promise.withResolvers<null>();
+    const timer = setTimeout(() => resolve(null), SIGN_OUT_REFRESH_TIMEOUT_MS);
+    accessToken = await Promise.race([getCurrentAccessToken(), timeout]).finally(() => clearTimeout(timer));
+    // A refresh that failed or timed out leaves the token as stored; GoTrue may still accept it.
+    accessToken ??= storedAccessToken();
+  }
+  // Explicit sign-out: no "session expired" notice, even if the refresh above was rejected.
+  clearStoredSession();
   if (!config || !accessToken) return;
   try {
     await fetch(`${config.url}/auth/v1/logout?scope=local`, {
@@ -123,6 +139,49 @@ export async function signOut(): Promise<void> {
   } catch {
     // Offline: the access token still expires on its own; nothing is stored locally any more.
   }
+}
+
+export type AuthRedirectOutcome = { kind: "none" } | { kind: "signed-in" } | { kind: "error"; message: string };
+
+/**
+ * Completes an email-link sign-in (sign-up confirmation, magic link, …): Supabase redirects
+ * back with the session, or an error, in the URL fragment. The fragment is removed from the
+ * address bar and the history entry first (`replaceUrl` gets the URL without it), whatever
+ * happens next, so the tokens do not linger. The access token is then checked against this
+ * project's GoTrue (`/auth/v1/user`), which also supplies the user, before the session is
+ * stored; a token GoTrue does not accept is not stored.
+ */
+export async function consumeAuthRedirect(replaceUrl: (pathAndSearch: string) => void): Promise<AuthRedirectOutcome> {
+  if (typeof window === "undefined") return { kind: "none" };
+  const fragment = parseAuthFragment(window.location.hash);
+  if (!fragment) return { kind: "none" };
+  replaceUrl(window.location.pathname + window.location.search);
+  if (fragment.kind === "error") return { kind: "error", message: fragment.message };
+
+  const config = supabaseAuthConfig();
+  if (!config) return { kind: "error", message: SIGN_IN_NOT_CONFIGURED_MESSAGE };
+  let res: Response;
+  try {
+    res = await fetch(`${config.url}/auth/v1/user`, {
+      headers: { apikey: config.anonKey, authorization: `Bearer ${fragment.accessToken}` },
+    });
+  } catch {
+    return { kind: "error", message: UNREACHABLE_MESSAGE };
+  }
+  const user: unknown = await res.json().catch(() => null);
+  const id = typeof user === "object" && user !== null ? Reflect.get(user, "id") : undefined;
+  if (!res.ok || typeof id !== "string") {
+    return { kind: "error", message: "This sign-in link is no longer valid. Sign in with your email and password." };
+  }
+  storeSession({
+    access_token: fragment.accessToken,
+    refresh_token: fragment.refreshToken,
+    token_type: "bearer",
+    expires_at: fragment.expiresAt,
+    expires_in: fragment.expiresIn,
+    user: user as GoTrueSession["user"],
+  });
+  return { kind: "signed-in" };
 }
 
 /** /login, returning to `path` (a same-origin path) after signing in. */

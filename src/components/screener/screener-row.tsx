@@ -8,6 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { MarketCompany, MarketQuote } from "@/lib/market-api";
+import type { MetricUnit } from "@/lib/screener-format";
 import { getTradingViewUrl } from "@/lib/tradingview";
 import { quoteSourceLabel } from "@/lib/quote-source";
 
@@ -17,6 +18,8 @@ export type ScreenerColumn = {
   id: string;
   label: string;
   align?: "left" | "right";
+  /** Unit the header states for a numeric column; its cells show bare numbers in that unit. */
+  unit?: MetricUnit;
   sortBy?: string;
   /** Filled from the NSE company master or live quotes, so it still has data with the database offline. */
   offline?: true;

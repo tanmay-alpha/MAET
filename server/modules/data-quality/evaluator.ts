@@ -251,7 +251,7 @@ export function detectPipelineGaps(probe: StructuralProbe): PipelineGap[] {
       id: "corporate_actions_empty",
       severity: "warning",
       title: "corporate_actions is empty",
-      detail: "No splits, bonuses or dividends are stored. Stored candles are not adjusted from this table; corporate actions shown on charts come live from Yahoo Finance.",
+      detail: "No splits, bonuses or dividends are stored: the corporate-action ingestion (daily processor after the close, or the admin trigger) has not completed a run. Until it does, backtests cannot warn about corporate actions inside their window. Charts read corporate actions live from Yahoo Finance.",
     });
   }
   if (!probe.universeMembershipHasRows) {

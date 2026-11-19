@@ -41,6 +41,7 @@ describe("Strategy parameter sweep worker", () => {
     await sql.unsafe(`
       DELETE FROM public.strategy_parameter_sweeps WHERE id = '${sweepId}';
       DELETE FROM public.candles WHERE symbol = '${symbol}';
+      DELETE FROM public.corporate_actions WHERE symbol = '${symbol}';
       INSERT INTO auth.users (id) VALUES ('${userId}') ON CONFLICT DO NOTHING;
       INSERT INTO public.users (id, email) VALUES ('${userId}', 'sweep@test.com') ON CONFLICT DO NOTHING;
       INSERT INTO public.strategy_definitions (id, user_id, name, current_draft)
@@ -57,6 +58,11 @@ describe("Strategy parameter sweep worker", () => {
       return { symbol, timeframe: "1d", ts: new Date(start + i * 86_400_000).toISOString(), open: p, high: p + 1, low: p - 1, close: p, volume: 100_000, source: "test" };
     });
     await sql`INSERT INTO public.candles ${sql(candleRows)}`;
+    // A split inside the window that the stored candles do not reflect.
+    await sql`
+      INSERT INTO public.corporate_actions (symbol, action_type, ex_date, ratio_numerator, ratio_denominator, source)
+      VALUES (${symbol}, 'SPLIT', '2023-03-01T00:00:00+05:30', 2, 1, 'test')
+    `;
     await sql`
       INSERT INTO public.strategy_parameter_sweeps
         (id, user_id, strategy_id, parameters, combination_count, symbol_or_universe, timeframe, from_date, to_date, status)
@@ -79,6 +85,7 @@ describe("Strategy parameter sweep worker", () => {
 
     // 200 bars give 199 returns: 16 CSCV blocks per result, the same blocks for every combination.
     for (const r of results) {
+      expect(r.result_summary.warnings).toEqual([expect.stringMatching(/^CORPORATE_ACTIONS_IN_WINDOW: 1 corporate action\(s\) between /)]);
       expect(r.result_summary.returnBlocks).toHaveLength(16);
       expect(r.result_summary.returnBlocks.reduce((n: number, [count]: number[]) => n + count, 0)).toBe(199);
     }
@@ -89,6 +96,7 @@ describe("Strategy parameter sweep worker", () => {
 
     await sql`DELETE FROM public.strategy_parameter_sweeps WHERE id = ${sweepId}`;
     await sql`DELETE FROM public.candles WHERE symbol = ${symbol}`;
+    await sql`DELETE FROM public.corporate_actions WHERE symbol = ${symbol}`;
   });
 
   it("fails sweeps whose strategy belongs to another user or whose stored grid is oversize", async () => {

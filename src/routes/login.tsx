@@ -12,8 +12,12 @@ import {
 import { supabaseAuthConfig } from "@/lib/auth-token";
 
 export const Route = createFileRoute("/login")({
-  validateSearch: (search: Record<string, unknown>): { redirect?: string } =>
-    typeof search.redirect === "string" ? { redirect: search.redirect } : {},
+  // authError: why an email link (sign-up confirmation, magic link) could not sign in; set by
+  // the root route after it strips the auth fragment Supabase redirected back with.
+  validateSearch: (search: Record<string, unknown>): { redirect?: string; authError?: string } => ({
+    ...(typeof search.redirect === "string" ? { redirect: search.redirect } : {}),
+    ...(typeof search.authError === "string" ? { authError: search.authError } : {}),
+  }),
   head: () => ({ meta: [{ title: "Sign in — MAET" }] }),
   component: LoginPage,
 });
@@ -26,7 +30,7 @@ const PRIMARY_BUTTON =
   "w-full rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50";
 
 function LoginPage() {
-  const { redirect } = Route.useSearch();
+  const { redirect, authError } = Route.useSearch();
   const destination = safeRedirectPath(redirect);
   const router = useRouter();
   const signedIn = useSignedIn();
@@ -135,6 +139,11 @@ function LoginPage() {
         {expired && signingIn ? (
           <p role="status" className="mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
             Your session expired. Sign in again to continue.
+          </p>
+        ) : null}
+        {authError && signingIn ? (
+          <p role="alert" className="mt-3 rounded border border-bear/40 bg-bear/10 px-3 py-2 text-xs text-bear">
+            {authError}
           </p>
         ) : null}
         <form method="post" onSubmit={(event) => void onSubmit(event)} className="mt-4 space-y-3">

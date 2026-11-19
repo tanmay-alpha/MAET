@@ -143,6 +143,12 @@ export type MarketFieldAvailability = Record<string, {
   reason?: string;
 }>;
 
+/** Rows a filter left out only because a filtered metric is missing; keyed by fieldAvailability key. */
+export type MissingDataExclusions = {
+  total: number;
+  byField: Record<string, number>;
+};
+
 export type MarketCompaniesResponse = {
   asOf: string;
   generatedAt: string;
@@ -155,6 +161,7 @@ export type MarketCompaniesResponse = {
   pageCount: number;
   items: MarketCompany[];
   fieldAvailability: MarketFieldAvailability;
+  excludedForMissingData: MissingDataExclusions;
   capBucketMethodology: string;
 };
 
