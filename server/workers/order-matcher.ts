@@ -2,10 +2,22 @@ import { bus } from "../infra/bus";
 import { onTick } from "../domain/market/matcher";
 import { paperRiskMonitor } from "../modules/paper-trading/risk-monitor";
 import { paperExecutionPolicy } from "../modules/paper-trading/fill-writer";
+import { paperTradingTickProcessor } from "../modules/paper-trading/tick-processor";
 import { evaluateExecutionQuote, type Tick } from "@shared/types";
+
+export type OrderMatcherOptions = {
+  /**
+   * Whether `exchange:symbol` may have working paper orders. When it answers false the
+   * tick skips order matching, which would otherwise query paper_orders on every tick of
+   * every streamed symbol. Omitted: every tick is matched.
+   */
+  hasWorkingOrders?: (exchange: string, symbol: string) => boolean;
+};
 
 export class OrderMatcherWorker {
   private off: (() => void) | undefined;
+
+  constructor(private readonly options: OrderMatcherOptions = {}) {}
 
   start(): void {
     if (this.off) return;
@@ -22,7 +34,13 @@ export class OrderMatcherWorker {
       // 1. Feed the margin monitor the latest live quote for this exchange:symbol
       paperRiskMonitor.updateQuote(tick);
 
-      // 2. Coordinates order matching for this symbol
+      // 2. No working order on the symbol: keep its volume baseline current, skip the database.
+      if (this.options.hasWorkingOrders && !this.options.hasWorkingOrders(tick.exchange, tick.symbol)) {
+        paperTradingTickProcessor.observeTick(tick);
+        return;
+      }
+
+      // 3. Coordinates order matching for this symbol
       onTick(tick)
         .then((receipts) => {
           // A fill can end a working order or close a position: the paper-interest

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { AngelOneWorker, parseAngelOnePacket } from "./angelone-ws";
+import { ANGEL_ONE_MAX_TOKENS_PER_SESSION, AngelOneWorker, parseAngelOnePacket } from "./angelone-ws";
 import { bus } from "../infra/bus";
 import type { AngelOneSession } from "../data/sources/angelone/client";
 
@@ -126,6 +126,36 @@ describe("AngelOneWorker socket lifecycle", () => {
     w.updateTokens("u1", ["11536"]);
     expect(created).toBe(1);
     await w.stop();
+  });
+
+  it("never subscribes more tokens than one session allows, keeping the caller's order", () => {
+    const socket = makeWsLikeSocket();
+    const w = new AngelOneWorker({ createSocket: () => socket });
+    const tokens = (from: number, count: number) => Array.from({ length: count }, (_, i) => String(from + i));
+    const subscribed = new Set<string>();
+    const apply = () => {
+      for (const frame of socket.sent.splice(0)) {
+        const { action, params } = JSON.parse(frame);
+        for (const token of params.tokenList[0].tokens) {
+          if (action === 1) subscribed.add(token);
+          else subscribed.delete(token);
+        }
+        // The provider counts live subscriptions after every request.
+        expect(subscribed.size).toBeLessThanOrEqual(ANGEL_ONE_MAX_TOKENS_PER_SESSION);
+      }
+    };
+
+    w.manageUser("u1", session, tokens(1, 1_500));
+    w.start();
+    socket.__open();
+    apply();
+    expect([...subscribed]).toEqual(tokens(1, ANGEL_ONE_MAX_TOKENS_PER_SESSION));
+
+    // A higher-priority batch arrives at the front: the tail is unsubscribed before it is subscribed.
+    w.updateTokens("u1", [...tokens(50_000, 300), ...tokens(1, 1_500)]);
+    apply();
+    expect(subscribed).toEqual(new Set([...tokens(50_000, 300), ...tokens(1, ANGEL_ONE_MAX_TOKENS_PER_SESSION - 300)]));
+    void w.stop();
   });
 });
 
