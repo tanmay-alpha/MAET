@@ -125,6 +125,24 @@ describe("provenance", () => {
     expect(describeProvenance(provenance, "price")).toBe("Angel One · live · 06 Nov, 15:45 IST");
   });
 
+  it("keeps synthetic stored prices explicit in the canonical provenance column", () => {
+    const asOf = "2000-01-03T10:00:00.000Z";
+    expect(priceProvenance(company({ price: 456, quoteSource: "simulated", quoteAsOf: asOf }), undefined, NOW)).toEqual({
+      source: "Synthetic demo data · not market data",
+      asOf,
+      stale: true,
+    });
+  });
+
+  it("never presents a stored market observation as live", () => {
+    const asOf = "2026-11-06T10:00:00.000Z";
+    expect(priceProvenance(company({ price: 1400, quoteSource: "yahoo", quoteAsOf: asOf }), undefined, NOW)).toEqual({
+      source: "Yahoo · delayed",
+      asOf,
+      stale: false,
+    });
+  });
+
   it("flags a price older than the staleness window and falls back to the stored snapshot", () => {
     const old = new Date(NOW - PRICE_STALE_AFTER_MS - 60_000).toISOString();
     expect(priceProvenance(company(), quote({ source: "yahoo", delayed: true, ts: old }), NOW)).toEqual({

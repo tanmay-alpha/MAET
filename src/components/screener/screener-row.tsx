@@ -10,7 +10,6 @@ import {
 import type { MarketCompany, MarketQuote } from "@/lib/market-api";
 import type { MetricUnit } from "@/lib/screener-format";
 import { getTradingViewUrl } from "@/lib/tradingview";
-import { quoteSourceLabel } from "@/lib/quote-source";
 
 export type QuoteMap = ReadonlyMap<string, MarketQuote>;
 
@@ -89,19 +88,6 @@ export function ScreenerRow({ company, rank, columns, quotes, screenerRunId }: {
   const navigate = useNavigate();
   const cell = (column: ScreenerColumn): ReactNode => {
     if (column.id === "rank") return <span className="text-muted-foreground">{rank}</span>;
-    if (column.id === "price") {
-      const quote = quotes.get(company.symbol);
-      const hasPrice = quote?.price !== undefined || company.price !== undefined;
-      const source = quote?.source ?? company.quoteSource ?? "database";
-      const label = `${quoteSourceLabel(source, quote?.delayed ?? true)}${quote ? "" : " · stored"}`;
-      const asOf = quote?.ts ?? company.quoteAsOf;
-      return (
-        <>
-          {column.render(company, quotes)}
-          {hasPrice && <span data-testid="price-provenance" title={`Price observation: ${asOf ?? "time unavailable"}`} className="block font-sans text-[9px] text-muted-foreground">{label}</span>}
-        </>
-      );
-    }
     if (column.id !== "company") return column.render(company, quotes);
     return (
       <button

@@ -141,7 +141,7 @@ export function priceProvenance(company: MarketCompany, quote: MarketQuote | und
   }
   if (!isAvailableMetric(company.price)) return null;
   return {
-    source: company.quoteSource ? sourceLabel(company.quoteSource) : null,
+    source: company.quoteSource ? quoteSourceLabel(company.quoteSource, true) : null,
     asOf: company.quoteAsOf ?? null,
     stale: company.quoteAsOf ? isOlderThan(company.quoteAsOf, PRICE_STALE_AFTER_MS, now) : false,
   };

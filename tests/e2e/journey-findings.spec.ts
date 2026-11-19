@@ -6,7 +6,7 @@ for (const width of [360, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/screener");
     // SSR controls exist before hydration; a rendered API quote proves handlers are mounted.
-    await expect(page.getByText("₹2,450", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Data source and as-of time")).toContainText("Price: Angel One · live");
     if (width < 1024) {
       const trigger = page.getByRole("button", { name: "Toggle Sidebar" });
       await trigger.focus();
@@ -32,6 +32,7 @@ for (const width of [360, 768, 1440]) {
 }
 
 test("screener prices retain row provenance and fresh quotes override stored observations", async ({ page }) => {
+  await page.clock.setFixedTime(new Date(FIXED_NOW));
   const storedAt = "2000-01-03T10:00:00.000Z";
   await page.route("**/api/market/companies?*", (route) => route.fulfill({ json: {
     asOf: FIXED_NOW, source: "database", sourceSummary: ["Stored snapshots"], total: 2,
@@ -51,10 +52,14 @@ test("screener prices retain row provenance and fresh quotes override stored obs
   await page.goto("/screener");
   const demo = page.getByRole("row").filter({ hasText: "DEMO-ARKA" });
   const real = page.getByRole("row").filter({ hasText: "RELIANCE" });
-  await expect(demo.getByTestId("price-provenance")).toHaveText("Synthetic demo data · not market data · stored");
-  await expect(demo.getByTestId("price-provenance")).toHaveAttribute("title", /2000-01-03T10:00:00.000Z/);
-  await expect(real.getByTestId("price-provenance")).toHaveText("Angel One · live");
-  const realPrice = real.locator("td").filter({ has: page.getByTestId("price-provenance") });
-  await expect(realPrice).toContainText("₹3,333");
-  await expect(realPrice).not.toContainText("₹123");
+  await expect(page.getByRole("columnheader", { name: "Source · as of", exact: true })).toBeAttached();
+  const headers = (await page.locator("thead th").allTextContents()).map((text) => text.trim());
+  expect(headers).toContain("Price (₹)");
+  expect(headers).toContain("Source · as of");
+  const demoProvenance = demo.locator("td").nth(headers.indexOf("Source · as of"));
+  const realProvenance = real.locator("td").nth(headers.indexOf("Source · as of"));
+  await expect(demoProvenance).toHaveText("Price: Synthetic demo data · not market data · 03 Jan, 15:30 ISTStale");
+  await expect(realProvenance).toHaveText("Price: Angel One · live · 06 Nov, 15:45 IST");
+  const realPrice = real.locator("td").nth(headers.indexOf("Price (₹)"));
+  await expect(realPrice).toHaveText("3,333.00");
 });
