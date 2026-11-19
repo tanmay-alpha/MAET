@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import type { SweepRobustness } from "../../server/modules/strategy-optimisation/sweep-robustness";
 import { RunJobDialog } from "@/components/strategy/run-job-dialog";
 import { RobustnessHeatmapView } from "@/components/strategy/robustness-heatmap-view";
+import { SweepSelectionView } from "@/components/strategy/sweep-selection-view";
 import { WalkForwardView } from "@/components/strategy/walk-forward-view";
 import { EquityLine } from "@/components/strategy/equity-line";
 import { EmptyLine, ErrorLine, MetricGrid, PageHeader, primaryButton, ViewSwitch, type MetricItem } from "@/components/strategy/page-chrome";
@@ -435,6 +436,7 @@ function SweepDetail({ sweep, results, robustness }: { sweep: SweepView; results
       {robustness && (
         <RobustnessHeatmapView analysis={robustness.analysis} paramXName={robustness.paramX} paramYName={robustness.paramY} />
       )}
+      {robustness && <SweepSelectionView selection={robustness.selection} />}
       <section>
         <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">
           Top {ranked.length} of {results.length} combinations by Sharpe · in-sample, so the best row is optimistic; confirm it with a walk-forward test

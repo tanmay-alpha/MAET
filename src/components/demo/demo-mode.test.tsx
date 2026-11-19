@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToString } from "react-dom/server";
-import { quoteSourceLabel } from "@/lib/quote-source";
+import { quoteProviderName, quoteSourceLabel, quoteSourceTitle } from "@/lib/quote-source";
+import { marketSummary, quoteTooltip } from "@/components/landing/market-presentation";
+import type { MarketQuote, MarketQuotesResponse } from "@/lib/market-api";
 import { DemoModeBanner } from "./demo-mode-banner";
 import { DEMO_BANNER_TEXT, SYNTHETIC_QUOTE_LABEL } from "./demo-mode";
 
@@ -32,16 +34,37 @@ describe("demo mode banner", () => {
   });
 });
 
-describe("quote labels", () => {
-  test("a demo build labels every quote synthetic, whatever source it reports", () => {
-    setDemoBuild("1");
-    expect(quoteSourceLabel("angelone", false, "OPEN")).toBe(SYNTHETIC_QUOTE_LABEL);
-    expect(quoteSourceLabel("yahoo", true, "CLOSED")).toBe(SYNTHETIC_QUOTE_LABEL);
-  });
+const quote: MarketQuote = {
+  symbol: "DEMO-ALPHA", exchange: "NSE", price: 812.5, ts: "2026-11-06T10:00:00.000Z",
+  source: "simulated", quality: "synthetic", delayed: false,
+};
+const yahoo: MarketQuote = { ...quote, symbol: "RELIANCE", price: 2450, source: "yahoo", quality: "delayed", delayed: true };
+const response = (quotes: MarketQuote[]): MarketQuotesResponse => ({ asOf: quote.ts, source: quotes[0].source, delayed: false, quotes, errors: [] });
 
-  test("an ordinary build never calls a simulated quote live", () => {
-    setDemoBuild(undefined);
-    expect(quoteSourceLabel("simulated", false, "OPEN")).toBe("Simulated · synthetic");
-    expect(quoteSourceLabel("angelone", false, "OPEN")).toBe("Angel One · live");
+// Labels state each quote's own source: a demo build can also serve real public quotes.
+for (const build of ["1", undefined]) {
+  describe(`quote labels in ${build ? "a demo" : "an ordinary"} build`, () => {
+    test("a seeded DEMO- (simulated) quote is labelled synthetic everywhere", () => {
+      setDemoBuild(build);
+      expect(quoteSourceLabel("simulated", false, "OPEN")).toBe(SYNTHETIC_QUOTE_LABEL);
+      expect(quoteTooltip(quote)).toStartWith(`${SYNTHETIC_QUOTE_LABEL} · `);
+      expect(quoteSourceTitle(quote)).toBe(`Quote source: ${SYNTHETIC_QUOTE_LABEL}`);
+      expect(quoteProviderName("simulated")).toBe(SYNTHETIC_QUOTE_LABEL);
+      expect(marketSummary(response([quote]))).toStartWith(`${SYNTHETIC_QUOTE_LABEL} · `);
+    });
+
+    test("a real Yahoo quote keeps its provider and delay", () => {
+      setDemoBuild(build);
+      expect(quoteSourceLabel("yahoo", true)).toBe("Yahoo · delayed");
+      expect(quoteSourceLabel("yahoo", true, "CLOSED")).toBe("Yahoo · delayed · market closed");
+      expect(quoteSourceLabel("angelone", false, "OPEN")).toBe("Angel One · live");
+      expect(quoteTooltip(yahoo)).toStartWith("Yahoo · delayed · ");
+      expect(quoteTooltip({ ...yahoo, quality: "stale" })).toStartWith("Yahoo · delayed · stale · ");
+      expect(quoteSourceTitle(yahoo)).toBe("Quote source: Yahoo · delayed");
+      expect(quoteSourceTitle(undefined)).toBe("Quote unavailable");
+      expect(quoteProviderName("yahoo")).toBe("Yahoo");
+      expect(marketSummary(response([yahoo]))).toStartWith("Yahoo Finance · ");
+      expect(marketSummary(response([yahoo, quote]))).toStartWith(`Yahoo Finance + ${SYNTHETIC_QUOTE_LABEL} · `);
+    });
   });
-});
+}

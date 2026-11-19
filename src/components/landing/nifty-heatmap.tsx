@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import nifty50 from "@shared/symbols/nifty50.json";
 import type { MarketQuotesResponse } from "@/lib/market-api";
-import { formatChange, heatmapTone, marketSummary, quoteRange, quoteTime, sourceName } from "./market-presentation";
+import { formatChange, heatmapTone, marketSummary, quoteRange, quoteTooltip } from "./market-presentation";
 
 export const NIFTY_SYMBOLS = nifty50.map((company) => company.symbol);
 
@@ -28,7 +28,7 @@ export function NiftyHeatmap({ data, isError, isPending }: { data?: MarketQuotes
         {nifty50.map((company) => {
           const quote = quoteMap.get(company.symbol);
           const description = quote
-            ? `${company.name} · ₹${quote.price.toLocaleString("en-IN")} · ${sourceName(quote.source)} · ${quote.quality} · ${quoteTime(quote.ts)} IST`
+            ? `${company.name} · ₹${quote.price.toLocaleString("en-IN")} · ${quoteTooltip(quote)}`
             : `${company.name} · Quote unavailable`;
           return (
             <Link key={company.symbol} to="/stock/$symbol" params={{ symbol: company.symbol }}

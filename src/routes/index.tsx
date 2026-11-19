@@ -4,7 +4,7 @@ import { ArrowUpRight, Github, Table2, FlaskConical, CandlestickChart, ArrowRigh
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { fetchMarketQuotes } from "@/lib/market-api";
 import { MarketSource, NiftyHeatmap, NIFTY_SYMBOLS } from "@/components/landing/nifty-heatmap";
-import { formatChange, quoteTime, sourceName } from "@/components/landing/market-presentation";
+import { formatChange, quoteTooltip } from "@/components/landing/market-presentation";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -85,7 +85,7 @@ function Landing() {
                 <tbody className="divide-y divide-border">
                   {WATCH_SYMBOLS.map((symbol) => {
                     const quote = quotes.get(symbol);
-                    return <tr key={symbol} title={quote ? `${sourceName(quote.source)} · ${quote.quality} · ${quoteTime(quote.ts)} IST` : "Quote unavailable"}>
+                    return <tr key={symbol} title={quote ? quoteTooltip(quote) : "Quote unavailable"}>
                       <th className="px-4 py-3 font-medium"><Link to="/stock/$symbol" params={{ symbol }} className="hover:text-primary">{symbol}</Link></th>
                       <td className="px-2 py-3 text-right font-mono tabular-nums">{quote?.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}</td>
                       <td className={`px-4 py-3 text-right font-mono tabular-nums ${quote?.changePct === undefined || quote.changePct === 0 ? "text-muted-foreground" : quote.changePct > 0 ? "text-bull" : "text-bear"}`}>{formatChange(quote?.changePct)}</td>
