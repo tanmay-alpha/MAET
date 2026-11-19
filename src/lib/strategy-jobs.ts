@@ -4,7 +4,13 @@
  * discovery/ranges, and mapping stored results onto the result views.
  */
 
-import type { WalkForwardAnalysisResult, WindowMetricsSummary } from "../../server/domain/strategy/walk-forward";
+import type {
+  OosPosition,
+  WalkForwardAnalysisResult,
+  WalkForwardBenchmark,
+  WalkForwardMethodology,
+  WindowMetricsSummary,
+} from "../../server/domain/strategy/walk-forward";
 
 // ============================================================
 // Row shapes (dates arrive as ISO strings over JSON)
@@ -63,10 +69,18 @@ export interface SweepResultView {
   } | null;
 }
 
-export type WalkForwardStoredSummary = WalkForwardAnalysisResult["summary"] & {
-  warnings: string[];
-  oosEquityCurve?: Array<{ timestamp: number; equity: number }>;
-};
+type WalkForwardSummary = WalkForwardAnalysisResult["summary"];
+/** Summary fields added with the cash-or-trade policy; absent on runs stored before it. */
+type LaterSummaryFields = "isAnnualisedAvg" | "oosAnnualisedReturn" | "oosSharpe" | "oosAnnualisedAvg" | "cashWindowsCount";
+
+export type WalkForwardStoredSummary = Omit<WalkForwardSummary, LaterSummaryFields> &
+  Partial<Pick<WalkForwardSummary, LaterSummaryFields>> & {
+    warnings: string[];
+    oosEquityCurve?: Array<{ timestamp: number; equity: number }>;
+    methodology?: WalkForwardMethodology | null;
+    benchmark?: WalkForwardBenchmark | null;
+    benchmarkReason?: string | null;
+  };
 
 export interface WalkForwardRunView {
   id: string;
@@ -96,7 +110,8 @@ export interface WalkForwardWindowView {
   selectedParameters: Record<string, number> | null;
   trainingMetrics: WindowMetricsSummary | null;
   validationMetrics: { metrics: WindowMetricsSummary | null; accepted: boolean; rejectionReason: string | null } | null;
-  testMetrics: WindowMetricsSummary | null;
+  /** Test-segment metrics; `position` / `cashReason` are absent on rows stored before the cash policy. */
+  testMetrics: (WindowMetricsSummary & { position?: OosPosition; cashReason?: string | null }) | null;
 }
 
 // ============================================================
@@ -268,7 +283,7 @@ export function walkForwardError(run: Pick<WalkForwardRunView, "oosSummary">): s
   return run.oosSummary && "error" in run.oosSummary ? run.oosSummary.error : null;
 }
 
-const NO_METRICS: WindowMetricsSummary = { totalReturn: 0, annualisedReturn: 0, sharpe: 0, maxDrawdown: 0, tradeCount: 0, winRate: 0 };
+const CASH_METRICS: WindowMetricsSummary = { totalReturn: 0, annualisedReturn: 0, sharpe: 0, maxDrawdown: 0, tradeCount: 0, winRate: 0 };
 
 /** A completed run and its stored windows in the shape WalkForwardView renders; null until completed. */
 export function walkForwardViewResult(
@@ -276,27 +291,45 @@ export function walkForwardViewResult(
   windows: readonly WalkForwardWindowView[],
 ): WalkForwardAnalysisResult | null {
   if (run.status !== "COMPLETED" || !isStoredSummary(run.oosSummary)) return null;
-  const { warnings, oosEquityCurve, ...summary } = run.oosSummary;
+  const { warnings, oosEquityCurve, methodology, benchmark, benchmarkReason, ...stored } = run.oosSummary;
   return {
     strategyVersionId: "",
     symbol: run.symbol,
     windowType: run.mode,
-    summary,
+    methodology: methodology ?? null,
+    summary: {
+      ...stored,
+      isAnnualisedAvg: stored.isAnnualisedAvg ?? null,
+      oosAnnualisedReturn: stored.oosAnnualisedReturn ?? null,
+      oosSharpe: stored.oosSharpe ?? null,
+      oosAnnualisedAvg: stored.oosAnnualisedAvg ?? null,
+      // Earlier runs held cash in exactly the windows they did not test.
+      cashWindowsCount: stored.cashWindowsCount ?? stored.totalWindowsCount - stored.testedWindowsCount,
+    },
+    benchmark: benchmark ?? null,
+    benchmarkReason: benchmark ? null : (benchmarkReason ?? "Not recorded for this run"),
     warnings,
     aggregateOosEquityCurve: oosEquityCurve ?? [],
-    windows: windows.map((w) => ({
-      windowNumber: w.windowIndex,
-      trainDates: { from: w.trainingFrom, to: w.trainingTo },
-      valDates: { from: w.validationFrom, to: w.validationTo },
-      testDates: { from: w.testFrom ?? w.validationTo, to: w.testTo ?? w.validationTo },
-      selectedParameters: w.selectedParameters ?? {},
-      validationAccepted: w.validationMetrics?.accepted ?? false,
-      rejectionReason: w.validationMetrics?.rejectionReason ?? null,
-      isMetrics: w.trainingMetrics ?? NO_METRICS,
-      valMetrics: w.validationMetrics?.metrics ?? null,
-      oosMetrics: w.testMetrics,
-      oosEquityCurve: [],
-    })),
+    windows: windows.map((w) => {
+      // Rows stored before the cash policy left the test segment of a rejected window empty: it held cash.
+      const { position, cashReason, ...testMetrics } = w.testMetrics ?? { ...CASH_METRICS, position: "CASH" as OosPosition, cashReason: null };
+      const oosPosition = position ?? "STRATEGY";
+      return {
+        windowNumber: w.windowIndex,
+        trainDates: { from: w.trainingFrom, to: w.trainingTo },
+        valDates: { from: w.validationFrom, to: w.validationTo },
+        testDates: { from: w.testFrom ?? w.validationTo, to: w.testTo ?? w.validationTo },
+        selectedParameters: w.selectedParameters,
+        validationAccepted: w.validationMetrics?.accepted ?? false,
+        rejectionReason: w.validationMetrics?.rejectionReason ?? null,
+        isMetrics: w.trainingMetrics,
+        valMetrics: w.validationMetrics?.metrics ?? null,
+        oosPosition,
+        cashReason: oosPosition === "CASH" ? (cashReason ?? w.validationMetrics?.rejectionReason ?? null) : null,
+        oosMetrics: testMetrics,
+        oosEquityCurve: [],
+      };
+    }),
   };
 }
 

@@ -18,6 +18,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { CreateSweepInputSchema, CreateWalkForwardInputSchema } from "../../../../shared/strategy/contracts";
 import { insertWithinActiveJobCap } from "../../../modules/strategy-jobs/repository";
 import { analyseSweepRobustness } from "../../../modules/strategy-optimisation/sweep-robustness";
+import { countWalkForwardWindows, walkForwardRange, walkForwardRunSpans } from "../../../domain/strategy/walk-forward";
 import { countCombinations, MAX_SWEEP_COMBINATIONS, type SweepParameter } from "../../../domain/strategy/parameter-sweep";
 
 /** Rejects parameter grids larger than a sweep or walk-forward run may request; returns the grid size. */
@@ -66,7 +67,10 @@ export const strategyOptimisationRouter = createRouter({
       return { sweep };
     }),
 
-  /** Get a parameter sweep, its results and (once completed) their robustness analysis */
+  /**
+   * Get a parameter sweep, its results and (once completed) their robustness analysis, including
+   * the retrospective-selection label, trial count and probability of backtest overfitting.
+   */
   getSweep: protectedProcedure
     .input(z.object({ sweepId: z.string().uuid() }).strict())
     .query(async ({ ctx, input }) => {
@@ -88,7 +92,14 @@ export const strategyOptimisationRouter = createRouter({
         ? analyseSweepRobustness(sweep.parameters as SweepParameter[], results)
         : null;
 
-      return { sweep, results, robustness };
+      // The per-block returns feed the PBO above; the client does not need them.
+      const summaries = results.map(({ resultSummary, ...row }) => {
+        if (!resultSummary || typeof resultSummary !== "object") return { ...row, resultSummary };
+        const { returnBlocks: _returnBlocks, ...summary } = resultSummary as Record<string, unknown>;
+        return { ...row, resultSummary: summary };
+      });
+
+      return { sweep, results: summaries, robustness };
     }),
 
   /** List sweeps for a strategy */
@@ -132,14 +143,16 @@ export const strategyOptimisationRouter = createRouter({
 
       assertCombinationLimit(input.parameters);
 
-      // Validate minimum windows
-      const totalDays = (new Date(input.to).getTime() - new Date(input.from).getTime()) / 86_400_000;
-      const windowSize = input.trainingWindowDays + input.validationWindowDays;
-      const maxWindows = Math.floor(totalDays / input.validationWindowDays);
+      // Calendar-day windows of training, validation and out-of-sample test that step by the test span.
+      const { rangeStart, rangeEnd } = walkForwardRange(new Date(input.from), new Date(input.to));
+      const rangeMs = rangeEnd.getTime() - rangeStart.getTime();
+      const spans = walkForwardRunSpans({ trainingDays: input.trainingWindowDays, validationDays: input.validationWindowDays });
+      const maxWindows = countWalkForwardWindows(rangeMs, spans);
       if (maxWindows < input.minimumWindows) {
+        const neededDays = spans.trainingDays + spans.validationDays + input.minimumWindows * spans.testDays;
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Date range is too short for ${input.minimumWindows} windows. Need at least ${input.minimumWindows * windowSize} days, got ${Math.floor(totalDays)}.`,
+          message: `Date range is too short for ${input.minimumWindows} windows. Need at least ${neededDays} days, got ${Math.floor(rangeMs / 86_400_000)}.`,
         });
       }
 
