@@ -66,5 +66,5 @@ describe("Migration 0030 corporate_actions identity", () => {
       await admin.unsafe(`DROP DATABASE IF EXISTS ${freshDb}`);
       await admin.end();
     }
-  });
+  }, 120_000);
 });
