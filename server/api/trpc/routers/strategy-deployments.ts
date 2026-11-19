@@ -18,10 +18,10 @@ import {
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { CreateDeploymentInputSchema, UpdateRiskLimitsInputSchema, ConfirmProposalInputSchema } from "../../../../shared/strategy/contracts";
 import { DeploymentRiskLimitsSchema } from "../../../../shared/strategy/schemas";
-import type { PaperTradingService } from "../../../modules/paper-trading/service";
+import type { PaperOrderDependencies, DeploymentRiskLimits } from "../../../workers/strategy-evaluator";
 
-/** `paperService` executes confirmed proposals; defaults to the canonical PaperTradingService. */
-export function createStrategyDeploymentsRouter(paperService?: Pick<PaperTradingService, "placeOrder">) {
+/** `deps` execute confirmed proposals; default: the canonical paper service and execution quotes. */
+export function createStrategyDeploymentsRouter(deps: PaperOrderDependencies = {}) {
   return createRouter({
     /** List all deployments for current user */
     list: protectedProcedure
@@ -274,49 +274,61 @@ export function createStrategyDeploymentsRouter(paperService?: Pick<PaperTrading
         // The signal row is authoritative for ENTRY vs EXIT: a SHORT_ONLY entry is a SELL, so the side
         // cannot say whether entry limits apply.
         const signalType = signal.signalType === "EXIT" ? "EXIT" : "ENTRY";
-        const { evaluateRiskGate, loadPaperState } = await import("../../../workers/strategy-evaluator");
-        const service = paperService ?? new (await import("../../../modules/paper-trading/service")).PaperTradingService();
-        const quotedPrice = Number(proposed.quoteMetadata?.price);
-        const paperState = await loadPaperState(
-          ctx.userId!,
-          Number.isFinite(quotedPrice) && quotedPrice > 0 ? { symbol, price: quotedPrice } : null,
-          new Date(),
+        const evaluator = await import("../../../workers/strategy-evaluator");
+        const quoteLoader = await evaluator.resolveQuoteLoader(deps);
+        // Re-checked at the price the order will execute at, not the proposal's bar close.
+        const executable = await evaluator.loadExecutableQuote(quoteLoader, "NSE", symbol);
+        if ("rejectReason" in executable) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: `No executable quote for ${symbol}: ${executable.details}` });
+        }
+        const paperState = await evaluator.loadPaperState(ctx.userId!, new Date());
+        const equity = await evaluator.markPaperEquity(
+          paperState,
+          { exchange: "NSE", symbol, price: executable.quote.price },
+          evaluator.createQuoteMarkSource(quoteLoader),
         );
 
-        const riskRes = evaluateRiskGate(
+        const reject = async (reasonCode: string) => {
+          await db
+            .update(strategyExecutionDecisions)
+            .set({ decision: "REJECTED", reasonCode })
+            .where(eq(strategyExecutionDecisions.id, decision.id));
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Risk gate check failed: ${reasonCode}` });
+        };
+
+        const riskRes = evaluator.evaluateRiskGate(
           deploymentRow,
           { type: signalType, symbol },
           paperState.cash,
           paperState.positions.length,
           0,
-          paperState.equity,
+          equity,
         );
+        if (!riskRes.passed) await reject(riskRes.rejectReason ?? "RISK_GATE_FAILED");
 
-        if (!riskRes.passed) {
-          await db
-            .update(strategyExecutionDecisions)
-            .set({ decision: "REJECTED", reasonCode: riskRes.rejectReason })
-            .where(eq(strategyExecutionDecisions.id, decision.id));
-          throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Risk gate check failed: ${riskRes.rejectReason}` });
-        }
-
-        // Execute canonical paper order using PaperTradingService instance
-        const orderRes = await service.placeOrder({
+        // An entry is re-sized against the executable quote and current equity before it is placed.
+        const submission = await evaluator.submitSignalOrder({
           userId: ctx.userId!,
-          command: {
-            symbol,
-            side,
-            type: "MARKET",
-            qty,
-            idempotencyKey: `manconfirm-${decision.id}`,
-          },
-        });
+          symbol,
+          signalType,
+          side,
+          quantity: qty,
+          limits: (deploymentRow.riskLimits ?? {}) as DeploymentRiskLimits,
+          equity: equity.equity,
+          idempotencyKey: `manconfirm-${decision.id}`,
+          executable,
+        }, deps);
+        if ("rejectReason" in submission) return reject(submission.rejectReason);
+        const orderRes = submission.placed;
 
         await db
           .update(strategyExecutionDecisions)
           .set({
             decision: "EXECUTED",
             paperOrderId: orderRes.order.id,
+            quoteSource: submission.quote.source,
+            quoteTimestamp: new Date(submission.quote.ts),
+            proposedOrder: { ...proposed, plannedQuantity: qty, quantity: submission.quantity },
           })
           .where(eq(strategyExecutionDecisions.id, decision.id));
 
