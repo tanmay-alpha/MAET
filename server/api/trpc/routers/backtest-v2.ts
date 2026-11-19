@@ -8,6 +8,7 @@ import { runBacktestV3, InsufficientHistoryV3Error } from "../../../domain/strat
 import { presetToV3Definition } from "../../../domain/backtest/preset-to-v3-adapter";
 import { StrategyTypeSchema } from "../../../modules/backtest/contracts";
 import { saveBacktestRun, storedEquityCurve } from "../../../modules/backtest/run-store";
+import { loadCorporateActions } from "../../../modules/corporate-actions/repository";
 import { CandleSchema, type Candle } from "@shared/types";
 
 export const MAX_BACKTEST_CANDLES = parseInt(process.env.MAX_BACKTEST_CANDLES || "50000", 10);
@@ -156,12 +157,18 @@ export const backtestV2Router = createRouter({
       try {
         // P0-A fix: translate preset params → V3 AST, then run through canonical V3 engine.
         const definition = presetToV3Definition(input.strategy, input.risk);
+        const unappliedCorporateActions = await loadCorporateActions(
+          symbol,
+          new Date(candleList[0].ts),
+          new Date(candleList[candleList.length - 1].ts),
+        );
         const result = runBacktestV3({
           strategyVersionId: `preset:${input.strategy.type}:${Date.now()}`,
           definition,
           symbol,
           candles: candleList,
           timeframe: input.timeframe,
+          unappliedCorporateActions,
         });
 
         const effectivePeriod = {
@@ -181,6 +188,7 @@ export const backtestV2Router = createRouter({
           trades: result.trades,
           signalCount: result.trades.length,
           insufficientHistory: false,
+          warnings: result.warnings,
           // Tag the engine version so stored runs are self-describing.
           engineVersion: "v3",
         };

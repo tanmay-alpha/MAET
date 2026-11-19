@@ -60,6 +60,7 @@ CI runs Chromium only; Firefox/WebKit are opt-in (`E2E_ALL_BROWSERS=1`).
 | Data quality (#72) | `data-quality.integration.test.ts` with a snapshot row | 7/8 → 8/8 |
 | Deployments (#68) | `deployments.integration.test.ts` tests 3, 6, 7 | fail → pass |
 | Reports (#71) | "records the server commit and exact candles" | fail → pass |
+| Corporate actions (#76) | `runner-v3-corporate-actions.test.ts` (window listing, warm-up exclusion) and `backtest-v2.test.ts` case 6b, with `runner-v3.ts`/`backtest-v2.ts` reverted | 3 fail → pass |
 
 ## Property-based and metamorphic financial tests
 

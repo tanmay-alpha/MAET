@@ -15,6 +15,7 @@
  */
 
 import type { Candle } from "@shared/types";
+import { istDateKey } from "../market/clock";
 
 export type CorporateActionType =
   | "SPLIT"
@@ -148,4 +149,51 @@ function adjustmentFactors(
     return { price: den / num, volume: num / den };
   }
   return null;
+}
+
+const LISTED_ACTIONS = 10;
+
+function describeAction(action: CorporateAction, exDate: string): string {
+  const ratio = `${action.ratioNumerator ?? "?"}:${action.ratioDenominator ?? "?"}`;
+  switch (action.actionType) {
+    case "DIVIDEND":
+      return `dividend ${[action.currency, action.amount ?? "?"].filter(Boolean).join(" ")} ex ${exDate}`;
+    case "SPLIT":
+      // Yahoo reports NSE bonus issues as splits.
+      return `split/bonus ${ratio} ex ${exDate}`;
+    case "REVERSE_SPLIT":
+      return `reverse split ${ratio} ex ${exDate}`;
+    case "BONUS":
+      return `bonus ${ratio} ex ${exDate}`;
+    default:
+      return `${action.actionType.toLowerCase().replace("_", " ")} ex ${exDate}`;
+  }
+}
+
+/**
+ * A backtest warning naming the corporate actions whose IST ex-date lies from `from` to `to`
+ * (inclusive) and that were not applied to the prices the run used, or null when there are none.
+ */
+export function unappliedCorporateActionsWarning(
+  actions: readonly CorporateAction[],
+  from: string | number | Date,
+  to: string | number | Date,
+): string | null {
+  const first = istDateKey(new Date(from));
+  const last = istDateKey(new Date(to));
+  const inWindow = actions
+    .map((action) => ({
+      action,
+      exDate: typeof action.exDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(action.exDate)
+        ? action.exDate
+        : istDateKey(new Date(action.exDate)),
+    }))
+    .filter(({ exDate }) => exDate >= first && exDate <= last)
+    .sort((a, b) => a.exDate.localeCompare(b.exDate));
+  if (inWindow.length === 0) return null;
+  const listed = inWindow.slice(0, LISTED_ACTIONS).map(({ action, exDate }) => describeAction(action, exDate));
+  const more = inWindow.length > LISTED_ACTIONS ? `; and ${inWindow.length - LISTED_ACTIONS} more` : "";
+  return `CORPORATE_ACTIONS_IN_WINDOW: ${inWindow.length} corporate action(s) between ${first} and ${last} are not `
+    + `applied to these prices: ${listed.join("; ")}${more}. Yahoo split-adjusts candles as of the day they were `
+    + "fetched, and dividends are not added to returns.";
 }
