@@ -18,6 +18,7 @@ import { calculateMarkedUnrealisedPnl } from "@shared/domain/paper-trading/margi
 import { buildClosePositionOrder } from "@/lib/paper-orders";
 import { ReturnsTaxSection } from "@/components/investing/returns-tax";
 import { rupees } from "@/components/investing/display";
+import { CashLedgerSection } from "@/components/trading/cash-ledger";
 
 export const Route = createFileRoute("/_app/portfolio")({
   head: () => ({
@@ -56,7 +57,7 @@ function StatCard({ icon: Icon, label, value, sub, trend }: {
 }
 
 function PortfolioPage() {
-  const { status, positions, resetAccount, placeOrder, isTradingAvailable, retry } = usePaperAccount();
+  const { status, account, positions, resetAccount, placeOrder, isTradingAvailable, retry } = usePaperAccount();
   const { metrics, trades, history, performance, isPerformanceLoading, performanceError, signedIn } = usePortfolioAnalytics();
   const navigate = useNavigate();
   const [selectedPeriod, setSelectedPeriod] = useState<ChartPeriod>("ALL");
@@ -399,6 +400,14 @@ function PortfolioPage() {
             </TiltCard>
           </div>
         </div>}
+
+        {status === "ready" && account && metrics && (
+          <CashLedgerSection
+            account={account}
+            unrealizedPnl={metrics.unrealizedPnl}
+            positionsMarketValue={metrics.positionsValue}
+          />
+        )}
       </div>
 
       <QuickTradeModal

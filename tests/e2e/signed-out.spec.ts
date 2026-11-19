@@ -12,7 +12,7 @@ test("signed out: /terminal makes no protected calls and asks the visitor to sig
   await expect(
     ticket
       .getByRole("status")
-      .filter({ hasText: "Paper trading requires a signed-in account. Sign-in is coming soon." }),
+      .filter({ hasText: "Paper trading requires a signed-in account. Sign in" }),
   ).toBeVisible();
   await expect(ticket.getByRole("button", { name: "BUY 10 RELIANCE", exact: true })).toBeDisabled();
   await expect(ticket.getByRole("button", { name: "BUY", exact: true })).toBeDisabled();
@@ -28,7 +28,7 @@ test("signed out: /terminal makes no protected calls and asks the visitor to sig
   await expect(page.getByText("Free Margin", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reset Account", exact: true })).toHaveCount(0);
   await expect(page.getByText("Paper Workstation", { exact: true })).toHaveCount(0);
-  await expect(page.locator("header").getByText("Sign-in coming soon", { exact: true })).toBeVisible();
+  await expect(page.getByRole("banner").getByRole("link", { name: "Sign in", exact: true })).toHaveAttribute("href", "/login?redirect=%2Fterminal");
   await expect(page.getByText("Honest Market Data Policy", { exact: true })).toHaveCount(0);
   await expect(page.locator('[title^="Quote source:"]').first()).toHaveAttribute("title", /Quote source: (Angel One|Yahoo)/);
   await expect(page.getByText(/^(YAH|ANG)$/)).toHaveCount(0);
@@ -52,7 +52,7 @@ test("signed out: /dashboard hides account balances and trading actions", async 
   await expect(page.getByRole("button", { name: "Quick Trade", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reset", exact: true })).toHaveCount(0);
   await expect(page.getByText("Paper Workstation", { exact: true })).toHaveCount(0);
-  await expect(page.locator("header").getByText("Sign-in coming soon", { exact: true })).toBeVisible();
+  await expect(page.getByRole("banner").getByRole("link", { name: "Sign in", exact: true })).toHaveAttribute("href", "/login?redirect=%2Fdashboard");
   await expect(page.locator("main").getByText("NIFTY 50", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "NIFTY 50 movers" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Top 5 gainers" }).getByRole("row")).toHaveCount(6);

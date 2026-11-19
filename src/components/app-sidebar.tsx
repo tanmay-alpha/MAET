@@ -1,6 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
-import { useSignedIn } from "@/hooks/use-signed-in";
+import { SidebarAuthControl } from "@/components/auth-controls";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter,
@@ -27,6 +27,7 @@ import {
   Bell,
   Play,
   BarChart2,
+  ShieldCheck,
   Layers,
 } from "lucide-react";
 
@@ -50,6 +51,7 @@ const reviewItems = [
 
 const systemItems = [
   { title: "Data Status", url: "/admin/data-quality", icon: Activity },
+  { title: "Data quality", url: "/data-quality", icon: ShieldCheck },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
@@ -73,7 +75,6 @@ const experimentalItems = [
 ];
 
 export function AppSidebar() {
-  const signedIn = useSignedIn();
   const pathname = useRouterState({ select: (r) => r.location.pathname });
   const [showExperimental, setShowExperimental] = useState(false);
 
@@ -218,15 +219,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">
-        {signedIn ? <div className="flex items-center gap-2 px-2 py-1.5 group-data-[collapsible=icon]:hidden">
-          <div className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-bull flex items-center justify-center text-white text-xs font-bold">
-            M
-          </div>
-          <div className="text-xs">
-            <div className="font-medium">Paper Workstation</div>
-            <div className="text-muted-foreground">NSE Equity</div>
-          </div>
-        </div> : <p className="px-2 py-1.5 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">Sign-in coming soon</p>}
+        <SidebarAuthControl />
       </SidebarFooter>
     </Sidebar>
   );

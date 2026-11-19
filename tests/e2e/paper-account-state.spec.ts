@@ -93,7 +93,8 @@ test("valid session: /portfolio header buttons and summary figures fit at 390px"
   await expect(page.getByRole("button", { name: "Quick Trade", exact: true })).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole("button", { name: "Reset", exact: true })).toBeInViewport({ ratio: 1 });
 
-  const totalValue = page.getByText(`${FIXTURE_CASH}.00`, { exact: true });
+  // The Total Value card (the cash ledger further down repeats the same figure).
+  const totalValue = page.locator("[aria-busy]").filter({ hasText: "Total Value" }).getByText(`${FIXTURE_CASH}.00`, { exact: true });
   await expect(totalValue).toBeVisible();
   // The figure is drawn inside its card rather than spilling past the edge.
   expect(await totalValue.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);

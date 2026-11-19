@@ -278,6 +278,35 @@ export function useChartLayout(symbol: string) {
   };
 }
 
+/**
+ * Where single-key chart shortcuts must not act: anything that takes typing or arrow keys
+ * (fields, selects, comboboxes, editable content) and anything inside an open dialog or menu,
+ * whose own keyboard handling (type-ahead, arrow navigation) would otherwise be swallowed.
+ */
+const SHORTCUT_EXEMPT_SELECTOR = [
+  "input",
+  "textarea",
+  "select",
+  "[contenteditable]:not([contenteditable='false'])",
+  "[role='combobox']",
+  "[role='textbox']",
+  "[role='listbox']",
+  "[role='dialog']",
+  "[role='alertdialog']",
+  "[role='menu']",
+  "[role='menubar']",
+  "dialog",
+].join(",");
+
+/** Whether a keydown should be left alone by page-wide chart shortcuts. */
+export function isShortcutExemptEvent(event: KeyboardEvent): boolean {
+  // Browser and OS shortcuts (Ctrl/⌘+F, Ctrl+R, Ctrl+=, …) and keys another handler already took.
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey) return true;
+  const target = event.target;
+  if (!(target instanceof Element)) return false;
+  return (target instanceof HTMLElement && target.isContentEditable) || target.closest(SHORTCUT_EXEMPT_SELECTOR) !== null;
+}
+
 // Hook for keyboard shortcuts
 export function useChartShortcuts(handlers: {
   onToggleFullscreen?: () => void;
@@ -295,13 +324,9 @@ export function useChartShortcuts(handlers: {
 }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in input
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
+      if (isShortcutExemptEvent(e)) return;
+      // Alt+letter belongs to the browser and OS menus (Alt+F, Alt+D, …).
+      if (e.altKey && e.key.length === 1) return;
 
       switch (e.key.toLowerCase()) {
         // Fullscreen
@@ -322,10 +347,8 @@ export function useChartShortcuts(handlers: {
           handlers.onZoomOut?.();
           break;
         case "0":
-          if (!e.ctrlKey && !e.metaKey) {
-            e.preventDefault();
-            handlers.onResetZoom?.();
-          }
+          e.preventDefault();
+          handlers.onResetZoom?.();
           break;
 
         // Pan
@@ -366,25 +389,19 @@ export function useChartShortcuts(handlers: {
 
         // Indicators
         case "m":
-          if (!e.altKey) {
-            e.preventDefault();
-            handlers.onToggleMA?.();
-          }
+          e.preventDefault();
+          handlers.onToggleMA?.();
           break;
         case "r":
-          if (!e.altKey) {
-            e.preventDefault();
-            handlers.onToggleRSI?.();
-          }
+          e.preventDefault();
+          handlers.onToggleRSI?.();
           break;
 
         // Delete last drawing
         case "delete":
         case "backspace":
-          if (!(e.target instanceof HTMLInputElement)) {
-            e.preventDefault();
-            handlers.onDeleteDrawing?.();
-          }
+          e.preventDefault();
+          handlers.onDeleteDrawing?.();
           break;
 
         // Escape to exit tool

@@ -8,6 +8,7 @@
 import type { MarketCandle, MarketCompany } from "../../../src/lib/market-api";
 import type {
   PaperAccountRow,
+  PaperLedgerEntryRow,
   PaperOrderRow,
 } from "../../../server/modules/paper-trading/contracts";
 
@@ -21,6 +22,7 @@ type Wire<Row> = {
 };
 export type PaperAccountWire = Wire<PaperAccountRow>;
 export type PaperOrderWire = Wire<PaperOrderRow>;
+export type PaperLedgerEntryWire = Wire<PaperLedgerEntryRow>;
 
 export const FIXED_NOW = "2026-11-06T10:15:00.000Z";
 export const USER_ID = "7d7f0f7e-1c1f-4a52-9a4c-0f3b7c1e2a01";
@@ -316,6 +318,45 @@ export function paperOrderRow(input: {
     version: 1,
   };
 }
+
+/** A paper_ledger_entries row as listLedger serializes it; amounts are numeric(18,4) strings. */
+export function paperLedgerRow(input: {
+  id: string;
+  entryType: "INITIAL_CASH" | "TRADE_REALIZED_PNL" | "EXECUTION_FEE";
+  amount: number;
+  balanceAfter: number;
+  createdAt: string;
+  fillId?: string;
+  metadata?: Record<string, unknown>;
+}): PaperLedgerEntryWire {
+  return {
+    id: input.id,
+    userId: USER_ID,
+    generation: 1,
+    fillId: input.fillId ?? null,
+    entryType: input.entryType,
+    amount: input.amount.toFixed(4),
+    balanceAfter: input.balanceAfter.toFixed(4),
+    currency: "INR",
+    sourceType: input.fillId ? "FILL" : "ACCOUNT_OPEN",
+    sourceId: input.fillId ?? "open:1",
+    metadata: input.metadata ?? (input.fillId ? {} : { generation: 1 }),
+    createdAt: input.createdAt,
+  };
+}
+
+// ── Supabase Auth (GoTrue) ──────────────────────────────────────────────────
+
+/** The one account the fake GoTrue knows; signing in with it yields ACCESS_TOKEN. */
+export const E2E_EMAIL = "e2e@maet.test";
+export const E2E_PASSWORD = "correct horse battery staple";
+/** The refresh token the fake GoTrue accepts (the one signIn() seeds). */
+export const REFRESH_TOKEN = "e2e-refresh-token";
+/** The anon key and project the suite builds the app with (playwright.config.ts). */
+export const SUPABASE_ORIGIN = "https://supabase.test";
+export const SUPABASE_ANON_KEY = "e2e-anon-key";
+/** Where the app stores the session: "sb-<first host label>-auth-token", as supabase-js does. */
+export const SESSION_STORAGE_KEY = "sb-supabase-auth-token";
 
 // ── Strategy definitions ────────────────────────────────────────────────────
 
