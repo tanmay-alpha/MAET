@@ -102,16 +102,7 @@ export async function createVersion(userId: string, strategyId: string) {
   const canonicalJson = canonicalDefinitionJson(definition);
   const definitionHash = createHash("sha256").update(canonicalJson).digest("hex");
 
-  // Check if identical version already exists
-  const existing = await repo.getVersionByHash(strategyId, definitionHash);
-  if (existing) {
-    throw new TRPCError({
-      code: "CONFLICT",
-      message: `An identical version (v${existing.versionNumber}) already exists for this strategy definition.`,
-    });
-  }
-
-  const version = await repo.createVersion(
+  const result = await repo.createVersion(
     userId,
     strategyId,
     definition,
@@ -119,6 +110,13 @@ export async function createVersion(userId: string, strategyId: string) {
     STRATEGY_ENGINE_VERSION,
     INDICATOR_ENGINE_VERSION,
   );
+  if ("duplicateOf" in result) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `An identical version (v${result.duplicateOf.versionNumber}) already exists for this strategy definition.`,
+    });
+  }
+  const version = result.created;
 
   // Move strategy to VALIDATED once first version created
   if (strategy.status === "DRAFT") {

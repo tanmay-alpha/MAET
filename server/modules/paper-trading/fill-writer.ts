@@ -60,6 +60,10 @@ function toDomainPosition(row: PaperPositionRow, symbolKey: string): PaperPositi
  * other exchange is a different position, so it gets a distinct key: it still counts towards
  * margin but can never be reconciled against this order's fill.
  */
+function domainSymbolKey(row: PaperPositionRow, order: PaperOrderRow): string {
+  return row.symbol === order.symbol && row.exchange !== order.exchange ? `${row.symbol}@${row.exchange}` : row.symbol;
+}
+
 function toDomainAccount(account: PaperAccountRow, positions: PaperPositionRow[], order: PaperOrderRow): PaperAccount {
   return {
     version: 3,
@@ -69,12 +73,21 @@ function toDomainAccount(account: PaperAccountRow, positions: PaperPositionRow[]
     maintenanceMargin: Number(account.maintenanceMargin),
     realisedPnl: Number(account.realisedPnl),
     status: account.status,
-    positions: positions.map((row) =>
-      toDomainPosition(row, row.symbol === order.symbol && row.exchange !== order.exchange ? `${row.symbol}@${row.exchange}` : row.symbol)
-    ),
+    positions: positions.map((row) => toDomainPosition(row, domainSymbolKey(row, order))),
     orders: [],
     fills: [],
   };
+}
+
+/** Current mark of every held position except the one this order trades (marked at the fill quote). */
+function currentMarks(positions: PaperPositionRow[], order: PaperOrderRow, markFor: MarkPriceSource): Map<string, number> {
+  const marks = new Map<string, number>();
+  for (const row of positions) {
+    if (row.symbol === order.symbol && row.exchange === order.exchange) continue;
+    const mark = markFor(row.exchange, row.symbol);
+    if (mark !== undefined) marks.set(domainSymbolKey(row, order), mark);
+  }
+  return marks;
 }
 
 function toDomainOrder(order: PaperOrderRow): PaperOrder {
@@ -100,6 +113,13 @@ function toDomainOrder(order: PaperOrderRow): PaperOrder {
   };
 }
 
+/**
+ * Current executable price of EXCHANGE:SYMBOL, or undefined when none is known. The margin
+ * check marks every other held position with it; a position without one counts its last
+ * known loss but none of its gain (`marginUnrealisedPnl`).
+ */
+export type MarkPriceSource = (exchange: string, symbol: string) => number | undefined;
+
 export interface ApplyFillInput {
   write: PaperTradingWriteRepository;
   /** Locked account row. */
@@ -113,6 +133,8 @@ export interface ApplyFillInput {
   fillQuantity: number;
   reason: PaperExecutionReason;
   ledgerSourceType: "FILL" | "LIQUIDATION_FILL";
+  /** Marks for the account's other positions in the margin check. */
+  markFor: MarkPriceSource;
   now: Date;
   createId: () => string;
 }
@@ -129,10 +151,11 @@ export interface AppliedFill {
 /**
  * Executes one fill of a locked order and persists every consequence of it: the fill row
  * (with the next execution sequence), the order's progress, the position (side included),
- * the account's cash and margins, the TRADE_REALIZED_PNL / EXECUTION_FEE ledger pair, the
- * bracket linkage (exits grown by entry fills; siblings shrunk or cancelled by exit fills)
- * and the outbox events. Must run inside the caller's serializable transaction; throws
- * PaperExecutionError before any write if the fill is rejected.
+ * the account's cash and margins, the TRADE_REALIZED_PNL then EXECUTION_FEE ledger rows
+ * (each with the running balance after it), the bracket linkage (exits grown by entry fills;
+ * siblings shrunk or cancelled by exit fills) and the outbox events. Must run inside the
+ * caller's serializable transaction; throws PaperExecutionError before any write if the fill
+ * is rejected.
  */
 export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
   const { write, account, order, now } = input;
@@ -157,6 +180,7 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
     quote: input.quote,
     reason: input.reason,
     exchange,
+    marks: currentMarks(input.positions, order, input.markFor),
     policy: paperExecutionPolicy(),
   });
   const { fill: fillPlan, charges } = execution;
@@ -256,11 +280,12 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
     updatedAt: now,
   });
 
+  // Each row's balance_after is the running cash after that row: realised P&L first, then
+  // the fee, which leaves the account's cash.
   const ledgerBase = {
     userId: account.userId,
     generation: account.generation,
     fillId: fill.id,
-    balanceAfter: String(execution.account.cash),
     currency: "INR",
     sourceType: input.ledgerSourceType,
     sourceId: fill.id,
@@ -272,6 +297,7 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
       id: input.createId(),
       entryType: "TRADE_REALIZED_PNL",
       amount: String(fillPlan.realisedPnl),
+      balanceAfter: String(Number(account.cashBalance) + fillPlan.realisedPnl),
       metadata: { orderId: order.id, side: order.side, fillPrice: fillPlan.fillPrice, qty: fillPlan.quantity },
     },
     {
@@ -279,6 +305,7 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
       id: input.createId(),
       entryType: "EXECUTION_FEE",
       amount: String(-fillPlan.fees),
+      balanceAfter: String(execution.account.cash),
       metadata: { orderId: order.id, exchange, product: PAPER_CHARGE_PRODUCT, charges },
     },
   ]);
