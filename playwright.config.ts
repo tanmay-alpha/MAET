@@ -32,6 +32,13 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
     { name: "mobile", use: { ...devices["Pixel 7"] } },
+    // Opt-in cross-engine run (`E2E_ALL_BROWSERS=1`; needs `bunx playwright install firefox webkit`).
+    ...(process.env.E2E_ALL_BROWSERS
+      ? [
+          { name: "firefox", use: { ...devices["Desktop Firefox"], viewport: { width: 1440, height: 900 } } },
+          { name: "webkit", use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 900 } } },
+        ]
+      : []),
   ],
   webServer: {
     command: `bun run --cwd src preview --port ${PORT}`,
