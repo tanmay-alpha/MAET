@@ -50,7 +50,14 @@ const LEGACY_SESSION_KEY = "supabase.auth.token";
 /** Set (in sessionStorage) when GoTrue refused to refresh the session, so the UI can say why. */
 const SESSION_EXPIRED_FLAG = "maet.auth.sessionExpired";
 
-let refreshPromise: Promise<string | null> | null = null;
+/** The refresh request in flight and the refresh token it was sent with. */
+let inFlightRefresh: { refreshToken: string; promise: Promise<string | null> } | null = null;
+/**
+ * Bumped by every sign-in and sign-out in this tab. A refresh started under one generation
+ * must not touch storage once another has begun, even if the new session happens to carry
+ * the same refresh token (e.g. the same session restored after sign-out).
+ */
+let sessionGeneration = 0;
 const sameTabListeners = new Set<() => void>();
 
 /** localStorage keys that hold a Supabase session ("supabase.auth.token" or "sb-<project>-auth-token"). */
@@ -129,6 +136,7 @@ export function storeSession(session: GoTrueSession): void {
   const storage = localStore();
   const config = supabaseAuthConfig();
   if (!storage || !config) return;
+  sessionGeneration++;
   for (const key of sessionKeys(storage)) storage.removeItem(key);
   const projectRef = new URL(config.url).hostname.split(".")[0];
   storage.setItem(
@@ -152,6 +160,7 @@ function sessionKeys(storage: Storage): string[] {
 export function clearStoredSession(reason?: "expired"): void {
   const storage = localStore();
   if (!storage) return;
+  sessionGeneration++;
   for (const key of sessionKeys(storage)) storage.removeItem(key);
   if (reason === "expired") window.sessionStorage?.setItem(SESSION_EXPIRED_FLAG, "1");
   notifySessionChange();
@@ -162,6 +171,23 @@ export function sessionEndedByExpiry(): boolean {
   return typeof window !== "undefined" && window.sessionStorage?.getItem(SESSION_EXPIRED_FLAG) === "1";
 }
 
+/**
+ * Whether the session a refresh started from is still the one stored: same tab generation,
+ * same storage key, same refresh token (another tab signing out, signing in or rotating the
+ * token changes the stored refresh token).
+ */
+function isStillStored(started: { generation: number; rawKey: string; refreshToken: string }): boolean {
+  if (started.generation !== sessionGeneration) return false;
+  const stored = getStoredSession();
+  return stored?.rawKey === started.rawKey && sessionFields(stored.data).refresh_token === started.refreshToken;
+}
+
+/**
+ * Exchanges the refresh token for a new session and stores it. The result — written back,
+ * or the session cleared on a 400/401 — applies only if the session it started from is still
+ * stored when GoTrue answers; after a sign-out or another user's sign-in it is discarded and
+ * no token is returned, so the stale session never comes back or ends the new one.
+ */
 async function refreshAccessToken(
   rawKey: string,
   refreshToken: string,
@@ -170,6 +196,7 @@ async function refreshAccessToken(
   // Supabase rejects refresh requests without the project's anon key.
   const config = supabaseAuthConfig();
   if (!config) return null;
+  const started = { generation: sessionGeneration, rawKey, refreshToken };
   let res: Response;
   try {
     res = await fetch(`${config.url}/auth/v1/token?grant_type=refresh_token`, {
@@ -184,12 +211,13 @@ async function refreshAccessToken(
 
   if (!res.ok) {
     // 400/401: the refresh token was revoked, reused or has expired. The session is over.
-    if (res.status === 400 || res.status === 401) clearStoredSession("expired");
+    if ((res.status === 400 || res.status === 401) && isStillStored(started)) clearStoredSession("expired");
     return null;
   }
 
   const refreshed = (await res.json().catch(() => null)) as Partial<GoTrueSession> | null;
   if (!refreshed?.access_token) return null;
+  if (!isStillStored(started)) return null;
 
   const updated: StoredSessionFields = {
     access_token: refreshed.access_token,
@@ -264,8 +292,14 @@ export async function getCurrentAccessToken(): Promise<string | null> {
   if (!isExpired) return accessToken;
 
   if (!fields.refresh_token) return null;
-  refreshPromise ??= refreshAccessToken(rawKey, fields.refresh_token, data).finally(() => {
-    refreshPromise = null;
-  });
-  return await refreshPromise;
+  // Concurrent callers for the same session share one request; a different session (another
+  // user signed in meanwhile) gets its own instead of the old session's result.
+  const refreshToken = fields.refresh_token;
+  if (inFlightRefresh?.refreshToken !== refreshToken) {
+    const promise: Promise<string | null> = refreshAccessToken(rawKey, refreshToken, data).finally(() => {
+      if (inFlightRefresh?.promise === promise) inFlightRefresh = null;
+    });
+    inFlightRefresh = { refreshToken, promise };
+  }
+  return await inFlightRefresh.promise;
 }

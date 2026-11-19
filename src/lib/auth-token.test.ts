@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
+  clearStoredSession,
   getCurrentAccessToken,
   hasStoredSession,
   sessionEndedByExpiry,
+  storeSession,
   storedSessionIdentity,
   supabaseAuthConfig,
   watchStoredSession,
@@ -75,7 +77,7 @@ describe("getCurrentAccessToken", () => {
   const nowSec = () => Math.floor(Date.now() / 1000);
   let storage: MemoryStorage;
   let refreshCalls: Array<{ url: string; body: unknown }>;
-  let respond: () => Response;
+  let respond: () => Response | Promise<Response>;
 
   beforeEach(() => {
     storage = new MemoryStorage();
@@ -174,5 +176,94 @@ describe("getCurrentAccessToken", () => {
     const stored = JSON.parse(storage.getItem("supabase.auth.token")!);
     expect(stored.currentSession).toMatchObject({ access_token: "new", refresh_token: "r1" });
     expect(stored.access_token).toBeUndefined();
+  });
+
+  describe("a refresh still in flight when the session changes", () => {
+    /** A refresh response the test releases after changing the session. */
+    function deferRefresh() {
+      const { promise, resolve } = Promise.withResolvers<Response>();
+      respond = () => promise;
+      return resolve;
+    }
+    const refreshed = () => new Response(JSON.stringify({ access_token: "old-refreshed", refresh_token: "r1-rotated", expires_in: 3600 }), { status: 200 });
+    const rejected = () => new Response(JSON.stringify({ error_code: "refresh_token_not_found", msg: "Invalid Refresh Token" }), { status: 401 });
+    const signInBob = () =>
+      storeSession({ access_token: "bob-access", refresh_token: "bob-refresh", expires_in: 3600, user: { id: "bob", email: "bob@b.c" } });
+    const storedBob = () => JSON.parse(storage.getItem(KEY)!);
+
+    test("after sign-out, a late success is not written back and its token is not returned", async () => {
+      storeV2(nowSec() - 5);
+      const release = deferRefresh();
+      const pending = getCurrentAccessToken();
+      await Promise.resolve();
+
+      clearStoredSession();
+      release(refreshed());
+
+      expect(await pending).toBeNull();
+      expect(storage.length).toBe(0);
+      expect(hasStoredSession()).toBe(false);
+    });
+
+    test("after sign-out, a late rejection does not report the session as expired", async () => {
+      storeV2(nowSec() - 5);
+      const release = deferRefresh();
+      const pending = getCurrentAccessToken();
+      await Promise.resolve();
+
+      clearStoredSession();
+      release(rejected());
+
+      expect(await pending).toBeNull();
+      expect(storage.length).toBe(0);
+      expect(sessionEndedByExpiry()).toBe(false);
+    });
+
+    test("after another user signs in, a late success leaves the new session untouched", async () => {
+      storeV2(nowSec() - 5);
+      const release = deferRefresh();
+      const pending = getCurrentAccessToken();
+      await Promise.resolve();
+
+      signInBob();
+      const bob = storage.getItem(KEY);
+      release(refreshed());
+
+      expect(await pending).toBeNull();
+      expect(storage.getItem(KEY)).toBe(bob);
+      expect(storedBob()).toMatchObject({ access_token: "bob-access", refresh_token: "bob-refresh", user: { id: "bob" } });
+      expect(storedSessionIdentity()).toBe("bob");
+    });
+
+    test("after another user signs in, a late rejection does not sign the new user out", async () => {
+      storeV2(nowSec() - 5);
+      const release = deferRefresh();
+      const pending = getCurrentAccessToken();
+      await Promise.resolve();
+
+      signInBob();
+      const bob = storage.getItem(KEY);
+      release(rejected());
+
+      expect(await pending).toBeNull();
+      expect(storage.getItem(KEY)).toBe(bob);
+      expect(sessionEndedByExpiry()).toBe(false);
+    });
+
+    test("the new user's own expired token gets its own refresh instead of joining the old one", async () => {
+      storeV2(nowSec() - 5);
+      const releaseOld = deferRefresh();
+      const oldPending = getCurrentAccessToken();
+      await Promise.resolve();
+
+      storeSession({ access_token: "bob-access", refresh_token: "bob-refresh", expires_at: nowSec() - 5, user: { id: "bob" } });
+      respond = () => new Response(JSON.stringify({ access_token: "bob-refreshed", refresh_token: "bob-rotated", expires_in: 3600 }), { status: 200 });
+      expect(await getCurrentAccessToken()).toBe("bob-refreshed");
+      expect(refreshCalls.map((call) => call.body)).toEqual([{ refresh_token: "r1" }, { refresh_token: "bob-refresh" }]);
+
+      releaseOld(refreshed());
+      expect(await oldPending).toBeNull();
+      expect(storedBob()).toMatchObject({ access_token: "bob-refreshed", refresh_token: "bob-rotated" });
+    });
   });
 });
