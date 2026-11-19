@@ -4,7 +4,14 @@ import type { SQL } from "drizzle-orm";
 import { getCalculator, type CalculatorInput } from "../../../domain/calculations/engine/calculator-registry";
 import * as drizzleClientModule from "../../../data/drizzle/client";
 import { candles, companies, technicalSnapshots } from "../../../db/schema";
-import { applyCandleFilters, CALCULATION_RESULTS_FILTERS, calculationResultsFilterQuery, screenerRouter } from "./screener";
+import {
+  applyCandleFilters,
+  CALCULATION_RESULTS_FILTERS,
+  calculationResultsFilterQuery,
+  MAX_SAVED_SCREENERS_PER_USER,
+  MAX_SCREENER_FILTERS,
+  screenerRouter,
+} from "./screener";
 
 const BARS = 120;
 const closes = Array.from({ length: BARS }, (_, i) => 400 + 30 * Math.sin(i / 8) + 0.4 * i);
@@ -96,6 +103,23 @@ function query(rows: unknown[]) {
   return builder;
 }
 
+/** Rows a user already has in screener_runs (read by saveScreener's cap check). */
+let savedScreenerCount = 0;
+const inserted: unknown[] = [];
+const savedTx = {
+  execute: (statement: SQL) => {
+    executed.push(statement);
+    return Promise.resolve([]);
+  },
+  select: () => ({ from: () => ({ where: () => Promise.resolve([{ count: savedScreenerCount }]) }) }),
+  insert: () => ({
+    values: (row: unknown) => {
+      inserted.push(row);
+      return { returning: () => Promise.resolve([{ id: "saved-1", name: "mine", startedAt: new Date("2026-01-02T00:00:00Z") }]) };
+    },
+  }),
+};
+
 mock.module("../../../data/drizzle/client", () => ({
   ...realDrizzleClient,
   db: {
@@ -109,6 +133,7 @@ mock.module("../../../data/drizzle/client", () => ({
       executed.push(statement);
       return Promise.resolve(executeResults.shift() ?? []);
     },
+    transaction: <T>(fn: (tx: typeof savedTx) => Promise<T>) => fn(savedTx),
   },
 }));
 
@@ -180,5 +205,49 @@ describe("screener.runScreen", () => {
     expect(gteQuery.params).toContain(20);
     expect(lteQuery.sql).toContain("<=");
     expect(lteQuery.params).toContain(80);
+  });
+});
+
+describe("screener input bounds", () => {
+  const caller = screenerRouter.createCaller({ userId: "test-user-1", email: "test@example.com", role: "user" });
+  const filters = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({ field: "volume" as const, operator: "gt" as const, value: i }));
+
+  it("rejects one filter more than the cap before touching the database, on both procedures", async () => {
+    selectedTables.length = 0;
+    executed.length = 0;
+    inserted.length = 0;
+    const tooMany = filters(MAX_SCREENER_FILTERS + 1);
+    await expect(caller.runScreen({ filters: tooMany })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.saveScreener({ name: "wide", filters: tooMany })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(selectedTables).toEqual([]);
+    expect(executed).toEqual([]);
+    expect(inserted).toEqual([]);
+  });
+
+  it("accepts exactly the cap", async () => {
+    selectRows.clear();
+    await expect(caller.runScreen({ filters: filters(MAX_SCREENER_FILTERS) })).resolves.toMatchObject({ results: [] });
+  });
+
+  it("rejects a range value with more than its two bounds", async () => {
+    await expect(
+      caller.runScreen({ filters: [{ field: "volume", operator: "between", value: [1, 2, 3] }] }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("saves below the per-user cap and refuses at it, under the user's advisory lock", async () => {
+    executed.length = 0;
+    inserted.length = 0;
+    savedScreenerCount = MAX_SAVED_SCREENERS_PER_USER - 1;
+    await expect(caller.saveScreener({ name: "mine", filters: filters(1) })).resolves.toMatchObject({ id: "saved-1" });
+    expect(inserted).toHaveLength(1);
+    const lock = new PgDialect().sqlToQuery(executed[0]!);
+    expect(lock.sql).toContain("pg_advisory_xact_lock");
+    expect(lock.params).toEqual(["screener-runs:test-user-1"]);
+
+    savedScreenerCount = MAX_SAVED_SCREENERS_PER_USER;
+    await expect(caller.saveScreener({ name: "one more", filters: filters(1) })).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    expect(inserted).toHaveLength(1);
   });
 });

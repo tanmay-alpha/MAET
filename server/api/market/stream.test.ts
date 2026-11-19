@@ -1,10 +1,28 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { MAX_STREAM_SYMBOLS } from "@shared/types";
 import { EventEmitter } from "node:events";
 import { getSubscriptionRefCount, resetSubscriptionRefsForTesting } from "../../orchestrator";
+import { registerMarketSymbols } from "../../domain/market/symbol";
+import { setAngelBatchGapForTests } from "../../domain/market/quote-service";
 import streamHandler, { getActiveStreamConnections, MAX_MARKET_STREAMS_PER_IP } from "./stream.get";
 
 const realFetch = globalThis.fetch;
+
+// Only catalogued symbols stream: put this file's fixtures into the symbol master.
+beforeAll(() => {
+  const fixtures = [
+    "SSELEAK",
+    "SSECAP",
+    ...Array.from({ length: MAX_STREAM_SYMBOLS + 1 }, (_, index) => `SSEU${index}`),
+    ...Array.from({ length: MAX_STREAM_SYMBOLS + 1 }, (_, index) => `SSEV${index}`),
+  ];
+  registerMarketSymbols(fixtures.map((symbol, index) => ({
+    exchange: "NSE" as const, symbol, name: symbol, token: String(700_000 + index), yahooTicker: `${symbol}.NS`, isActive: true,
+  })));
+  // No Angel One session here; skip the pause between its (failing) quote batches.
+  setAngelBatchGapForTests(0);
+});
+afterAll(() => setAngelBatchGapForTests(undefined));
 
 afterEach(() => {
   globalThis.fetch = realFetch;
@@ -104,5 +122,26 @@ describe("GET /api/market/stream", () => {
   it("rejects more symbols than the stream cap", async () => {
     const symbols = Array.from({ length: MAX_STREAM_SYMBOLS + 1 }, (_, index) => `SSEV${index}`);
     await expect(handler(fakeStreamEvent(symbols.join(",")).event)).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("streams only catalogued symbols and indices, dropping unknown ones from the feed registry", async () => {
+    const yahoo = holdYahoo();
+    const { event, req } = fakeStreamEvent("SSELEAK,NIFTY50,NOTALISTING,ZZZ123", "203.0.113.30");
+    const handled = handler(event);
+    expect(getSubscriptionRefCount("SSELEAK")).toBe(1);
+    expect(getSubscriptionRefCount("NIFTY50")).toBe(1);
+    expect(getSubscriptionRefCount("NOTALISTING")).toBe(0);
+    expect(getSubscriptionRefCount("ZZZ123")).toBe(0);
+    req.emit("close");
+    yahoo.release();
+    await handled;
+    expect(getSubscriptionRefCount("SSELEAK")).toBe(0);
+  }, 2_000);
+
+  it("rejects a request with no catalogued symbol before opening a stream", async () => {
+    const unknown = Array.from({ length: MAX_STREAM_SYMBOLS }, (_, index) => `JUNK${index}`);
+    await expect(handler(fakeStreamEvent(unknown.join(","), "203.0.113.31").event)).rejects.toMatchObject({ statusCode: 400 });
+    expect(getActiveStreamConnections()).toBe(0);
+    expect(unknown.some((symbol) => getSubscriptionRefCount(symbol) > 0)).toBe(false);
   });
 });
