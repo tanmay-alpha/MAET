@@ -292,7 +292,8 @@ The account `generation` implements reset: every query filters by it, and a rese
 | `strategy_parameter_sweeps`, `strategy_sweep_results`, `strategy_walk_forward_runs`, `strategy_walk_forward_windows` | Optimisation jobs. |
 | `strategy_deployments`, `strategy_signal_events`, `strategy_execution_decisions` | Deployed strategies and their signals (unique `(deployment_id, fingerprint)`). |
 | `option_contracts`, `option_quote_snapshots`, `option_greek_snapshots` | Options data (`0017_options_market_data.sql`). |
-| `ingestion_runs`, `dead_letter_queue`, `source_audit`, `anomaly_flags` | Ingestion bookkeeping and data-quality audit. |
+| `ingestion_runs`, `dead_letter_queue` | Ingestion bookkeeping; the admin reliability section of `/admin/data-quality` reads them (`server/modules/data-quality/`). |
+| `source_audit`, `anomaly_flags` | Audit tables from `0004_quality_audit_tables.sql` with no writer configured: nothing inserts rows, so no page reads them. Market-data quality (`/data-quality`) is computed from `candles`, `quote_snapshots`, `fundamentals` and `corporate_actions` instead. |
 
 ## 5. Deployment and CI
 
@@ -328,6 +329,7 @@ There is no metrics exporter or tracing; observability is logs plus the health e
 - Fills and ledger are append-only by trigger (SQLSTATE `55000`); the only escape hatch is the session setting `maet.allow_history_mutation = 'true'` (`0012`).
 - Alerts and backtest presets: owner policies; technical snapshots and universe membership: no client access (`0026_rls_hardening.sql`).
 - User-owned tables whose owner policies allowed writes (strategy lab tables, alerts, workspaces, chart workspaces, trade theses and the other tables from `0013`, `0015`, `0016` and `0026`): owner-only `SELECT`, writes revoked from `authenticated` and everything from `anon` (`0028_client_read_only_owner_tables.sql`), so per-user caps enforced by the API cannot be bypassed through PostgREST.
+- Trade thesis child tables (`thesis_signals`, `thesis_snapshots`, `thesis_order_links`) have no `user_id`: owner-only `SELECT` through the parent `trade_theses.user_id = auth.uid()`, writes revoked from `authenticated` and everything from `anon` (`0029_thesis_child_owner_policies.sql`). Before 0029 they had RLS enabled with no policies, so clients could read nothing.
 
 The backend connects with whatever credentials its connection string carries (`server/data/drizzle/client.ts`); it does not `SET ROLE` or forward the user's JWT to Postgres. Whether that role bypasses RLS is a property of the deployed database, not of this repository, so API-level filtering is the primary control.
 
