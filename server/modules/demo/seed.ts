@@ -43,16 +43,23 @@ import type { BacktestJobRow } from "../strategy-jobs/repository";
 import { runBacktestJob } from "../../workers/backtest-worker";
 import { bundledNseHolidays, tradingDaysBetween } from "./calendar";
 import { generateDemoSeries } from "./generator";
-import { DEMO_COMPANIES, DEMO_DATA_SOURCE, DEMO_FROM, DEMO_SEED, DEMO_TO } from "./universe";
+import {
+  DEMO_COMPANIES,
+  DEMO_DATA_SOURCE,
+  DEMO_FROM,
+  DEMO_SEED,
+  DEMO_SYMBOLS,
+  DEMO_TO,
+  DEMO_USER_EMAIL,
+  DEMO_USER_ID,
+} from "./universe";
+import { assertSeedableContents } from "./target";
 
-export const DEMO_USER_ID = "de300000-0000-4000-8000-000000000001";
-export const DEMO_USER_EMAIL = "demo@maet.invalid";
 export const DEMO_STRATEGY_ID = "de300000-0000-4000-8000-000000000101";
 export const DEMO_STRATEGY_VERSION_ID = "de300000-0000-4000-8000-000000000102";
 export const DEMO_BACKTEST_JOB_ID = "de300000-0000-4000-8000-000000000103";
 const DEMO_WORKER_ID = "demo-seed";
 const DEMO_INITIAL_CASH = 1_000_000;
-const DEMO_SYMBOLS = DEMO_COMPANIES.map((company) => company.symbol);
 const BACKTEST_SYMBOL = "DEMO-CHIT";
 /** Demo fills price at the last minutes of the session (15:25 IST). */
 const FILL_TIME_UTC = "T09:55:00.000Z";
@@ -368,7 +375,13 @@ async function runDemoBacktest(bars: Candle[]): Promise<{ trades: number; dataHa
   return { trades: outcome.trade_count ?? 0, dataHash: outcome.data_hash };
 }
 
-export async function seedDemo(): Promise<DemoSeedSummary> {
+/**
+ * Seeds the database the shared client points at. Before any write it refuses a database holding
+ * data the demo did not write (real users, real companies) unless `allowExistingData` is set:
+ * a loopback tunnel or a misread URL must not put DEMO- companies in front of real users.
+ */
+export async function seedDemo({ allowExistingData }: { allowExistingData: boolean }): Promise<DemoSeedSummary> {
+  await assertSeedableContents(getSqlClient(), allowExistingData);
   const universe = generateDemoUniverse();
   await deletePreviousDemo();
   await insertMarketData(universe);

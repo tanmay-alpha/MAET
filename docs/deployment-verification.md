@@ -29,8 +29,10 @@ Manual/full: `bun run scripts/smoke-deploy.ts --sha <commit>` checks both tiers 
 ## Vercel preview quota
 
 Vercel project setting **Ignored Build Step** = `if [ -f scripts/vercel-ignore-build.sh ]; then bash scripts/vercel-ignore-build.sh; else exit 1; fi` (set via the Vercel API on 2026-11-10). Vercel treats any exit code other than 0/1 as a failed deployment, so a branch created before the script existed (exit 127) failed its preview until the guard was added.
-Production always builds; previews build only if `src/`, `shared/`, `package.json`, `bun.lock` or `tsconfig.json`
-changed since the branch's previous deployment. A `src/vercel.json` was tried first and broke SSR packaging
+Production always builds. Previews build only when the commit message contains `[preview]`
+(since 2026-11-19). The earlier rule built a preview whenever frontend inputs changed, and on
+2026-11-19 the Hobby quota ran out again (`Deployment rate limited — retry in 24 hours` on PR #84's preview).
+Previews have no backend anyway (OPS-6), and CI builds the frontend and runs Playwright on every PR. A `src/vercel.json` was tried first and broke SSR packaging
 (every page 500, `ERR_PACKAGE_IMPORT_NOT_DEFINED #tanstack-router-entry`); it was removed before merge.
 
 Previews have no `VITE_API_URL` (the variable exists only for Production), so preview pages cannot reach a
@@ -70,3 +72,6 @@ free-tier resources and is an owner action. After the owner provisions them:
 | 2026-11-06 | Vercel status on `f535d0a`: `Deployment rate limited — retry in 24 hours` | GitHub commit statuses |
 | 2026-11-09 18:47 | `maet-pi.vercel.app` → `dpl_6vDkwVL6…`, commit `49dcad5` (synced) | Vercel API |
 | 2026-11-09 19:07 | Preview with `src/vercel.json` → HTTP 500 on `/`; fixed preview `b33f1e5` → 200, `x-maet-build: b33f1e5…` | `vercel curl`, runtime logs |
+| 2026-11-19 11:15 | Smoke test on `f41bb87`: 4/6. Frontend revision, CORS, 401 auth boundary and quotes pass; readiness 503 and `companies.searchCompanies` 503 (OPS-1). The search query was HTTP 500 before #64 mapped DB outages to 503 | `scripts/smoke-deploy.ts` |
+| 2026-11-19 15:26 | Last production frontend build: `09dcbac`. Later production builds (`54be651` and onward) rejected: `Deployment rate limited — retry in 24 hours`. Preview builds from parallel PRs used up the Hobby quota. `Verify Vercel Production` fails for those commits, which is the intended signal. #85 makes previews opt-in (`[preview]`); the next push to `main` after the quota resets deploys the latest commit | Vercel API, GitHub commit statuses |
+| 2026-11-19 15:40 | Backend `/api/health` reports `54be651` (latest `main`), still degraded on database/Redis (OPS-1) | `curl` |

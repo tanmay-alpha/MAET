@@ -10,7 +10,7 @@ describe("demo seed target guard", () => {
       "postgresql://postgres:postgres@127.0.0.1:58432/maet_test_demo",
       "postgres://postgres@localhost/maet_demo",
       "postgresql://postgres:postgres@[::1]:5432/maet_demo",
-      "postgresql://postgres:postgres@postgres:5432/maet_demo", // docker-compose service
+      "postgresql://postgres:postgres@pg.local:5432/maet_demo",
     ]) {
       expect(productionLookingReason(url, {})).toBeNull();
     }
@@ -22,6 +22,9 @@ describe("demo seed target guard", () => {
       "postgresql://postgres.abc:pw@aws-0-ap-south-1.pooler.supabase.com:6543/postgres",
       "postgresql://u:pw@maet.cluster-1.ap-south-1.rds.amazonaws.com/maet",
       "postgresql://u:pw@10.0.4.12:5432/maet",
+      // Single-label hosts: a Render internal Postgres host, and a docker-compose service name.
+      "postgresql://maet:pw@dpg-abcdef123456-a/maet",
+      "postgresql://postgres:postgres@postgres:5432/maet_demo",
       "postgresql://postgres:postgres@localhost:5432/maet_prod",
       "not a url",
     ]) {

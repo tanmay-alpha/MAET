@@ -70,7 +70,7 @@ describe("rate limit middleware", () => {
     expect(limited.headers.get("access-control-expose-headers")?.toLowerCase()).toContain("retry-after");
   });
 
-  it("keys on cf-connecting-ip, then true-client-ip, then the leftmost X-Forwarded-For entry", async () => {
+  it("keys on cf-connecting-ip, then true-client-ip, never on a spoofable leftmost X-Forwarded-For entry", async () => {
     const request = buildApp({ now: 0 });
     // Render appends its own proxy hop on the right; it must not be the key.
     for (let i = 0; i < 3; i++) {
@@ -84,10 +84,12 @@ describe("rate limit middleware", () => {
     expect((await viaTrueClient("192.0.2.50")).status).toBe(429);
     expect((await viaTrueClient("192.0.2.51")).status).toBe(200);
 
-    const viaXff = (left: string) => request("/api/trpc/x", { "cf-connecting-ip": "", "x-forwarded-for": `${left}, 10.1.1.1` });
-    for (let i = 0; i < 3; i++) expect((await viaXff("192.0.2.80")).status).toBe(200);
-    expect((await viaXff("192.0.2.80")).status).toBe(429);
-    expect((await viaXff("192.0.2.81")).status).toBe(200);
+    // No trusted proxy hop is configured and the socket is the only other source: a client
+    // rotating the leftmost X-Forwarded-For value still drains one bucket.
+    const spoofed = (left: string) =>
+      request("/api/market/corporate-actions?symbol=ZQ1", { "cf-connecting-ip": "", "x-forwarded-for": `${left}, 172.71.195.123, 10.226.90.65` });
+    for (let i = 0; i < 3; i++) expect((await spoofed(`192.0.2.${80 + i}`)).status).toBe(200);
+    expect((await spoofed("192.0.2.99")).status).toBe(429);
   });
 
   it("groups IPv6 clients by /64", async () => {

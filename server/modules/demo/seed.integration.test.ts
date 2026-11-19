@@ -1,17 +1,19 @@
 /**
  * Synthetic demo seed against PostgreSQL. Skipped without TEST_DATABASE_URL.
  *
- * Seeds in-process, then again through `bun run seed:demo` (the CLI path), and checks the second
- * run replaced rather than duplicated the first, produced the same backtest from the same bars,
- * and left the paper account consistent with its fills.
+ * In-process: seeds the shared test database (which holds other suites' users, hence
+ * allowExistingData) and checks the rows, labels and ledger. CLI: `bun run seed:demo` against a
+ * fresh database checks the content guard (real users or companies are refused unless --i-know,
+ * before any write) and that a rerun replaces rather than duplicates the demo rows.
  */
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { join } from "node:path";
+import postgres from "postgres";
 import { applyMigrations } from "../../scripts/apply-migrations";
 import { getSqlClient } from "../../data/drizzle/client";
 import { strategyBacktestsRouter } from "../../api/trpc/routers/strategy-backtests";
-import { countDemoRows, DEMO_BACKTEST_JOB_ID, DEMO_USER_EMAIL, DEMO_USER_ID, seedDemo, type DemoSeedSummary } from "./seed";
-import { DEMO_COMPANIES } from "./universe";
+import { countDemoRows, DEMO_BACKTEST_JOB_ID, seedDemo, type DemoSeedSummary } from "./seed";
+import { DEMO_COMPANIES, DEMO_USER_EMAIL, DEMO_USER_ID } from "./universe";
 
 const enabled = Boolean(process.env.TEST_DATABASE_URL);
 const repoRoot = join(import.meta.dir, "../../..");
@@ -23,7 +25,7 @@ describe("synthetic demo seed (PostgreSQL)", () => {
   beforeAll(async () => {
     if (!enabled) return;
     await applyMigrations();
-    first = await seedDemo();
+    first = await seedDemo({ allowExistingData: true });
     firstCounts = await countDemoRows();
   }, 60_000);
 
@@ -73,17 +75,102 @@ describe("synthetic demo seed (PostgreSQL)", () => {
     expect(Number(account.cash)).toBeCloseTo(Number(account.ledger), 4);
     expect(Number(account.cash)).toBeCloseTo(Number(account.last_balance), 4);
   });
+});
 
-  it("replaces its own rows when run again through `bun run seed:demo`", async () => {
-    if (!enabled) return console.log("  Skipping demo seed test: TEST_DATABASE_URL not set");
-    const run = Bun.spawnSync([process.execPath, "--no-env-file", "run", "server/scripts/seed-demo.ts"], {
+/** A migrated, otherwise empty database that only `bun run seed:demo` (a child process) writes to. */
+const fresh = {
+  name: `maet_demo_guard_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+  url: "",
+  sql: undefined as postgres.Sql | undefined,
+  async seed(...args: string[]) {
+    const run = Bun.spawnSync([process.execPath, "--no-env-file", "run", "server/scripts/seed-demo.ts", ...args], {
       cwd: repoRoot,
-      env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", TEST_DATABASE_URL: process.env.TEST_DATABASE_URL! },
+      env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", TEST_DATABASE_URL: fresh.url },
     });
-    expect(run.stderr.toString()).not.toContain("error");
-    expect(run.exitCode).toBe(0);
-    expect(run.stdout.toString()).toContain(`data hash ${first.backtestDataHash}`);
+    const stdout = run.stdout.toString();
+    const rowsLine = /rows: (\{.*\})/u.exec(stdout)?.[1];
+    return { exitCode: run.exitCode, stdout, stderr: run.stderr.toString(), rows: rowsLine ? (JSON.parse(rowsLine) as Record<string, number>) : null };
+  },
+  /** When the demo backtest job was written: a seed run deletes and recreates it. */
+  async demoJobCreatedAt(): Promise<string | null> {
+    const [row] = await fresh.sql!<{ created_at: Date }[]>`SELECT created_at FROM public.strategy_backtest_jobs WHERE id = ${DEMO_BACKTEST_JOB_ID}`;
+    return row ? row.created_at.toISOString() : null;
+  },
+};
 
-    expect(await countDemoRows()).toEqual(firstCounts);
+describe("`bun run seed:demo` content guard (fresh PostgreSQL database)", () => {
+  let admin: postgres.Sql | undefined;
+
+  beforeAll(async () => {
+    if (!enabled) return;
+    admin = postgres(process.env.TEST_DATABASE_URL!, { max: 1, onnotice: () => {} });
+    await admin.unsafe(`CREATE DATABASE ${fresh.name}`);
+    const url = new URL(process.env.TEST_DATABASE_URL!);
+    url.pathname = `/${fresh.name}`;
+    fresh.url = url.toString();
+    fresh.sql = postgres(fresh.url, { max: 1, onnotice: () => {} });
+    await applyMigrations({ sql: fresh.sql });
+  }, 60_000);
+
+  afterAll(async () => {
+    if (!enabled) return;
+    await fresh.sql?.end({ timeout: 1 });
+    await admin?.unsafe(`DROP DATABASE IF EXISTS ${fresh.name} WITH (FORCE)`);
+    await admin?.end({ timeout: 1 });
+  });
+
+  it("accepts an empty database, then one holding only a previous demo seed, with identical rows", async () => {
+    if (!enabled) return console.log("  Skipping demo seed guard test: TEST_DATABASE_URL not set");
+    const empty = await fresh.seed();
+    expect(empty.stderr).not.toContain("Refusing");
+    expect(empty.exitCode).toBe(0);
+    // The CLI writes exactly what the in-process seed wrote, down to the backtest's data hash.
+    expect(empty.stdout).toContain(`data hash ${first.backtestDataHash}`);
+    expect(empty.rows).toEqual(firstCounts);
+    const demoOnly = await fresh.seed();
+    expect(demoOnly.exitCode).toBe(0);
+    expect(demoOnly.rows).toEqual(empty.rows);
+  }, 60_000);
+
+  it("refuses, before any write, a database with a real user, and seeds it with --i-know", async () => {
+    if (!enabled) return console.log("  Skipping demo seed guard test: TEST_DATABASE_URL not set");
+    const realUser = crypto.randomUUID();
+    await fresh.sql!`INSERT INTO auth.users (id) VALUES (${realUser})`;
+    await fresh.sql!`INSERT INTO public.users (id, email) VALUES (${realUser}, 'trader@example.com')`;
+    const before = await fresh.demoJobCreatedAt();
+    expect(before).not.toBeNull();
+
+    const refused = await fresh.seed();
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("Refusing to seed demo data: the database holds 1 user(s) other than the demo user");
+    expect(await fresh.demoJobCreatedAt()).toBe(before);
+
+    const overridden = await fresh.seed("--i-know");
+    expect(overridden.exitCode).toBe(0);
+    expect(await fresh.demoJobCreatedAt()).not.toBe(before);
+    await fresh.sql!`DELETE FROM public.users WHERE id = ${realUser}`;
+    await fresh.sql!`DELETE FROM auth.users WHERE id = ${realUser}`;
+  }, 60_000);
+
+  it("refuses a database whose auth.users holds a real account without a profile row", async () => {
+    if (!enabled) return console.log("  Skipping demo seed guard test: TEST_DATABASE_URL not set");
+    const authOnly = crypto.randomUUID();
+    await fresh.sql!`INSERT INTO auth.users (id) VALUES (${authOnly})`;
+    const refused = await fresh.seed();
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("1 user(s) other than the demo user");
+    await fresh.sql!`DELETE FROM auth.users WHERE id = ${authOnly}`;
+  }, 60_000);
+
+  it("refuses a database holding real companies", async () => {
+    if (!enabled) return console.log("  Skipping demo seed guard test: TEST_DATABASE_URL not set");
+    await fresh.sql!`INSERT INTO public.companies (id, symbol, name, exchange) VALUES ('REALCO', 'REALCO', 'Real Company Ltd', 'NSE')`;
+    const before = await fresh.demoJobCreatedAt();
+    const refused = await fresh.seed();
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("1 companies that are not demo rows");
+    expect(await fresh.demoJobCreatedAt()).toBe(before);
+    await fresh.sql!`DELETE FROM public.companies WHERE id = 'REALCO'`;
+    expect((await fresh.seed()).exitCode).toBe(0);
   }, 60_000);
 });

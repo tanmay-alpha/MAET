@@ -1,6 +1,8 @@
 import { createError, defineEventHandler, getQuery, setResponseHeader } from "h3";
 import { AppError, type Candle } from "@shared/types";
 import { loadMarketCandles } from "../../domain/market/candle-service";
+import { isCataloguedMarketSymbol } from "../../domain/market/symbol";
+import { isMarketSymbol } from "../../domain/market/symbol-pattern";
 import { getLogger } from "../../infra/logger";
 
 const TIMEFRAMES: Candle["tf"][] = ["1m", "5m", "15m", "1h", "1d", "1wk"];
@@ -24,8 +26,12 @@ export default defineEventHandler(async (event) => {
   const tf = String(query.tf ?? "5m") as Candle["tf"];
   const requestedRange = String(query.range ?? (tf === "1d" || tf === "1wk" ? "1y" : "5d"));
 
-  if (!/^[A-Z0-9&.-]+$/.test(symbol)) {
+  if (!isMarketSymbol(symbol)) {
     throw createError({ statusCode: 400, statusMessage: "Invalid symbol" });
+  }
+  // Anonymous callers must not make the server look up arbitrary tickers on Yahoo.
+  if (!isCataloguedMarketSymbol(symbol)) {
+    throw createError({ statusCode: 400, statusMessage: "Unknown symbol" });
   }
   if (!TIMEFRAMES.includes(tf)) {
     throw createError({ statusCode: 400, statusMessage: "Unsupported timeframe" });

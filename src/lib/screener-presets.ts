@@ -1,4 +1,5 @@
-import type { MarketCompany, MarketQuote } from "@/lib/market-api";
+import type { MarketCompany, MarketQuote, MissingDataExclusions } from "@/lib/market-api";
+import { isAvailableMetric } from "@/lib/screener-format";
 
 export type ScreenerFilters = Record<string, string>;
 export type ScreenerSortDirection = "asc" | "desc";
@@ -77,17 +78,68 @@ function isLiveQuoteKey(key: string): key is LiveQuoteKey {
   return Object.hasOwn(LIVE_QUOTE_FIELDS, key);
 }
 
-/** The value the row displays: the live quote when there is one, else the stored snapshot. */
+/**
+ * The value the row displays: the live quote when there is one, else the stored snapshot.
+ * A null or non-finite value (an API may send `null`) is missing, never 0.
+ */
 function displayedValue(company: MarketCompany, quote: MarketQuote | undefined, key: LiveQuoteKey): number | undefined {
   const field = LIVE_QUOTE_FIELDS[key];
-  return quote?.[field] ?? company[field];
+  const live = quote?.[field];
+  if (isAvailableMetric(live)) return live;
+  const stored: unknown = company[field];
+  return isAvailableMetric(stored) ? stored : undefined;
+}
+
+/**
+ * How one row fares against the live price / change / volume filters: `passes` covers the
+ * values it has, `missing` names the filtered fields it lacks (never read as 0).
+ */
+function screenLiveRow(
+  company: MarketCompany,
+  quote: MarketQuote | undefined,
+  filters: ScreenerFilters,
+): { passes: boolean; missing: LiveQuoteKey[] } {
+  const missing: LiveQuoteKey[] = [];
+  let passes = true;
+  for (const key of LIVE_QUOTE_KEYS) {
+    const min = filters[`${key}_min`]?.trim();
+    const max = filters[`${key}_max`]?.trim();
+    if (!min && !max) continue;
+    const value = displayedValue(company, quote, key);
+    if (value === undefined) missing.push(key);
+    else if ((min && value < Number(min)) || (max && value > Number(max))) passes = false;
+  }
+  return { passes, missing };
+}
+
+/**
+ * Rows on this page the live filters leave out only because the filtered quote value is
+ * missing, keyed like the server's report (`price`, `changePct`, `volume`).
+ */
+export function liveMissingExclusions(
+  companies: readonly MarketCompany[],
+  quotes: ReadonlyMap<string, MarketQuote>,
+  filters: ScreenerFilters,
+): MissingDataExclusions {
+  const report: MissingDataExclusions = { total: 0, byField: {} };
+  for (const company of companies) {
+    const { passes, missing } = screenLiveRow(company, quotes.get(company.symbol), filters);
+    if (!passes || missing.length === 0) continue;
+    report.total += 1;
+    for (const key of missing) {
+      const field = LIVE_QUOTE_FIELDS[key];
+      report.byField[field] = (report.byField[field] ?? 0) + 1;
+    }
+  }
+  return report;
 }
 
 /**
  * Arranges one loaded page by the quote values its rows display.
  *
  * - `filterLive`: apply price / change / volume filters here. The NSE fallback (database
- *   down) has no stored quotes, so the server cannot evaluate them.
+ *   down) has no stored quotes, so the server cannot evaluate them. Rows missing a filtered
+ *   value are left out; `liveMissingExclusions` counts them.
  * - Price / change / volume sorts are re-applied with the displayed live values, so the
  *   column reads in order even where the server had no (or an older) snapshot. Missing
  *   values go last and ties fall back to the symbol, as on the server.
@@ -100,15 +152,8 @@ export function arrangeLivePage(
   const { filters, sort, filterLive } = options;
   const rows = filterLive
     ? companies.filter((company) => {
-        const quote = quotes.get(company.symbol);
-        return LIVE_QUOTE_KEYS.every((key) => {
-          const value = displayedValue(company, quote, key);
-          const min = filters[`${key}_min`]?.trim();
-          const max = filters[`${key}_max`]?.trim();
-          if (min && (value === undefined || value < Number(min))) return false;
-          if (max && (value === undefined || value > Number(max))) return false;
-          return true;
-        });
+        const { passes, missing } = screenLiveRow(company, quotes.get(company.symbol), filters);
+        return passes && missing.length === 0;
       })
     : [...companies];
   const { sortBy, sortDir } = sort;

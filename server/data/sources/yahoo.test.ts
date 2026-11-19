@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import {
   getCandles,
+  getCorporateActions,
   getQuote,
   UpstreamDegradedError,
   UpstreamPermanentError,
+  MAX_QUEUED_YAHOO_REQUESTS,
+  YahooOverloadedError,
+  YahooTimeoutError,
   _resetCircuitForTest,
+  _setFetchTimeoutForTest,
 } from "./yahoo";
 
 import { spyOn } from "bun:test";
@@ -170,8 +175,90 @@ describe("yahoo source", () => {
     }) as unknown as typeof fetch;
 
     await expect(getCandles("ZZZZFAKE", new Date("2026-10-01"), new Date("2026-11-01"), "1d")).rejects.toThrow("404");
-    await expect(getQuote("ZZZZFAKE")).rejects.toBeInstanceOf(UpstreamPermanentError);
+    // A different ticker: the first 404 is remembered, so ZZZZFAKE would not reach fetch again.
+    await expect(getQuote("ZZZZFAKE2")).rejects.toBeInstanceOf(UpstreamPermanentError);
     expect(agents[0]).toBe(agents[1]);
     expect(agents[0]).toContain("Mozilla/5.0");
+  });
+});
+
+/** A Yahoo call that never answers; it only settles when its abort signal fires. */
+function hangingFetch(calls: { count: number }): typeof fetch {
+  return ((_url: unknown, init?: RequestInit) => {
+    calls.count++;
+    const { promise, reject } = Promise.withResolvers<Response>();
+    init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    return promise;
+  }) as unknown as typeof fetch;
+}
+
+/**
+ * Settles with the outcome of `promise`, or "pending" if it still runs after `ms`. A real
+ * delay is deliberate: the guard under test is the platform's `AbortSignal.timeout`, which
+ * fake timers do not drive.
+ */
+function within(promise: Promise<unknown>, ms: number): Promise<unknown> {
+  return Promise.race([promise.then(() => "resolved", (error: unknown) => error), Bun.sleep(ms).then(() => "pending")]);
+}
+
+describe("yahoo abuse guards", () => {
+  it("remembers a ticker Yahoo reports as unknown for ten minutes across quote, candle and event calls", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response("Not Found", { status: 404 });
+    }) as unknown as typeof fetch;
+    const now = spyOn(Date, "now");
+    const start = 1_800_000_000_000;
+    now.mockImplementation(() => start);
+    try {
+      for (let i = 0; i < 5; i++) {
+        await expect(getCorporateActions("ZQ123")).rejects.toBeInstanceOf(UpstreamPermanentError);
+      }
+      await expect(getCandles("ZQ123", new Date("2026-10-01"), new Date("2026-11-01"), "1d")).rejects.toBeInstanceOf(UpstreamPermanentError);
+      await expect(getQuote("ZQ123")).rejects.toBeInstanceOf(UpstreamPermanentError);
+      expect(calls).toBe(1);
+
+      now.mockImplementation(() => start + 10 * 60_000 + 1);
+      await expect(getCorporateActions("ZQ123")).rejects.toBeInstanceOf(UpstreamPermanentError);
+      expect(calls).toBe(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("aborts a hung fetch at the request timeout and does not retry it", async () => {
+    _setFetchTimeoutForTest(50);
+    const calls = { count: 0 };
+    globalThis.fetch = hangingFetch(calls);
+
+    const outcome = await within(getQuote("RELIANCE.NS"), 2_000);
+
+    expect(outcome).toBeInstanceOf(YahooTimeoutError);
+    expect(outcome).toBeInstanceOf(UpstreamDegradedError);
+    expect(calls.count).toBe(1);
+  });
+
+  it("rejects at once when the slot wait queue is full", async () => {
+    _setFetchTimeoutForTest(100);
+    const calls = { count: 0 };
+    globalThis.fetch = hangingFetch(calls);
+    // 4 requests take the slots, MAX_QUEUED_YAHOO_REQUESTS more queue behind them.
+    const backlog = Array.from({ length: 4 + MAX_QUEUED_YAHOO_REQUESTS }, (_, i) =>
+      getQuote(`HUNG${i}.NS`).catch((error: unknown) => error)
+    );
+    await Bun.sleep(0);
+    expect(calls.count).toBe(4);
+
+    const outcome = await within(getQuote("RELIANCE.NS"), 50);
+    expect(outcome).toBeInstanceOf(YahooOverloadedError);
+    expect(outcome).toBeInstanceOf(UpstreamDegradedError);
+    expect(calls.count).toBe(4);
+
+    // Drain: the held slots time out, then the queue sees fast 404s.
+    globalThis.fetch = (async () => new Response("", { status: 404 })) as unknown as typeof fetch;
+    const settled = await Promise.all(backlog);
+    expect(settled.slice(0, 4).every((error) => error instanceof YahooTimeoutError)).toBe(true);
+    expect(settled.slice(4).every((error) => error instanceof UpstreamPermanentError)).toBe(true);
   });
 });
