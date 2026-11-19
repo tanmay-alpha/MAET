@@ -461,7 +461,8 @@ function Compare() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          {/* relative: the sr-only "Action" header label is absolutely positioned and would otherwise widen the page. */}
+          <div className="relative overflow-x-auto">
           <table className="w-full min-w-[720px] text-xs">
             <thead className="bg-panel text-muted-foreground">
               <tr>

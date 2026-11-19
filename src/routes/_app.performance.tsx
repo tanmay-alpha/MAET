@@ -93,7 +93,7 @@ function BacktestRuns() {
     body = <EmptyLine>No completed backtests. Run one from a saved strategy in the Strategy Lab.</EmptyLine>;
   } else {
     body = (
-      <div className="overflow-x-auto">
+      <div className="relative overflow-x-auto">
         <table className="w-full whitespace-nowrap text-xs">
           <thead className="border-b border-border bg-panel text-muted-foreground">
             <tr>

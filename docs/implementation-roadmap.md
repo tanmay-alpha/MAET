@@ -23,7 +23,7 @@ branch, merged `main` into it, re-ran its suites and merged it only after CI pas
 | UX-1 | P0 | Auth UI | No sign-in/out | `app-shell.tsx:52` | `/login`, sign-up, sign-out | FrontendAuth | `auth.spec.ts` | done | #70 |
 | UX-2 | P1 | Routing | No route error boundary | `__root.tsx` | `_app` error panel with retry | FrontendAuth | `resilience.spec.ts` | done | #70 |
 | UX-3 | P1 | A11y | Shortcut hijack; unlabeled chart | `use-chart-layout.ts` | Skip interactive targets; `role=img` | FrontendAuth | `resilience.spec.ts` | done | #70 |
-| UX-4 | P1 | Responsive | 768 px squeeze; `/orders` +370 px overflow | Playwright | Slide-over sidebar < 1024 px | FrontendAuth | 360/768/1440 on six pages | done | #70 |
+| UX-4 | P1 | Responsive | 768 px squeeze; `/orders` +370 px and `/backtest` +248 px overflow (sr-only header labels escaping their table scrollers) | Playwright | Slide-over sidebar < 1024 px; table scrollers are `relative` | FrontendAuth, UiPolish | 360/768/1440 on ten pages, wide tables filled with rows | done | #70, UiPolish PR |
 | UX-5 | P2 | Portfolio | No cash ledger | no callers | Ledger + reconciliation | FrontendAuth | `ledger.spec.ts` | done | #70 |
 | UX-6 | P2 | Bundles | Chart libraries not split per route | build output | — | — | — | deferred | — |
 | FIN-1 | P1 | Paper margin | Stale marks | `margin.ts` | Live marks; unmarked gains never count | PaperRisk | counterexample + seeded sweep | done | #59 |
@@ -44,7 +44,7 @@ branch, merged `main` into it, re-ran its suites and merged it only after CI pas
 | RES-4 | P1 | Corporate actions | Never ingested | no writer | Reported on `/data-quality` | — | — | open (data source needed) | #65 |
 | RES-5 | P1 | Docs | Survivorship claim unsupported | README | Claim removed; gap stated | orchestrator | doc review | done | docs |
 | RES-6 | P1 | Ingestion | Wrote `price_daily`; consumers read `candles` | writer | Validated upsert into `candles` | IngestionPipeline | Postgres pipeline test | done | #67 |
-| RES-7 | P2 | Sweeps | No overfitting control | `robustness.ts` | PBO via CSCV | WalkForward | 30 seeded matrices | done | #62 |
+| RES-7 | P2 | Sweeps | No overfitting control | `robustness.ts` | PBO via CSCV, shown on the sweep results page with trials and the reason when null | WalkForward, UiPolish | 30 seeded matrices, 3 component | done | #62, UiPolish PR |
 | RES-8 | P2 | Benchmark | Always 0 | worker | Same-date benchmark in walk-forward; reports mark queued-backtest benchmark as not applied | WalkForward, RunReports | unit | done (walk-forward); reported (backtests) | #62, #71 |
 | SEC-1 | P1 | Market stream | Unbounded Angel subscriptions; per-tick DB | `stream.get.ts` | Catalogue check, 1,000-token budget, idle short-circuit | Hardening | 2,000-symbol + 400-step tests | done | #64 |
 | SEC-2 | P1 | Backtest v2 | Unbounded stored runs | `backtest-v2.ts` | 50-run retention, downsample | Hardening | Postgres retention test | done | #64 |
@@ -55,5 +55,5 @@ branch, merged `main` into it, re-ran its suites and merged it only after CI pas
 | F-1 | P2 | Feature | Market-data quality center | — | `/data-quality` + admin reliability | DataQuality | 21 unit, 8 Postgres, e2e | done | #65, #72 |
 | F-2/3 | P2 | Feature | Run reports, comparison | — | `/research/reports` | RunReports | 31 unit, 6 Postgres | done | #71 |
 | F-4 | P2 | Feature | Ledger/reconciliation | — | `/portfolio` | FrontendAuth | e2e | done | #70 |
-| F-8 | P2 | Feature | Synthetic demo | — | `seed:demo`, demo banner | DemoMode | 20 unit, 3 Postgres | done | #69 |
+| F-8 | P2 | Feature | Synthetic demo | — | `seed:demo`, demo banner; every quote label, tooltip and source line goes through `quoteSourceLabel` / `quoteProviderName` | DemoMode, UiPolish | 22 unit, 3 Postgres | done | #69, UiPolish PR |
 | TEST-1 | P2 | Load | No bounded load test | — | `scripts/load-test.ts` (refuses production) | orchestrator | local run recorded | done | docs |

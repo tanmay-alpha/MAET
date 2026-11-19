@@ -19,6 +19,11 @@ export function sourceName(source: string): string {
   return SOURCE_NAMES[source] ?? source;
 }
 
+/** Provider name for a quote; a demo build names no provider, its quotes are generated. */
+export function quoteProviderName(source: string): string {
+  return isDemoBuild() ? SYNTHETIC_QUOTE_LABEL : sourceName(source);
+}
+
 /**
  * "Angel One · live", "Yahoo · delayed", "Yahoo · delayed · market closed": from the API's own
  * `source` field. Simulated quotes say "synthetic", and a demo build (VITE_MAET_DEMO_MODE=1)
@@ -29,4 +34,9 @@ export function quoteSourceLabel(source: string, delayed: boolean, marketPhase?:
   const parts = [sourceName(source), source === "simulated" ? "synthetic" : delayed ? "delayed" : "live"];
   if (marketPhase && CLOSED_PHASES[marketPhase]) parts.push("market closed");
   return parts.join(" · ");
+}
+
+/** Hover text naming where a row's quote came from; demo builds call it synthetic. */
+export function quoteSourceTitle(quote: { source: string; delayed: boolean } | undefined): string {
+  return quote ? `Quote source: ${quoteSourceLabel(quote.source, quote.delayed)}` : "Quote unavailable";
 }

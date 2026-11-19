@@ -856,7 +856,7 @@ function Screener() {
         })}
       </div>
 
-      <div className="min-w-0 flex-1 overflow-auto">
+      <div className="relative min-w-0 flex-1 overflow-auto">
         <table className="w-full border-separate border-spacing-0 text-xs">
           <thead className="sticky top-0 z-20 bg-background">
             <tr>

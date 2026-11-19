@@ -101,7 +101,7 @@ test("keyboard: chart shortcuts leave selects, editable text and menus alone; th
 });
 
 const WIDTHS = [360, 768, 1440] as const;
-const SIGNED_IN_PAGES = ["/portfolio", "/dashboard", "/orders", "/terminal", "/screener", "/chart/RELIANCE"];
+const SIGNED_IN_PAGES = ["/portfolio", "/dashboard", "/orders", "/terminal", "/screener", "/chart/RELIANCE", "/backtest", "/compare", "/performance", "/strategies"];
 
 /**
  * What sticks out sideways: the document's horizontal overflow, plus elements in <main>
@@ -138,19 +138,46 @@ function horizontalOverflow(page: Page) {
   });
 }
 
+/** Rows for the pages' wide tables, so the sweep measures them filled rather than empty. */
+function serveTableRows(api: MockApi) {
+  api.onQuery("backtestV2.listRuns", () => ({
+    runs: ["RELIANCE", "HDFCBANK"].map((symbol, index) => ({
+      id: `run-${index}`, symbol, timeframe: "1d", strategy: "SMA_CROSS", createdAt: FIXED_NOW,
+      result: { metrics: { totalReturn: 0.1234, maxDrawdown: -0.0567, sharpe: 1.23 }, signalCount: 42 },
+    })),
+  }));
+  api.onQuery("strategyBacktests.listJobs", () => ({
+    jobs: ["RELIANCE", "HDFCBANK"].map((symbol, index) => ({
+      id: `job-${index}`, status: "COMPLETED", symbolOrUniverse: symbol, timeframe: "1d",
+      fromDate: "2024-01-01", toDate: "2026-11-01", requestedAt: FIXED_NOW,
+    })),
+  }));
+  api.onQuery("strategyBacktests.getPerformance", () => ({ snapshot: null }));
+  api.onQuery("strategyDefinitions.list", () => ({
+    strategies: [{
+      id: "22222222-2222-4222-8222-222222222222", name: "Momentum breakout with a long descriptive name",
+      description: "Buys 20-day highs on above-average volume and exits on a trailing stop", status: "DRAFT", updatedAt: FIXED_NOW,
+    }],
+  }));
+}
+
 test.describe("responsive layout", () => {
   test.skip(({ isMobile, browserName }) => isMobile || browserName !== "chromium", "Viewport sweep runs once, in the desktop project");
 
   for (const width of WIDTHS) {
-    test(`${width}px: key pages fit the viewport and the content gets the width`, async ({ page }) => {
+    test(`${width}px: key pages fit the viewport and the content gets the width`, async ({ page, api }) => {
       await page.setViewportSize({ width, height: 900 });
+      serveTableRows(api);
       await signIn(page);
+      const overflowing: { path: string; overflow: string[] }[] = [];
       for (const path of SIGNED_IN_PAGES) {
         await page.goto(path);
         await expect(page.locator("main")).toBeVisible();
         await page.waitForLoadState("networkidle");
-        expect({ path, overflow: await horizontalOverflow(page) }).toEqual({ path, overflow: [] });
+        const overflow = await horizontalOverflow(page);
+        if (overflow.length > 0) overflowing.push({ path, overflow });
       }
+      expect(overflowing).toEqual([]);
       const mainWidth = await page.locator("main").evaluate((element) => element.getBoundingClientRect().width);
       if (width < 1024) {
         // No docked sidebar below lg: the page content spans the viewport…
