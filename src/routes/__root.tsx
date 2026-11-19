@@ -16,7 +16,7 @@ import { useEffect, type ReactNode } from "react";
 import "../styles.css";
 import { API_BASE_URL } from "@/lib/api-url";
 import { DemoModeBanner } from "@/components/demo/demo-mode-banner";
-import { clearQueriesOnSessionChange } from "@/lib/auth-session";
+import { clearQueriesOnSessionChange, consumeAuthRedirect } from "@/lib/auth-session";
 
 function NotFoundComponent() {
   return (
@@ -104,9 +104,17 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const router = useRouter();
   // Sign-out (here or in another tab) or a different user must not leave the last
   // account's cached data on screen.
   useEffect(() => clearQueriesOnSessionChange(queryClient), [queryClient]);
+  // An email link (sign-up confirmation, magic link) lands with the session, or an error, in
+  // the URL fragment: store it, strip it, and send failures to /login with the reason.
+  useEffect(() => {
+    void consumeAuthRedirect((pathAndSearch) => router.history.replace(pathAndSearch)).then((outcome) => {
+      if (outcome.kind === "error") void router.navigate({ to: "/login", search: { authError: outcome.message } });
+    });
+  }, [router]);
   return (
     <QueryClientProvider client={queryClient}>
       <DemoModeBanner />
