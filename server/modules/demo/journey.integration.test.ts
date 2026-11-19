@@ -20,7 +20,8 @@ afterEach(() => {
 describe.skipIf(!process.env.TEST_DATABASE_URL)("local product journey (PostgreSQL)", () => {
   beforeAll(async () => {
     await applyMigrations();
-    await seedDemo();
+    // The shared test database holds other suites' users and companies (see seed.integration.test.ts).
+    await seedDemo({ allowExistingData: true });
   }, 60_000);
 
   it("includes stored prices and their provenance in an unfiltered screener page", async () => {
