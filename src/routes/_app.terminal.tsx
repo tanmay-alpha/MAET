@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { CandlestickChart } from "@/components/trading/candlestick-chart";
+import { LazyCandlestickChart } from "@/components/trading/lazy-candlestick-chart";
 import { OrderPanel } from "@/components/trading/order-panel";
 import { ResetAccountButton } from "@/components/trading/reset-account-button";
 import { Watchlist } from "@/components/trading/watchlist";
@@ -328,7 +328,7 @@ function Terminal() {
           {/* Chart Canvas */}
           <div className="min-h-[350px] overflow-hidden bg-background lg:min-h-0 lg:flex-1">
             {candles.length > 1 ? (
-              <CandlestickChart
+              <LazyCandlestickChart
                 data={candles}
                 ariaLabel={`${active} ${chartType === "line" ? "line" : "candlestick"} chart, ${intervalConfig.timeframe} bars over ${intervalConfig.range}`}
                 height={350}

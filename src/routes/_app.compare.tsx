@@ -2,16 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Check, Plus, X } from "lucide-react";
-import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { LazyCompareLineChart } from "@/components/compare/lazy-compare-line-chart";
+import type { CompareChartMode } from "@/components/compare/compare-line-chart";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { fetchMarketCandles } from "@/lib/market-api";
 import { quoteSourceLabel, sourceName } from "@/lib/quote-source";
@@ -29,7 +21,6 @@ const COLORS = ["#2962ff", "#26a69a", "#ef5350", "#f59e0b", "#8b5cf6"];
 
 type TabType = "Performance" | "Valuation" | "Growth" | "Profitability" | "Leverage" | "Momentum";
 type RangeType = "1mo" | "3mo" | "6mo" | "1y" | "2y" | "5y";
-type ChartMode = "pct" | "indexed" | "price";
 
 const RANGE_LABELS: { id: RangeType; label: string }[] = [
   { id: "1mo", label: "1M" },
@@ -52,7 +43,7 @@ function Compare() {
   const [input, setInput] = useState("");
   const [activeTab, setActiveTab] = useState<TabType>("Performance");
   const [selectedRange, setSelectedRange] = useState<RangeType>("3mo");
-  const [chartMode, setChartMode] = useState<ChartMode>("pct");
+  const [chartMode, setChartMode] = useState<CompareChartMode>("pct");
   const primarySymbol = symbols[0] || "RELIANCE";
 
   const quotes = useMarketQuotes(symbols);
@@ -384,55 +375,7 @@ function Compare() {
           {/* Interactive Line Chart */}
           <div className="min-h-[320px] flex-1 p-3">
             {chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 14, right: 28, bottom: 6, left: 4 }}>
-                  <CartesianGrid stroke="var(--color-grid)" strokeDasharray="2 4" vertical={false} />
-                  <XAxis
-                    dataKey="date"
-                    stroke="var(--color-muted-foreground)"
-                    tick={{ fontSize: 10 }}
-                    minTickGap={34}
-                  />
-                  <YAxis
-                    stroke="var(--color-muted-foreground)"
-                    tick={{ fontSize: 10 }}
-                    tickFormatter={(value) =>
-                      chartMode === "pct"
-                        ? `${Number(value).toFixed(0)}%`
-                        : chartMode === "indexed"
-                        ? Number(value).toFixed(0)
-                        : `₹${Number(value).toFixed(0)}`
-                    }
-                    width={52}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      background: "var(--color-panel-elevated)",
-                      border: "1px solid var(--color-border)",
-                      borderRadius: 4,
-                    }}
-                    formatter={(value) => [
-                      chartMode === "pct"
-                        ? `${Number(value).toFixed(2)}%`
-                        : chartMode === "indexed"
-                        ? Number(value).toFixed(2)
-                        : `₹${Number(value).toFixed(2)}`,
-                      "",
-                    ]}
-                  />
-                  <Legend />
-                  {symbols.map((symbol, index) => (
-                    <Line
-                      key={symbol}
-                      dataKey={symbol}
-                      stroke={COLORS[index]}
-                      dot={false}
-                      strokeWidth={1.8}
-                      connectNulls
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
+              <LazyCompareLineChart data={chartData} symbols={symbols} colors={COLORS} mode={chartMode} />
             ) : (
               <p role="status" className="flex h-full items-center justify-center text-xs text-muted-foreground">
                 {candlesFailed ? "Price history is unavailable right now." : "Loading price history…"}

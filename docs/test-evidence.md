@@ -110,6 +110,35 @@ Postgres and Redis. The script refuses the production hostnames (verified: exit 
 1,194 requests/s overall, with zero 5xx (other than `/api/ready` by design) and zero network errors.
 The 429s are the per-IP token bucket (capacity 300) engaging after its burst, which is the intended behaviour.
 
+## Frontend bundle (UX-6)
+
+`bun run build && bun run check:bundle` (Vercel preset). Initial JS is what a route needs before
+it renders: the start-manifest preloads of the route and its ancestors plus their static imports.
+Lazy JS is fetched with `import()` after the route renders. Sizes in kB of 1000 bytes.
+
+| Route | Initial JS gzip, before | Initial JS gzip, after | Lazy JS gzip, after |
+|---|---:|---:|---:|
+| entry (root route, every page) | 141.6 kB (10 files) | 141.8 kB (11 files) | — |
+| landing `/` | 154.0 kB (21 files) | 154.2 kB (22 files) | — |
+| `/stock/$symbol` | 276.3 kB | 214.6 kB | 63.8 kB (lightweight-charts) |
+| `/chart/$symbol` | 281.1 kB | 220.4 kB | 62.9 kB |
+| `/terminal` | 284.5 kB | 222.9 kB | 63.8 kB |
+| `/compare` | 311.3 kB | 211.6 kB | 100.8 kB (recharts) |
+| `/payoff` | 318.3 kB | 211.8 kB | 108.0 kB (recharts) |
+| `/screener`, `/portfolio` | 218.2 / 224.9 kB | 218.5 / 225.3 kB | — |
+
+The landing route never loaded a chart library: TanStack Start already split routes. Its extra
+file is the `vendor-react` chunk, which stays cached across deploys that only change app code.
+
+Tests that failed before the change:
+- `tests/e2e/lazy-charts.spec.ts`: no `role=status` placeholder while the chart chunk is held.
+- `tests/e2e/ssr-assets.spec.ts`: the server-rendered document linked `/assets/styles-CDyV7Tsr.css`
+  (404). The server build hashed its own copy of the CSS, which nothing serves; the first paint was
+  unstyled until hydration. 3 of 3 paths failed; all pass after `__root.tsx` imports the CSS as a
+  side effect so TanStack Start links the client build's file.
+- `bun run check:bundle` exits 1 when `routes/index.tsx` statically imports the candlestick chart
+  (218.0 kB against a 169.6 kB limit).
+
 ## Known flakiness
 
 - One `test:unit` run under heavy parallel load (three suites at once on one machine) showed 1 failure that did not reproduce in three reruns.

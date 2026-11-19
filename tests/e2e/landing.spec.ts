@@ -5,9 +5,7 @@ test("landing exposes public heatmap, one index row and working research links",
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
     // The shared mock intentionally aborts Google Fonts; application errors still fail.
-    // The node-server preview build has a known global stylesheet hash mismatch.
-    const previewStylesheet = /\/assets\/styles-[^/]+\.css$/.test(message.location().url);
-    if (message.type() === "error" && !message.location().url.startsWith("https://fonts.googleapis.com/") && !previewStylesheet) {
+    if (message.type() === "error" && !message.location().url.startsWith("https://fonts.googleapis.com/")) {
       errors.push(message.text());
     }
   });
