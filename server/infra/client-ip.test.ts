@@ -21,10 +21,20 @@ describe("getClientIp", () => {
     );
   });
 
-  it("falls back to the leftmost X-Forwarded-For entry, never Render's appended proxy hop", () => {
-    expect(getClientIp(eventWith({ "x-forwarded-for": "198.51.100.7, 10.1.1.1, 10.2.2.2" }, "10.9.9.9"))).toBe(
-      "198.51.100.7"
+  it("never keys on a client-supplied X-Forwarded-For entry when no proxy hop is trusted", () => {
+    expect(getClientIp(eventWith({ "x-forwarded-for": "198.51.100.7, 10.1.1.1, 10.2.2.2" }, "10.9.9.9"))).toBe("10.9.9.9");
+    expect(getClientIp(eventWith({ "x-forwarded-for": "198.51.100.8" }, "10.9.9.9"))).toBe("10.9.9.9");
+  });
+
+  it("takes the entry the outermost trusted proxy appended, ignoring anything the client prepended", () => {
+    // Render: Cloudflare appends the client, Render's edge the Cloudflare hop, an internal proxy the edge.
+    const render = "81.97.145.24, 172.71.195.123, 10.226.90.65";
+    expect(getClientIp(eventWith({ "x-forwarded-for": render }, "10.9.9.9"), 3)).toBe("81.97.145.24");
+    expect(getClientIp(eventWith({ "x-forwarded-for": `198.51.100.7, 192.0.2.1, ${render}` }, "10.9.9.9"), 3)).toBe(
+      "81.97.145.24"
     );
+    // Fewer entries than trusted hops: the chain is not the one we trust, so use the socket.
+    expect(getClientIp(eventWith({ "x-forwarded-for": "172.71.195.123, 10.226.90.65" }, "10.9.9.9"), 3)).toBe("10.9.9.9");
   });
 
   it("falls back to the socket address, then 'unknown'", () => {
@@ -34,7 +44,7 @@ describe("getClientIp", () => {
 
   it("normalises IPv6 clients to their /64", () => {
     expect(getClientIp(eventWith({ "cf-connecting-ip": "2001:db8:abcd:12:1::5" }))).toBe("2001:db8:abcd:12::/64");
-    expect(getClientIp(eventWith({ "x-forwarded-for": "[2001:db8:abcd:12::9], 10.1.1.1" }))).toBe(
+    expect(getClientIp(eventWith({ "x-forwarded-for": "[2001:db8:abcd:12::9], 10.1.1.1" }), 2)).toBe(
       "2001:db8:abcd:12::/64"
     );
   });
