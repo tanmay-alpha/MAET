@@ -1,4 +1,5 @@
 import type { MarketQuote } from "@/lib/market-api";
+import { quoteSourceTitle } from "@/lib/quote-source";
 import { type MarketCatalogItem } from "@/lib/market-catalog";
 import { CompanySearchInput } from "@/components/market/company-search-input";
 import { useTerminalStore } from "@/store/useTerminalStore";
@@ -48,12 +49,11 @@ export function Watchlist({
           const quote = quotes.get(item.symbol);
           const price = quote?.price;
           const changePct = quote?.changePct;
-          const source = quote?.source === "angelone" ? "Angel One" : quote?.source === "yahoo" ? "Yahoo" : quote?.source;
 
           return (
             <div
               key={item.symbol}
-              title={source ? `Quote source: ${source}` : "Quote unavailable"}
+              title={quoteSourceTitle(quote)}
               className={`group flex w-full items-center gap-3 px-3 py-2 text-xs transition-colors hover:bg-accent ${
                 active === item.symbol ? "bg-accent font-semibold" : ""
               }`}

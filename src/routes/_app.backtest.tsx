@@ -241,7 +241,8 @@ function RunHistory({ signedIn, query }: {
   else if (runs.length === 0) body = <EmptyLine>No saved runs yet. Each run above is saved here.</EmptyLine>;
   else {
     body = (
-      <div className="overflow-x-auto">
+      // relative: the sr-only "Chart" header label is absolutely positioned and would otherwise widen the page.
+      <div className="relative overflow-x-auto">
         <table className="w-full whitespace-nowrap text-xs">
           <thead className="border-b border-border bg-panel text-muted-foreground">
             <tr>
