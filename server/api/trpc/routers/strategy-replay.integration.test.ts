@@ -89,4 +89,39 @@ describe("strategy replay router (Postgres)", () => {
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     expect((await loadSession(sessionId)).state).toMatchObject({ orders: [] });
   });
+
+  it("treats another user's session as NOT_FOUND and leaves it untouched", async () => {
+    const owner = await setup();
+    const { order } = await owner.caller.placeOrder({ sessionId: owner.sessionId, side: "BUY", type: "LIMIT", qty: 1, limitPrice: 1 });
+    await owner.caller.step({ sessionId: owner.sessionId });
+    const before = await loadSession(owner.sessionId);
+
+    const { caller: other } = await setup();
+    const sessionId = owner.sessionId;
+    const attempts: [string, () => Promise<unknown>][] = [
+      ["getState", () => other.getState({ sessionId })],
+      ["listOrders", () => other.listOrders({ sessionId })],
+      ["listFills", () => other.listFills({ sessionId })],
+      ["getPositions", () => other.getPositions({ sessionId })],
+      ["getLedger", () => other.getLedger({ sessionId })],
+      ["step", () => other.step({ sessionId })],
+      ["placeOrder", () => other.placeOrder({ sessionId, side: "BUY", type: "MARKET", qty: 1 })],
+      ["cancelOrder", () => other.cancelOrder({ sessionId, orderId: order.id })],
+      ["reset", () => other.reset({ sessionId })],
+      ["close", () => other.close({ sessionId })],
+    ];
+    for (const [name, attempt] of attempts) {
+      const outcome = await attempt().then(
+        (value) => ({ resolved: value }),
+        (error: unknown) => ({ code: error instanceof Error && "code" in error ? error.code : String(error) }),
+      );
+      expect({ name, outcome }).toEqual({ name, outcome: { code: "NOT_FOUND" } });
+    }
+    expect((await other.list()).sessions.map((s) => s.id)).not.toContain(sessionId);
+
+    expect(await loadSession(owner.sessionId)).toEqual(before);
+    expect(before.status).toBe("ACTIVE");
+    expect(before.barsRevealed).toBe(2);
+    expect(orderIds(before)).toEqual([order.id]);
+  }, 30_000);
 });

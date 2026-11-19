@@ -421,10 +421,12 @@ export const strategyReplayRouter = createRouter({
   close: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }).strict())
     .mutation(async ({ ctx, input }) => {
-      await db
+      const closed = await db
         .update(strategyReplaySessions)
         .set({ status: "CLOSED", updatedAt: new Date() })
-        .where(and(eq(strategyReplaySessions.id, input.sessionId), eq(strategyReplaySessions.userId, ctx.userId!)));
+        .where(and(eq(strategyReplaySessions.id, input.sessionId), eq(strategyReplaySessions.userId, ctx.userId!)))
+        .returning({ id: strategyReplaySessions.id });
+      if (closed.length === 0) throw new TRPCError({ code: "NOT_FOUND", message: "Replay session not found" });
       return { closed: true };
     }),
 
