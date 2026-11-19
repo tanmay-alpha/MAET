@@ -17,6 +17,7 @@ jobs:
   validate:
     name: Code Quality & Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       NODE_ENV: test
       BUN_TEST: "1"
@@ -49,6 +50,7 @@ jobs:
   paper-trading-integration:
     name: Paper Trading Integration Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -86,6 +88,7 @@ jobs:
   paper-trading-concurrency:
     name: Paper Trading Concurrency Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -123,6 +126,7 @@ jobs:
   advanced-features:
     name: Advanced Product Feature Verification Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -198,6 +202,7 @@ jobs:
   build-frontend:
     name: Frontend Production Build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [validate, paper-trading-integration, paper-trading-concurrency, advanced-features]
 
     steps:
@@ -223,6 +228,7 @@ jobs:
   build-backend:
     name: Backend Server Build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [validate, paper-trading-integration, paper-trading-concurrency, advanced-features]
 
     steps:
