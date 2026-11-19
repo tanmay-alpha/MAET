@@ -8,11 +8,13 @@
 
 import { createRouter, publicProcedure } from "../core";
 import { evaluateReadiness } from "../../../modules/capabilities/readiness";
+import { isDemoMode } from "../../../modules/demo/mode";
 
 export const capabilitiesRouter = createRouter({
   /**
    * Returns the canonical state of every declared capability based on env flags,
-   * database schema readiness, authentication, and role authorization.
+   * database schema readiness, authentication, and role authorization, and whether this
+   * deployment serves the synthetic demo dataset (MAET_DEMO_MODE).
    */
   get: publicProcedure.query(async ({ ctx }) => {
     const capabilities = await evaluateReadiness({
@@ -20,6 +22,6 @@ export const capabilitiesRouter = createRouter({
       email: ctx.email,
       role: ctx.role,
     });
-    return { capabilities };
+    return { capabilities, demoMode: isDemoMode() };
   }),
 });

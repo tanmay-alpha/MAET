@@ -137,6 +137,11 @@ export interface ApplyFillInput {
   markFor: MarkPriceSource;
   now: Date;
   createId: () => string;
+  /**
+   * Quote policy for this fill; defaults to paperExecutionPolicy(), which rejects synthetic
+   * quotes. Only the synthetic demo seed (server/modules/demo) passes its own.
+   */
+  policy?: ExecutionQuotePolicyConfig;
 }
 
 export interface AppliedFill {
@@ -181,7 +186,7 @@ export async function applyFill(input: ApplyFillInput): Promise<AppliedFill> {
     reason: input.reason,
     exchange,
     marks: currentMarks(input.positions, order, input.markFor),
-    policy: paperExecutionPolicy(),
+    policy: input.policy ?? paperExecutionPolicy(),
   });
   const { fill: fillPlan, charges } = execution;
 

@@ -233,6 +233,27 @@ These are the constraints I checked while designing the data paths. They shape w
 - **World Monitor sources.** USGS feeds are US public domain with attribution; EONET needs no key but asks for attribution; World Bank indicators are CC BY 4.0; GDELT allows reuse of its metadata with citation, but linked articles keep their publishers' copyright, so MAET links out and never republishes article bodies. Sources and links are listed in `docs/ARCHITECTURE.md`.
 - **What I'd say in an interview.** A commercial launch would need a licensed data vendor or an exchange agreement. Today the design labels every quote with its source and delay, uses Yahoo only as a fallback, and doesn't sell or export data. Stored Yahoo candles for backtests are the part a licence review would look at first.
 
+### F7. Synthetic demo mode
+
+**What it does.** `bun run seed:demo` fills a scratch database with a fictitious market (eight `DEMO-` companies whose names say "synthetic demo"), a demo user (`demo@maet.invalid`) with a paper account and four fills, three saved screens, and a completed backtest. A demo deployment sets two flags: the frontend is built with `VITE_MAET_DEMO_MODE=1`, which shows a permanent "Demo — synthetic data, not market data" banner and labels every quote "Synthetic demo data · not market data"; the server runs with `MAET_DEMO_MODE=1`, which `capabilities.get` reports as `demoMode: true` for API consumers. Either flag alone changes nothing else.
+
+**Data flow.** `server/modules/demo/calendar.ts` (trading days from the real market clock and bundled NSE holidays) → `generator.ts` (bars) → `seed.ts` (rows) ← `server/scripts/seed-demo.ts` (target guard in `target.ts`). Frontend: `src/components/demo/demo-mode-banner.tsx` (rendered once in `src/routes/__root.tsx`; `null` unless the build flag is set), `src/lib/quote-source.ts`.
+
+**Hard parts and decisions.**
+
+- **Deterministic market.** Geometric Brownian motion whose drift/volatility switch between bull, calm and bear regimes (a Markov chain, ~50-session regimes). Each session splits its return into an overnight gap and an intraday body, extends high/low beyond the body and rounds to the 0.05 tick in integer ticks, so `low ≤ open, close ≤ high` survives rounding. Volume is log-normal, scaled by regime and move size. Seeded mulberry32, one stream per symbol: same seed, same bars on every machine. History stops at a fixed date (2026-11-18), so reruns don't drift with the clock.
+- **Real engines, honest provenance.** Fills go through the real fill writer (`applyFill`) with quotes recorded as `source: "simulated"`, `quality: "synthetic"`. Live trading's policy rejects synthetic quotes, so `applyFill` takes an optional `policy`; only the seed passes one, and a unit test pins that the default still rejects synthetic quotes. The backtest is the real job (`runBacktestJob`: candle loading, runner-v3, persistence) over the seeded candles.
+- **Safe target.** The seed writes only to `MIGRATION_DATABASE_URL`, or `TEST_DATABASE_URL` with `NODE_ENV=test`, and runs with `--no-env-file`. Anything that isn't loopback, a docker-compose service name or `*.local`, any database named like `prod`/`live`, and the app's own `DATABASE_URL`/`SUPABASE_DB_URL` are refused unless `--i-know` is passed.
+- **Idempotent.** Each run deletes the previous demo rows (the demo user cascades its data; companies and candles must match a demo symbol *and* the `synthetic-demo` source) and writes them again. Deleting the demo user's fills and ledger uses migration 0012's transaction-local `maet.allow_history_mutation` escape hatch. The paper account is opened on the first demo session so its `INITIAL_CASH` entry precedes the historical fills.
+- **A build flag, not a runtime check.** A first version asked `capabilities.get` on every page and re-mounted the app when the answer arrived; that cost every visitor a request and broke the signed-out e2e contract ("no protected tRPC calls"). Vite inlines `VITE_MAET_DEMO_MODE`, so ordinary builds make no request, render nothing extra and never re-mount.
+
+**Proof.** `server/modules/demo/generator.test.ts`: same seed → identical bars; OHLC/tick/volume invariants on 10,000 bars; regime volatilities differ. `calendar.test.ts`: no weekends or bundled holidays, exact 2026 session count. `target.test.ts`: production-looking URLs refused, and `bun run seed:demo` exits before connecting. `seed.integration.test.ts`: seeding twice (in-process, then the CLI) leaves identical row counts and the same backtest data hash; cash equals the ledger sum. `server/modules/paper-trading/fill-writer-policy.test.ts`, `src/components/demo/demo-mode.test.tsx`.
+
+**Likely questions.**
+
+- *Why not replay real candles?* Redistribution limits (F6) and honesty: a demo should never be mistaken for market data, so every symbol, name, quote label and banner says it is synthetic.
+- *Does the demo bypass the engines?* No: fills, ledger and backtest come from the production code paths; only the quote policy for these seeded fills differs, explicitly.
+
 ## Trade-offs I made
 
 | Decision | Benefit | Cost |

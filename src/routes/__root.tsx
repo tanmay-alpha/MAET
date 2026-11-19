@@ -12,6 +12,7 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { API_BASE_URL } from "@/lib/api-url";
+import { DemoModeBanner } from "@/components/demo/demo-mode-banner";
 import { clearQueriesOnSessionChange } from "@/lib/auth-session";
 
 function NotFoundComponent() {
@@ -106,6 +107,7 @@ function RootComponent() {
   useEffect(() => clearQueriesOnSessionChange(queryClient), [queryClient]);
   return (
     <QueryClientProvider client={queryClient}>
+      <DemoModeBanner />
       <Outlet />
     </QueryClientProvider>
   );

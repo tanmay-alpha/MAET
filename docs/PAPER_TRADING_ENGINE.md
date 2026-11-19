@@ -86,6 +86,8 @@ The tick matcher has no phase check of its own; it relies on the quote gate belo
 - it is not delayed (`quality: "delayed"` or `source: "yahoo"`) unless `PAPER_EXECUTION_ALLOW_DELAYED=true`;
 - its timestamp is at most 10 s in the future and at most `PAPER_EXECUTION_MAX_QUOTE_AGE_MS` old (default 15,000 ms, `server/config.ts`).
 
+`applyFill` accepts an optional `policy`; every trading path omits it and gets `paperExecutionPolicy()`. Only the synthetic demo seed (`server/modules/demo/seed.ts`) passes its own, allowing its historical `simulated`/`synthetic` quotes; those fills keep that provenance in `quote_source`/`quote_quality`.
+
 For MARKET orders the quote comes from `loadExecutionQuote` (`server/modules/paper-trading/execution-quote.ts`): the latest streamed tick if it is on the order's exchange and executable, otherwise the market-data layer (`loadQuote`). The service additionally rejects a quote from a different exchange than the order (`placeMarketOrder`).
 
 **Why:** a paper fill is only meaningful against a price that was tradable at that moment. Rejecting delayed Yahoo data and old ticks keeps fills honest at the cost of refusing orders when the live feed is down.

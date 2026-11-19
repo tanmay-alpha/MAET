@@ -415,7 +415,7 @@ export const trpc = {
   },
   capabilities: {
     get: {
-      query: (): Promise<{ capabilities: any[] }> => trpcQuery("capabilities.get"),
+      query: (): Promise<{ capabilities: any[]; demoMode: boolean }> => trpcQuery("capabilities.get"),
     },
   },
   // ============================================================
