@@ -6,12 +6,14 @@ How MAET backtests a strategy and evaluates it out of sample, as implemented at 
 
 | Entry point | Path | Engine call | Results |
 |---|---|---|---|
-| `backtestV2.run` (tRPC, synchronous) | `server/api/trpc/routers/backtest-v2.ts` | Preset (SMA, EMA, RSI, MACD, Donchian, Bollinger) → `presetToV3Definition` (`server/domain/backtest/preset-to-v3-adapter.ts`) → `runBacktestV3`, inside the web request | `backtest_runs` |
+| `backtestV2.run` (tRPC, synchronous) | `server/api/trpc/routers/backtest-v2.ts` | Preset (SMA, EMA, RSI, MACD, Donchian, Bollinger) → `presetToV3Definition` (`server/domain/backtest/preset-to-v3-adapter.ts`) → `runBacktestV3`, inside the web request | `backtest_runs` (newest 50 per user, equity curve downsampled to about 1,000 points; the response carries every bar; `server/modules/backtest/run-store.ts`) |
 | `strategyBacktests.createJob` (tRPC, queued) | `server/api/trpc/routers/strategy-backtests.ts`, `server/modules/strategy-jobs/repository.ts` | `server/workers/backtest-worker.ts` claims the job and calls `runBacktestV3` | `strategy_backtest_trades`, `strategy_equity_points`, `strategy_performance_snapshots` |
 | `strategyOptimisation` sweeps | `server/api/trpc/routers/strategy-optimisation.ts` | `server/workers/sweep-worker.ts`: one `runBacktestV3` per parameter combination | `strategy_sweep_results` |
 | `strategyOptimisation` walk-forward | same router | `server/workers/walk-forward-worker.ts` → `runWalkForwardAnalysis` (`server/domain/strategy/walk-forward.ts`) | `strategy_walk_forward_runs`, `strategy_walk_forward_windows` |
 
-Strategies are an AST (`shared/strategy/ast.ts`, validated by `shared/strategy/schemas.ts`): entry/exit rule groups of conditions over price, market and indicator operands with lags 0–50, plus risk and execution config. Versions are immutable and identified by a SHA-256 of their canonical JSON (`server/modules/strategy-definitions/service.ts`).
+Strategies are an AST (`shared/strategy/ast.ts`, validated by `shared/strategy/schemas.ts`): entry/exit rule groups of conditions over price, market and indicator operands with lags 0–50, plus risk and execution config. Versions are immutable and identified by a SHA-256 of their canonical JSON (`canonicalDefinitionJson`: every field at every depth, object keys sorted, so key order never matters and any nested change is a new hash; `server/modules/strategy-definitions/service.ts`). Hashes stored before that fix covered only the top-level scalar fields, so one re-save of an unchanged legacy definition can create a new version instead of a conflict.
+
+**Rejected settings.** Validation (the Zod schema for API input, and `validateAst` when a stored draft is versioned) rejects settings the engine would otherwise ignore (`unsupportedStrategyFeatures` in `shared/strategy/ast.ts`): `direction: LONG_SHORT` (one entry rule group cannot say which signals go long and which short), `risk.atrStopMultiplier`, `risk.allowPyramiding: true` and `risk.maximumPyramids`. runner-v3 still runs definitions stored before the check (`LONG_SHORT` trades long) and adds an `UNSUPPORTED_SETTING_IGNORED` warning per setting.
 
 Queued jobs: creation takes a per-user advisory transaction lock and enforces a cap of 3 queued/running jobs of a kind in the last 6 hours; workers claim the oldest job with `FOR UPDATE SKIP LOCKED`, heartbeat every 30 s, and recover `RUNNING` jobs whose heartbeat is older than 5 minutes (`server/modules/strategy-jobs/repository.ts`, `server/modules/strategy-optimisation/repository.ts`; sweeps and walk-forward runs use `updated_at` as their heartbeat). The job runner (`server/modules/strategy-jobs/runner.ts`) runs inside the web service, started by `server/plugins/strategy-jobs.ts` unless `STRATEGY_JOBS_IN_PROCESS=false` (then `bun run worker:strategy-jobs` runs it standalone). It executes one job at a time, awaits a checkpoint after every backtest (handing the event loop back to the API and letting it stop the job), fails a job after `STRATEGY_JOB_TIME_BUDGET_MS` (default 15 min), requeues the running job on shutdown, and fails rather than requeues an abandoned job older than 6 hours. Results and the `COMPLETED` status are written in one transaction that commits only while the worker still holds the job.
 
@@ -41,6 +43,16 @@ equityCurve.append(mark-to-market at close[i])
 
 With `fillPolicy: ON_CLOSE`, `signalIdx = i`, fills are at `close[i]`, a rule exit fills after the protective exits, and there is no entry-bar protective check. After the loop any open position is closed at the last close with reason `end_of_period`.
 
+**Risk gates**, evaluated on every bar's closing mark $M_i$ (equity plus unrealised P&L at `close[i]`) after the bar's exits and entries. A triggered gate closes any open position at `close[i]` (a market-on-close order whatever the fill policy, so it uses no later data) and the curve point is the realised equity after exit costs:
+
+| Gate | Condition | Effect |
+|---|---|---|
+| Equity depleted | $M_i \le 0$ | exit reason `equity_depleted`; no further trades (`TRADING_HALTED` warning) |
+| `maximumDrawdownPercent` $d$ | $(\max_{s<i} M_s - M_i)/\max_{s<i} M_s \ge d\%$, peak including the starting capital | exit reason `max_drawdown`; no further trades (`TRADING_HALTED` warning) |
+| `maximumDailyLossPercent` $l$ | $(D - M_i)/D \ge l\%$, $D$ the last mark before the bar's IST calendar day began | exit reason `daily_loss_limit`; no entries until the first bar of the next IST day (`DAILY_LOSS_LIMIT` warning with the day count) |
+
+Once equity is at or below zero the curve stays flat, so `computeMetrics` never scores a move on a non-positive base (a further adverse move on negative equity would otherwise appear as a positive return). With daily bars every bar is its own day, so the daily-loss gate compares each close with the previous one.
+
 **Protective exits** (`protectiveExit`) are checked in a fixed conservative order: trailing stop, stop loss, take profit. If the bar opens beyond a level the fill is at the open (gap); otherwise at the level. So when one bar touches both stop and target, the stop wins. The trailing level uses the peak (trough for shorts) from *previous* bars, then updates it with the current bar. `intrabarPolicy` is returned as metadata; the order above is not configurable.
 
 **Look-ahead guarantees and their limits:**
@@ -49,7 +61,7 @@ With `fillPolicy: ON_CLOSE`, `signalIdx = i`, fills are at `close[i]`, a rule ex
 2. Position sizing uses ATR at `signalIdx`; the only bar-$i$ input is the open, which is known at the moment of the fill.
 3. The indicator cache is precomputed over the whole series, so correctness relies on every indicator being causal (trailing). The canonical implementations are trailing windows or recursive filters (`shared/indicators/canonical.ts`). Donchian channels include the current bar, which is still causal at `signalIdx`.
 4. A position closed on a bar cannot re-enter on that bar (`canEnter` is captured first).
-5. Tests: `truncated-history.test.ts` is the strongest check: a run that never saw bars after time $T$ must agree with the full-history run on every trade closed and every equity point marked before $T$ (for runner-v3 and the portfolio engine, long and short, both fill policies). `fill-bar-look-ahead.test.ts` perturbs the fill bar's high/low/close/volume and checks that sizing and fills decided at its open do not change. Also `look-ahead.test.ts`, `same-bar-exit-order.test.ts` and `reproducibility.test.ts` (all in `server/domain/strategy/`, run by `test:unit`).
+5. Tests: `truncated-history.test.ts` is the strongest check: a run that never saw bars after time $T$ must agree with the full-history run on every trade closed and every equity point marked before $T$ (for runner-v3 and the portfolio engine, long and short, both fill policies). `metamorphic-invariants.test.ts` repeats that over seeded random paths and random cut points, and also replaces every bar after the cut with unrelated data (trades closed, entries made and marks up to and including the cut must not change), with the risk gates enabled. `fill-bar-look-ahead.test.ts` perturbs the fill bar's high/low/close/volume and checks that sizing and fills decided at its open do not change. Also `look-ahead.test.ts`, `same-bar-exit-order.test.ts`, `runner-v3-risk-gates.test.ts` and `reproducibility.test.ts` (all in `server/domain/strategy/`, run by `test:unit`).
 
 `server/domain/strategy/look-ahead-detector.ts` offers an empirical check: it overwrites all OHLCV after a pivot with absurd values (99999.99) and asserts that signal timestamps up to the pivot do not change. It compares signal timestamps only, and only tests call it.
 
@@ -62,7 +74,7 @@ $$
 \text{net} = \text{gross} - \text{fees}_{in} - \text{fees}_{out} - \text{slip}_{in} - \text{slip}_{out}
 $$
 
-Only `SHORT_ONLY` produces shorts; `LONG_ONLY` and `LONG_SHORT` both trade long. Pyramiding, `maximumOpenPositions > 1`, daily-loss and drawdown gates are not implemented by this loop.
+Only `SHORT_ONLY` produces shorts; validation rejects `LONG_SHORT`, and a stored `LONG_SHORT` definition trades long with a warning. Pyramiding and `maximumOpenPositions > 1` are not implemented by this loop (pyramiding is rejected at validation).
 
 ## 3. Cost model
 
@@ -80,16 +92,16 @@ The statutory schedule is the same one paper trading uses (rates in [PAPER_TRADI
 
 **Cost drag** $= 100 \cdot \text{total costs} / \text{gross P\&L}$ when aggregate gross P&L is positive, else 0.
 
-The spread, square-root market impact and participation-cap model in `server/domain/strategy/execution-model.ts` is **not** used by runner-v3 (§9).
+The spread, square-root market impact and participation-cap model in `server/domain/strategy/execution-model.ts` is **not** used by runner-v3 (§9). Its participation cap fills at most $\lfloor V_{i-1} \cdot \min(1, \text{rate}) \rfloor$ shares; when that is 0, or the reference volume is missing, zero, negative or non-finite, the order fills nothing and the fill carries `rejectionReason` (`PARTICIPATION_CAP` or `NO_REFERENCE_VOLUME`). Forced exits ignore the cap.
 
 ## 4. Portfolio engine (research module)
 
 `runPortfolioBacktestEngine` in `server/domain/strategy/portfolio-engine.ts` simulates many symbols on one shared cash pool. No server endpoint or worker calls it (§9); it is described because it is tested and it is the intended next step.
 
 - **Timeline.** The sorted union of all candle timestamps; symbols with fewer than 5 bars are skipped; a symbol with no candle at a timestamp keeps its last mark.
-- **Order per timestamp.** Exits first (rule exit, stop before target), then entries; a symbol closed at a timestamp cannot reopen at it.
+- **Order per timestamp.** Under next-open: (A) held positions are marked to bar $i$'s open, and only exits that fill at the open happen (a rule exit decided on $i-1$, or a stop/target the bar opens beyond); (C) entries are decided and filled at the open; (D) stops and targets touched later in the bar (on held and new positions), the end-of-period close-out and the close mark follow. So neither the cash an intrabar stop frees nor any of bar $i$'s high, low or close can fund or size an entry at its open. Under on-close every exit happens at the complete bar, then entries at the close. A symbol closed at a timestamp cannot reopen at it.
 - **Ranking.** Candidates sort descending by a key, ties by symbol: `MOMENTUM` = $(c_{sig} - c_{sig-10})/c_{sig}$; `RELATIVE_VOLUME` actually uses raw signal-bar volume; `SCORECARD_SCORE` uses volume × momentum. Under next-open, all ranking and sizing inputs come from the signal bar $i-1$.
-- **Limits** per candidate: open-position cap (default 5), sector exposure of existing positions (default 40%), allocation $= \min(\text{equity}\cdot\text{pos\%},\ \text{cash} - \text{reserve})$ rejected if ≤ ₹100, gross exposure cap (default 100%); if the fill plus fees exceeds free cash the quantity is shrunk once to fit.
+- **Limits** per candidate, all checked on the portfolio as it would stand after the order (exposures valued at the step-A marks, the order at the higher of its fill and reference price): open-position cap (default 5); sizing budget $= \min(\text{equity}\cdot\text{pos\%},\ \text{cash} - \text{reserve})$; the order's exposure may not exceed $\min(\text{budget},\ \text{sector headroom},\ \text{gross headroom})$, where headroom = cap% × equity − current exposure (sector default 40%, gross default 100%). An order over that cap or over free cash (after fill frictions and charges) is resized down; it is rejected if the cap is ≤ ₹100 or the resized order rounds to 0 shares. Caps bind at entry only; later price moves can drift exposure above a cap. `excludedSignalsByReason` counts rejections (`MAX_OPEN_POSITIONS`, `SECTOR_EXPOSURE_CAP`, `GROSS_EXPOSURE_CAP`, `INSUFFICIENT_CAPITAL`, `ZERO_SIZE`, `NON_POSITIVE_EQUITY`, `PARTICIPATION_CAP`, `NO_REFERENCE_VOLUME`).
 - **Execution** goes through `ExecutionModel` (spread, impact, participation cap on bar-$(i-1)$ volume).
 - **Accounting identity.** Entry notional (long or short) is reserved from cash:
 
@@ -97,7 +109,8 @@ $$
 E_t = \text{cash}_t + \sum_j q_j\,p^{fill}_{j} + \sum_j u_j,\qquad u_j = \pm\, q_j\,(c_{j,t} - p^{fill}_{j})
 $$
 
-- **Not implemented** despite the config type: `rebalanceSchedule` is assigned but never read; there are no trailing stops or cooldowns; positions whose history ends before the global last timestamp are not force-closed; the "reproducibility hash" is a string of lengths and capital, not a data hash.
+- **Reproducibility hash**: SHA-256 (hex) of the canonical JSON of the definition, capital, resolved constraints, ranking, rebalance schedule, price series, sectors, corporate actions, every symbol's candles (sorted by time) and the benchmark candles.
+- **Not implemented** despite the config type: `rebalanceSchedule` is assigned but never read (it is part of the hash); there are no trailing stops, cooldowns, or drawdown/daily-loss gates; positions whose history ends before the global last timestamp are not force-closed.
 
 ## 5. Walk-forward analysis
 
@@ -206,7 +219,7 @@ One adapter quirk: the Donchian preset compares the close with a channel that in
 |---|---|---|
 | `ExecutionModel` (spread models, square-root impact, participation cap) | Only called by the portfolio engine; runner-v3 charges slippage as a flat bps debit. | `server/domain/strategy/execution-model.ts`, imports in `portfolio-engine.ts` only |
 | Portfolio engine | No endpoint, worker or frontend code calls it; only its tests do. | `server/domain/strategy/portfolio-engine.ts` |
-| Point-in-time fundamentals and universe membership | Only tests call them. | `server/domain/fundamentals/point-in-time.ts`, `point-in-time.test.ts`, `p2-research-invariants.test.ts` |
+| Point-in-time fundamentals and universe membership | Only tests call them. A fundamentals row whose `availableFrom` is null, missing or unparseable is never visible (no lag from `periodEnd` is assumed; `new Date(null)` would otherwise date it 1970). | `server/domain/fundamentals/point-in-time.ts`, `point-in-time.test.ts`, `p2-research-invariants.test.ts` |
 | Corporate actions in backtests | Supported by the runner, never supplied by callers; no corporate-action ingestion. | §7 |
 | Look-ahead detector | Only tests call it. (Robustness scoring is returned by `strategyOptimisation.getSweep`.) | `look-ahead-detector.ts` |
 | In-memory replay engine | Only its test uses it; the replay router has its own DB-backed logic. | `server/modules/strategy-replay/replay-engine.ts`, `server/api/trpc/routers/strategy-replay.ts` |

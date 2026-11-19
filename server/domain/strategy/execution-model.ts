@@ -9,7 +9,9 @@
  *    - SELL impact shifts execution price downward.
  *    - Invariant: non-negative, finite, bounded at maxImpactBps, zero impact for zero quantity.
  * 4. Slippage and per-leg brokerage/statutory charges (computeLegCharges).
- * 5. Participation constraints: maxFillQuantity = floor(referenceVolume * maxParticipationRate).
+ * 5. Participation constraints: maxFillQuantity = floor(referenceVolume * min(1, maxParticipationRate)).
+ *    When that is 0 (or the reference volume is missing, zero, negative or non-finite) a capped
+ *    order does not fill at all; the result carries a `rejectionReason`.
  * 6. Execution cost reporting: brokerage, taxes, spread, slippage, impact, cost drag.
  *
  * Look-ahead rule: an order filled on bar i is decided at bar i's open, so every liquidity or
@@ -56,6 +58,13 @@ export interface ExecutionCostBreakdown {
   costDragPercent: number; // totalTransactionCost / tradeNotional * 100
 }
 
+/** Why a participation-capped order filled nothing. */
+export type FillRejectionReason =
+  /** The reference volume is missing, zero, negative or non-finite: liquidity is unknown. */
+  | "NO_REFERENCE_VOLUME"
+  /** floor(referenceVolume * participationRate) is 0: not even one share fits in the cap. */
+  | "PARTICIPATION_CAP";
+
 export interface SingleFillResult {
   fillQuantity: number;
   referencePrice: number;
@@ -67,6 +76,8 @@ export interface SingleFillResult {
   costs: ExecutionCostBreakdown;
   timestamp: string | number;
   barIndex?: number;
+  /** Set when a positive order quantity filled 0 shares because of the participation cap. */
+  rejectionReason?: FillRejectionReason;
 }
 
 // ============================================================
@@ -162,16 +173,16 @@ export class ExecutionModel {
   }
 
   /**
-   * Computes the maximum quantity that can be filled in the given bar based on participation constraints.
+   * Maximum quantity that can fill on one bar: floor(barVolume * min(1, rate)) whole shares.
+   * Invariant: never more than that; 0 when the volume is missing, zero, negative, non-finite, or
+   * too small for one share at the rate (the order is then not filled, rather than forced to 1).
    */
   public getMaximumBarFillQuantity(barVolume: number, participationRate?: number): number {
     const rate = participationRate ?? this.config.maxParticipationRate ?? 0.1; // default 10% of bar volume
-    if (rate >= 1.0) {
-      return barVolume > 0 ? barVolume : Infinity;
+    if (!Number.isFinite(barVolume) || barVolume <= 0 || !Number.isFinite(rate) || rate <= 0) {
+      return 0;
     }
-    const maxQty = Math.floor(Math.max(0, barVolume) * rate);
-    // If bar volume is positive but rate produces 0, allow at least 1 share so simulation makes progress
-    return barVolume > 0 ? Math.max(1, maxQty) : 0;
+    return Math.floor(barVolume * Math.min(1, rate));
   }
 
   /**
@@ -189,9 +200,14 @@ export class ExecutionModel {
     const maxFillQty = options.enforceParticipationCap
       ? this.getMaximumBarFillQuantity(ctx.referenceVolume, ctx.config.maxParticipationRate)
       : Infinity;
-    const fillQty = Math.min(Math.max(0, targetQty), maxFillQty);
+    const requestedQty = Number.isFinite(targetQty) && targetQty > 0 ? targetQty : 0;
+    const fillQty = Math.min(requestedQty, maxFillQty);
 
     if (fillQty === 0) {
+      const volume = ctx.referenceVolume;
+      const rejectionReason: FillRejectionReason | undefined = requestedQty > 0 && options.enforceParticipationCap
+        ? (Number.isFinite(volume) && volume > 0 ? "PARTICIPATION_CAP" : "NO_REFERENCE_VOLUME")
+        : undefined;
       return {
         fillQuantity: 0,
         referencePrice: safeRefPrice,
@@ -211,6 +227,7 @@ export class ExecutionModel {
         },
         timestamp: ctx.bar.ts,
         barIndex: ctx.barIndex,
+        ...(rejectionReason ? { rejectionReason } : {}),
       };
     }
 

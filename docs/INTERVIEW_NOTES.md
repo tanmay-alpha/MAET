@@ -50,7 +50,7 @@ Cash only changes through the ledger: every fill writes a `TRADE_REALIZED_PNL` r
 
 ### 10. What happens when the database is down?
 
-`/api/health` still returns HTTP 200 but reports `degraded` (deliberately, so Render does not restart the instance during an external outage). Quotes keep working because that path is in memory plus the providers. Candle requests fall back to Yahoo. Paper trading and strategy operations fail with a masked 500 / `INTERNAL_SERVER_ERROR`; there is no in-memory fallback for money-moving operations, which I think is right. Files: `server/infra/health.ts`, `server/domain/market/candle-service.ts`, `server/api/trpc/core.ts`.
+`/api/health` still returns HTTP 200 but reports `degraded` (deliberately, so Render does not restart the instance during an external outage). Quotes keep working because that path is in memory plus the providers. Candle requests fall back to Yahoo. Paper trading and strategy operations fail with 503 `SERVICE_UNAVAILABLE` (connection-class errors and the open circuit are mapped in `server/api/trpc/core.ts`), so the client can tell an outage from a bug; there is no in-memory fallback for money-moving operations, which I think is right. Files: `server/infra/health.ts`, `server/domain/market/candle-service.ts`, `server/api/trpc/core.ts`.
 
 ### 11. And when Angel One or Redis is down?
 
@@ -274,4 +274,4 @@ These are the constraints I checked while designing the data paths. They shape w
 4. Run the research workers as a separate Render worker (or a queue), and move `backtestV2.run` onto the job queue.
 5. Wire corporate actions and point-in-time fundamentals into backtests, and replace the flat bps slippage with the existing `ExecutionModel`.
 6. Add a property-based test that $\sum \text{ledger} = \text{cash}$ after random sequences of fills, cancels and resets.
-7. Add a global Angel One token budget across market streams, alerts and paper interest, and a BSE live source.
+7. Add a BSE live source (the Angel One token budget across paper interest, alerts and market streams exists; BSE symbols still get no ticks).
