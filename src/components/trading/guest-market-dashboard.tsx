@@ -5,6 +5,7 @@ import { useWatchlist } from "@/hooks/use-watchlist";
 import type { MarketQuote } from "@/lib/market-api";
 import type { MarketCatalogItem } from "@/lib/market-catalog";
 import { marketPhaseLabel, NIFTY50_SYMBOLS, rankNiftyMovers } from "./guest-market-movers";
+import { SignInLink } from "@/components/common/sign-in-link";
 
 function QuoteRow({ symbol, name, quote }: { symbol: string; name: string; quote?: MarketQuote }) {
   const source = quote?.source === "angelone" ? "Angel One" : quote?.source === "yahoo" ? "Yahoo" : quote?.source;
@@ -34,7 +35,7 @@ function GuestWatchlistRows({ items }: { items: MarketCatalogItem[] }) {
  * loaded gets it with that account notice instead, so the page stays useful.
  */
 export function GuestMarketDashboard({
-  accountNotice = <p role="status" className="mt-2 text-xs text-muted-foreground">Paper account requires sign-in.</p>,
+  accountNotice = <p role="status" className="mt-2 text-xs text-muted-foreground">Paper account requires sign-in. <SignInLink /></p>,
 }: {
   accountNotice?: ReactNode;
 }) {
