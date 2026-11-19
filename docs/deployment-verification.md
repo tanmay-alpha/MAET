@@ -16,7 +16,7 @@
 
 - `GET /api/health` — liveness. Always HTTP 200 (Render restarts an instance on non-2xx, which cannot
   repair an external outage). Body: `status` (`ok`/`degraded`), `version`, `checks.{database,redis,orchestrator,marketData}`, `databaseCircuit`.
-- `GET /api/ready` — readiness. Same body; HTTP 503 unless database and Redis are reachable. Release gates use this.
+- `GET /api/ready` — readiness. Same body; HTTP 503 unless every check (database, Redis, orchestrator, market data) passes. Release gates use this.
 
 ## Release gates (on every push to `main`)
 

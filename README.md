@@ -10,12 +10,14 @@
 > **MAET** is a quantitative research, market-data and paper-trading terminal for Indian equities (NSE & BSE).  
 > Backtests evaluate rules on bar *i−1* and fill at bar *i*'s open; paper fills require a fresh live quote and pay the statutory Indian equity charges. [docs/RESEARCH_ENGINE.md](docs/RESEARCH_ENGINE.md) states exactly what is and is not guaranteed.
 
-- **Live Web Frontend**: [https://maet-pi.vercel.app/](https://maet-pi.vercel.app/)
-- **Backend Service Target**: Render (`https://maet.onrender.com`)
+- **Live Web Frontend**: [https://maet-pi.vercel.app/](https://maet-pi.vercel.app/) (every response carries `x-maet-build: <commit>`)
+- **Backend Service**: Render (`https://maet.onrender.com`; liveness `/api/health`, readiness `/api/ready`)
 - **Operational Database**: Supabase PostgreSQL (via Drizzle ORM)
 - **Analytics Data Warehouse (optional)**: Google BigQuery, written only by the ingestion engine; the dataset comes from `BIGQUERY_DATASET` (no default)
 - **Cache & Real-time Layer**: in-process quote cache and tick bus; Redis (`UPSTASH_REDIS_URL`) for the Yahoo candle cache, the optional shared rate-limit store, the daily-processor lock and paper-notification pub/sub; Server-Sent Events (SSE)
-- **Code-grounded engineering docs**: [Architecture](docs/ARCHITECTURE.md), [Paper trading engine](docs/PAPER_TRADING_ENGINE.md), [Research engine](docs/RESEARCH_ENGINE.md), [Interview notes](docs/INTERVIEW_NOTES.md) (these follow the code; where this README differs, they win)
+- **Code-grounded engineering docs**: [Architecture](docs/ARCHITECTURE.md), [Paper trading engine](docs/PAPER_TRADING_ENGINE.md), [Research engine](docs/RESEARCH_ENGINE.md), [Interview notes](docs/INTERVIEW_NOTES.md), [Engineering audit](docs/engineering-audit.md), [Test evidence](docs/test-evidence.md), [Deployment verification](docs/deployment-verification.md) (these follow the code; where this README differs, they win)
+
+> **Production status (2026-11-19).** The Supabase project and Upstash Redis database the Render service was configured with no longer exist (both hostnames return NXDOMAIN). The backend runs the latest commit but `/api/ready` answers 503 with `database=false, redis=false`, so account features, stored candles and saved data are unavailable until new data stores are provisioned. The runbook is in [docs/deployment-verification.md](docs/deployment-verification.md#ops-1-runbook-restoring-the-data-stores). Locally, every feature runs against Docker Postgres/Redis or the synthetic demo.
 
 ---
 
@@ -32,6 +34,9 @@ MAET combines screening, strategy research, paper trading, investing tools and w
 - **Import portfolio** (`/import`): analyse a Zerodha or Groww tradebook (or any CSV) in the browser — FIFO holdings, realised gains per FY, tax estimate and XIRR. The file is never uploaded.
 - **Payoff Lab** (`/payoff`): multi-leg options builder with exact breakevens and max profit/loss, Black-Scholes Greeks and a scenario grid.
 - **World Monitor** (`/world`): USGS earthquakes, NASA EONET events, GDELT headlines and World Bank GDP/CPI on one page, with rule-based Indian-sector exposure hints (labelled as hints, not predictions).
+- **Market-data quality** (`/data-quality`, public): freshness of every tracked symbol against the latest completed NSE session (IST, holiday calendar), missing sessions and invalid bars over 60 sessions, last quote with its source and a Delayed/Real-time label, fundamentals and corporate-action coverage, and pipeline gaps detected from the tables themselves. Admins also get job-queue, ingestion-retry, dead-letter and database/Redis status.
+- **Run reports & comparison** (`/research/reports`): each completed backtest gets a report with the strategy version hash, engine versions, server commit, data window, candle fingerprint, effective costs and a SHA-256 reproducibility hash, downloadable as JSON and CSV. Compare 2–4 runs on their shared dates only, with warnings when cost or fill assumptions differ.
+- **Synthetic demo** (`bun run seed:demo`): a deterministic synthetic dataset (fictitious `DEMO-` companies on the NSE calendar, a paper account, saved screens and a backtest produced by the real engine), labelled as synthetic everywhere it appears. See §5.
 
 ```mermaid
 flowchart TB
@@ -129,8 +134,8 @@ MAET includes a research and simulation toolkit aimed at the usual pitfalls of n
   $$\text{availableFrom} \le T_{\text{simulation}}$$
   A row with no known `availableFrom` (null, missing or unparseable) is never visible.
 - **Full Restatement Tracking**: Backtests evaluated before an accounting restatement see Revision 1; evaluations after see Revision 2.
-- **Universe Membership**: Point-in-time index constituent queries (`getActiveUniverseConstituents()`) intended to keep delisted or excluded companies in their historical windows and so avoid survivorship bias once wired.
-- **Status**: Not yet used by any backtest.
+- **Universe Membership**: Point-in-time index constituent queries (`getActiveUniverseConstituents()`) intended to keep delisted or excluded companies in their historical windows. Nothing populates `universe_membership` yet, so this guards against nothing in practice.
+- **Status**: Not yet used by any backtest. Backtests run on today's symbol lists, so **results are not survivorship-free**. No ingested source supplies filing or announcement dates (`fundamentals.filing_date`/`available_from` are always null), so point-in-time fundamentals cannot be backed by real availability dates until such a source is added. The `/data-quality` page reports both gaps.
 
 ### D. Multi-Symbol Shared Capital Portfolio Engine (`server/domain/strategy/portfolio-engine.ts`, research module)
 - **Synchronized Timeline**: Bar-by-bar multi-asset evaluation across instrument universes.
@@ -219,12 +224,13 @@ MAET is organized as a clean, type-safe Bun workspace monorepo:
 MAET/
 ├── .github/workflows/
 │   ├── ci.yml                    # Typecheck, lint, test wiring check, unit/integration/concurrency/advanced suites, builds
-│   └── deploy-render.yml         # Verifies the Render deployment serves the pushed commit and reports healthy
+│   ├── deploy-render.yml         # Waits for /api/ready on the pushed commit, then runs the backend smoke test
+│   └── verify-vercel.yml         # Waits until maet-pi.vercel.app serves the pushed commit (x-maet-build)
 ├── server/                       # Backend (Nitro / H3 / tRPC), deployed to Render
 │   ├── api/                      # File-based REST/SSE routes (/api/*), health.get.ts, tRPC entry, auth (trpc/auth.ts) & routers
 │   ├── data/                     # Clients & adapters: Drizzle/Postgres, Redis, BigQuery, Angel One, Yahoo, NSE
 │   ├── db/
-│   │   ├── migrations/           # Numbered SQL migrations (0001–0027) + upgrade tests
+│   │   ├── migrations/           # Numbered SQL migrations (0001–0029) + upgrade tests
 │   │   ├── seeds/                # Reference data loads (market_baseline_metrics.sql)
 │   │   └── schema.ts             # Drizzle table definitions
 │   ├── domain/                   # Business logic: analysis, backtest, calculations, company, data
@@ -259,6 +265,7 @@ MAET/
 │   ├── canonical-indicators.test.ts  # Canonical indicator test suite
 │   └── e2e/                      # Playwright critical-flow specs against a mocked backend (CI job `e2e`)
 ├── scripts/setup-render.sh       # Render setup helper
+├── scripts/smoke-deploy.ts       # Read-only post-deploy smoke test (revision, readiness, CORS, auth boundary)
 ├── playwright.config.ts
 ├── bun.lock
 ├── package.json                  # Workspace configuration and scripts
@@ -271,7 +278,7 @@ MAET/
 
 ### Prerequisites
 - [Bun](https://bun.sh/) $\ge$ 1.3.14 (primary runtime and package manager)
-- Node.js $\ge$ 20.x (supported fallback)
+- Node.js $\ge$ 22 (production runtime on Render; CI boots the built backend on Node 22)
 - PostgreSQL $\ge$ 16 (local or Supabase cloud instance)
 - Redis (Upstash or local; `UPSTASH_REDIS_URL` is required outside tests)
 - Optional: Google Cloud BigQuery service account
@@ -302,7 +309,7 @@ PORT=3000
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-SUPABASE_DB_URL=postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
+SUPABASE_DB_URL=postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?sslmode=require
 
 # Redis (Upstash or local; required outside tests)
 UPSTASH_REDIS_URL=redis://default:[password]@[endpoint]:6379
@@ -371,12 +378,26 @@ Tests never fall back to a default database either: with `NODE_ENV=test` the ser
 Run from a trusted machine, never from CI:
 
 1. Check connectivity with `bun run check:db` (uses `.env`). After restoring the database, run `bun run verify:db` (`server/scripts/verify-db-restore.ts`), a read-only verifier: it checks the migration history, the schema against Drizzle, key-table row counts, paper invariants (ledger sums to cash, no fills on another user's or generation's order, no non-positive positions) and RLS on `paper_*` tables inside a read-only transaction that is always rolled back. It reads `SUPABASE_DB_URL`/`DATABASE_URL` (or `--url-env=VAR`), never `.env`; exit codes are 0 pass, 1 failure, 2 cannot connect, 3 usage error.
-2. Apply pending migrations against Supabase's **direct** connection (not the transaction pooler):
+2. Apply pending migrations against Supabase's **session** pooler (port 5432 on the pooler host; Render and most networks cannot reach the IPv6-only direct host). Take a `pg_dump` first for any database that already holds data:
    ```bash
-   MIGRATION_DATABASE_URL="<supabase direct connection url>" bun run server/scripts/apply-migrations.ts
+   MIGRATION_DATABASE_URL="<supabase session pooler url>" bun run server/scripts/apply-migrations.ts
    ```
 
 Production may not have the `_applied_migrations` tracking table if earlier migrations were applied by hand. The runner would then create it and apply **every** file in one run, and not every historical migration is safe to re-run. Before the first run, create `public._applied_migrations (name text primary key, applied_at timestamptz not null default now())` and insert the names of the files production already has, so only genuinely new files run. On Supabase the runner leaves the existing `auth` schema, `auth.uid()` and roles untouched; it only creates stand-ins where they are missing.
+
+### 6. Synthetic Demo (no market data, no credentials)
+For interviews or offline exploration, seed a scratch database with a deterministic synthetic dataset produced by the application's own code paths:
+
+```bash
+docker run -d --name maet-demo-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=maet_demo -p 127.0.0.1:5432:5432 postgres:16
+export MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/maet_demo
+bun run server/scripts/apply-migrations.ts
+bun run seed:demo
+```
+
+It writes eight fictitious `DEMO-` companies with 2026 daily bars on the NSE trading calendar (seeded geometric Brownian motion with regime switches), a demo user (`demo@maet.invalid`) with a paper account and four fills made through the real fill writer, three saved screens, and a completed backtest run by the real runner-v3. Rerunning replaces only the demo rows. The script refuses non-local hosts, databases named like `prod`/`live`, and the app's own `DATABASE_URL`/`SUPABASE_DB_URL` unless `--i-know` is passed.
+
+A demo deployment sets `MAET_DEMO_MODE=1` on the server (exposed as `capabilities.demoMode`) and builds the frontend with `VITE_MAET_DEMO_MODE=1`. The site then shows a permanent "Demo — synthetic data, not market data" banner and labels every quote as synthetic. Live paper trading still rejects synthetic quotes; only the seed may fill against them.
 
 ---
 
@@ -430,29 +451,33 @@ bun run --cwd server build
 
 ## 7. Financial & Research Invariants Checked in CI
 
-CI runs tests for these invariants on every pull request and push to `main`. Items 1–5 and 7 exercise research modules from section 2 that production backtests do not call; item 6 covers the walk-forward engine the production worker uses, and item 9 the production runner.
+CI runs tests for these invariants on every pull request and push to `main`. Items marked *(research)* exercise modules from section 2 that production backtests do not call; the rest cover production code.
 
-1. **Deterministic Execution**: Market impact strictly scales with $\sqrt{\text{participation}}$, increasing buy fill prices and decreasing sell fill prices.
-2. **Corporate Action Split Invariant**: Stock splits (e.g. 2:1) adjust historical series without creating artificial drawdown anomalies.
-3. **Look-Ahead Isolation**: Historical fundamentals queries strictly reject any revisions published after simulation timestamp $T$.
-4. **Survivorship Bias Guard**: Index constituent membership queries accurately reflect historical reality (e.g., delisted companies exist in their historical active windows).
-5. **Shared Capital Conservation**: Multiple symbols competing for one shared cash pool cannot double-spend it or exceed allocation limits.
-6. **Walk-Forward Partitioning**: Test candles are excluded from the training and validation runs of each window.
-7. **Robustness Overfit Detection**: Fragile parameter spikes (e.g., high Sharpe with zero neighbor support) are flagged with `OVERFIT_RISK`.
-8. **RBAC & Security Boundaries**: Ingestion and administrative mutations strictly require authenticated admin claims derived from verified JWT `app_metadata`.
-9. **Look-Ahead (runner-v3)**: A run truncated at time $T$ reproduces the full run's trades and equity before $T$, and fill-bar high/low/close/volume cannot influence decisions made at the open (`truncated-history.test.ts`, `fill-bar-look-ahead.test.ts`).
-10. **Capital-gains rules**: STCG/LTCG classification at the 12-month boundary, the 23 Jul 2024 rate change, the shared ₹1.25 lakh exemption and the loss set-off order (`shared/domain/investing/capital-gains.test.ts`); XIRR against reference cash flows and scale invariance (`xirr.test.ts`).
-11. **Options payoff**: Black-Scholes reference values and put-call parity, Greeks against finite differences, exact breakevens, unlimited-loss detection and iron-condor max profit = net credit × lots × lot size (`shared/domain/options/black-scholes.test.ts`, `payoff.test.ts`).
-12. **No invented account figures**: with an expired session or a failing backend the dashboard, terminal and portfolio show a status line and no balance (`tests/e2e/paper-account-state.spec.ts`).
+1. **Participation cap** *(research)*: a capped order fills at most ⌊bar volume × rate⌋ shares; when that is 0, or the volume is missing, zero, negative or not a number, nothing fills and the reason is recorded (2,000-case seeded check). Market impact scales with $\sqrt{\text{participation}}$, raising buy and lowering sell fill prices.
+2. **Corporate Action Split Invariant** *(research)*: stock splits (e.g. 2:1) adjust historical series without creating artificial drawdown anomalies.
+3. **Look-Ahead Isolation** *(research)*: point-in-time fundamentals never show a revision published after simulation time $T$, and a row with unknown availability is never visible.
+4. **Shared capital and exposure caps** *(research)*: candidates competing on one bar never spend more than free cash; open-position, position, sector and gross caps hold on the portfolio as it would be after each order (40-run seeded check); entries at bar *i*'s open are sized without bar *i*'s close or intrabar exits (50 random perturbations).
+5. **Walk-Forward Partitioning**: each window is exactly T training → V validation → V out-of-sample days, test segments tile the range (300-case seeded check), and test candles never enter training/validation. Rejected windows hold cash and count in every OOS aggregate.
+6. **Probability of Backtest Overfitting**: CSCV gives ≈0.5 for i.i.d. noise candidates, 0 for a dominant candidate and >0.9 when in-sample winners lose out of sample; it agrees with a direct computation on 30 seeded return matrices.
+7. **Robustness Overfit Detection**: fragile parameter spikes (e.g. high Sharpe with zero neighbour support) are flagged with `OVERFIT_RISK`.
+8. **Look-Ahead and risk gates (runner-v3)**: a run truncated at $T$, or with every bar after $T$ replaced by random data, reproduces the full run's trades and equity before $T$; fill-bar high/low/close/volume cannot influence decisions made at the open; drawdown and daily-loss limits halt trading; no return is ever computed on non-positive equity (60-run seeded check).
+9. **Paper engine accounting**: on seeded random fill sequences, cash, realised P&L, margin and fees reconcile with the trade history after every fill, fees are charged once, closing at the mark moves unrealised into realised P&L, and a long on a price path earns the same as a short on its mirror. A position-reducing fill is never margin-rejected (300-trial sweep); other positions are marked at live prices; replaying the ledger reproduces every row's balance; three concurrent deliveries of one idempotency key give one order and one fill (Postgres).
+10. **RBAC & Security Boundaries**: ingestion and administrative mutations require admin claims from verified JWT `app_metadata`; every user-owned table has owner-only RLS (including thesis child tables, migration 0029); another user's run, report or replay is `NOT_FOUND`.
+11. **Bounded resources**: the Angel One feed never exceeds its 1,000-token budget and never drops paper or alert symbols (400-step random check); stored backtests are capped at 50 per user; screener filters at 20; concurrent NSE master loads share one fetch.
+12. **Capital-gains rules**: STCG/LTCG classification at the 12-month boundary, the 23 Jul 2024 rate change, the shared ₹1.25 lakh exemption and the loss set-off order (`shared/domain/investing/capital-gains.test.ts`); XIRR against reference cash flows and scale invariance (`xirr.test.ts`).
+13. **Options payoff**: Black-Scholes reference values and put-call parity, Greeks against finite differences, exact breakevens, unlimited-loss detection and iron-condor max profit = net credit × lots × lot size (`shared/domain/options/black-scholes.test.ts`, `payoff.test.ts`).
+14. **No invented account figures**: with an expired session or a failing backend the dashboard, terminal and portfolio show a status line and no balance (`tests/e2e/paper-account-state.spec.ts`).
+
+Not guaranteed: backtests are **not survivorship-free** (they use today's symbol lists) and fundamentals carry no real availability dates. See §2.C.
 
 ---
 
 ## 8. Deployment Architecture
 
-- **Frontend (Vercel)**: Automatically deploys from `main`. Uses TanStack Start and pre-built Nitro output (`.vercel/output`).
-- **Backend (Render)**: Render deploys `main` using `render.yaml`. `deploy-render.yml` runs on pushes touching `server/**`, `shared/**`, `package.json`, `bun.lock` or `render.yaml`, builds the backend and waits until `/api/health` reports the pushed commit with `status: "ok"`.
-- **Health semantics**: `GET /api/health` (Render's `healthCheckPath`) always answers HTTP 200 so Render does not restart an instance because of an external outage. The body reports `status: "ok"` or `"degraded"` and per-component `checks`: `database` (live `select 1`) and `redis` (live `PING`), each with a 2 s timeout and cached for 10 s, plus `orchestrator` and `marketData` as reported by those components. `GET /health/detailed` (row counts, DLQ stats, recent ingestion runs) requires an admin JWT.
-- **Database (Supabase)**: Transaction pooler configuration via port `6543` with `sslmode=require`.
+- **Frontend (Vercel)**: deploys `main` to production through the Git integration (TanStack Start, prebuilt Nitro output in `.vercel/output`). Every response carries `x-maet-build: <commit>`. `verify-vercel.yml` waits until `https://maet-pi.vercel.app/` serves the pushed commit, so a failed, rate-limited or unpromoted build fails the workflow instead of silently leaving an older revision live. The project's Ignored Build Step (`src/scripts/vercel-ignore-build.sh`) skips preview builds that change no frontend input, so previews cannot use up the Hobby deployment quota that production needs.
+- **Backend (Render)**: Node 22, deployed from `main` using `render.yaml`. CI boots the built bundle on Node 22 (Bun runs the tests, Node runs production). `deploy-render.yml` waits until `/api/ready` answers 200 for the pushed commit, then runs `scripts/smoke-deploy.ts --backend-only` (CORS preflight from the production origin, 401 on an anonymous protected procedure, a public DB-backed query, the quotes API; all read-only). `bun run scripts/smoke-deploy.ts --sha <commit>` checks both tiers.
+- **Health semantics**: `GET /api/health` is liveness (Render's `healthCheckPath`): it always answers HTTP 200, so Render does not restart an instance over an external outage. `GET /api/ready` returns the same body but answers **503** unless every check passes: database, Redis, the orchestrator and market data (live Angel One or the Yahoo fallback). The body reports `status: "ok"` or `"degraded"`, `version` (the deployed commit) and per-component `checks`: `database` (live `select 1`) and `redis` (live `PING`), each with a 2 s timeout and cached for 10 s, plus `orchestrator` and `marketData` as reported by those components. Database connectivity failures surface from tRPC as `SERVICE_UNAVAILABLE` (503), not as 500. `GET /health/detailed` (row counts, DLQ stats, recent ingestion runs) requires an admin JWT.
+- **Database (Supabase)**: the application connects through the Supavisor transaction pooler (port `6543`, `sslmode=require`); Render has no IPv6, so the direct `db.<ref>.supabase.co` host is unreachable from it.
 
 ---
 

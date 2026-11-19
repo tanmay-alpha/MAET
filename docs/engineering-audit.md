@@ -51,7 +51,7 @@ Refuted infrastructure hypotheses (from the static audit, disproved by logs): IP
 
 ## Code findings
 
-Status legend: **verified** = reproduced or confirmed in current code; **refuted** = not true at `49dcad5`.
+Status legend: **verified** = reproduced or confirmed in current code; **refuted** = not true at `49dcad5`. The PR that fixed each finding is listed in [`implementation-roadmap.md`](implementation-roadmap.md); every finding there is fixed except OPS-1 (owner action), OPS-6, UX-6 and RES-4 (deferred).
 
 ### Financial correctness
 
@@ -66,7 +66,7 @@ Status legend: **verified** = reproduced or confirmed in current code; **refuted
 | FIN-7 | P2 | `portfolio-engine.ts:389,574` (research) | Entries sized at bar *i* open use marks at bar *i* close (look-ahead) | verified (code) |
 | FIN-8 | P2 | `point-in-time.ts:80` (research) | Rows with null `filing_date`/`available_from` become visible from 1970 | verified; nothing populates these columns |
 | FIN-9 | P3 | `fill-writer.ts:263` | Both ledger rows of a fill store the same post-fee `balanceAfter` | verified (code) |
-| FIN-10 | P3 | `tick-processor.ts:24` | `MIN_FILL_PER_TICK = 1` fills resting orders without traded volume | to verify |
+| FIN-10 | P3 | `tick-processor.ts:24` | `MIN_FILL_PER_TICK = 1` fills resting orders without traded volume | verified; fixed #59 |
 | FIN-11 | P2 | AUTO_PAPER deployments (`strategy-evaluator.ts`, disabled by default) | `limits.maxPositions` vs schema `maximumOpenPositions`; quantity always 1; ENTRY always buys | verified (code); feature flag off |
 | FIN-L3 | — | "CalculationEngine.ts uses period timestamps for historical fundamentals" | refuted: no such file; no backtest consumes fundamentals; live screens use the latest row by design |
 | FIN-L5 | — | Costs charged once; entry+exit fees; paper cash reconciliation | verified correct by reading; property tests added in the fix branch |
@@ -75,14 +75,14 @@ Status legend: **verified** = reproduced or confirmed in current code; **refuted
 
 | ID | Pri | Finding | Status |
 |---|---|---|---|
-| RES-1 | P1 (claimed P0) | Walk-forward windows ignore requested training/validation spans | to verify in fix branch |
-| RES-2 | P1 | Rejected walk-forward windows excluded from aggregates and OOS curve (survivor-window averaging) | to verify |
+| RES-1 | P1 (claimed P0) | Walk-forward windows ignore requested training/validation spans | verified (2024 example: 4 ~91-day slices instead of 120/40/40); fixed #62 |
+| RES-2 | P1 | Rejected walk-forward windows excluded from aggregates and OOS curve (survivor-window averaging) | verified; fixed #62 |
 | RES-3 | P1 | Fundamentals have no populated filing/availability dates; `financial_statements` has none | verified (schema + writers) |
 | RES-4 | P1 | Corporate actions table never populated; backtests use provider-adjusted candles | verified (no writer) |
 | RES-5 | P1 | Docs claim point-in-time universe membership; `universe_membership` is never populated; backtests use today's Nifty 50 | verified — documentation must not claim survivorship-free results |
 | RES-6 | P1 | Ingestion engine writes `price_daily`, consumers read `candles` | verified |
 | RES-7 | P2 | No multiple-testing control (PBO/CSCV, deflated Sharpe) for sweeps | verified |
-| RES-8 | P2 | Benchmark return/alpha always 0 (no benchmark candles passed) | to verify |
+| RES-8 | P2 | Benchmark return/alpha always 0 (no benchmark candles passed) | verified for queued backtests; walk-forward now has a same-date benchmark (#62); reports mark it not applied (#71) |
 
 ### Security and abuse (no auth bypass, IDOR or SQL injection found)
 
@@ -92,7 +92,7 @@ Status legend: **verified** = reproduced or confirmed in current code; **refuted
 | SEC-2 | P1/P2 | `backtestV2.run` stores full per-bar curves on every call with no retention | verified (code) |
 | SEC-3 | P2 | Screener filters array unbounded; saved screeners uncapped | verified (code) |
 | SEC-4 | P2 | NSE company master fetch has no single-flight | verified (code) |
-| SEC-5 | P3 | Replay session lost updates under concurrent writes | open |
+| SEC-5 | P3 | Replay session lost updates under concurrent writes | verified; fixed #66 (also: replay session creation always failed on a Date parameter) |
 | SEC-6 | P3 | `FEATURE_*` flags are UI-only; Vercel market routes leak raw error messages | verified (code) |
 
 ### Frontend / UX
@@ -102,19 +102,19 @@ Status legend: **verified** = reproduced or confirmed in current code; **refuted
 | UX-1 | P0 | No sign-in, sign-up or sign-out UI ("Sign-in coming soon"); every account feature is unreachable for real users | verified (`app-shell.tsx:52`, `app-sidebar.tsx:228`) |
 | UX-2 | P1 | Only the root route has an error component | verified |
 | UX-3 | P1 | Global chart shortcuts swallow keys in selects/comboboxes; chart canvas has no accessible name | verified (code) |
-| UX-4 | P1 | 768 px: desktop sidebar + hidden top nav squeeze content | to verify in browser |
+| UX-4 | P1 | 768 px: desktop sidebar + hidden top nav squeeze content | verified with Playwright (also /orders +370 px at 360 px); fixed #70 |
 | UX-5 | P2 | `paperTrading.listLedger` has no UI (no cash ledger) | verified |
-| UX-6 | P2 | Heavy chart libraries not split per route | open |
+| UX-6 | P2 | Heavy chart libraries not split per route | open (deferred) |
 
 ### Backend
 
 | ID | Pri | Finding | Status |
 |---|---|---|---|
 | BE-1 | P1 | DB connectivity failures surface as HTTP 500 on public procedures (`companies.searchCompanies` in production) | observed live |
-| BE-2 | P1 | Market breadth loads up to ~400 days × all symbols into memory | open |
-| BE-3 | P2 | `strategyDefinitions.createVersion` assigns version numbers non-atomically | open |
-| BE-4 | P2 | `createWorkspace` inserts workspace + pane outside a transaction | open |
-| BE-5 | P3 | `thesis_signals`/`thesis_snapshots`/`thesis_order_links` have RLS enabled with no owner policy | open (API access unaffected; direct PostgREST reads denied) |
+| BE-2 | P1 | Market breadth loads up to ~400 days × all symbols into memory | verified; fixed #60 |
+| BE-3 | P2 | `strategyDefinitions.createVersion` assigns version numbers non-atomically | verified (Postgres test 0/3); fixed #58 |
+| BE-4 | P2 | `createWorkspace` inserts workspace + pane outside a transaction | verified; fixed #58 |
+| BE-5 | P3 | `thesis_signals`/`thesis_snapshots`/`thesis_order_links` have RLS enabled with no owner policy | verified; fixed #66 (migration 0029) |
 
 ## TODO
 
