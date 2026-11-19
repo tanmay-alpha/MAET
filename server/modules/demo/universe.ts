@@ -14,6 +14,9 @@ export const DEMO_SEED = 20_261_119;
 /** Demo history: the bundled NSE holiday year, up to a fixed end so reruns never drift. */
 export const DEMO_FROM = "2026-01-01";
 export const DEMO_TO = "2026-11-18";
+/** The demo user owns every seeded paper, screener and strategy row. */
+export const DEMO_USER_ID = "de300000-0000-4000-8000-000000000001";
+export const DEMO_USER_EMAIL = "demo@maet.invalid";
 
 export interface DemoCompany extends DemoSeriesSpec {
   name: string;
@@ -32,3 +35,5 @@ export const DEMO_COMPANIES: readonly DemoCompany[] = [
   { symbol: "DEMO-JALA", name: "Jala Specialty Chemicals (synthetic demo)", sector: "Materials", industry: "Specialty Chemicals", startPrice: 676.35, volatilityScale: 1.3, baseVolume: 720_000, sharesOutstanding: 180_000_000 },
   { symbol: "DEMO-NIRA", name: "Nira Healthcare Labs (synthetic demo)", sector: "Health Care", industry: "Pharmaceuticals", startPrice: 504.2, volatilityScale: 0.85, baseVolume: 1_350_000, sharesOutstanding: 520_000_000 },
 ];
+
+export const DEMO_SYMBOLS = DEMO_COMPANIES.map((company) => company.symbol);
