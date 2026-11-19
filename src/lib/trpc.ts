@@ -42,6 +42,12 @@ import type {
 } from "./strategy-jobs";
 import type { SweepRobustness } from "../../server/modules/strategy-optimisation/sweep-robustness";
 import type { PaperLedgerPage } from "./paper-ledger";
+import type {
+  DataQualityReport,
+  DataQualityUniverse,
+  IngestionBatchView,
+  ReliabilityReport,
+} from "../../server/modules/data-quality/contracts";
 
 export type {
   BreadthOverview,
@@ -393,26 +399,18 @@ export const trpc = {
     },
   },
   dataQuality: {
+    getPublicReport: {
+      query: (input?: { universe?: DataQualityUniverse }): Promise<DataQualityReport> =>
+        trpcQuery("dataQuality.getPublicReport", input),
+    },
+    getReliability: {
+      query: (): Promise<ReliabilityReport> => trpcQuery("dataQuality.getReliability"),
+    },
     getOverview: {
-      query: (): Promise<any> => trpcQuery("dataQuality.getOverview"),
-    },
-    listAudits: {
-      query: (input?: { limit?: number }): Promise<any> => trpcQuery("dataQuality.listAudits", input),
-    },
-    listAnomalies: {
-      query: (input?: { limit?: number }): Promise<any> => trpcQuery("dataQuality.listAnomalies", input),
-    },
-    resolveAnomaly: {
-      mutate: (input: { anomalyId: string; resolutionNote?: string }): Promise<any> => trpcMutation("dataQuality.resolveAnomaly", input),
-    },
-    suppressAnomaly: {
-      mutate: (input: { anomalyId: string }): Promise<any> => trpcMutation("dataQuality.suppressAnomaly", input),
+      query: (): Promise<{ recentBatches: IngestionBatchView[] }> => trpcQuery("dataQuality.getOverview"),
     },
     retryBatch: {
-      mutate: (input: { batchId: string }): Promise<any> => trpcMutation("dataQuality.retryBatch", input),
-    },
-    getCoverage: {
-      query: (): Promise<any> => trpcQuery("dataQuality.getCoverage"),
+      mutate: (input: { batchId: string }): Promise<unknown> => trpcMutation("dataQuality.retryBatch", input),
     },
   },
   capabilities: {

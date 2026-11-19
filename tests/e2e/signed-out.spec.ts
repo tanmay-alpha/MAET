@@ -85,7 +85,7 @@ const SIGNED_OUT_PAGES = [
   { path: "/strategies/00000000-0000-4000-8000-000000000001/backtests", notice: "Backtests and research jobs require a signed-in account." },
   { path: "/strategies/00000000-0000-4000-8000-000000000001/deployments", notice: "Strategy deployments require a signed-in account." },
   { path: "/options/NIFTY", notice: "Options chains require a signed-in account." },
-  { path: "/admin/data-quality", notice: "Ingestion audits and anomalies are visible to admin accounts." },
+  { path: "/admin/data-quality", notice: "Job queues, ingestion runs and dead-letter stats are visible to admin accounts." },
   { path: "/workspace", notice: "Watchlists, saved screeners and screener runs require a signed-in account." },
 ];
 
