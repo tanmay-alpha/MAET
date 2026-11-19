@@ -66,6 +66,8 @@ export interface SweepResultView {
     winRate: string;
     profitFactor: string | null;
     tradeCount: number;
+    /** The combination's backtest warnings; absent on results stored before they were kept. */
+    warnings?: string[];
   } | null;
 }
 

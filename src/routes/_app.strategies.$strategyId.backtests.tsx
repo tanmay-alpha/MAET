@@ -427,9 +427,16 @@ function SweepDetail({ sweep, results, robustness }: { sweep: SweepView; results
     .sort((a, b) => Number(b.resultSummary!.sharpe) - Number(a.resultSummary!.sharpe))
     .slice(0, 20);
   const names = sweep.parameters.map((p) => p.name);
+  // Every combination runs on the same candles, so window warnings repeat; list each once.
+  const warnings = [...new Set(results.flatMap((r) => r.resultSummary?.warnings ?? []))];
 
   return (
     <div className="space-y-4">
+      {warnings.length > 0 && (
+        <ul data-testid="sweep-warnings" className="space-y-1 rounded border border-amber-500/30 px-3 py-2 text-xs text-amber-300">
+          {warnings.map((w) => <li key={w}>{w}</li>)}
+        </ul>
+      )}
       {robustness && (
         <RobustnessHeatmapView analysis={robustness.analysis} paramXName={robustness.paramX} paramYName={robustness.paramY} />
       )}
