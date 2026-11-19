@@ -57,7 +57,7 @@ describe.skipIf(!enabled)("strategy versions — definition hash (PostgreSQL)", 
       DELETE FROM public.users WHERE id = '${userId}';
       DELETE FROM auth.users WHERE id = '${userId}';
       INSERT INTO auth.users (id) VALUES ('${userId}');
-      INSERT INTO public.users (id, email) VALUES ('${userId}', 'versions@test.com');
+      INSERT INTO public.users (id, email) VALUES ('${userId}', 'versions-hash@test.com');
     `);
   });
 
