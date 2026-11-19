@@ -1,4 +1,4 @@
-import { SYNTHETIC_QUOTE_LABEL, isDemoBuild } from "@/components/demo/demo-mode";
+import { SYNTHETIC_QUOTE_LABEL } from "@/components/demo/demo-mode";
 
 const SOURCE_NAMES: Record<string, string> = {
   angelone: "Angel One",
@@ -19,24 +19,25 @@ export function sourceName(source: string): string {
   return SOURCE_NAMES[source] ?? source;
 }
 
-/** Provider name for a quote; a demo build names no provider, its quotes are generated. */
+/** Provider name for a quote; a simulated (seeded demo or simulator) quote names no provider. */
 export function quoteProviderName(source: string): string {
-  return isDemoBuild() ? SYNTHETIC_QUOTE_LABEL : sourceName(source);
+  return source === "simulated" ? SYNTHETIC_QUOTE_LABEL : sourceName(source);
 }
 
 /**
  * "Angel One · live", "Yahoo · delayed", "Yahoo · delayed · market closed": from the API's own
- * `source` field. Simulated quotes say "synthetic", and a demo build (VITE_MAET_DEMO_MODE=1)
- * labels every quote synthetic: its data is generated, whatever provider name a response carries.
+ * `source` field, so a label always states where that quote came from. Simulated quotes (the
+ * seeded demo dataset and the market simulator) say they are synthetic; a real Yahoo quote in a
+ * demo build still says Yahoo. The demo banner is the build-level signal.
  */
 export function quoteSourceLabel(source: string, delayed: boolean, marketPhase?: string): string {
-  if (isDemoBuild()) return SYNTHETIC_QUOTE_LABEL;
-  const parts = [sourceName(source), source === "simulated" ? "synthetic" : delayed ? "delayed" : "live"];
+  if (source === "simulated") return SYNTHETIC_QUOTE_LABEL;
+  const parts = [sourceName(source), delayed ? "delayed" : "live"];
   if (marketPhase && CLOSED_PHASES[marketPhase]) parts.push("market closed");
   return parts.join(" · ");
 }
 
-/** Hover text naming where a row's quote came from; demo builds call it synthetic. */
+/** Hover text naming where a row's quote came from. */
 export function quoteSourceTitle(quote: { source: string; delayed: boolean } | undefined): string {
   return quote ? `Quote source: ${quoteSourceLabel(quote.source, quote.delayed)}` : "Quote unavailable";
 }

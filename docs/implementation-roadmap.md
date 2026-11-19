@@ -55,5 +55,5 @@ branch, merged `main` into it, re-ran its suites and merged it only after CI pas
 | F-1 | P2 | Feature | Market-data quality center | — | `/data-quality` + admin reliability | DataQuality | 21 unit, 8 Postgres, e2e | done | #65, #72 |
 | F-2/3 | P2 | Feature | Run reports, comparison | — | `/research/reports` | RunReports | 31 unit, 6 Postgres | done | #71 |
 | F-4 | P2 | Feature | Ledger/reconciliation | — | `/portfolio` | FrontendAuth | e2e | done | #70 |
-| F-8 | P2 | Feature | Synthetic demo | — | `seed:demo`, demo banner; every quote label, tooltip and source line goes through `quoteSourceLabel` / `quoteProviderName` | DemoMode, UiPolish | 22 unit, 3 Postgres | done | #69, UiPolish PR |
+| F-8 | P2 | Feature | Synthetic demo; demo builds called real Yahoo quotes synthetic | demo browser audit | `seed:demo`, demo banner; every quote label, tooltip and source line goes through `quoteSourceLabel` / `quoteProviderName`, which state each quote's own source (simulated → synthetic, Yahoo → Yahoo · delayed) | DemoMode, UiPolish | 24 unit, 3 Postgres | done | #69, UiPolish PR |
 | TEST-1 | P2 | Load | No bounded load test | — | `scripts/load-test.ts` (refuses production) | orchestrator | local run recorded | done | docs |

@@ -235,7 +235,7 @@ These are the constraints I checked while designing the data paths. They shape w
 
 ### F7. Synthetic demo mode
 
-**What it does.** `bun run seed:demo` fills a scratch database with a fictitious market (eight `DEMO-` companies whose names say "synthetic demo"), a demo user (`demo@maet.invalid`) with a paper account and four fills, three saved screens, and a completed backtest. A demo deployment sets two flags: the frontend is built with `VITE_MAET_DEMO_MODE=1`, which shows a permanent "Demo — synthetic data, not market data" banner and labels every quote "Synthetic demo data · not market data"; the server runs with `MAET_DEMO_MODE=1`, which `capabilities.get` reports as `demoMode: true` for API consumers. Either flag alone changes nothing else.
+**What it does.** `bun run seed:demo` fills a scratch database with a fictitious market (eight `DEMO-` companies whose names say "synthetic demo"), a demo user (`demo@maet.invalid`) with a paper account and four fills, three saved screens, and a completed backtest. A demo deployment sets two flags: the frontend is built with `VITE_MAET_DEMO_MODE=1`, which shows a permanent "Demo — synthetic data, not market data" banner; the server runs with `MAET_DEMO_MODE=1`, which `capabilities.get` reports as `demoMode: true` for API consumers. Either flag alone changes nothing else. Quote labels follow each quote's own `source`, not the build flag: seeded `DEMO-` quotes (`source: "simulated"`) read "Synthetic demo data · not market data", while a real public fallback quote served by the same deployment still reads "Yahoo · delayed" (`quoteSourceLabel`, `src/lib/quote-source.ts`).
 
 **Data flow.** `server/modules/demo/calendar.ts` (trading days from the real market clock and bundled NSE holidays) → `generator.ts` (bars) → `seed.ts` (rows) ← `server/scripts/seed-demo.ts` (target guard in `target.ts`). Frontend: `src/components/demo/demo-mode-banner.tsx` (rendered once in `src/routes/__root.tsx`; `null` unless the build flag is set), `src/lib/quote-source.ts`.
 
@@ -251,7 +251,7 @@ These are the constraints I checked while designing the data paths. They shape w
 
 **Likely questions.**
 
-- *Why not replay real candles?* Redistribution limits (F6) and honesty: a demo should never be mistaken for market data, so every symbol, name, quote label and banner says it is synthetic.
+- *Why not replay real candles?* Redistribution limits (F6) and honesty: a demo should never be mistaken for market data, so every demo symbol, name and quote label says it is synthetic, and the banner covers the whole build. A real quote shown in a demo keeps its real provider label rather than being called synthetic.
 - *Does the demo bypass the engines?* No: fills, ledger and backtest come from the production code paths; only the quote policy for these seeded fills differs, explicitly.
 
 ## Trade-offs I made

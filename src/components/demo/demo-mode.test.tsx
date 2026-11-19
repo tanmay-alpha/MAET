@@ -34,43 +34,37 @@ describe("demo mode banner", () => {
   });
 });
 
-describe("quote labels", () => {
-  test("a demo build labels every quote synthetic, whatever source it reports", () => {
-    setDemoBuild("1");
-    expect(quoteSourceLabel("angelone", false, "OPEN")).toBe(SYNTHETIC_QUOTE_LABEL);
-    expect(quoteSourceLabel("yahoo", true, "CLOSED")).toBe(SYNTHETIC_QUOTE_LABEL);
-  });
+const quote: MarketQuote = {
+  symbol: "DEMO-ALPHA", exchange: "NSE", price: 812.5, ts: "2026-11-06T10:00:00.000Z",
+  source: "simulated", quality: "synthetic", delayed: false,
+};
+const yahoo: MarketQuote = { ...quote, symbol: "RELIANCE", price: 2450, source: "yahoo", quality: "delayed", delayed: true };
+const response = (quotes: MarketQuote[]): MarketQuotesResponse => ({ asOf: quote.ts, source: quotes[0].source, delayed: false, quotes, errors: [] });
 
-  test("an ordinary build never calls a simulated quote live", () => {
-    setDemoBuild(undefined);
-    expect(quoteSourceLabel("simulated", false, "OPEN")).toBe("Simulated · synthetic");
-    expect(quoteSourceLabel("angelone", false, "OPEN")).toBe("Angel One · live");
-  });
-});
+// Labels state each quote's own source: a demo build can also serve real public quotes.
+for (const build of ["1", undefined]) {
+  describe(`quote labels in ${build ? "a demo" : "an ordinary"} build`, () => {
+    test("a seeded DEMO- (simulated) quote is labelled synthetic everywhere", () => {
+      setDemoBuild(build);
+      expect(quoteSourceLabel("simulated", false, "OPEN")).toBe(SYNTHETIC_QUOTE_LABEL);
+      expect(quoteTooltip(quote)).toStartWith(`${SYNTHETIC_QUOTE_LABEL} · `);
+      expect(quoteSourceTitle(quote)).toBe(`Quote source: ${SYNTHETIC_QUOTE_LABEL}`);
+      expect(quoteProviderName("simulated")).toBe(SYNTHETIC_QUOTE_LABEL);
+      expect(marketSummary(response([quote]))).toStartWith(`${SYNTHETIC_QUOTE_LABEL} · `);
+    });
 
-describe("quote tooltips and provenance lines", () => {
-  const quote: MarketQuote = {
-    symbol: "RELIANCE", exchange: "NSE", price: 2450, ts: "2026-11-06T10:00:00.000Z",
-    source: "angelone", quality: "live", delayed: false,
-  };
-  const response: MarketQuotesResponse = { asOf: quote.ts, source: "angelone", delayed: false, quotes: [quote], errors: [] };
-
-  test("a demo build names no provider in the index, heatmap and watchlist tooltips or the source line", () => {
-    setDemoBuild("1");
-    expect(quoteTooltip(quote)).toStartWith(`${SYNTHETIC_QUOTE_LABEL} · `);
-    expect(quoteTooltip(quote)).not.toContain("Angel One");
-    expect(quoteSourceTitle(quote)).toBe(`Quote source: ${SYNTHETIC_QUOTE_LABEL}`);
-    expect(quoteProviderName("yahoo")).toBe(SYNTHETIC_QUOTE_LABEL);
-    expect(marketSummary(response)).toStartWith(`${SYNTHETIC_QUOTE_LABEL} · `);
+    test("a real Yahoo quote keeps its provider and delay", () => {
+      setDemoBuild(build);
+      expect(quoteSourceLabel("yahoo", true)).toBe("Yahoo · delayed");
+      expect(quoteSourceLabel("yahoo", true, "CLOSED")).toBe("Yahoo · delayed · market closed");
+      expect(quoteSourceLabel("angelone", false, "OPEN")).toBe("Angel One · live");
+      expect(quoteTooltip(yahoo)).toStartWith("Yahoo · delayed · ");
+      expect(quoteTooltip({ ...yahoo, quality: "stale" })).toStartWith("Yahoo · delayed · stale · ");
+      expect(quoteSourceTitle(yahoo)).toBe("Quote source: Yahoo · delayed");
+      expect(quoteSourceTitle(undefined)).toBe("Quote unavailable");
+      expect(quoteProviderName("yahoo")).toBe("Yahoo");
+      expect(marketSummary(response([yahoo]))).toStartWith("Yahoo Finance · ");
+      expect(marketSummary(response([yahoo, quote]))).toStartWith(`Yahoo Finance + ${SYNTHETIC_QUOTE_LABEL} · `);
+    });
   });
-
-  test("an ordinary build names the provider and its delay", () => {
-    setDemoBuild(undefined);
-    expect(quoteTooltip(quote)).toStartWith("Angel One · live · ");
-    expect(quoteTooltip({ ...quote, source: "yahoo", delayed: true, quality: "stale" })).toStartWith("Yahoo · delayed · stale · ");
-    expect(quoteSourceTitle(quote)).toBe("Quote source: Angel One · live");
-    expect(quoteSourceTitle(undefined)).toBe("Quote unavailable");
-    expect(quoteProviderName("angelone")).toBe("Angel One");
-    expect(marketSummary(response)).toStartWith("Angel One · ");
-  });
-});
+}
