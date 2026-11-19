@@ -7,6 +7,7 @@ import { eq, and, desc, asc, gte, lte, inArray } from "drizzle-orm";
 import { runBacktestV3, InsufficientHistoryV3Error } from "../../../domain/strategy/runner-v3";
 import { presetToV3Definition } from "../../../domain/backtest/preset-to-v3-adapter";
 import { StrategyTypeSchema } from "../../../modules/backtest/contracts";
+import { saveBacktestRun, storedEquityCurve } from "../../../modules/backtest/run-store";
 import { CandleSchema, type Candle } from "@shared/types";
 
 export const MAX_BACKTEST_CANDLES = parseInt(process.env.MAX_BACKTEST_CANDLES || "50000", 10);
@@ -168,6 +169,7 @@ export const backtestV2Router = createRouter({
           to: candleList[candleList.length - 1].ts,
         };
 
+        // Stored runs keep a downsampled curve; the response below carries every bar.
         const resultPayload: Record<string, unknown> = {
           runId: result.runId,
           symbol: result.symbol,
@@ -175,7 +177,7 @@ export const backtestV2Router = createRouter({
           to: effectivePeriod.to,
           effectivePeriod,
           metrics: result.metrics,
-          equityCurve: result.equityCurve,
+          equityCurve: storedEquityCurve(result.equityCurve),
           trades: result.trades,
           signalCount: result.trades.length,
           insufficientHistory: false,
@@ -183,23 +185,20 @@ export const backtestV2Router = createRouter({
           engineVersion: "v3",
         };
 
-        const [saved] = await db
-          .insert(backtestRuns)
-          .values({
-            userId: ctx.userId!,
-            symbol,
-            timeframe: input.timeframe,
-            strategy: input.strategy.type,
-            parameters: {
-              ...input.strategy,
-              risk: input.risk,
-              from: input.from,
-              to: input.to,
-              effectivePeriod,
-            },
-            result: resultPayload,
-          })
-          .returning();
+        const saved = await saveBacktestRun({
+          userId: ctx.userId!,
+          symbol,
+          timeframe: input.timeframe,
+          strategy: input.strategy.type,
+          parameters: {
+            ...input.strategy,
+            risk: input.risk,
+            from: input.from,
+            to: input.to,
+            effectivePeriod,
+          },
+          result: resultPayload,
+        });
 
         return {
           runId: saved.id,
@@ -226,9 +225,11 @@ export const backtestV2Router = createRouter({
           });
         }
         if (err instanceof TRPCError) throw err;
+        // The cause lets core's outage mapping answer 503 when saving hit an unreachable database.
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Backtest execution failed due to an internal server error",
+          cause: err,
         });
       }
     }),
