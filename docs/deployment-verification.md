@@ -72,3 +72,6 @@ free-tier resources and is an owner action. After the owner provisions them:
 | 2026-11-06 | Vercel status on `f535d0a`: `Deployment rate limited — retry in 24 hours` | GitHub commit statuses |
 | 2026-11-09 18:47 | `maet-pi.vercel.app` → `dpl_6vDkwVL6…`, commit `49dcad5` (synced) | Vercel API |
 | 2026-11-09 19:07 | Preview with `src/vercel.json` → HTTP 500 on `/`; fixed preview `b33f1e5` → 200, `x-maet-build: b33f1e5…` | `vercel curl`, runtime logs |
+| 2026-11-19 11:15 | Smoke test on `f41bb87`: 4/6. Frontend revision, CORS, 401 auth boundary and quotes pass; readiness 503 and `companies.searchCompanies` 503 (OPS-1). The search query was HTTP 500 before #64 mapped DB outages to 503 | `scripts/smoke-deploy.ts` |
+| 2026-11-19 15:26 | Last production frontend build: `09dcbac`. Later production builds (`54be651` and onward) rejected: `Deployment rate limited — retry in 24 hours`. Preview builds from parallel PRs used up the Hobby quota. `Verify Vercel Production` fails for those commits, which is the intended signal. #85 makes previews opt-in (`[preview]`); the next push to `main` after the quota resets deploys the latest commit | Vercel API, GitHub commit statuses |
+| 2026-11-19 15:40 | Backend `/api/health` reports `54be651` (latest `main`), still degraded on database/Redis (OPS-1) | `curl` |
