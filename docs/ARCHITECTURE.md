@@ -283,8 +283,9 @@ The account `generation` implements reset: every query filters by it, and a rese
 | Table | Purpose / key |
 |---|---|
 | `companies`, `company_identifiers` | Company master; unique symbol; unique `(identifier_type, identifier_value)`. |
-| `candles` | OHLCV, primary key `(symbol, timeframe, ts)`; written by the candle service and daily processor (`server/domain/market/candle-service.ts`, `server/workers/daily-processor.ts`). |
-| `financial_statements`, `fundamentals`, `corporate_actions`, `universe_membership` | Fundamentals with point-in-time columns, corporate events, index membership windows (`0022_p2_research_engine.sql`). |
+| `candles` | OHLCV, primary key `(symbol, timeframe, ts)`; written by the candle service, the daily processor and the ingestion engine's daily pipeline (`server/domain/market/candle-service.ts`, `server/workers/daily-processor.ts`, `server/workers/ingestion-engine/pipelines/daily-pipeline.ts`). All three store Yahoo bars under the canonical symbol with the provider's bar timestamp unchanged (NSE daily bars: 09:15 IST session open, `03:45Z`) and `source = 'yahoo'`, so they upsert the same key. The ingestion pipeline writes only bars that pass validation (positive prices, `low <= open, close <= high`, integer volume `>= 0`, timestamp between 1990 and now, one bar per symbol and instant). |
+| `price_daily` | Legacy, no longer written. The ingestion engine used to write daily bars here, where no chart, screener, breadth or backtest read them; the table remains only for the row count in `/health/detailed` and `ingestion.getInventory`. |
+| `financial_statements`, `fundamentals`, `corporate_actions`, `universe_membership` | Fundamentals with point-in-time columns, corporate events, index membership windows (`0022_p2_research_engine.sql`). `financial_statements.period_date` is the provider's fiscal period end. Neither Yahoo nor the NSE quote page supplies a filing or announcement date, so `fundamentals.filing_date` and `available_from` stay null; the daily processor writes both sources' ratios as `period_type = 'snapshot'` rows dated at the observation time. Before this, NSE rows were labelled `quarterly` with `period_date` = sync time; the database that held them was deleted (OPS-1), so no relabelling migration exists. |
 | `technical_snapshots` | Cached canonical indicator snapshots, unique `(symbol, exchange, timeframe)`. |
 | `backtest_runs` | Results of synchronous `backtestV2.run`. |
 | `strategy_definitions`, `strategy_versions` | Strategy Lab drafts and immutable versions, unique `(strategy_id, version_number)` and `(strategy_id, definition_hash)`. |
@@ -292,7 +293,7 @@ The account `generation` implements reset: every query filters by it, and a rese
 | `strategy_parameter_sweeps`, `strategy_sweep_results`, `strategy_walk_forward_runs`, `strategy_walk_forward_windows` | Optimisation jobs. |
 | `strategy_deployments`, `strategy_signal_events`, `strategy_execution_decisions` | Deployed strategies and their signals (unique `(deployment_id, fingerprint)`). |
 | `option_contracts`, `option_quote_snapshots`, `option_greek_snapshots` | Options data (`0017_options_market_data.sql`). |
-| `ingestion_runs`, `dead_letter_queue`, `source_audit`, `anomaly_flags` | Ingestion bookkeeping and data-quality audit. |
+| `ingestion_runs`, `dead_letter_queue`, `source_audit`, `anomaly_flags` | Ingestion bookkeeping and data-quality audit. The daily pipeline records bars refused by validation in `ingestion_runs.metadata.recordsRejected`. |
 
 ## 5. Deployment and CI
 

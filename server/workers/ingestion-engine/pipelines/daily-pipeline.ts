@@ -1,23 +1,23 @@
 /**
  * Daily Pipeline — Post-market daily bar processing
- * Orchestrates: NSE company sync → Yahoo OHLCV → Fundamentals → DLQ retry
- * Writes to both Supabase (operational) and BigQuery (analytical) simultaneously
+ * Fetches Yahoo daily OHLCV, validates every bar, and upserts accepted bars
+ * into `candles` (timeframe '1d') — the table charts, screener, breadth and
+ * backtests read — with an optional BigQuery copy.
  */
 
 import { getLogger } from "../../../infra/logger";
-import { validateOHLCVBatch, validateOHLCVRanges } from "../validators/schema-validator";
+import { validateDailyBars } from "../validators/schema-validator";
 import { coordinateOHLCVWrite } from "../writers/write-coordinator";
 import { pushToDLQ } from "../queue/dead-letter-queue";
 import { startIngestionRun, completeIngestionRun } from "../writers/supabase-writer";
 import * as YahooHistory from "../sources/yahoo-history";
-import * as NSEEquities from "../sources/nse-equities";
 
 const logger = getLogger("pipeline:daily");
+const TIMEFRAME = "1d";
 
 export interface DailyPipelineOptions {
   symbols: string[];
   backfillDays?: number;
-  syncFundamentals?: boolean;
   dryRun?: boolean;
 }
 
@@ -33,7 +33,26 @@ export interface DailyPipelineResult {
   durationMs: number;
 }
 
-export async function runDailyPipeline(opts: DailyPipelineOptions): Promise<DailyPipelineResult> {
+export type DailyPipelineDependencies = {
+  fetchHistory: typeof YahooHistory.fetch;
+  writeBars: typeof coordinateOHLCVWrite;
+  startRun: typeof startIngestionRun;
+  completeRun: typeof completeIngestionRun;
+  pushToDLQ: typeof pushToDLQ;
+};
+
+export const dailyPipelineDependencies: DailyPipelineDependencies = {
+  fetchHistory: YahooHistory.fetch,
+  writeBars: coordinateOHLCVWrite,
+  startRun: startIngestionRun,
+  completeRun: completeIngestionRun,
+  pushToDLQ,
+};
+
+export async function runDailyPipeline(
+  opts: DailyPipelineOptions,
+  deps: DailyPipelineDependencies = dailyPipelineDependencies,
+): Promise<DailyPipelineResult> {
   const runId = `daily-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const startedAt = new Date();
   logger.info({ runId, symbols: opts.symbols.length }, "Daily pipeline starting");
@@ -51,13 +70,13 @@ export async function runDailyPipeline(opts: DailyPipelineOptions): Promise<Dail
   };
 
   if (!opts.dryRun) {
-    await startIngestionRun({ runId, source: "yahoo-history", pipeline: "daily" });
+    await deps.startRun({ runId, source: "yahoo-history", pipeline: "daily" });
   }
 
   // Step 1: Fetch OHLCV from Yahoo
-  const fetchResults = await YahooHistory.fetch({
+  const fetchResults = await deps.fetchHistory({
     symbols: opts.symbols,
-    timeframes: ["1d"],
+    timeframes: [TIMEFRAME],
     backfillDays: opts.backfillDays ?? 365,
   });
 
@@ -65,7 +84,7 @@ export async function runDailyPipeline(opts: DailyPipelineOptions): Promise<Dail
   for (const fr of fetchResults) {
     if (fr.error) {
       result.symbolsFailed++;
-      await pushToDLQ({
+      await deps.pushToDLQ({
         source: "yahoo-history",
         pipeline: "daily",
         batchId: runId,
@@ -82,44 +101,40 @@ export async function runDailyPipeline(opts: DailyPipelineOptions): Promise<Dail
       continue;
     }
 
-    // Schema validation
-    const { valid: schemaValid, invalid: schemaInvalid } = validateOHLCVBatch(fr.rows);
-    result.validationRejected += schemaInvalid.length;
-
-    // Range validation
-    const { valid: rangeValid, violations } = validateOHLCVRanges(schemaValid);
-    result.validationRejected += schemaValid.length - rangeValid.length;
-
-    if (violations.length > 0) {
-      logger.warn({ symbol: fr.symbol, violations: violations.length }, "Range violations detected");
+    const { valid, rejected } = validateDailyBars(fr.rows);
+    result.validationRejected += rejected.length;
+    if (rejected.length > 0) {
+      logger.warn(
+        { symbol: fr.symbol, rejected: rejected.length, sample: rejected.slice(0, 3) },
+        "Daily bars rejected by validation",
+      );
     }
 
-    if (rangeValid.length === 0) {
+    if (valid.length === 0) {
       result.symbolsFailed++;
       continue;
     }
 
     if (!opts.dryRun) {
       try {
-        const writeResult = await coordinateOHLCVWrite(rangeValid, "yahoo-history", "daily", "1d", runId);
+        const writeResult = await deps.writeBars(valid, "yahoo-history", "daily", TIMEFRAME, runId);
         result.recordsInserted += writeResult.supabase.inserted;
 
         if (writeResult.supabase.failed > 0) {
-          await pushToDLQ({
+          await deps.pushToDLQ({
             source: "yahoo-history",
             pipeline: "daily",
             batchId: runId,
             symbol: fr.symbol,
             errorCode: "WRITE_FAILED",
-            errorMessage: `${writeResult.supabase.failed} rows failed to write to Supabase`,
-            rawPayload: { rowCount: rangeValid.length },
+            errorMessage: `${writeResult.supabase.failed} rows failed to write to candles`,
+            rawPayload: { rowCount: valid.length },
           });
           result.dlqPushed++;
         }
       } catch (err) {
         logger.error({ err, symbol: fr.symbol }, "Write coordinator failed");
         result.symbolsFailed++;
-        result.dlqPushed++;
         continue;
       }
     }
@@ -128,22 +143,24 @@ export async function runDailyPipeline(opts: DailyPipelineOptions): Promise<Dail
   }
 
   result.durationMs = Date.now() - startedAt.getTime();
+  result.status = result.symbolsFailed === 0 ? "success" : result.symbolsSucceeded > 0 ? "partial" : "failed";
 
   if (!opts.dryRun) {
-    await completeIngestionRun({
+    await deps.completeRun({
       runId,
-      status: result.symbolsFailed === 0 ? "success" : result.symbolsSucceeded > 0 ? "partial" : "failed",
+      status: result.status,
       symbolsAttempted: result.symbolsAttempted,
       symbolsSucceeded: result.symbolsSucceeded,
       symbolsFailed: result.symbolsFailed,
       recordsInserted: result.recordsInserted,
+      recordsRejected: result.validationRejected,
       startedAt,
     });
   }
 
   logger.info(
     result,
-    `Daily pipeline complete: ${result.symbolsSucceeded}/${result.symbolsAttempted} symbols, ${result.recordsInserted} records inserted`
+    `Daily pipeline complete: ${result.symbolsSucceeded}/${result.symbolsAttempted} symbols, ${result.recordsInserted} records inserted, ${result.validationRejected} rejected`
   );
 
   return result;

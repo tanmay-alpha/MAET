@@ -22,7 +22,7 @@ import {
   quoteSnapshots,
 } from "../db/schema";
 import { getCandles } from "../data/sources/yahoo";
-import { getFundamentals as fetchNSEFundamentals } from "../data/sources/nse";
+import { getFundamentals as fetchNSEFundamentals, type Fundamentals } from "../data/sources/nse";
 import { getNseCompanyMaster } from "../data/sources/nse-company-master";
 import { getYahooFundamentals } from "../data/sources/yahoo-fundamentals";
 import { resolveMarketSymbol } from "../domain/market/symbol";
@@ -94,6 +94,35 @@ const DEFAULT_SYMBOLS = [
 
 const DEFAULT_TIMEFRAMES: Candle["tf"][] = ["1d", "1wk"];
 const MAX_CONCURRENT = 4;
+
+/**
+ * The NSE quote page reports price-dependent ratios as observed now. It gives
+ * no fiscal period end and no filing or announcement date, so the row is a
+ * snapshot dated at the observation time with filing/availability unknown
+ * (null), never a fabricated quarter. One row per company per month; the
+ * first observation of the month is kept.
+ */
+export function nseFundamentalsSnapshotValues(
+  data: Fundamentals,
+  companyId: string,
+): typeof fundamentals.$inferInsert {
+  const observedAt = new Date(data.asOf);
+  return {
+    id: `${companyId}-${observedAt.toISOString().slice(0, 7)}`,
+    companyId,
+    periodDate: observedAt,
+    periodType: "snapshot",
+    filingDate: null,
+    availableFrom: null,
+    peRatio: data.pe?.toString(),
+    pbRatio: data.pb?.toString(),
+    roe: data.roe?.toString(),
+    marketCap: data.marketCap?.toString(),
+    dividendYield: data.dividendYield?.toString(),
+    source: "nse",
+    raw: data.raw,
+  };
+}
 
 export interface ProcessingStats {
   companiesSynced: number;
@@ -683,23 +712,9 @@ export class DailyProcessor {
           },
         });
 
-      // Upsert latest fundamentals snapshot
-      const fundId = `${companyId}-${now.toISOString().slice(0, 7)}`;
       await db
         .insert(fundamentals)
-        .values({
-          id: fundId,
-          companyId,
-          periodDate: now,
-          periodType: "quarterly",
-          peRatio: data.pe?.toString(),
-          pbRatio: data.pb?.toString(),
-          roe: data.roe?.toString(),
-          marketCap: data.marketCap?.toString(),
-          dividendYield: data.dividendYield?.toString(),
-          source: "nse",
-          raw: data.raw as any,
-        })
+        .values(nseFundamentalsSnapshotValues(data, companyId))
         .onConflictDoNothing();
 
       log.debug({ symbol, pe: data.pe, pb: data.pb }, "fundamentals synced");
