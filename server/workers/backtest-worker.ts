@@ -9,13 +9,15 @@
  */
 
 import { randomUUID } from "crypto";
+import { eq } from "drizzle-orm";
 import { db } from "../data/drizzle/client";
-import { strategyBacktestTrades, strategyEquityPoints, strategyPerformanceSnapshots } from "../db/schema";
+import { strategyBacktestJobs, strategyBacktestTrades, strategyEquityPoints, strategyPerformanceSnapshots } from "../db/schema";
 import * as jobs from "../modules/strategy-jobs/repository";
 import { JobCandleLimitError, loadJobCandles } from "../modules/strategy-jobs/candles";
 import { downsample } from "../modules/strategy-jobs/downsample";
 import { JobInterruptedError, type JobContext } from "../modules/strategy-jobs/job-context";
 import { runBacktestV3, InsufficientHistoryV3Error } from "../domain/strategy/runner-v3";
+import { buildRunMetadata } from "../modules/research-reports/run-metadata";
 
 const MAX_EQUITY_POINTS = 1000;
 
@@ -66,9 +68,19 @@ export async function runBacktestJob(job: jobs.BacktestJobRow, workerId: string,
     const m = result.metrics;
     const equitySample = downsample(result.equityCurve, MAX_EQUITY_POINTS);
     const runId = randomUUID();
+    // What the research run report needs to describe this run exactly: the server revision and the
+    // bars it consumed are only knowable now.
+    const runMetadata = buildRunMetadata({
+      symbols: [symbol],
+      candles: candleData,
+      engineVersion: result.engineVersion,
+      indicatorVersion: result.indicatorVersion,
+      feeModelVersion: result.feeModelVersion,
+    });
 
     await db.transaction(async (tx) => {
       if (!(await jobs.completeJob(tx, job.id, workerId, runId))) throw new JobInterruptedError("LEASE_LOST");
+      await tx.update(strategyBacktestJobs).set({ reproducibilityMetadata: runMetadata }).where(eq(strategyBacktestJobs.id, job.id));
 
       if (result.trades.length > 0) {
         await tx.insert(strategyBacktestTrades).values(

@@ -20,6 +20,7 @@ import { strategyOptimisationRouter } from "./routers/strategy-optimisation";
 import { strategyReplayRouter } from "./routers/strategy-replay";
 import { strategyDeploymentsRouter } from "./routers/strategy-deployments";
 import { optionsRouter } from "./routers/options";
+import { researchReportsRouter } from "./routers/research-reports";
 
 export const appRouter = createRouter({
   market: marketRouter,
@@ -44,6 +45,7 @@ export const appRouter = createRouter({
   strategyReplay: strategyReplayRouter,
   strategyDeployments: strategyDeploymentsRouter,
   options: optionsRouter,
+  researchReports: researchReportsRouter,
 });
 
 export type AppRouter = typeof appRouter;

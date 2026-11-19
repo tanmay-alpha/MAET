@@ -57,6 +57,7 @@ const systemItems = [
 
 const strategyItems = [
   { title: "Strategy Lab", url: "/strategies", icon: FlaskConical },
+  { title: "Run reports", url: "/research/reports", icon: ClipboardList },
   { title: "Performance", url: "/performance", icon: BarChart2 },
   { title: "Bar Replay", url: "/replay", icon: Play },
   { title: "Payoff Lab", url: "/payoff", icon: LineChart },
