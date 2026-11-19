@@ -38,7 +38,8 @@ __root.tsx                                # App root shell: HTML, meta, theme sc
 │   ├── _app.news.tsx                     # Sample headlines (no market news feed connected) (/news)
 │   ├── _app.settings.tsx                 # Theme, shortcuts, browser data (/settings)
 │   ├── _app.workspace.tsx                # Workspace manager (/workspace)
-│   └── _app.admin.data-quality.tsx       # Public data status (backend health, quote source) + admin ingestion audits (/admin/data-quality)
+│   ├── _app.data-quality.tsx             # Public market-data quality: candle freshness, gaps, invalid bars, quotes, pipeline gaps (/data-quality)
+│   └── _app.admin.data-quality.tsx       # Data status: backend health, quote source + admin reliability (job queues, ingestion runs, DLQ) (/admin/data-quality)
 ```
 
 ---
