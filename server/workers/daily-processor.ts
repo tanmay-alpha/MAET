@@ -32,7 +32,7 @@ import { classifyByMarketCapRank } from "../domain/fundamentals/classification";
 import { calculateFundamentalRatios } from "../domain/fundamentals/ratios";
 import { runCorporateActionIngestion, TRACKED_CORPORATE_ACTION_SYMBOLS } from "../modules/corporate-actions/ingest";
 import type { Candle } from "@shared/types";
-import { sql } from "drizzle-orm";
+import { lt, sql } from "drizzle-orm";
 
 export type DailyProcessorOptions = {
   /** Symbols to process. Defaults to NSE Nifty 50 constituents. */
@@ -784,7 +784,7 @@ export class DailyProcessor {
     try {
       await db
         .delete(candles)
-        .where(sql`${candles.ts} < ${cutoff}`);
+        .where(lt(candles.ts, cutoff));
 
       log.info({ cutoff }, "stale candle data cleaned up");
     } catch (err) {
