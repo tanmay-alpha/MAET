@@ -1,51 +1,32 @@
-import { createRouter, adminProcedure } from "../core";
+import { createRouter, adminProcedure, publicProcedure } from "../core";
 import { z } from "zod";
+import { DATA_QUALITY_UNIVERSES } from "../../../modules/data-quality/contracts";
 import {
-  getDataQualityOverview,
-  listAudits,
-  listAnomalies,
-  resolveAnomaly,
-  suppressAnomaly,
+  getDataQualityReport,
+  getRecentIngestionBatches,
+  getReliabilityReport,
   retryBatch,
-  getDataCoverage,
 } from "../../../modules/data-quality/service";
 
 export const dataQualityRouter = createRouter({
-  getOverview: adminProcedure.query(async () => {
-    return await getDataQualityOverview();
+  /** Market-data freshness and completeness for a bounded universe. Aggregates only: no user data. */
+  getPublicReport: publicProcedure
+    .input(z.object({ universe: z.enum(DATA_QUALITY_UNIVERSES).default("nifty50") }).strict().optional())
+    .query(async ({ input }) => {
+      return await getDataQualityReport(input?.universe ?? "nifty50");
+    }),
+
+  getReliability: adminProcedure.query(async () => {
+    return await getReliabilityReport();
   }),
 
-  listAudits: adminProcedure
-    .input(z.object({ limit: z.number().int().positive().max(50).default(20) }).optional())
-    .query(async ({ input }) => {
-      return await listAudits(input?.limit ?? 20);
-    }),
-
-  listAnomalies: adminProcedure
-    .input(z.object({ limit: z.number().int().positive().max(50).default(20) }).optional())
-    .query(async ({ input }) => {
-      return await listAnomalies(input?.limit ?? 20);
-    }),
-
-  resolveAnomaly: adminProcedure
-    .input(z.object({ anomalyId: z.string().uuid(), resolutionNote: z.string().optional() }).strict())
-    .mutation(async ({ input, ctx }) => {
-      return await resolveAnomaly(input.anomalyId, ctx.userId, input.resolutionNote);
-    }),
-
-  suppressAnomaly: adminProcedure
-    .input(z.object({ anomalyId: z.string().uuid() }).strict())
-    .mutation(async ({ input }) => {
-      return await suppressAnomaly(input.anomalyId);
-    }),
+  getOverview: adminProcedure.query(async () => {
+    return await getRecentIngestionBatches();
+  }),
 
   retryBatch: adminProcedure
     .input(z.object({ batchId: z.string().min(1) }).strict())
     .mutation(async ({ input }) => {
       return await retryBatch(input.batchId);
     }),
-
-  getCoverage: adminProcedure.query(async () => {
-    return await getDataCoverage();
-  }),
 });
