@@ -29,8 +29,10 @@ Manual/full: `bun run scripts/smoke-deploy.ts --sha <commit>` checks both tiers 
 ## Vercel preview quota
 
 Vercel project setting **Ignored Build Step** = `if [ -f scripts/vercel-ignore-build.sh ]; then bash scripts/vercel-ignore-build.sh; else exit 1; fi` (set via the Vercel API on 2026-11-10). Vercel treats any exit code other than 0/1 as a failed deployment, so a branch created before the script existed (exit 127) failed its preview until the guard was added.
-Production always builds; previews build only if `src/`, `shared/`, `package.json`, `bun.lock` or `tsconfig.json`
-changed since the branch's previous deployment. A `src/vercel.json` was tried first and broke SSR packaging
+Production always builds. Previews build only when the commit message contains `[preview]`
+(since 2026-11-19). The earlier rule built a preview whenever frontend inputs changed, and on
+2026-11-19 the Hobby quota ran out again (`Deployment rate limited — retry in 24 hours` on PR #84's preview).
+Previews have no backend anyway (OPS-6), and CI builds the frontend and runs Playwright on every PR. A `src/vercel.json` was tried first and broke SSR packaging
 (every page 500, `ERR_PACKAGE_IMPORT_NOT_DEFINED #tanstack-router-entry`); it was removed before merge.
 
 Previews have no `VITE_API_URL` (the variable exists only for Production), so preview pages cannot reach a
