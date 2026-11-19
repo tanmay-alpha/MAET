@@ -438,6 +438,17 @@ the tradebook import, Payoff Lab, World Monitor, the in-app error panel, chart s
 layout at 360/768/1440 px (screenshots of `/login` and `/portfolio` go to `test-results/screenshots/`), each on one
 desktop and one mobile viewport unless noted.
 
+### Load and Deployment Checks
+```bash
+# Bounded read-only load test against a LOCAL or staging backend (refuses the production hosts)
+bun run scripts/load-test.ts --base http://127.0.0.1:3000 --concurrency 20 --requests 1000
+
+# Read-only smoke test of a deployment: revision on both tiers, readiness, CORS, auth boundary, DB query, quotes
+bun run scripts/smoke-deploy.ts --sha <commit>
+```
+
+Measured results and every suite's counts are recorded in [docs/test-evidence.md](docs/test-evidence.md).
+
 ### Production Builds
 ```bash
 # Build frontend bundle
