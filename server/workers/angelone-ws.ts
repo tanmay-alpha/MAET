@@ -10,6 +10,26 @@ const WS_URL = "wss://smartapisocket.angelone.in/smart-stream";
 const MAX_RECONNECT_ATTEMPTS = 10;
 const HEARTBEAT_MS = 30_000;
 
+/**
+ * SmartAPI WebSocket 2.0 allows 1,000 token subscriptions per WebSocket session (one per
+ * token and mode; we subscribe mode 2 only), and rejects requests beyond it with E1002
+ * "Subscription Limit Exceeded". Callers pass tokens in priority order; anything past
+ * the limit is dropped here rather than sent.
+ */
+export const ANGEL_ONE_MAX_TOKENS_PER_SESSION = 1_000;
+
+/** Distinct tokens in caller order, cut at the per-session limit. */
+function capTokens(tokens: string[]): string[] {
+  const distinct = [...new Set(tokens)];
+  if (distinct.length > ANGEL_ONE_MAX_TOKENS_PER_SESSION) {
+    getLog().warn(
+      { requested: distinct.length, limit: ANGEL_ONE_MAX_TOKENS_PER_SESSION },
+      "Angel One token subscriptions exceed the per-session limit; dropping the lowest-priority tokens"
+    );
+  }
+  return distinct.slice(0, ANGEL_ONE_MAX_TOKENS_PER_SESSION);
+}
+
 type UserState = {
   session: AngelOneSession;
   tokens: string[];
@@ -92,7 +112,7 @@ export class AngelOneWorker {
 
   manageUser(userId: string, session: AngelOneSession, tokens: string[]): void {
     this.dropUser(userId);
-    this.users.set(userId, { session, tokens, reconnectAttempts: 0 });
+    this.users.set(userId, { session, tokens: capTokens(tokens), reconnectAttempts: 0 });
     if (!this.stopped) this.connect(userId);
   }
 
@@ -100,8 +120,9 @@ export class AngelOneWorker {
     const state = this.users.get(userId);
     if (!state) return;
     const previous = new Set(state.tokens);
-    const next = new Set(tokens);
+    const next = new Set(capTokens(tokens));
     state.tokens = [...next];
+    // Unsubscribes go first, so the freed slots are available to the new subscriptions.
     // A socket that is still connecting subscribes to `state.tokens` on open.
     const connection = this.connections.get(userId);
     if (!connection?.open) return;

@@ -1,7 +1,7 @@
 import { CandleWriter } from "./workers/candle-writer";
 import { MarketClockWorker } from "./workers/market-clock";
 import { ScreenerRunner } from "./workers/screener-runner";
-import { AngelOneWorker } from "./workers/angelone-ws";
+import { ANGEL_ONE_MAX_TOKENS_PER_SESSION, AngelOneWorker } from "./workers/angelone-ws";
 import { OrderMatcherWorker } from "./workers/order-matcher";
 import { DAILY_PROCESSOR_LOCK_TTL_MS, DailyProcessorSchedule } from "./workers/daily-processor-schedule";
 import { ReloginBackoff } from "./workers/relogin-backoff";
@@ -24,15 +24,33 @@ import { alertEvaluatorWorker } from "./workers/alert-evaluator";
 import type { QuoteSnapshot } from "./modules/alerts/evaluator";
 import { listActiveAlertSymbols } from "./modules/alerts/repository";
 import { startOutboxPublisherWorker, stopOutboxPublisherWorker } from "./workers/paper-outbox-publisher";
-import { PaperInterestSubscriptions } from "./modules/paper-trading/interest-subscriptions";
+import { listPaperInterest, PaperInterestSubscriptions } from "./modules/paper-trading/interest-subscriptions";
+
+/**
+ * Who asked for a symbol on the live feed. The Angel One session takes at most
+ * ANGEL_ONE_MAX_TOKENS_PER_SESSION tokens; when demand exceeds that, paper trading
+ * (resting orders must see ticks to fill; positions are margin-monitored) goes first,
+ * then price alerts, then anonymous market-stream viewers in the order they subscribed.
+ * A viewer whose symbol misses the budget still has the REST quote poll.
+ */
+export type FeedSource = "paper" | "alert" | "stream";
+const FEED_PRIORITY: readonly FeedSource[] = ["paper", "alert", "stream"];
 
 const angelOne = new AngelOneWorker();
 const candleWriter = new CandleWriter();
 const marketClock = new MarketClockWorker();
 const screenerRunner = new ScreenerRunner();
-const orderMatcher = new OrderMatcherWorker();
-const subscriptionRefs = new Map<string, number>();
-const alertSubscriptionSymbols = new Set<string>();
+/** EXCHANGE:SYMBOL with a working paper order (current generations), from the last paper-interest read. */
+let workingOrderKeys = new Set<string>();
+const orderMatcher = new OrderMatcherWorker({
+  hasWorkingOrders: (exchange, symbol) => workingOrderKeys.has(`${exchange}:${symbol}`),
+});
+/** Reference counts per source; Map order is first-subscription order (the tie-break within a source). */
+const subscriptionRefs: Record<FeedSource, Map<string, number>> = {
+  paper: new Map(),
+  alert: new Map(),
+  stream: new Map(),
+};
 let started = false;
 let angelRetryTimer: ReturnType<typeof setTimeout> | undefined;
 let angelDailyLoginTimer: ReturnType<typeof setTimeout> | undefined;
@@ -60,8 +78,18 @@ function errorMessage(error: unknown): string {
 // Keeps symbols with working paper orders or open positions on the live feed,
 // so resting orders can fill and positions are marked without any viewer.
 const paperInterest = new PaperInterestSubscriptions({
-  subscribe: subscribeSymbol,
-  unsubscribe: unsubscribeSymbol,
+  subscribe: (symbol) => subscribeSymbol(symbol, "paper"),
+  unsubscribe: (symbol) => unsubscribeSymbol(symbol, "paper"),
+  // The same read also tells the order matcher which symbols can have a resting order to match.
+  fetchInterest: async () => {
+    const rows = await listPaperInterest();
+    workingOrderKeys = new Set(
+      rows
+        .filter((row) => row.kind === "ORDER")
+        .map((row) => `${row.exchange.trim().toUpperCase()}:${row.symbol.trim().toUpperCase()}`)
+    );
+    return rows;
+  },
   log: {
     info: (fields, message) => log().info(fields, message),
     warn: (fields, message) => log().warn(fields, message),
@@ -69,11 +97,15 @@ const paperInterest = new PaperInterestSubscriptions({
   },
 });
 
-function activeAngelTokens(): string[] {
+/** Feed tokens in priority order, at most ANGEL_ONE_MAX_TOKENS_PER_SESSION of them (what the Angel One session subscribes). */
+export function activeAngelTokens(): string[] {
   const tokens = new Set<string>();
-  for (const symbol of subscriptionRefs.keys()) {
-    const info = lookupSymbol("NSE", symbol) ?? lookupSymbol("BSE", symbol);
-    if (info?.token) tokens.add(String(info.token));
+  for (const source of FEED_PRIORITY) {
+    for (const symbol of subscriptionRefs[source].keys()) {
+      if (tokens.size >= ANGEL_ONE_MAX_TOKENS_PER_SESSION) return Array.from(tokens);
+      const info = lookupSymbol("NSE", symbol) ?? lookupSymbol("BSE", symbol);
+      if (info?.token) tokens.add(String(info.token));
+    }
   }
   return Array.from(tokens);
 }
@@ -166,22 +198,19 @@ export async function reconcileAlertSubscriptions(fetchActiveSymbols = listActiv
   try {
     const activeSymbols = await fetchActiveSymbols();
     const currentActive = new Set(activeSymbols.map((s) => s.toUpperCase()));
+    const alertRefs = subscriptionRefs.alert;
+    let changed = false;
 
-    // 1. Subscribe newly active symbols
+    // 1. Subscribe newly active symbols (one alert reference per symbol)
     for (const s of currentActive) {
-      if (!alertSubscriptionSymbols.has(s)) {
-        subscribeSymbol(s);
-        alertSubscriptionSymbols.add(s);
-      }
+      if (!alertRefs.has(s)) changed = addRef(s, "alert") || changed;
     }
 
     // 2. Unsubscribe symbols no longer backed by active alerts
-    for (const s of alertSubscriptionSymbols) {
-      if (!currentActive.has(s)) {
-        unsubscribeSymbol(s);
-        alertSubscriptionSymbols.delete(s);
-      }
+    for (const s of [...alertRefs.keys()]) {
+      if (!currentActive.has(s)) changed = removeRef(s, "alert") || changed;
     }
+    if (changed) syncAngelSubscriptions();
   } catch (err) {
     console.error("[Orchestrator] Alert subscription reconciliation failed:", err);
   }
@@ -189,12 +218,15 @@ export async function reconcileAlertSubscriptions(fetchActiveSymbols = listActiv
 
 /**
  * Runs per-tick alert evaluation without letting a rejection (e.g. a Postgres hiccup while
- * loading alerts) escape the bus handler as an unhandled rejection.
+ * loading alerts) escape the bus handler as an unhandled rejection. Only symbols with an
+ * active alert (as of the last reconcile, every 10 s) reach the database: every other
+ * streamed symbol would otherwise cost an alerts query per tick.
  */
 export async function evaluateTickAlerts(
   tick: Tick,
   processQuote: (quote: QuoteSnapshot) => Promise<unknown> = (quote) => alertEvaluatorWorker.processQuote(quote),
 ): Promise<void> {
+  if (!subscriptionRefs.alert.has(tick.symbol.toUpperCase())) return;
   try {
     await processQuote({
       symbol: tick.symbol,
@@ -300,11 +332,12 @@ export async function stopOrchestrator(): Promise<void> {
   await alertEvaluatorWorker.stop();
 
   // Release the feed subscriptions owned by alerts and paper trading.
-  for (const s of alertSubscriptionSymbols) {
-    unsubscribeSymbol(s);
+  if (subscriptionRefs.alert.size > 0) {
+    subscriptionRefs.alert.clear();
+    syncAngelSubscriptions();
   }
-  alertSubscriptionSymbols.clear();
   paperInterest.stop();
+  workingOrderKeys = new Set();
 
   await angelOne.stop();
   screenerRunner.stop();
@@ -314,44 +347,58 @@ export async function stopOrchestrator(): Promise<void> {
   marketDataMultiplexer.stop();
 }
 
-export function subscribeSymbol(symbol: string): void {
+/** Adds one reference; true when the symbol is new for this source (the token order may change). */
+function addRef(symbol: string, source: FeedSource): boolean {
   const s = symbol.toUpperCase();
-  const count = subscriptionRefs.get(s) ?? 0;
-  subscriptionRefs.set(s, count + 1);
-  if (count === 0) {
-    syncAngelSubscriptions();
-  }
+  const refs = subscriptionRefs[source];
+  const count = refs.get(s) ?? 0;
+  refs.set(s, count + 1);
+  return count === 0;
 }
 
-export function unsubscribeSymbol(symbol: string): void {
+/** Drops one reference; true when the source no longer holds the symbol. */
+function removeRef(symbol: string, source: FeedSource): boolean {
   const s = symbol.toUpperCase();
-  const count = subscriptionRefs.get(s) ?? 0;
-  if (count <= 1) {
-    subscriptionRefs.delete(s);
-    syncAngelSubscriptions();
-  } else {
-    subscriptionRefs.set(s, count - 1);
+  const refs = subscriptionRefs[source];
+  const count = refs.get(s);
+  if (count === undefined) return false;
+  if (count > 1) {
+    refs.set(s, count - 1);
+    return false;
   }
+  refs.delete(s);
+  return true;
 }
 
+export function subscribeSymbol(symbol: string, source: FeedSource = "stream"): void {
+  if (addRef(symbol, source)) syncAngelSubscriptions();
+}
+
+export function unsubscribeSymbol(symbol: string, source: FeedSource = "stream"): void {
+  if (removeRef(symbol, source)) syncAngelSubscriptions();
+}
+
+/** A market-stream connection's symbols; one feed update for the whole set, and one on release. */
 export function subscribeMarketSymbols(symbols: string[]): () => void {
-  for (const s of symbols) {
-    subscribeSymbol(s);
-  }
+  let changed = false;
+  for (const s of symbols) changed = addRef(s, "stream") || changed;
+  if (changed) syncAngelSubscriptions();
   return () => {
-    for (const s of symbols) {
-      unsubscribeSymbol(s);
-    }
+    let released = false;
+    for (const s of symbols) released = removeRef(s, "stream") || released;
+    if (released) syncAngelSubscriptions();
   };
 }
 
 // Test/inspection helpers
+/** References on a symbol across every source. */
 export function getSubscriptionRefCount(symbol: string): number {
-  return subscriptionRefs.get(symbol.toUpperCase()) ?? 0;
+  const s = symbol.toUpperCase();
+  return FEED_PRIORITY.reduce((total, source) => total + (subscriptionRefs[source].get(s) ?? 0), 0);
 }
 
 export function getAlertSubscriptionSymbols(): string[] {
-  return Array.from(alertSubscriptionSymbols);
+  return Array.from(subscriptionRefs.alert.keys());
 }
 
 /** Re-reads working paper orders and open positions and updates their feed subscriptions. */
@@ -365,6 +412,6 @@ export function getPaperInterestSymbols(): string[] {
 
 export function resetSubscriptionRefsForTesting(): void {
   paperInterest.stop();
-  subscriptionRefs.clear();
-  alertSubscriptionSymbols.clear();
+  for (const source of FEED_PRIORITY) subscriptionRefs[source].clear();
+  workingOrderKeys = new Set();
 }
