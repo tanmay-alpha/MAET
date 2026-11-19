@@ -10,38 +10,65 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, protectedProcedure } from "../core";
 import { db } from "../../../data/drizzle/client";
 import { strategyReplaySessions, candles } from "../../../db/schema";
-import { eq, and, desc, asc, lte, gte, gt } from "drizzle-orm";
+import { eq, and, desc, asc, lte, gte, gt, sql, count } from "drizzle-orm";
 import { CreateReplayInputSchema } from "../../../../shared/strategy/contracts";
 
 /** Largest quantity a single replay order may carry. */
 export const MAX_REPLAY_ORDER_QTY = 1_000_000;
 /** Pending orders a single replay session may hold at once. */
 export const MAX_REPLAY_OPEN_ORDERS = 50;
+/**
+ * Orders of any status a session may store. Each order fills at most once and
+ * each fill adds one ledger entry, so this also bounds fills (<= orders) and
+ * the ledger (<= fills + 1). `reset` clears all three.
+ */
+export const MAX_REPLAY_STORED_ORDERS = 1_000;
+/** ACTIVE replay sessions a user may hold at once; `close` frees a slot. */
+export const MAX_ACTIVE_REPLAY_SESSIONS = 10;
 
 type ReplayTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type ReplaySessionRow = typeof strategyReplaySessions.$inferSelect;
+
+/** Postgres `lock_not_available`, raised when `lock_timeout` expires; drizzle wraps it in `cause`. */
+function isLockTimeout(error: unknown): boolean {
+  for (let current = error, depth = 0; current && typeof current === "object" && depth < 5; depth++) {
+    if ("code" in current && current.code === "55P03") return true;
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
+}
 
 /**
  * Runs a read-modify-write of a replay session's JSONB state under a row lock.
  * step, placeOrder, cancelOrder and reset each rewrite the whole `state`
  * document, so without the lock a concurrent step + placeOrder would let the
- * later writer drop the other's orders/fills.
+ * later writer drop the other's orders/fills. The timeouts stop a stuck holder
+ * from parking callers (and connections from the small pool) indefinitely.
  */
-function withLockedSession<T>(
+async function withLockedSession<T>(
   sessionId: string,
   userId: string,
   fn: (tx: ReplayTx, session: ReplaySessionRow) => Promise<T>,
 ): Promise<T> {
-  return db.transaction(async (tx) => {
-    const [session] = await tx
-      .select()
-      .from(strategyReplaySessions)
-      .where(and(eq(strategyReplaySessions.id, sessionId), eq(strategyReplaySessions.userId, userId)))
-      .limit(1)
-      .for("update");
-    if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Replay session not found" });
-    return fn(tx, session);
-  });
+  try {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '2s'`);
+      await tx.execute(sql`SET LOCAL statement_timeout = '5s'`);
+      const [session] = await tx
+        .select()
+        .from(strategyReplaySessions)
+        .where(and(eq(strategyReplaySessions.id, sessionId), eq(strategyReplaySessions.userId, userId)))
+        .limit(1)
+        .for("update");
+      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Replay session not found" });
+      return fn(tx, session);
+    });
+  } catch (error) {
+    if (isLockTimeout(error)) {
+      throw new TRPCError({ code: "CONFLICT", message: "Replay session is busy, retry", cause: error });
+    }
+    throw error;
+  }
 }
 
 export const strategyReplayRouter = createRouter({
@@ -86,23 +113,38 @@ export const strategyReplayRouter = createRouter({
         ],
       };
 
-      const [session] = await db
-        .insert(strategyReplaySessions)
-        .values({
-          userId: ctx.userId!,
-          symbol: input.symbol,
-          timeframe: input.timeframe,
-          startTimestamp: firstCandle.ts,
-          currentBarTimestamp: firstCandle.ts,
-          barsRevealed: 1,
-          initialCapital: initialCapital.toFixed(4),
-          currentEquity: initialCapital.toFixed(4),
-          state: initialState as any,
-          status: "ACTIVE",
-        })
-        .returning();
+      return db.transaction(async (tx) => {
+        // Serialise this user's creates so concurrent calls cannot all pass the count.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`replay-sessions:${ctx.userId!}`}))`);
+        const [{ active }] = await tx
+          .select({ active: count() })
+          .from(strategyReplaySessions)
+          .where(and(eq(strategyReplaySessions.userId, ctx.userId!), eq(strategyReplaySessions.status, "ACTIVE")));
+        if (active >= MAX_ACTIVE_REPLAY_SESSIONS) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `You can have at most ${MAX_ACTIVE_REPLAY_SESSIONS} active replay sessions; close one first`,
+          });
+        }
 
-      return { session };
+        const [session] = await tx
+          .insert(strategyReplaySessions)
+          .values({
+            userId: ctx.userId!,
+            symbol: input.symbol,
+            timeframe: input.timeframe,
+            startTimestamp: firstCandle.ts,
+            currentBarTimestamp: firstCandle.ts,
+            barsRevealed: 1,
+            initialCapital: initialCapital.toFixed(4),
+            currentEquity: initialCapital.toFixed(4),
+            state: initialState as any,
+            status: "ACTIVE",
+          })
+          .returning();
+
+        return { session };
+      });
     }),
 
   /** Step forward one bar — reveals exactly one next candle and processes pending replay orders */
@@ -281,6 +323,12 @@ export const strategyReplayRouter = createRouter({
           message: `A replay session can hold at most ${MAX_REPLAY_OPEN_ORDERS} open orders`,
         });
       }
+      if (orders.length >= MAX_REPLAY_STORED_ORDERS) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `A replay session can store at most ${MAX_REPLAY_STORED_ORDERS} orders; reset the session to continue`,
+        });
+      }
       const newOrder = {
         id: crypto.randomUUID(),
         symbol: session.symbol,
@@ -309,10 +357,14 @@ export const strategyReplayRouter = createRouter({
   cancelOrder: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid(), orderId: z.string().uuid() }).strict())
     .mutation(async ({ ctx, input }) => withLockedSession(input.sessionId, ctx.userId!, async (tx, session) => {
+      if (session.status !== "ACTIVE") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Session is not active" });
       const state = (session.state as any) ?? { orders: [], fills: [], positions: [], ledger: [] };
       const orders = state.orders ?? [];
       const order = orders.find((o: any) => o.id === input.orderId);
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Replay order not found" });
+      if (order.status !== "PENDING") {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Only pending orders can be cancelled; this order is ${order.status}` });
+      }
 
       order.status = "CANCELLED";
 

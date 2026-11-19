@@ -3,7 +3,13 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, getSqlClient } from "../../../data/drizzle/client";
 import { strategyReplaySessions } from "../../../db/schema";
-import { MAX_REPLAY_OPEN_ORDERS, MAX_REPLAY_ORDER_QTY, strategyReplayRouter } from "./strategy-replay";
+import {
+  MAX_ACTIVE_REPLAY_SESSIONS,
+  MAX_REPLAY_OPEN_ORDERS,
+  MAX_REPLAY_ORDER_QTY,
+  MAX_REPLAY_STORED_ORDERS,
+  strategyReplayRouter,
+} from "./strategy-replay";
 
 async function setup(bars = 5) {
   const userId = crypto.randomUUID();
@@ -21,7 +27,7 @@ async function setup(bars = 5) {
   }
   const caller = strategyReplayRouter.createCaller({ userId, email: null, role: "user" });
   const { session } = await caller.create({ symbol, timeframe: "1d", startTimestamp: new Date(start).toISOString() });
-  return { caller, sessionId: session.id };
+  return { caller, sessionId: session.id, userId, symbol, startTimestamp: new Date(start).toISOString() };
 }
 
 async function loadSession(id: string) {
@@ -123,5 +129,81 @@ describe("strategy replay router (Postgres)", () => {
     expect(before.status).toBe("ACTIVE");
     expect(before.barsRevealed).toBe(2);
     expect(orderIds(before)).toEqual([order.id]);
+  }, 30_000);
+
+  it("caps stored orders per session, including filled and cancelled ones", async () => {
+    const { caller, sessionId } = await setup();
+    const seeded = Array.from({ length: MAX_REPLAY_STORED_ORDERS }, () => ({ id: crypto.randomUUID(), status: "CANCELLED" }));
+    const row = await loadSession(sessionId);
+    await getDb()
+      .update(strategyReplaySessions)
+      .set({ state: { ...PersistedOrders.passthrough().parse(row.state), orders: seeded } })
+      .where(eq(strategyReplaySessions.id, sessionId));
+    await expect(
+      caller.placeOrder({ sessionId, side: "BUY", type: "LIMIT", qty: 1, limitPrice: 1 }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining(`${MAX_REPLAY_STORED_ORDERS} orders`) });
+    expect(orderIds(await loadSession(sessionId))).toHaveLength(MAX_REPLAY_STORED_ORDERS);
+  }, 30_000);
+
+  it("caps ACTIVE sessions per user, even when creates race", async () => {
+    const { caller, sessionId, userId, symbol, startTimestamp } = await setup();
+    const results = await Promise.allSettled(
+      Array.from({ length: MAX_ACTIVE_REPLAY_SESSIONS + 2 }, () => caller.create({ symbol, timeframe: "1d", startTimestamp })),
+    );
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(MAX_ACTIVE_REPLAY_SESSIONS - 1);
+    for (const result of results) {
+      if (result.status === "rejected") expect(result.reason).toMatchObject({ code: "PRECONDITION_FAILED" });
+    }
+    const active = await getSqlClient()`
+      SELECT count(*)::int AS n FROM public.strategy_replay_sessions WHERE user_id = ${userId} AND status = 'ACTIVE'
+    `;
+    expect(active[0]!.n).toBe(MAX_ACTIVE_REPLAY_SESSIONS);
+
+    // Closing a session frees a slot.
+    await caller.close({ sessionId });
+    await caller.create({ symbol, timeframe: "1d", startTimestamp });
+  }, 30_000);
+
+  it("only cancels pending orders on active sessions", async () => {
+    const { caller, sessionId } = await setup();
+    const { order: filled } = await caller.placeOrder({ sessionId, side: "BUY", type: "MARKET", qty: 1 });
+    await caller.step({ sessionId });
+    await expect(caller.cancelOrder({ sessionId, orderId: filled.id })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect((await caller.listOrders({ sessionId })).orders).toMatchObject([{ id: filled.id, status: "FILLED" }]);
+
+    const { order: pending } = await caller.placeOrder({ sessionId, side: "BUY", type: "LIMIT", qty: 1, limitPrice: 1 });
+    await caller.close({ sessionId });
+    await expect(caller.cancelOrder({ sessionId, orderId: pending.id })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect((await caller.listOrders({ sessionId })).orders).toMatchObject([{ status: "FILLED" }, { id: pending.id, status: "PENDING" }]);
+  }, 30_000);
+
+  it("returns CONFLICT within the lock timeout when another transaction holds the session", async () => {
+    const { caller, sessionId } = await setup();
+    const acquired = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    // A real Postgres lock wait is under test, so the holder needs a real-time
+    // bound: without lock_timeout, step would otherwise wait for the holder forever.
+    const safetyRelease = setTimeout(release.resolve, 4_000);
+    const holder = getSqlClient().begin(async (tx) => {
+      await tx`SELECT id FROM public.strategy_replay_sessions WHERE id = ${sessionId} FOR UPDATE`;
+      acquired.resolve();
+      await release.promise;
+    });
+    try {
+      await acquired.promise;
+      const startedAt = performance.now();
+      const outcome = await caller.step({ sessionId }).then(
+        () => ({ code: "OK" }),
+        (error: unknown) => ({ code: error instanceof Error && "code" in error ? error.code : String(error) }),
+      );
+      const elapsed = performance.now() - startedAt;
+      expect(outcome).toEqual({ code: "CONFLICT" });
+      expect(elapsed).toBeLessThan(3_500);
+    } finally {
+      clearTimeout(safetyRelease);
+      release.resolve();
+      await holder;
+    }
+    expect((await loadSession(sessionId)).barsRevealed).toBe(1);
   }, 30_000);
 });
