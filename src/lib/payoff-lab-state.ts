@@ -5,16 +5,14 @@
  * Inputs stay strings while the user types; only validated numbers reach the URL, and a
  * leg's fields are kept as typed so a template with blank premiums survives a reload.
  */
-import { z } from "zod";
 import { indexContractDefaults } from "@shared/domain/options/index-contracts";
 import type { Instrument, Leg, Side } from "@shared/domain/options/payoff";
+import { MAX_LEGS, isCalendarDate, parsePayoffSearch, type PayoffSearch } from "./payoff-search";
 
 export const PAYOFF_LAB_STORAGE_KEY = "maet:payoff-lab";
 export const DEFAULT_SYMBOL = "NIFTY";
 export const DEFAULT_RATE_PCT = 6.5;
 export const DEFAULT_IV_PCT = 14;
-export const MAX_LEGS = 12;
-export const IV_SHIFT_LIMIT = 10;
 
 export interface ContractDraft {
   symbol: string;
@@ -81,42 +79,7 @@ export interface LabValidation {
   lab: ValidLab | null;
 }
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** A real YYYY-MM-DD day: engines disagree on "2026-02-30" (rolled into March, or NaN). */
-function isCalendarDate(value: string): boolean {
-  if (!ISO_DATE.test(value)) return false;
-  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
-
 const NUMERIC_DRAFT = /^\d{0,9}(\.\d{0,4})?$/;
-
-const payoffSearchSchema = z.object({
-  sym: z
-    .string()
-    .trim()
-    .toUpperCase()
-    .regex(/^[A-Z0-9&.-]{1,20}$/)
-    .optional()
-    .catch(undefined),
-  spot: z.coerce.number().finite().positive().optional().catch(undefined),
-  lot: z.coerce.number().int().positive().optional().catch(undefined),
-  step: z.coerce.number().finite().positive().optional().catch(undefined),
-  exp: z.string().refine(isCalendarDate).optional().catch(undefined),
-  r: z.coerce.number().min(0).max(50).optional().catch(undefined),
-  iv: z.coerce.number().positive().max(300).optional().catch(undefined),
-  legs: z.string().max(MAX_LEGS * 48).optional().catch(undefined),
-  ivs: z.coerce.number().min(-IV_SHIFT_LIMIT).max(IV_SHIFT_LIMIT).optional().catch(undefined),
-});
-
-export type PayoffSearch = z.infer<typeof payoffSearchSchema>;
-
-/** The route's search schema: invalid values are dropped, never thrown. */
-export function parsePayoffSearch(search: Record<string, unknown>): PayoffSearch {
-  return payoffSearchSchema.parse(search);
-}
 
 // Legs travel as "B_CE_24000_1_120~S_PE_23800_1_": side, instrument, strike, lots, premium.
 const SIDE_CODE = { buy: "B", sell: "S" } as const;

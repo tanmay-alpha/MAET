@@ -5,7 +5,7 @@
  *
  * Each result also stores its per-bar returns summarised into CSCV blocks (`returnBlocks`, the same
  * contiguous blocks for every combination), from which strategyOptimisation.getSweep computes the
- * probability of backtest overfitting.
+ * probability of backtest overfitting. Its `warnings` are the backtest's (e.g. CORPORATE_ACTIONS_IN_WINDOW).
  *
  * The job runner (server/modules/strategy-jobs/runner.ts) claims the row, heartbeats it and owns
  * shutdown / time-budget handling; `ctx.checkpoint()` after each backtest lets it interrupt the sweep
@@ -26,6 +26,7 @@ import {
 import { cscvBlockCount } from "../domain/strategy/robustness";
 import type { StrategyDefinition } from "../../shared/strategy/ast";
 import { loadJobCandles } from "../modules/strategy-jobs/candles";
+import { loadCorporateActions } from "../modules/corporate-actions/repository";
 import { JobInterruptedError, type JobContext } from "../modules/strategy-jobs/job-context";
 import { failSweep } from "../modules/strategy-optimisation/repository";
 import { equityReturnBlocks } from "../modules/strategy-optimisation/sweep-robustness";
@@ -57,6 +58,14 @@ export async function runSweepJob(sweepId: string, ctx: JobContext): Promise<voi
     const candleData = await loadJobCandles(sweep.symbolOrUniverse, sweep.timeframe, sweep.fromDate, sweep.toDate);
     if (candleData.length < 50) throw new Error(`Insufficient candle history: ${candleData.length} bars, need at least 50`);
 
+    // Stored candles do not reflect these (see runner-v3 unappliedCorporateActions); every
+    // combination runs on the same window, so they are loaded once.
+    const unappliedCorporateActions = await loadCorporateActions(
+      sweep.symbolOrUniverse,
+      new Date(candleData[0].ts),
+      new Date(candleData[candleData.length - 1].ts),
+    );
+
     const results: Array<typeof strategySweepResults.$inferInsert> = [];
     // The equity curve has one point per bar: the first bar's mark, then one return per later bar.
     const expectedReturns = candleData.length - 1;
@@ -68,6 +77,7 @@ export async function runSweepJob(sweepId: string, ctx: JobContext): Promise<voi
         symbol: sweep.symbolOrUniverse,
         candles: candleData,
         timeframe: sweep.timeframe,
+        unappliedCorporateActions,
       });
       const m = backtest.metrics;
       results.push({
@@ -85,6 +95,7 @@ export async function runSweepJob(sweepId: string, ctx: JobContext): Promise<voi
           tradeCount: backtest.tradeCount,
           costDragPercent: finite(backtest.costDragPercent ?? 0, 4),
           returnBlocks: equityReturnBlocks(backtest.equityCurve.map((p) => p.equity), expectedReturns, blocks),
+          warnings: backtest.warnings,
         },
       });
 

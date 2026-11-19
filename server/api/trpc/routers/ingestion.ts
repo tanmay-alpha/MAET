@@ -187,8 +187,9 @@ export const ingestionRouter = createRouter({
             symbols: input.symbols,
             backfillDays: 365,
           });
+          // result.runId is the ingestion_runs batch id; the slot id names only the lock.
           return {
-            runId,
+            runId: result.runId,
             status: result.symbolsFailed === 0 ? "completed" : result.symbolsSucceeded > 0 ? "partial" : "failed",
             symbols: input.symbols,
             result,

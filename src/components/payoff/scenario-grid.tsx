@@ -1,5 +1,5 @@
 import { pnlAfterDays, type Leg } from "@shared/domain/options/payoff";
-import { IV_SHIFT_LIMIT } from "@/lib/payoff-lab-state";
+import { IV_SHIFT_LIMIT } from "@/lib/payoff-search";
 import { formatPrice, formatSignedRupees, pnlTone } from "./format";
 
 interface ScenarioGridProps {

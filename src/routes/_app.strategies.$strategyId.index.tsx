@@ -8,7 +8,8 @@ import { conditionText, executionRows, groupText, riskRows } from "@/components/
 import { dateTime } from "@/components/strategy/format";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import { useSignedIn } from "@/hooks/use-signed-in";
-import { RESEARCH_TAB_FOR_KIND, type JobKind } from "@/lib/strategy-jobs";
+import type { JobKind } from "@/lib/strategy-jobs";
+import { RESEARCH_TAB_FOR_KIND } from "@/lib/strategy-research-search";
 
 export const Route = createFileRoute("/_app/strategies/$strategyId/")({
   head: () => ({ meta: [{ title: "Strategy — MAET Strategy Lab" }] }),

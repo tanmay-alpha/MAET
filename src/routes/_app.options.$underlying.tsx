@@ -11,7 +11,8 @@ import { useSignedIn } from "@/hooks/use-signed-in";
 import { useMarketQuotes } from "@/hooks/use-market-quotes";
 import { SignedOutNotice } from "@/components/common/signed-out-notice";
 import { sourceName } from "@/lib/quote-source";
-import { payoffSearchForChainContract, type PayoffSearch } from "@/lib/payoff-lab-state";
+import { payoffSearchForChainContract } from "@/lib/payoff-lab-state";
+import type { PayoffSearch } from "@/lib/payoff-search";
 
 const UNAVAILABLE = "—";
 

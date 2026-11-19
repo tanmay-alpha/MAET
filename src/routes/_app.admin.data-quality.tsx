@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { AuthenticationError, trpc, TrpcRequestError } from "@/lib/trpc";
 import { apiUrl } from "@/lib/api-url";
 import { fetchMarketQuotes } from "@/lib/market-api";
@@ -9,6 +9,7 @@ import { quoteSourceLabel } from "@/lib/quote-source";
 import { useSignedIn } from "@/hooks/use-signed-in";
 import { IngestionBatches } from "@/components/data-quality/ingestion-batches";
 import { ReliabilityPanel } from "@/components/data-quality/reliability-panel";
+import { IngestionTriggers } from "@/components/data-quality/ingestion-triggers";
 
 export const Route = createFileRoute("/_app/admin/data-quality")({
   head: () => ({ meta: [{ title: "Data status — MAET" }] }),
@@ -42,10 +43,11 @@ function Row({ label, ok, detail }: { label: string; ok: boolean | undefined; de
 }
 
 function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+  const headingId = useId();
   return (
-    <section className="border-b border-border py-4 last:border-b-0">
+    <section aria-labelledby={headingId} className="border-b border-border py-4 last:border-b-0">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold">{title}</h2>
+        <h2 id={headingId} className="text-sm font-semibold">{title}</h2>
         {aside}
       </div>
       {children}
@@ -185,6 +187,13 @@ function DataStatusPage() {
             <ReliabilityPanel report={reliabilityQuery.data} />
           )}
         </Section>
+
+        {/* Only an admin's reliability query succeeds; everyone else never sees the triggers. */}
+        {reliabilityQuery.isSuccess && (
+          <Section title="Manual ingestion">
+            <IngestionTriggers defaultSymbols={PROBE_SYMBOLS} />
+          </Section>
+        )}
 
         <Section title="Ingestion batches">
           {!signedIn ? (

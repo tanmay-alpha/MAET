@@ -58,7 +58,7 @@ export interface RecordedRequest {
 
 type TrpcHandler = (input: unknown, request: Request) => unknown;
 
-export type TrpcErrorCode = "BAD_REQUEST" | "UNAUTHORIZED" | "NOT_FOUND" | "CONFLICT" | "INTERNAL_SERVER_ERROR";
+export type TrpcErrorCode = "BAD_REQUEST" | "UNAUTHORIZED" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "INTERNAL_SERVER_ERROR";
 
 class TrpcError extends Error {
   constructor(
@@ -72,6 +72,7 @@ class TrpcError extends Error {
 const TRPC_ERROR_STATUS = {
   BAD_REQUEST: 400,
   UNAUTHORIZED: 401,
+  FORBIDDEN: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
   INTERNAL_SERVER_ERROR: 500,
@@ -79,6 +80,7 @@ const TRPC_ERROR_STATUS = {
 const TRPC_ERROR_CODE = {
   BAD_REQUEST: -32600,
   UNAUTHORIZED: -32001,
+  FORBIDDEN: -32003,
   NOT_FOUND: -32004,
   CONFLICT: -32009,
   INTERNAL_SERVER_ERROR: -32603,
